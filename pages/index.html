@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Arrow Flight Benchmarks — Valid Matrix</title>
+  <title>Curated Arrow Flight Benchmark Matrix</title>
   <style>
     body { margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background: #f7f8fb; color: #111827; }
     main { max-width: 1220px; margin: 0 auto; padding: 28px; }
@@ -23,134 +23,118 @@
     td strong { display: block; }
     td span { display: block; color: #6b7280; font-size: 12px; margin-top: 2px; }
     a { color: #2563eb; margin-right: 10px; white-space: nowrap; }
-    .empty { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; }
-    .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 12px 16px; margin: 18px 0; color: #92400e; font-size: 13px; }
+    .empty { display: none; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; }
+    .query-chart { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; margin: 18px 0; }
+    .query-chart h2 { margin: 0 0 4px; }
+    .query-chart svg { width: 100%; height: auto; }
+    .query-chart svg text { fill: #4b5563; font-size: 12px; }
+    .legend { display: flex; gap: 18px; margin: 12px 0; color: #4b5563; }
+    .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
   </style>
 </head>
 <body>
 <main>
-  <h1>Arrow Flight Benchmarks — Valid Matrix</h1>
-  <p>Curated TPC-H benchmark results. Only publishable runs — see <a href="https://github.com/nsu-fit/ArrowFlight">README</a> for methodology.</p>
-
-  <div class="note">
-    <strong>Matrix scope:</strong> Q1, Q6, Q14 · SF 0.1, 1.0 · 1, 3, 8 nodes · ArrowFlight vs Spark Direct on HDFS Parquet.
-    Each paired run has verified engine-order alternation, warmup, and cache policy.
-    Exploratory and historical runs are excluded.
-  </div>
+  <h1>Curated Arrow Flight Benchmark Matrix</h1>
+  <p>Only schema-valid, publishable paired TPC-H Q1/Q6/Q14 measurements at SF 0.1/1 and 1/3/8 Flight nodes are shown. Conclusions are per query; no global speedup is claimed.</p>
+  <p><a href="exploratory.html">Open exploratory/history</a></p>
 
   <div class="cards">
-    <div class="card"><div class="label">Publishable Runs</div><div class="value" id="compare-count">0</div></div>
+    <div class="card"><div class="label">Reports</div><div class="value" id="visible-count">0</div></div>
+    <div class="card"><div class="label">Compare Runs</div><div class="value" id="compare-count">0</div></div>
     <div class="card"><div class="label">Latest Run</div><div class="value" id="latest-run">-</div></div>
   </div>
 
+  
+
   <div class="toolbar">
+    <select id="benchmark-filter">
+      <option value="">All benchmarks</option>
+    </select>
+    <select id="kind-filter">
+      <option value="">All paths</option>
+      <option value="compare">Flight vs Direct</option>
+      <option value="run">Single run</option>
+    </select>
     <select id="query-filter">
       <option value="">All queries</option>
-    </select>
-    <select id="scale-filter">
-      <option value="">All scales</option>
-    </select>
-    <select id="nodes-filter">
-      <option value="">All nodes</option>
     </select>
     <input id="search" type="search" placeholder="Search run name">
   </div>
 
-  <div class="empty" id="empty" style="display:none">No runs match the selected filters.</div>
+  <div class="empty" id="empty">No reports match the selected filters.</div>
   <table>
     <thead>
       <tr>
         <th>Run</th>
+        <th>Benchmark</th>
         <th>Query</th>
         <th>SF</th>
-        <th>Nodes</th>
-        <th>Engine Order</th>
         <th>Flight thr.</th>
         <th>Direct thr.</th>
         <th>Flight avg</th>
         <th>Direct avg</th>
-        <th>Links</th>
+        <th>Nodes</th>
+        <th>Resources</th>
+        <th>Cache</th>
+        <th>Warmup, s</th>
+        <th>Order</th>
+        <th>Pairs</th>
+        <th>Samples</th>
+        <th>Paired speedup</th>
+        <th>Open</th>
       </tr>
     </thead>
-    <tbody id="runs"></tbody>
+    <tbody id="runs">
+      
+    </tbody>
   </table>
 </main>
-<script>      <tr data-query="q1" data-scale="0.1" data-nodes="8">
-        <td><strong>tpch-compare-q1-20260721-144435</strong><span>compare</span></td>
-        <td>q1</td>
-        <td>0.1</td>
-        <td>8</td>
-        <td><span>paired</span></td>
-        <td>1.696 req/s</td>
-        <td>1.685 req/s</td>
-        <td>578.3 ms</td>
-        <td>591.9 ms</td>
-        <td><a href="benchmarks/tpch-compare-q1-20260721-144435/compare.report.html">compare</a> <a href="benchmarks/tpch-compare-q1-20260721-144435/flight/tpch_2026-07-21_14-53-49.report.html">flight</a> <a href="benchmarks/tpch-compare-q1-20260721-144435/direct/tpch_2026-07-21_14-57-02.report.html">direct</a></td>
-      </tr>
-      <tr data-query="q1" data-scale="0.1" data-nodes="3">
-        <td><strong>tpch-compare-q1-20260715-024126</strong><span>compare</span></td>
-        <td>q1</td>
-        <td>0.1</td>
-        <td>3</td>
-        <td><span>paired</span></td>
-        <td>1.984 req/s</td>
-        <td>1.344 req/s</td>
-        <td>482.4 ms</td>
-        <td>729.3 ms</td>
-        <td><a href="benchmarks/tpch-compare-q1-20260715-024126/compare.report.html">compare</a> <a href="benchmarks/tpch-compare-q1-20260715-024126/flight/tpch_2026-07-15_02-45-39.report.html">flight</a> <a href="benchmarks/tpch-compare-q1-20260715-024126/direct/tpch_2026-07-15_02-46-51.report.html">direct</a></td>
-      </tr>
-      <tr data-query="q1" data-scale="0.1" data-nodes="3">
-        <td><strong>tpch-compare-q1-20260715-023117</strong><span>compare</span></td>
-        <td>q1</td>
-        <td>0.1</td>
-        <td>3</td>
-        <td><span>paired</span></td>
-        <td>2.033 req/s</td>
-        <td>1.367 req/s</td>
-        <td>472.7 ms</td>
-        <td>717.1 ms</td>
-        <td><a href="benchmarks/tpch-compare-q1-20260715-023117/compare.report.html">compare</a> <a href="benchmarks/tpch-compare-q1-20260715-023117/flight/tpch_2026-07-15_02-35-32.report.html">flight</a> <a href="benchmarks/tpch-compare-q1-20260715-023117/direct/tpch_2026-07-15_02-36-42.report.html">direct</a></td>
-      </tr>  <script>
-    const rows = [...document.querySelectorAll('#runs tr')];
-    document.getElementById('compare-count').textContent = rows.length;
-    document.getElementById('latest-run').textContent = rows[0]?.querySelector('strong')?.textContent || '-';
+<script type="application/json" id="runs-json">[]</script>
+<script>
+  const runs = JSON.parse(document.getElementById('runs-json').textContent);
+  const rows = [...document.querySelectorAll('#runs tr')];
+  const benchmarkFilter = document.getElementById('benchmark-filter');
+  const kindFilter = document.getElementById('kind-filter');
+  const queryFilter = document.getElementById('query-filter');
+  const search = document.getElementById('search');
 
-    const queryFilter = document.getElementById('query-filter');
-    const scaleFilter = document.getElementById('scale-filter');
-    const nodesFilter = document.getElementById('nodes-filter');
-    const search = document.getElementById('search');
+  function addOptions(select, values) {
+    values.filter(Boolean).sort().forEach((value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    });
+  }
 
-    function addOptions(select, values) {
-      values.filter(Boolean).sort().forEach((value) => {
-        const opt = document.createElement('option');
-        opt.value = value;
-        opt.textContent = value;
-        select.appendChild(opt);
-      });
-    }
+  addOptions(benchmarkFilter, [...new Set(runs.map((run) => String(run.benchmark)))]);
+  addOptions(queryFilter, [...new Set(runs.map((run) => String(run.query)))]);
+  document.getElementById('compare-count').textContent = runs.filter((run) => run.kind === 'compare').length;
+  document.getElementById('latest-run').textContent = runs[0]?.title || '-';
 
-    addOptions(queryFilter, [...new Set(rows.map(r => r.dataset.query))]);
-    addOptions(scaleFilter, [...new Set(rows.map(r => r.dataset.scale))]);
-    addOptions(nodesFilter, [...new Set(rows.map(r => r.dataset.nodes))]);
+  function applyFilters() {
+    const benchmark = benchmarkFilter.value;
+    const kind = kindFilter.value;
+    const query = queryFilter.value;
+    const term = search.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach((row) => {
+      const text = row.textContent.toLowerCase();
+      const show = (!benchmark || row.dataset.benchmark === benchmark)
+        && (!kind || row.dataset.kind === kind)
+        && (!query || row.dataset.query === query)
+        && (!term || text.includes(term));
+      row.style.display = show ? '' : 'none';
+      if (show) visible += 1;
+    });
+    document.getElementById('visible-count').textContent = visible;
+    document.getElementById('empty').style.display = visible ? 'none' : 'block';
+  }
 
-    function applyFilters() {
-      const q = queryFilter.value;
-      const s = scaleFilter.value;
-      const n = nodesFilter.value;
-      const term = search.value.trim().toLowerCase();
-      let visible = 0;
-      rows.forEach(row => {
-        const show = (!q || row.dataset.query === q)
-          && (!s || row.dataset.scale === s)
-          && (!n || row.dataset.nodes === n)
-          && (!term || row.textContent.toLowerCase().includes(term));
-        row.style.display = show ? '' : 'none';
-        if (show) visible++;
-      });
-    }
-
-    [queryFilter, scaleFilter, nodesFilter, search].forEach(el => el.addEventListener('input', applyFilters));
-    applyFilters();
-  </script>
+  [benchmarkFilter, kindFilter, queryFilter, search].forEach((element) => {
+    element.addEventListener('input', applyFilters);
+  });
+  applyFilters();
+</script>
 </body>
 </html>
