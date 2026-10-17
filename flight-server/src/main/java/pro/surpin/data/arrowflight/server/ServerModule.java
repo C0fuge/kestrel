@@ -11,11 +11,7 @@ import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -33,6 +29,8 @@ import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
+import pro.surpin.data.arrowflight.server.storage.DataStores;
 
 /**
  * Dagger module that wires all server components as singletons.
@@ -168,52 +166,39 @@ public final class ServerModule {
     }
 
     /**
-     * Provide Hadoop FileSystem singleton
+     * Provide DataStore singleton, chosen by the scheme of the data directory
      * @param config application configuration
-     * @return Hadoop file system
+     * @return store of the data directory
      */
     @Provides
     @Singleton
-    FileSystem fileSystem(AppConfig config) {
-        hadoopConfig.setInt("io.file.buffer.size", config.ioFileBufferSize());
-        hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);
-        hadoopConfig.setBoolean("dfs.client.read.shortcircuit.skip.checksum", false);
-        hadoopConfig.setBoolean("fs.file.impl.disable.cache", true);
-        try {
-            return new Path(config.dataDir()).getFileSystem(hadoopConfig);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+    DataStore dataStore(AppConfig config) {
+        return DataStores.open(config, hadoopConfig, localStorageHost);
     }
 
     /**
      * Provide ParquetAdapter singleton
      * @param config application configuration
-     * @param fs Hadoop file system
+     * @param store store of the data directory
      * @return parquet adapter
      */
     @Provides
     @Singleton
-    ParquetAdapter parquetAdapter(AppConfig config, FileSystem fs) {
-        return new ParquetAdapter(config, fs, localStorageHost);
+    ParquetAdapter parquetAdapter(AppConfig config, DataStore store) {
+        return new ParquetAdapter(config, store, localStorageHost);
     }
 
     /**
      * Provide DuckDbAdapter singleton
      * @param config application configuration
      * @param ioPool I/O thread pool
-     * @param fs Hadoop file system of the data directory
+     * @param store store of the data directory
      * @return DuckDB adapter
      */
     @Provides
     @Singleton
-    DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, FileSystem fs) {
-        // The data directory as DuckDB sees file paths: qualified, local paths without "file:".
-        String root = fs.makeQualified(new Path(config.dataDir())).toUri().toString();
-        if (root.startsWith("file:")) {
-            root = new Path(root).toUri().getPath();
-        }
-        return new DuckDbAdapter(config, ioPool, List.of(root));
+    DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, DataStore store) {
+        return new DuckDbAdapter(config, ioPool, store.duckDbRoots());
     }
 
     /**

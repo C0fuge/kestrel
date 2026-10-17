@@ -1,15 +1,13 @@
 package pro.surpin.data.arrowflight.server.services;
 
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
-import org.apache.hadoop.fs.Path;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -50,15 +48,15 @@ class CatalogViewsTest {
                 Statement s = conn.createStatement()) {
             s.execute("COPY (SELECT 1::UTINYINT AS x) TO '" + file + "' (FORMAT parquet)");
         }
-        FileSystem fs = mock(FileSystem.class);
-        when(fs.makeQualified(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        LocatedFileStatus status = new LocatedFileStatus(new FileStatus(java.nio.file.Files.size(file),
-                false, 1, 0, 0, new Path(file.toUri())), null);
+        DataFile status = new DataFile("f.parquet", file.toUri().toString(),
+                java.nio.file.Files.size(file), 0, null);
+        DataStore store = mock(DataStore.class);
+        when(store.duckDbUri(any(DataFile.class))).thenReturn(file.toString());
         ParquetAdapter parquet = mock(ParquetAdapter.class);
-        when(parquet.fileSystem()).thenReturn(fs);
-        when(parquet.getSchemas(null)).thenReturn(Map.of("a", new Path("/a"), "b", new Path("/b")));
-        when(parquet.getTables(eq("a"), any())).thenReturn(Map.of("only", new Path("/a/only"), "Both", new Path("/a/Both")));
-        when(parquet.getTables(eq("b"), any())).thenReturn(Map.of("both", new Path("/b/both")));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("a", "/a", "b", "/b"));
+        when(parquet.getTables(eq("a"), any())).thenReturn(Map.of("only", "/a/only", "Both", "/a/Both"));
+        when(parquet.getTables(eq("b"), any())).thenReturn(Map.of("both", "/b/both"));
         when(parquet.tableFiles(any(), any())).thenReturn(List.of(status));
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
         try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {

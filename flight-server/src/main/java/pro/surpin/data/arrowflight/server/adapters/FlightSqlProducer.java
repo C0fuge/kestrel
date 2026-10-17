@@ -758,7 +758,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         boolean errored = false;
 
         try {
-            Map<String, org.apache.hadoop.fs.Path> schemas =
+            Map<String, String> schemas =
                     metadataService.getSchemas(schemaFilterPattern);
             try (VectorSchemaRoot root = metadataService.getSchemasRoot(
                     schemas.keySet().stream()
@@ -827,8 +827,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
 
         Map<String, Map<String, Schema>> tables = new java.util.LinkedHashMap<>();
         try {
-            for (Map.Entry<String, org.apache.hadoop.fs.Path> schemaEntry : !canMatch
-                    ? java.util.Set.<Map.Entry<String, org.apache.hadoop.fs.Path>>of()
+            for (Map.Entry<String, String> schemaEntry : !canMatch
+                    ? java.util.Set.<Map.Entry<String, String>>of()
                     : metadataService.getSchemas(schemaFilterPattern).entrySet()) {
                 if (!authorization.canSeeSchema(
                         context == null ? null : context.peerIdentity(), schemaEntry.getKey())) {
@@ -836,7 +836,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 }
                 Map<String, Schema> tablesForSchema = new java.util.LinkedHashMap<>();
                 tables.put(schemaEntry.getKey(), tablesForSchema);
-                for (Map.Entry<String, org.apache.hadoop.fs.Path> tableEntry :
+                for (Map.Entry<String, String> tableEntry :
                         metadataService.getTables(schemaEntry.getKey(), tableFilterPattern)
                                 .entrySet()) {
                     if (!authorization.canReadTable(

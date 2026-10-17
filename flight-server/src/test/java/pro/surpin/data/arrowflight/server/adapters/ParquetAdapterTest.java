@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.adapters;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
+import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -148,7 +149,8 @@ class ParquetAdapterTest {
                      mockStatic(ParquetFileReader.class)) {
             parquetReader.when(() -> ParquetFileReader.open(any()))
                     .thenReturn(reader);
-            ParquetAdapter adapter = new ParquetAdapter(config, fileSystem);
+            ParquetAdapter adapter = new ParquetAdapter(config,
+                    new HadoopDataStore(fileSystem, config.dataDir(), "localhost"));
 
             Schema first = adapter.getTableSchema("test_schema", "test_table");
             Schema second = adapter.getTableSchema("test_schema", "test_table");
@@ -201,7 +203,7 @@ class ParquetAdapterTest {
 
         /** Creates an adapter backed by mocked directory metadata. */
         private CatalogTestParquetAdapter(AppConfig config, FileSystem fileSystem) {
-            super(config, fileSystem);
+            super(config, new HadoopDataStore(fileSystem, config.dataDir(), "localhost"));
         }
 
         @Override
@@ -291,12 +293,6 @@ class ParquetAdapterTest {
             }
             throw new FileNotFoundException(path.toString());
         }
-    }
-
-    @Test
-    void hasLocalBlockMatchesResolvedFlightAndDataNodeAliases() {
-        assertTrue(ParquetAdapter.hasLocalBlock(Set.of("127.0.0.1"), "localhost"));
-        assertFalse(ParquetAdapter.hasLocalBlock(Set.of("127.0.0.2"), "localhost"));
     }
 
     @Test

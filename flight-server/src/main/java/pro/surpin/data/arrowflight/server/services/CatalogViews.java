@@ -1,11 +1,12 @@
 package pro.surpin.data.arrowflight.server.services;
 
-import org.apache.hadoop.fs.LocatedFileStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.io.IOException;
 import java.sql.Connection;
@@ -109,7 +110,7 @@ public final class CatalogViews {
             String createSchema = "CREATE SCHEMA IF NOT EXISTS " + DuckDbAdapter.quoteIdentifier(schema);
             boolean schemaAdded = false;
             for (String table : parquetAdapter.getTables(schema, null).keySet().stream().sorted().toList()) {
-                List<LocatedFileStatus> files = parquetAdapter.tableFiles(schema, table);
+                List<DataFile> files = parquetAdapter.tableFiles(schema, table);
                 if (files.isEmpty()) {
                     continue;
                 }
@@ -168,13 +169,13 @@ public final class CatalogViews {
      * @return view definitions
      * @throws SQLException when DuckDB cannot read the file
      */
-    private TableViews describe(String schema, String table, List<LocatedFileStatus> files,
+    private TableViews describe(String schema, String table, List<DataFile> files,
             String fingerprint) throws SQLException {
-        List<String> uris = new ArrayList<>(files.size());
-        for (LocatedFileStatus file : files) {
-            uris.add(parquetAdapter.fileSystem().makeQualified(file.getPath()).toUri().toString());
+        DataStore store = parquetAdapter.dataStore();
+        List<String> paths = new ArrayList<>(files.size());
+        for (DataFile file : files) {
+            paths.add(store.duckDbUri(file));
         }
-        List<String> paths = ExecutionService.ducksDbPaths(uris);
         String source = DuckDbAdapter.readParquetFromClause(paths);
         List<String> select = new ArrayList<>();
         List<String> typed = new ArrayList<>();

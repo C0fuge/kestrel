@@ -7,10 +7,8 @@ import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.BlockMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
-import org.apache.parquet.hadoop.util.HadoopStreams;
 import org.apache.parquet.column.statistics.Statistics;
 import org.apache.parquet.io.InputFile;
-import org.apache.parquet.io.SeekableInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -580,31 +578,19 @@ public final class DuckDbAdapter implements AutoCloseable {
     /**
      * Reads only the Parquet footer to get the total row count. Zero column I/O.
      *
-     * @param fileSystem Hadoop FileSystem
-     * @param full       absolute file path
+     * @param file Parquet file opened through the data store
+     * @param name file name, for logs
      * @return total row count across all row groups
      * @throws IOException on read failure
      */
-    public static long footerRowCount(org.apache.hadoop.fs.FileSystem fileSystem,
-            org.apache.hadoop.fs.Path full) throws IOException {
+    public static long footerRowCount(InputFile file, String name) throws IOException {
         long t = LogUtil.mark();
-        final long fileLen = fileSystem.getFileStatus(full).getLen();
-        try (ParquetFileReader pfr = ParquetFileReader.open(new InputFile() {
-            @Override
-            public long getLength() {
-                return fileLen;
-            }
-
-            @Override
-            public SeekableInputStream newStream() throws IOException {
-                return HadoopStreams.wrap(fileSystem.open(full));
-            }
-        })) {
+        try (ParquetFileReader pfr = ParquetFileReader.open(file)) {
             long count = 0;
             for (BlockMetaData b : pfr.getFooter().getBlocks()) {
                 count += b.getRowCount();
             }
-            LogUtil.logTiming(t, "duckdb.footerRowCount", "file=" + full.getName() + " count=" + count);
+            LogUtil.logTiming(t, "duckdb.footerRowCount", "file=" + name + " count=" + count);
             return count;
         }
     }
@@ -612,28 +598,17 @@ public final class DuckDbAdapter implements AutoCloseable {
     /**
      * Reads MIN/MAX/COUNT statistics from Parquet footer. Zero column I/O.
      *
-     * @param fileSystem Hadoop FileSystem
-     * @param full       absolute file path
-     * @param pq         parsed query with select expressions
+     * @param file Parquet file opened through the data store
+     * @param name file name, for logs
+     * @param pq   parsed query with select expressions
      * @return optional array of aggregated stats values, empty if any stats are missing
      * @throws IOException on read failure
      */
     @SuppressWarnings("java:S3776") // Footer aggregation handles every supported statistic in one pass.
-    public static Optional<Object[]> footerStats(org.apache.hadoop.fs.FileSystem fileSystem,
-            org.apache.hadoop.fs.Path full, ParquetQueryParser pq) throws IOException {
+    public static Optional<Object[]> footerStats(InputFile file, String name,
+            ParquetQueryParser pq) throws IOException {
         long t = LogUtil.mark();
-        final long fileLen = fileSystem.getFileStatus(full).getLen();
-        try (ParquetFileReader pfr = ParquetFileReader.open(new InputFile() {
-            @Override
-            public long getLength() {
-                return fileLen;
-            }
-
-            @Override
-            public SeekableInputStream newStream() throws IOException {
-                return HadoopStreams.wrap(fileSystem.open(full));
-            }
-        })) {
+        try (ParquetFileReader pfr = ParquetFileReader.open(file)) {
             List<ParquetQueryParser.SelectExpr> exprs = pq.selectExprs;
             int n = exprs.size();
             Object[] result = new Object[n];
@@ -679,7 +654,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                     result[i] = totalRows;
                 }
             }
-            LogUtil.logTiming(t, "duckdb.footerStats", "file=" + full.getName());
+            LogUtil.logTiming(t, "duckdb.footerStats", "file=" + name);
             return Optional.of(result);
         }
     }

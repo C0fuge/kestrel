@@ -11,6 +11,7 @@ import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
+import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
@@ -72,7 +73,8 @@ public class TestFlightServerHelper implements AutoCloseable {
         localFs.initialize(URI.create("file:///"), new Configuration());
 
         // Adapters
-        parquetAdapter = new ParquetAdapter(appConfig, localFs);
+        parquetAdapter = new ParquetAdapter(appConfig,
+                new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
         duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool());
 
         // Services

@@ -9,6 +9,7 @@ import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
+import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
@@ -52,7 +53,8 @@ class ParquetManagerIntegrationTest {
         localFs.initialize(new java.net.URI("file:///"), new Configuration());
 
         allocator = new RootAllocator(Long.MAX_VALUE);
-        parquetAdapter = new ParquetAdapter(appConfig, localFs, "localhost");
+        parquetAdapter = new ParquetAdapter(appConfig,
+                new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"), "localhost");
         metadataService = new MetadataService(parquetAdapter);
         DuckDbAdapter duckDbAdapter = new DuckDbAdapter(appConfig,
                 Executors.newCachedThreadPool());

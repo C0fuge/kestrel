@@ -5,6 +5,7 @@ import pro.surpin.data.arrowflight.server.adapters.SchemaConverter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
+import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -33,9 +34,9 @@ class MetadataUtilsTest {
                 3, 4096, 4, 65536, 2, 2, 2, "", false, "", "", "", "", null, false, 2_147_483_648L,
                 67108864, 67108864, 30000L,
                 "/nonexistent-data-dir", null, 31001, 5701, 120, 3, 500, 3, true, false, 64, null, null, "complete", true, true
-            ), new RawLocalFileSystem() {{
+            ), new HadoopDataStore(new RawLocalFileSystem() {{
                 initialize(URI.create("file:///"), new Configuration());
-            }});
+            }}, "/nonexistent-data-dir", "localhost"));
         }
     }
 
@@ -326,9 +327,9 @@ class MetadataUtilsTest {
                         67108864, 67108864, 30000L, "/nonexistent-data-dir", null,
                         31001, 5701, 120,
                         3, 500, 3, true, false, 64, null, null, "complete", true, true),
-                new RawLocalFileSystem() {{
+                new HadoopDataStore(new RawLocalFileSystem() {{
                     initialize(URI.create("file:///"), new Configuration());
-                }}) {
+                }}, "/nonexistent-data-dir", "localhost")) {
             @Override
             public Schema getTableSchema(String schema, String table) {
                 return tableSchema;

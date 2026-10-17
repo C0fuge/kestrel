@@ -20,7 +20,6 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.arrow.vector.util.Text;
-import org.apache.hadoop.fs.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +44,8 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.math.BigDecimal;
 
@@ -276,11 +277,11 @@ public final class ExecutionService {
                 dropJoinViews(conn, aliases);
             }
         }
-        Path sample = parquetAdapter.sampleFile(pq.schema, pq.table)
+        DataFile sample = parquetAdapter.sampleFile(pq.schema, pq.table)
                 .orElseThrow(() -> new IOException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
-        String from = "(SELECT * FROM " + DuckDbAdapter.readParquetFromClause(ducksDbPaths(List.of(
-                parquetAdapter.fileSystem().makeQualified(sample).toUri().toString())))
+        String from = "(SELECT * FROM " + DuckDbAdapter.readParquetFromClause(List.of(
+                parquetAdapter.dataStore().duckDbUri(sample)))
                 + " LIMIT 0)";
         String duckSql = pq.hasAggregation
                 ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
@@ -335,7 +336,7 @@ public final class ExecutionService {
             LogUtil.logTiming(tDiscover, "files.discover", FILES_TIMING_PREFIX + fileUris.length);
         }
 
-        List<Path> parquetFiles = resolveParquetFiles(fileUris);
+        List<String> parquetFiles = resolveParquetFiles(fileUris);
         if (parquetFiles.isEmpty()) {
             pathTracker.unknown("no-parquet-files");
             LOGGER.warn("No Parquet files to read for query: {}", query);
@@ -359,7 +360,7 @@ public final class ExecutionService {
         LOGGER.debug("qid={} node={} execution=engine engine=DuckDB files={}",
                 LogUtil.qid(), LogUtil.node(), resolvedUris.size());
         String duckSql = DuckDbAdapter.buildSelectSql(parsedQuery,
-                DuckDbAdapter.readParquetFromClause(ducksDbPaths(resolvedUris)));
+                DuckDbAdapter.readParquetFromClause(resolvedUris));
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
     }
 
@@ -369,8 +370,8 @@ public final class ExecutionService {
      * @param allocator     Arrow buffer allocator
      * @param query         SQL query
      * @param pq            parsed query
-     * @param parquetFiles  resolved Parquet file paths
-     * @param resolvedUris  resolved file URIs
+     * @param parquetFiles  Parquet file paths relative to the data directory
+     * @param resolvedUris  file paths as DuckDB reads them
      * @param listener      Flight stream listener
      * @param startListener whether to call listener.start()
      * @param pathTracker   runtime execution-path tracker
@@ -378,7 +379,7 @@ public final class ExecutionService {
      */
     @SuppressWarnings("java:S3776") // Aggregation dispatch intentionally keeps all aggregate states together.
     private void executeAggregation(BufferAllocator allocator, String query,
-            ParquetQueryParser pq, List<Path> parquetFiles, List<String> resolvedUris,
+            ParquetQueryParser pq, List<String> parquetFiles, List<String> resolvedUris,
             FlightProducer.ServerStreamListener listener,
             boolean startListener, ExecutionPathTracker pathTracker) throws Exception {
         long t = LogUtil.mark();
@@ -402,9 +403,10 @@ public final class ExecutionService {
                         e -> e.func == ParquetQueryParser.SelectExpr.AggFunc.COUNT_STAR)) {
             pathTracker.select(ExecutionPath.FOOTER_COUNT);
             List<Future<Long>> futs = new ArrayList<>(parquetFiles.size());
-            for (Path file : parquetFiles) {
+            DataStore store = parquetAdapter.dataStore();
+            for (String file : parquetFiles) {
                 futs.add(ioPool.submit(() -> DuckDbAdapter.footerRowCount(
-                        parquetAdapter.fileSystem(), file)));
+                        store.inputFile(file), fileName(file))));
             }
             long total = 0;
             for (Future<Long> f : futs) {
@@ -434,9 +436,10 @@ public final class ExecutionService {
         if (statsEligible) {
             pathTracker.select(ExecutionPath.FOOTER_STATS);
             List<Future<Optional<Object[]>>> futs = new ArrayList<>(parquetFiles.size());
-            for (Path file : parquetFiles) {
+            DataStore store = parquetAdapter.dataStore();
+            for (String file : parquetFiles) {
                 futs.add(ioPool.submit(() -> DuckDbAdapter.footerStats(
-                        parquetAdapter.fileSystem(), file, pq)));
+                        store.inputFile(file), fileName(file), pq)));
             }
             Object[] merged = null;
             boolean allHaveStats = true;
@@ -467,7 +470,7 @@ public final class ExecutionService {
         }
 
         String duckSql = DuckDbAdapter.buildDuckSqlWithFilter(pq,
-                DuckDbAdapter.readParquetFromClause(ducksDbPaths(resolvedUris)), false);
+                DuckDbAdapter.readParquetFromClause(resolvedUris), false);
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
     }
 
@@ -592,60 +595,43 @@ public final class ExecutionService {
     // ── private helpers ──────────────────────────────────────────────────
 
     /**
-     * Resolves relative file URIs to absolute Parquet paths.
+     * Collects the relative paths of the files to read.
      *
      * @param fileUris relative file paths
-     * @return resolved Parquet paths
-     * @throws IOException on HDFS read failure
+     * @return relative file paths
      */
-    private List<Path> resolveParquetFiles(String[] fileUris)
-            throws IOException {
+    private static List<String> resolveParquetFiles(String[] fileUris) {
         long t = LogUtil.mark();
-        List<Path> files = new ArrayList<>();
-        for (String uri : fileUris) {
-            files.add(new Path(parquetAdapter.dataDirectory(), uri));
-        }
+        List<String> files = List.of(fileUris);
         LogUtil.logTiming(t, "files.resolvePaths", FILES_TIMING_PREFIX + files.size());
         return files;
     }
 
     /**
-     * Resolves relative file URIs to absolute URIs for DuckDB consumption.
+     * Names relative files the way DuckDB reads them.
      *
      * @param fileUris relative file paths
-     * @return resolved URIs
-     * @throws IOException on HDFS read failure
+     * @return DuckDB file paths
      */
-    private List<String> resolveUris(String[] fileUris) throws IOException {
+    private List<String> resolveUris(String[] fileUris) {
         long t = LogUtil.mark();
+        DataStore store = parquetAdapter.dataStore();
         List<String> uris = new ArrayList<>(fileUris.length);
         for (String rel : fileUris) {
-            Path path = new Path(parquetAdapter.dataDirectory(), rel);
-            uris.add(parquetAdapter.fileSystem().makeQualified(path).toUri().toString());
+            uris.add(store.duckDbUri(rel));
         }
         LogUtil.logTiming(t, "files.resolveUris", FILES_TIMING_PREFIX + uris.size());
         return uris;
     }
 
     /**
-     * Strips file: scheme from URIs for DuckDB consumption.
+     * Returns the last segment of a relative file path, for logs.
      *
-     * @param uris fully-qualified URIs
-     * @return DuckDB-compatible paths
+     * @param relativePath relative file path
+     * @return file name
      */
-    static List<String> ducksDbPaths(List<String> uris) {
-        return uris.stream().map(u -> {
-            if (u.startsWith("file:")) {
-                int colon = u.indexOf(':');
-                // file:///path → /path,  file:/path → /path
-                String stripped = u.substring(colon + 1);
-                while (stripped.startsWith("/")) {
-                    stripped = stripped.substring(1);
-                }
-                return "/" + stripped;
-            }
-            return u;
-        }).toList();
+    static String fileName(String relativePath) {
+        return relativePath.substring(relativePath.lastIndexOf('/') + 1);
     }
 
     /**
@@ -653,54 +639,21 @@ public final class ExecutionService {
      *
      * @param key schema.table or table name
      * @return DuckDB-compatible file paths
-     * @throws IOException on HDFS read failure
+     * @throws IOException on storage read failure
      */
     private List<String> resolveTableFiles(String key) throws IOException {
         long t = LogUtil.mark();
         int dot = key.indexOf('.');
         String schema = dot > 0 ? key.substring(0, dot) : null;
         String table = dot > 0 ? key.substring(dot + 1) : key;
-        Path dir = schema != null
-                ? new Path(parquetAdapter.dataDirectory(), schema + "/" + table)
-                : new Path(parquetAdapter.dataDirectory(), table);
+        String dir = schema != null ? schema + "/" + table : table;
+        DataStore store = parquetAdapter.dataStore();
         List<String> uris = new ArrayList<>();
-        org.apache.hadoop.fs.RemoteIterator<org.apache.hadoop.fs.LocatedFileStatus> it =
-                parquetAdapter.fileSystem().listFiles(dir, true);
-        while (it.hasNext()) {
-            org.apache.hadoop.fs.LocatedFileStatus f = it.next();
-            if (f.isFile() && f.getPath().getName().endsWith(".parquet")) {
-                uris.add(plainDuckDbPath(f.getPath()));
-            }
+        for (DataFile f : store.parquetFiles(dir)) {
+            uris.add(store.duckDbUri(f));
         }
         LogUtil.logTiming(t, "engine:join.resolveTableFiles", "table=" + key + " " + FILES_TIMING_PREFIX + uris.size());
         return uris;
-    }
-
-    /**
-     * Converts Hadoop path to DuckDB-quoted path string.
-     *
-     * @param p Hadoop path
-     * @return quoted DuckDB path
-     */
-    static String duckDbPath(org.apache.hadoop.fs.Path p) {
-        java.net.URI uri = p.toUri();
-        String path = "file".equals(uri.getScheme())
-                ? uri.getPath()
-                : uri.toString();
-        return "'" + path.replace("'", "''") + "'";
-    }
-
-    /**
-     * Converts Hadoop path to unquoted DuckDB path string.
-     *
-     * @param p Hadoop path
-     * @return unquoted DuckDB path
-     */
-    static String plainDuckDbPath(org.apache.hadoop.fs.Path p) {
-        java.net.URI uri = p.toUri();
-        return "file".equals(uri.getScheme())
-                ? uri.getPath()
-                : uri.toString();
     }
 
     // ── emit ─────────────────────────────────────────────────────────────

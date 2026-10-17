@@ -13,10 +13,8 @@ import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
-import org.apache.hadoop.fs.Path;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -155,57 +153,12 @@ class ExecutionServiceTest {
         assertTrue(groups.get(2).isEmpty());
     }
 
-    // ── ducksDbPaths ────────────────────────────────────────────────────────
+    // ── fileName ────────────────────────────────────────────────────────────
 
     @Test
-    void ducksDbPathsStripsFileScheme() {
-        List<String> result = ExecutionService.ducksDbPaths(
-                List.of("file:/data/file.parquet"));
-        assertEquals(List.of("/data/file.parquet"), result);
-    }
-
-    @Test
-    void ducksDbPathsStripsFileSchemeTripleSlash() {
-        List<String> result = ExecutionService.ducksDbPaths(
-                List.of("file:///data/file.parquet"));
-        assertEquals(List.of("/data/file.parquet"), result);
-    }
-
-    @Test
-    void ducksDbPathsPreservesNonFileScheme() {
-        List<String> result = ExecutionService.ducksDbPaths(
-                List.of("hdfs://namenode/data/file.parquet"));
-        assertEquals(List.of("hdfs://namenode/data/file.parquet"), result);
-    }
-
-    @Test
-    void ducksDbPathsMixed() {
-        List<String> result = ExecutionService.ducksDbPaths(
-                List.of("file:/a.parquet", "hdfs://ns/b.parquet"));
-        assertEquals(List.of("/a.parquet", "hdfs://ns/b.parquet"), result);
-    }
-
-    // ── duckDbPath ──────────────────────────────────────────────────────────
-
-    @Test
-    void duckDbPathFileScheme() {
-        String result = ExecutionService.duckDbPath(
-                new Path(URI.create("file:/data/file.parquet")));
-        assertEquals("'/data/file.parquet'", result);
-    }
-
-    @Test
-    void duckDbPathEscapesQuote() {
-        String result = ExecutionService.duckDbPath(
-                new Path(URI.create("file:/data/quote's.parquet")));
-        assertEquals("'/data/quote''s.parquet'", result);
-    }
-
-    @Test
-    void plainDuckDbPathFileScheme() {
-        String result = ExecutionService.plainDuckDbPath(
-                new Path(URI.create("file:/data/file.parquet")));
-        assertEquals("/data/file.parquet", result);
+    void fileNameIsLastPathSegment() {
+        assertEquals("part-0.parquet", ExecutionService.fileName("tpch/lineitem/part-0.parquet"));
+        assertEquals("part-0.parquet", ExecutionService.fileName("part-0.parquet"));
     }
 
     // ── toLong ────────────────────────────────────────────────────────────

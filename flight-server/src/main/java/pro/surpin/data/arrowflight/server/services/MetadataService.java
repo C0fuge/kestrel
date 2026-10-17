@@ -78,10 +78,10 @@ public final class MetadataService {
      * Lists schemas matching an optional filter pattern.
      *
      * @param filterPattern SQL LIKE pattern, null for all
-     * @return map of schema name to path
+     * @return map of schema name to location
      * @throws IOException on HDFS read failure
      */
-    public Map<String, org.apache.hadoop.fs.Path> getSchemas(String filterPattern) throws IOException {
+    public Map<String, String> getSchemas(String filterPattern) throws IOException {
         return parquetAdapter.getSchemas(filterPattern);
     }
 
@@ -90,9 +90,9 @@ public final class MetadataService {
      *
      * @param schema        schema name
      * @param filterPattern SQL LIKE pattern, null for all
-     * @return map of table name to path
+     * @return map of table name to location
      */
-    public Map<String, org.apache.hadoop.fs.Path> getTables(String schema, String filterPattern) {
+    public Map<String, String> getTables(String schema, String filterPattern) {
         return parquetAdapter.getTables(schema, filterPattern);
     }
 

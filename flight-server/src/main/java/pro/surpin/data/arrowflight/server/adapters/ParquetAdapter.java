@@ -7,12 +7,6 @@ import org.apache.calcite.adapter.arrow.ArrowFieldTypeFactory;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.RemoteIterator;
-
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.schema.MessageType;
 import org.slf4j.Logger;
@@ -20,13 +14,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.URI;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,27 +24,26 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
-import static pro.surpin.data.arrowflight.server.adapters.HostUtils.LOOPBACK_HOSTS;
+import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**
- * Reads Parquet metadata and file listings from HDFS.
+ * Reads Parquet metadata and file listings from the data store.
  * Maintains caches for schemas, tables, and DDL strings.
  */
 public class ParquetAdapter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ParquetAdapter.class);
-    private static final String PARQUET_EXTENSION = ".parquet";
     private static final String TABLE_TIMING_PREFIX = "table=";
     private static final String FIELD_COUNT_PREFIX = " fields=";
     private static final long METADATA_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
-    private final FileSystem fileSystem;
+    private final DataStore store;
     private final String dataDirectory;
     private final String localhost;
     private final JavaTypeFactoryImpl typeFactory;
@@ -82,8 +71,8 @@ public class ParquetAdapter {
      * @param ddls DDL for discovered tables
      * @param expiresAtNanos monotonic refresh deadline
      */
-    private record CatalogSnapshot(Map<String, Path> schemas,
-            Map<String, Map<String, Path>> tables,
+    private record CatalogSnapshot(Map<String, String> schemas,
+            Map<String, Map<String, String>> tables,
             Map<String, Map<String, String>> ddls, long expiresAtNanos) {
     }
 
@@ -112,25 +101,25 @@ public class ParquetAdapter {
     }
 
     /**
-     * Creates a ParquetAdapter for the given Hadoop filesystem and data directory.
+     * Creates a ParquetAdapter for the given data store.
      *
-     * @param appConfig  server configuration
-     * @param fileSystem Hadoop FileSystem instance
+     * @param appConfig server configuration
+     * @param store     store of the data directory
      */
-    public ParquetAdapter(AppConfig appConfig, FileSystem fileSystem) {
-        this(appConfig, fileSystem, "localhost");
+    public ParquetAdapter(AppConfig appConfig, DataStore store) {
+        this(appConfig, store, "localhost");
     }
 
     /**
      * Creates a ParquetAdapter with an explicit localhost override.
      *
-     * @param appConfig  server configuration
-     * @param fileSystem Hadoop FileSystem instance
-     * @param localhost  local hostname for block locality resolution
+     * @param appConfig server configuration
+     * @param store     store of the data directory
+     * @param localhost storage host colocated with this server, for the local file inventory
      */
-    public ParquetAdapter(AppConfig appConfig, FileSystem fileSystem, String localhost) {
-        this.fileSystem = fileSystem;
-        this.dataDirectory = appConfig.dataDir();
+    public ParquetAdapter(AppConfig appConfig, DataStore store, String localhost) {
+        this.store = Objects.requireNonNull(store, "store");
+        this.dataDirectory = store.root();
         this.localhost = localhost;
         this.typeFactory = new JavaTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
 
@@ -141,10 +130,10 @@ public class ParquetAdapter {
      * Lists all schemas (top-level directories) matching an optional filter pattern.
      *
      * @param filterExpression SQL LIKE pattern, null for all
-     * @return map of schema name to path
-     * @throws IOException on HDFS read failure
+     * @return map of schema name to location
+     * @throws IOException on storage read failure
      */
-    public Map<String, Path> getSchemas(String filterExpression) throws IOException {
+    public Map<String, String> getSchemas(String filterExpression) throws IOException {
         java.util.function.Predicate<String> schemaPredicate = createLikePredicate(filterExpression);
         return currentCatalog().schemas().entrySet().stream()
                 .filter(entry -> filterExpression == null || schemaPredicate.test(entry.getKey()))
@@ -156,10 +145,10 @@ public class ParquetAdapter {
      *
      * @param schema           schema name
      * @param filterExpression SQL LIKE pattern, null for all
-     * @return map of table name to path
+     * @return map of table name to location
      */
-    public Map<String, Path> getTables(String schema, String filterExpression) {
-        Map<String, Path> tables = currentCatalog().tables()
+    public Map<String, String> getTables(String schema, String filterExpression) {
+        Map<String, String> tables = currentCatalog().tables()
                 .getOrDefault(schema, Collections.emptyMap());
         java.util.function.Predicate<String> tablePredicate = createLikePredicate(filterExpression);
         return tables.entrySet().stream()
@@ -244,10 +233,10 @@ public class ParquetAdapter {
             return current;
         }
         try {
-            Path tablePath = tablePath(key.schema(), key.table());
+            String tablePath = tablePath(key.schema(), key.table());
             LOGGER.debug("node={} parquet=schemaReadStart table={}.{} path={}",
-                    LogUtil.node(), key.schema(), key.table(), tablePath);
-            List<LocatedFileStatus> files = parquetFiles(tablePath);
+                    LogUtil.node(), key.schema(), key.table(), location(tablePath));
+            List<DataFile> files = store.parquetFiles(tablePath);
             String fingerprint = inventoryFingerprint(files);
             if (current != null && current.fingerprint().equals(fingerprint)) {
                 return new CachedTableSchema(
@@ -255,17 +244,14 @@ public class ParquetAdapter {
             }
             if (files.isEmpty()) {
                 LOGGER.warn("node={} parquet=schemaNotFound table={}.{} path={}",
-                        LogUtil.node(), key.schema(), key.table(), tablePath);
+                        LogUtil.node(), key.schema(), key.table(), location(tablePath));
                 return new CachedTableSchema(
                         new Schema(Collections.emptyList(), null),
                         fingerprint, now + METADATA_TTL_NANOS);
             }
-            LocatedFileStatus first = files.get(0);
-            String relativePath = relativePath(first.getPath());
+            DataFile first = files.get(0);
             long footerStart = LogUtil.mark();
-            CachedParquetMetadata metadata = readParquetMetadata(
-                    relativePath, first.getPath(), first.getLen(),
-                    first.getModificationTime(), now);
+            CachedParquetMetadata metadata = readParquetMetadata(first, now);
             Schema arrowSchema = SchemaConverter.convert(metadata.schema(), ignored -> true);
             LogUtil.logTiming(footerStart, "schema.readFooter",
                     TABLE_TIMING_PREFIX + key.schema() + "." + key.table()
@@ -283,18 +269,12 @@ public class ParquetAdapter {
      * @param schema schema name
      * @param table  table name
      * @return first Parquet file in path order, or empty when the table has none
-     * @throws IOException on file-system access failure
+     * @throws IOException on storage access failure
      */
-    public java.util.Optional<Path> sampleFile(String schema, String table) throws IOException {
-        validateName(schema);
-        validateName(table);
-        Path tablePath = tablePath(schema, table);
-        if (!fileSystem.exists(tablePath)) {
-            return java.util.Optional.empty();
-        }
-        List<LocatedFileStatus> files = parquetFiles(tablePath);
+    public java.util.Optional<DataFile> sampleFile(String schema, String table) throws IOException {
+        List<DataFile> files = tableFiles(schema, table);
         return files.isEmpty()
-                ? java.util.Optional.empty() : java.util.Optional.of(files.get(0).getPath());
+                ? java.util.Optional.empty() : java.util.Optional.of(files.get(0));
     }
 
     /**
@@ -302,84 +282,76 @@ public class ParquetAdapter {
      *
      * @param schema schema name
      * @param table table name
-     * @return file statuses in path order, empty when the table has none
-     * @throws IOException on file-system access failure
+     * @return files in path order, empty when the table has none
+     * @throws IOException on storage access failure
      */
-    public List<LocatedFileStatus> tableFiles(String schema, String table) throws IOException {
+    public List<DataFile> tableFiles(String schema, String table) throws IOException {
         validateName(schema);
         validateName(table);
-        Path tablePath = tablePath(schema, table);
-        if (!fileSystem.exists(tablePath)) {
-            return List.of();
-        }
-        return parquetFiles(tablePath);
+        requireSchema(schema, table);
+        return store.tableFiles(schema, table);
     }
 
     /**
-     * Identifies a set of files by their paths and lengths.
+     * Identifies a set of files by their paths, lengths and modification times.
      *
-     * @param files table file statuses
+     * @param files table files
      * @return fingerprint that changes when a file is added, removed or rewritten
      */
-    public static String filesFingerprint(List<? extends org.apache.hadoop.fs.FileStatus> files) {
-        StringBuilder fingerprint = new StringBuilder();
-        for (org.apache.hadoop.fs.FileStatus status : files) {
-            fingerprint.append(status.getPath()).append(':').append(status.getLen()).append(':')
-                    .append(status.getModificationTime()).append(';');
-        }
-        return Integer.toHexString(fingerprint.toString().hashCode()) + "/" + files.size();
+    public static String filesFingerprint(List<DataFile> files) {
+        return Integer.toHexString(inventoryFingerprint(files).hashCode()) + "/" + files.size();
     }
 
     /**
-     * Lists sorted Parquet files below a table directory.
-     *
-     * @param tablePath table directory
-     * @return sorted Parquet file statuses
-     * @throws IOException on file-system access failure
-     */
-    private List<LocatedFileStatus> parquetFiles(Path tablePath) throws IOException {
-        List<LocatedFileStatus> result = new ArrayList<>();
-        RemoteIterator<LocatedFileStatus> iterator = fileSystem.listFiles(tablePath, true);
-        while (iterator.hasNext()) {
-            LocatedFileStatus file = iterator.next();
-            if (file.isFile()
-                    && file.getPath().getName().toLowerCase()
-                    .endsWith(PARQUET_EXTENSION)) {
-                result.add(file);
-            }
-        }
-        result.sort(Comparator.comparing(file -> file.getPath().toString()));
-        return result;
-    }
-
-    /**
-     * Resolves a table path without platform-specific delimiters.
+     * Resolves a table directory below the data directory.
      *
      * @param schema schema name
      * @param table table name
-     * @return resolved table path
+     * @return table directory relative to the data directory
      * @throws IllegalArgumentException when the table is named without its schema
      */
-    private Path tablePath(String schema, String table) {
+    private static String tablePath(String schema, String table) {
+        requireSchema(schema, table);
+        return schema + "/" + table;
+    }
+
+    /**
+     * Refuses a table named without its schema.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @throws IllegalArgumentException when the schema is missing
+     */
+    private static void requireSchema(String schema, String table) {
         if (schema == null || schema.isEmpty()) {
             throw new IllegalArgumentException("Name the table with its schema (schema." + table
                     + "): partial results need it; complete answers also find tables without a schema");
         }
-        return new Path(new Path(dataDirectory, schema), table);
+    }
+
+    /**
+     * Names a path below the data directory for logs.
+     *
+     * @param relativePath path below the data directory
+     * @return data directory and path
+     */
+    private String location(String relativePath) {
+        return dataDirectory.endsWith("/")
+                ? dataDirectory + relativePath : dataDirectory + "/" + relativePath;
     }
 
     /**
      * Builds a stable fingerprint from table file inventory.
      *
-     * @param files sorted Parquet file statuses
+     * @param files sorted Parquet files
      * @return inventory fingerprint
      */
-    private static String inventoryFingerprint(List<LocatedFileStatus> files) {
+    private static String inventoryFingerprint(List<DataFile> files) {
         StringBuilder result = new StringBuilder();
-        for (LocatedFileStatus file : files) {
-            result.append(file.getPath()).append(':')
-                    .append(file.getLen()).append(':')
-                    .append(file.getModificationTime()).append(';');
+        for (DataFile file : files) {
+            result.append(file.relativePath()).append(':')
+                    .append(file.size()).append(':')
+                    .append(file.modificationTime()).append(';');
         }
         return result.toString();
     }
@@ -390,7 +362,7 @@ public class ParquetAdapter {
      * @param relativePath relative path below the data directory
      * @param expectedLength length published in cluster inventory
      * @return cached footer metadata
-     * @throws IOException on file-system access failure
+     * @throws IOException on storage access failure
      */
     private CachedParquetMetadata parquetMetadata(
             String relativePath, long expectedLength) throws IOException {
@@ -400,29 +372,26 @@ public class ParquetAdapter {
                 && current.length() == expectedLength) {
             return current;
         }
-        Path path = new Path(dataDirectory, relativePath);
-        FileStatus status = fileSystem.getFileStatus(path);
-        if (status.getLen() != expectedLength) {
+        DataFile file = store.file(relativePath);
+        if (file.size() != expectedLength) {
             throw new IOException("Parquet inventory size changed for " + relativePath);
         }
-        return readParquetMetadata(relativePath, path, status.getLen(),
-                status.getModificationTime(), now);
+        return readParquetMetadata(file, now);
     }
 
     /**
      * Reads and caches schema and row count from one Parquet footer.
      *
-     * @param relativePath cache key below the data directory
-     * @param path absolute Hadoop path
-     * @param length file length
-     * @param modificationTime file modification time
+     * @param file listed or looked-up file; its relative path is the cache key
      * @param now current monotonic time
      * @return cached footer metadata
      * @throws IOException on footer read failure
      */
-    private CachedParquetMetadata readParquetMetadata(String relativePath,
-            Path path, long length, long modificationTime, long now)
+    private CachedParquetMetadata readParquetMetadata(DataFile file, long now)
             throws IOException {
+        String relativePath = file.relativePath();
+        long length = file.size();
+        long modificationTime = file.modificationTime();
         CachedParquetMetadata current = parquetMetadataCache.get(relativePath);
         if (current != null && current.length() == length
                 && current.modificationTime() == modificationTime) {
@@ -432,20 +401,7 @@ public class ParquetAdapter {
             parquetMetadataCache.put(relativePath, refreshed);
             return refreshed;
         }
-        try (ParquetFileReader reader = ParquetFileReader.open(
-                new org.apache.parquet.io.InputFile() {
-                    @Override
-                    public long getLength() {
-                        return length;
-                    }
-
-                    @Override
-                    public org.apache.parquet.io.SeekableInputStream newStream()
-                            throws IOException {
-                        return org.apache.parquet.hadoop.util.HadoopStreams.wrap(
-                                fileSystem.open(path));
-                    }
-                })) {
+        try (ParquetFileReader reader = ParquetFileReader.open(store.inputFile(file))) {
             MessageType parquetSchema =
                     reader.getFooter().getFileMetaData().getSchema();
             long rowCount = reader.getFooter().getBlocks().stream()
@@ -456,18 +412,6 @@ public class ParquetAdapter {
             parquetMetadataCache.put(relativePath, metadata);
             return metadata;
         }
-    }
-
-    /**
-     * Converts an absolute Hadoop path to a path below the configured data root.
-     *
-     * @param path absolute file path
-     * @return relative path
-     * @throws IOException when the data root cannot be resolved
-     */
-    private String relativePath(Path path) throws IOException {
-        URI root = fileSystem.getFileStatus(new Path(dataDirectory)).getPath().toUri();
-        return root.relativize(path.toUri()).toString();
     }
 
     /**
@@ -561,8 +505,8 @@ public class ParquetAdapter {
      * @throws IOException on filesystem read failure
      */
     private CatalogSnapshot loadCatalog() throws IOException {
-        Map<String, Path> schemas = Map.copyOf(scanSchemas());
-        Map<String, Map<String, Path>> tables = scanTables(schemas);
+        Map<String, String> schemas = Map.copyOf(scanSchemas());
+        Map<String, Map<String, String>> tables = scanTables(schemas);
         Map<String, Map<String, String>> ddls = new HashMap<>();
         StringBuilder ddlBuilder = new StringBuilder();
         tables.forEach((schemaName, tablesMap) -> {
@@ -594,14 +538,12 @@ public class ParquetAdapter {
      *
      * @param query SQL query
      * @return map of relative file path to FileAssignment with locality info
-     * @throws IOException on HDFS read failure
+     * @throws IOException on storage read failure
      */
-    @SuppressWarnings("java:S3776") // Locality calculation mirrors the Hadoop block hierarchy.
     public Map<String, FileAssignment> locationsForQuery(String query) throws IOException {
         long t = LogUtil.mark();
         ParquetQueryParser parsedQuery = ParquetQueryParser.parse(query);
         Map<String, FileAssignment> result = new HashMap<>();
-        URI dataDirectoryURI = fileSystem.getFileStatus(new Path(dataDirectory)).getPath().toUri();
 
         int fileCount = 0;
         long totalBytes = 0;
@@ -610,19 +552,14 @@ public class ParquetAdapter {
             for (ParquetQueryParser.JoinTable jt : parsedQuery.joinTables) {
                 validateName(jt.schema());
                 validateName(jt.table());
-                Path parquetPath = tablePath(jt.schema(), jt.table());
+                String parquetPath = tablePath(jt.schema(), jt.table());
                 LOGGER.debug("node={} parquet=discover table={}.{} path={}",
-                        LogUtil.node(), jt.schema(), jt.table(), parquetPath);
-                RemoteIterator<LocatedFileStatus> filesIter = fileSystem.listFiles(parquetPath, true);
-                while (filesIter.hasNext()) {
-                    LocatedFileStatus file = filesIter.next();
-                    if (file.isDirectory() || !file.getPath().getName().toLowerCase().endsWith(PARQUET_EXTENSION)) {
-                        continue;
-                    }
-                    String relativePath = dataDirectoryURI.relativize(file.getPath().toUri()).toString();
-                    result.putIfAbsent(relativePath, new FileAssignment(file.getLen(), fileLocality(file).keySet()));
+                        LogUtil.node(), jt.schema(), jt.table(), location(parquetPath));
+                for (DataFile file : store.parquetFiles(parquetPath)) {
+                    result.putIfAbsent(file.relativePath(),
+                            new FileAssignment(file.size(), file.hosts()));
                     fileCount++;
-                    totalBytes += file.getLen();
+                    totalBytes += file.size();
                 }
                 LogUtil.logTiming(t, "schema.discoverJoinTable", TABLE_TIMING_PREFIX + jt.schema() + "." + jt.table() + " files=" + fileCount + " bytes=" + totalBytes);
             }
@@ -631,19 +568,13 @@ public class ParquetAdapter {
 
         validateName(parsedQuery.schema);
         validateName(parsedQuery.table);
-        Path parquetPath = tablePath(parsedQuery.schema, parsedQuery.table);
+        String parquetPath = tablePath(parsedQuery.schema, parsedQuery.table);
         LOGGER.debug("node={} parquet=discover table={}.{} path={}",
-                LogUtil.node(), parsedQuery.schema, parsedQuery.table, parquetPath);
-        RemoteIterator<LocatedFileStatus> filesIter = fileSystem.listFiles(parquetPath, true);
-        while (filesIter.hasNext()) {
-            LocatedFileStatus file = filesIter.next();
-            if (file.isDirectory() || !file.getPath().getName().toLowerCase().endsWith(PARQUET_EXTENSION)) {
-                continue;
-            }
-            String relativePath = dataDirectoryURI.relativize(file.getPath().toUri()).toString();
-            result.put(relativePath, new FileAssignment(file.getLen(), fileLocality(file).keySet()));
+                LogUtil.node(), parsedQuery.schema, parsedQuery.table, location(parquetPath));
+        for (DataFile file : store.parquetFiles(parquetPath)) {
+            result.put(file.relativePath(), new FileAssignment(file.size(), file.hosts()));
             fileCount++;
-            totalBytes += file.getLen();
+            totalBytes += file.size();
         }
         LogUtil.logTiming(t, "schema.discover", TABLE_TIMING_PREFIX + (parsedQuery.schema != null ? parsedQuery.schema + "." : "") + (parsedQuery.table != null ? parsedQuery.table : "") + " files=" + fileCount + " bytes=" + totalBytes);
         return result;
@@ -655,65 +586,10 @@ public class ParquetAdapter {
      * locations are mapped to the configured storage host.
      *
      * @return relative Parquet path to file size
-     * @throws IOException on file-system access failure
+     * @throws IOException on storage access failure
      */
     public Map<String, Long> localFileInventory() throws IOException {
-        long t = LogUtil.mark();
-        Map<String, Long> result = new LinkedHashMap<>();
-        Path root = new Path(this.dataDirectory);
-        if (!this.fileSystem.exists(root)) {
-            LOGGER.warn("node={} parquet=inventoryDataDirNotFound path={}",
-                    LogUtil.node(), this.dataDirectory);
-            return result;
-        }
-
-        URI rootUri = this.fileSystem.getFileStatus(root).getPath().toUri();
-        RemoteIterator<LocatedFileStatus> files = this.fileSystem.listFiles(root, true);
-        int scanned = 0;
-        while (files.hasNext()) {
-            LocatedFileStatus file = files.next();
-            scanned++;
-            if (file.isFile()
-                    && file.getPath().getName().toLowerCase().endsWith(PARQUET_EXTENSION)
-                    && hasLocalBlock(fileLocality(file).keySet(), localhost)) {
-                String relativePath = rootUri.relativize(file.getPath().toUri()).toString();
-                result.put(relativePath, file.getLen());
-            }
-        }
-        long totalBytes = result.values().stream().mapToLong(Long::longValue).sum();
-        LogUtil.logTiming(t, "parquet.localInventory", "localFiles=" + result.size() + " scanned=" + scanned + " totalBytes=" + totalBytes);
-        return result;
-    }
-
-    static boolean hasLocalBlock(java.util.Set<String> blockHosts, String localHost) {
-        String normalizedLocalHost = HostUtils.normalize(localHost);
-        return blockHosts.stream()
-                .map(HostUtils::normalize)
-                .anyMatch(normalizedLocalHost::equals);
-    }
-
-    /**
-     * Returns block locality for a file, mapping host to block count.
-     *
-     * @param locatedFileStatus file status
-     * @return ordered map of host to block count
-     */
-    public LinkedHashMap<String, Long> fileLocality(LocatedFileStatus locatedFileStatus) {
-        Objects.requireNonNull(locatedFileStatus);
-        return Arrays.stream(locatedFileStatus.getBlockLocations())
-                .flatMap(bl -> {
-                    try {
-                        return Stream.of(bl.getHosts())
-                                .map(host -> LOOPBACK_HOSTS.contains(host) ? localhost : host);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                })
-                .collect(Collectors.groupingBy(h -> h, Collectors.counting()))
-                .entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
-                        (e1, e2) -> e1, LinkedHashMap::new));
+        return store.localInventory(localhost);
     }
 
     /**
@@ -741,12 +617,12 @@ public class ParquetAdapter {
     }
 
     /**
-     * Returns the Hadoop filesystem instance.
+     * Returns the store of the data directory.
      *
-     * @return FileSystem
+     * @return data store
      */
-    public FileSystem fileSystem() {
-        return fileSystem;
+    public DataStore dataStore() {
+        return store;
     }
 
     /**
@@ -756,27 +632,23 @@ public class ParquetAdapter {
      * @return true unless the data directory is on the local file system
      */
     public boolean sharedStorage() {
-        String scheme = fileSystem.getUri().getScheme();
-        return scheme != null && !"file".equalsIgnoreCase(scheme);
+        return store.shared();
     }
 
     /**
      * Scans data directory for schema directories and caches them.
      *
-     * @throws IOException on HDFS read failure
+     * @throws IOException on storage read failure
      */
-    private Map<String, Path> scanSchemas() throws IOException {
+    private Map<String, String> scanSchemas() throws IOException {
         LOGGER.info("Initializing schema cache for data directory: {}", dataDirectory);
-        Path dirPath = new Path(dataDirectory);
 
-        if (!fileSystem.exists(dirPath)) {
+        if (!store.exists("")) {
             LOGGER.info("Data directory does not exist: {}", dataDirectory);
             return Collections.emptyMap();
         }
 
-        Map<String, Path> result = Arrays.stream(fileSystem.listStatus(dirPath))
-                .filter(FileStatus::isDirectory)
-                .collect(Collectors.toMap(status -> status.getPath().getName(), FileStatus::getPath));
+        Map<String, String> result = store.directories("");
 
         LOGGER.info("Collected schemas: {}", result);
         return result;
@@ -785,25 +657,21 @@ public class ParquetAdapter {
     /**
      * Scans each schema directory for table directories and caches them.
      *
-     * @throws IOException on HDFS read failure
+     * @throws IOException on storage read failure
      */
-    private Map<String, Map<String, Path>> scanTables(Map<String, Path> schemas)
+    private Map<String, Map<String, String>> scanTables(Map<String, String> schemas)
             throws IOException {
         LOGGER.info("Initializing table cache for data directory: {}", dataDirectory);
-        Path schemaPath = new Path(dataDirectory);
 
-        if (!fileSystem.exists(schemaPath)) {
+        if (!store.exists("")) {
             LOGGER.info("Data directory does not exist: {}", dataDirectory);
             return Collections.emptyMap();
         }
 
-        Map<String, Map<String, Path>> result = new HashMap<>();
-        for (Map.Entry<String, Path> schema : schemas.entrySet()) {
+        Map<String, Map<String, String>> result = new HashMap<>();
+        for (Map.Entry<String, String> schema : schemas.entrySet()) {
             LOGGER.info("Collecting tables for schema: {} at path {}", schema.getKey(), schema.getValue());
-            Map<String, Path> tables = Arrays.stream(fileSystem.listStatus(schema.getValue()))
-                    .filter(FileStatus::isDirectory)
-                    .collect(Collectors.toMap(status -> status.getPath().getName(), FileStatus::getPath));
-            result.put(schema.getKey(), Map.copyOf(tables));
+            result.put(schema.getKey(), Map.copyOf(store.directories(schema.getKey())));
         }
 
         LOGGER.info("Collected tables: {}", result);

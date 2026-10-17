@@ -94,7 +94,9 @@ class ArrowFlightPerfTest {
 
             // ── build parquet paths for local DuckDB ──────────────────────
             String parquetDir = dataDir + "/" + schema + "/" + table;
-            String[] parquetUris = findParquetFiles(helper.parquetAdapter.fileSystem(), parquetDir);
+            org.apache.hadoop.fs.LocalFileSystem localFs = new org.apache.hadoop.fs.LocalFileSystem();
+            localFs.initialize(java.net.URI.create("file:///"), new org.apache.hadoop.conf.Configuration());
+            String[] parquetUris = findParquetFiles(localFs, parquetDir);
             System.out.println("Parquet files  : " + Arrays.toString(parquetUris));
             System.out.println();
 
