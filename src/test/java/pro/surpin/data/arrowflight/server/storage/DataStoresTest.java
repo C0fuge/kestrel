@@ -40,14 +40,13 @@ class DataStoresTest {
         assertEquals("hadoop", DataStores.kindOf(null));
     }
 
-    /** Verifies an S3 data directory fails with a clear message until S3 is built in. */
+    /** Verifies an S3 data directory without credentials fails before anything is listed. */
     @Test
-    void s3IsRefusedInThisBuild() {
+    void s3WithoutCredentialsIsRefused() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> DataStores.open(config("s3://lake/parquet"), new Configuration(), "localhost"));
 
-        assertTrue(e.getMessage().contains("S3 storage is not available in this build"),
-                e.getMessage());
+        assertTrue(e.getMessage().contains("without credentials"), e.getMessage());
     }
 
     /** Verifies a local directory opens a Hadoop store with the client read options set. */

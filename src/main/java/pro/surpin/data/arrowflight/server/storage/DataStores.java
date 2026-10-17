@@ -52,14 +52,13 @@ public final class DataStores {
      * @param hadoopConfig Hadoop configuration, which receives the client read options
      * @param storageHost storage host colocated with this server
      * @return data store
-     * @throws IllegalArgumentException when the data directory is on storage this build cannot read
+     * @throws IllegalArgumentException when the S3 settings cannot reach an S3 data directory
      * @throws UncheckedIOException when the file system cannot be opened
      */
     public static DataStore open(AppConfig config, Configuration hadoopConfig, String storageHost) {
         String dataDirectory = config.dataDir();
         if ("s3".equals(kindOf(dataDirectory))) {
-            throw new IllegalArgumentException("S3 storage is not available in this build: dataDir="
-                    + dataDirectory);
+            return S3DataStore.open(config);
         }
         hadoopConfig.setInt("io.file.buffer.size", config.ioFileBufferSize());
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);
