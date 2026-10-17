@@ -234,20 +234,16 @@ public final class HadoopDataStore implements DataStore {
     }
 
     /**
-     * Converts a qualified URI to the path DuckDB reads: local files lose their "file:" scheme.
+     * Converts a qualified URI to the path DuckDB reads: local files become plain paths, with
+     * escaped characters decoded ({@code file:/a/part%201.parquet} → {@code /a/part 1.parquet}).
      *
      * @param uri qualified URI
      * @return DuckDB path
      */
     static String duckDbPath(String uri) {
         if (uri.startsWith("file:")) {
-            int colon = uri.indexOf(':');
-            // file:///path → /path,  file:/path → /path
-            String stripped = uri.substring(colon + 1);
-            while (stripped.startsWith("/")) {
-                stripped = stripped.substring(1);
-            }
-            return "/" + stripped;
+            // file:///path and file:/path both name /path.
+            return URI.create(uri).getPath();
         }
         return uri;
     }

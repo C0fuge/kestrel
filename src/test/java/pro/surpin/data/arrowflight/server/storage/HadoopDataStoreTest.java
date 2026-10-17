@@ -186,6 +186,16 @@ class HadoopDataStoreTest {
         assertEquals("/data/file.parquet", HadoopDataStore.duckDbPath("file:///data/file.parquet"));
     }
 
+    /** Verifies a local file whose name needs escaping reaches DuckDB as its real path. */
+    @Test
+    void duckDbUriOfEscapedLocalNameIsTheFilePath() throws Exception {
+        Files.createDirectories(root.resolve("s3/t 1"));
+        Files.writeString(root.resolve("s3/t 1/part 1%.parquet"), "x");
+        String path = store("localhost").duckDbUri("s3/t 1/part 1%.parquet");
+        assertTrue(Files.exists(java.nio.file.Path.of(path)), path);
+        assertEquals("/data/a b/c%d.parquet", HadoopDataStore.duckDbPath("file:/data/a%20b/c%25d.parquet"));
+    }
+
     /** Verifies URIs of shared file systems reach DuckDB unchanged. */
     @Test
     void duckDbPathPreservesNonFileScheme() {
