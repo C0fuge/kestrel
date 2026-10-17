@@ -276,4 +276,73 @@ class ConfigAdapterTest {
 
         assertThrows(IllegalArgumentException.class, ConfigAdapter::getConfig);
     }
+
+    @Test
+    void s3SettingsDefaults() {
+        pro.surpin.data.arrowflight.server.storage.S3Settings s3 = ConfigAdapter.getConfig().s3();
+
+        assertNull(s3.endpoint());
+        assertEquals("us-east-1", s3.region());
+        assertEquals("path", s3.urlStyle());
+        assertTrue(s3.verifyTls());
+        assertEquals(30, s3.listingTtlSeconds());
+        assertEquals(ConfigAdapter.getConfig().ioParallelism(), s3.maxConnections());
+        assertTrue(s3.metadataCache());
+        assertFalse(s3.hasCredentials());
+    }
+
+    @Test
+    void s3SettingsFromSystemPropertiesAndEnvironment() {
+        setProp("s3Endpoint", "http://minio:9000");
+        setProp("arrowflight.s3.region", "eu-west-3");
+        setProp("s3UrlStyle", "VHOST");
+        setProp("s3ListingTtlSeconds", "5");
+        setProp("s3MaxConnections", "7");
+        setProp("duckDbHttpfsExtension", "/ext/httpfs.duckdb_extension");
+        setProp("duckDbS3MetadataCache", "false");
+
+        pro.surpin.data.arrowflight.server.storage.S3Settings s3 = ConfigAdapter.s3Settings(
+                new java.util.Properties(), 16, true,
+                java.util.Map.of("FLIGHT_S3_ACCESS_KEY", "AK", "FLIGHT_S3_SECRET_KEY", "SK"));
+
+        assertEquals("http://minio:9000", s3.endpoint());
+        assertEquals("eu-west-3", s3.region());
+        assertEquals("vhost", s3.urlStyle());
+        assertEquals(5, s3.listingTtlSeconds());
+        assertEquals(7, s3.maxConnections());
+        assertEquals("/ext/httpfs.duckdb_extension", s3.httpfsExtension());
+        assertFalse(s3.metadataCache());
+        assertEquals("AK", s3.accessKey());
+        assertEquals("SK", s3.secretKey());
+    }
+
+    @Test
+    void s3CredentialsAreReadOnlyForAnS3DataDirectory() {
+        pro.surpin.data.arrowflight.server.storage.S3Settings s3 = ConfigAdapter.s3Settings(
+                new java.util.Properties(), 16, false,
+                java.util.Map.of("FLIGHT_S3_ACCESS_KEY", "AK", "FLIGHT_S3_SECRET_KEY", "SK"));
+
+        assertFalse(s3.hasCredentials());
+        assertEquals(16, s3.maxConnections());
+    }
+
+    @Test
+    void s3SecretAsSystemPropertyIsAStartupError() {
+        setProp("s3SecretKey", "do-not-pass-me-here");
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                ConfigAdapter::getConfig);
+
+        assertTrue(e.getMessage().contains("s3SecretKey"), e.getMessage());
+        assertFalse(e.getMessage().contains("do-not-pass-me-here"), e.getMessage());
+    }
+
+    @Test
+    void s3SecretInPropertiesFileIsAStartupError() {
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("arrowflight.s3.secretKey", "x");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.s3Settings(props, 16, true, java.util.Map.of()));
+    }
 }
