@@ -127,14 +127,26 @@ public final class QueryPlanner {
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
 
-        boolean loadTracked = hasReplicatedFiles(pathLocations, allServerUris);
         List<FlightEndpoint> endpoints;
-        if (parsed.isJoin) {
-            endpoints = joinEndpoints(
-                    query, pathLocations, allServerUris, loadTracked);
+        if (parquetAdapter.withoutLocality()) {
+            // Every node reads every file equally well: balance by bytes, also across queries.
+            boolean loadTracked = allServerUris.size() > 1;
+            if (parsed.isJoin) {
+                endpoints = joinEndpointsWithoutLocality(query, sourceCacheKey(parsed),
+                        pathLocations, cluster.serverLoads(), loadTracked);
+            } else {
+                endpoints = distributeEndpointsWithoutLocality(query, pathLocations,
+                        new HashMap<>(cluster.serverLoads()), loadTracked);
+            }
         } else {
-            endpoints = distributeEndpoints(query, pathLocations,
-                    new HashMap<>(cluster.serverLoads()), loadTracked);
+            boolean loadTracked = hasReplicatedFiles(pathLocations, allServerUris);
+            if (parsed.isJoin) {
+                endpoints = joinEndpoints(
+                        query, pathLocations, allServerUris, loadTracked);
+            } else {
+                endpoints = distributeEndpoints(query, pathLocations,
+                        new HashMap<>(cluster.serverLoads()), loadTracked);
+            }
         }
         long totalBytes = pathLocations.values().stream()
                 .mapToLong(FileAssignment::size).sum();
@@ -208,6 +220,13 @@ public final class QueryPlanner {
 
     private Map<String, FileAssignment> validatedPathLocations(
             ParquetQueryParser parsed, Set<String> allServerUris) throws IOException {
+        if (parquetAdapter.withoutLocality()) {
+            // The store's own listing is current (and cached by the store); node inventories
+            // are empty without locality.
+            Map<String, FileAssignment> listed = listedFiles(parsed);
+            validatePathLocations(listed, parsed, allServerUris, parquetAdapter.sharedStorage());
+            return listed;
+        }
         String cacheKey = sourceCacheKey(parsed);
         long now = System.nanoTime();
         CachedFilePlan cached = filePlanCache.get(cacheKey);
@@ -252,6 +271,57 @@ public final class QueryPlanner {
                     immutable, now + FILE_PLAN_TTL_NANOS));
         }
         return immutable;
+    }
+
+    /**
+     * Lists the files of the tables a query reads from the data store, for storage without
+     * locality. Tables are matched by name the way node inventories are matched: in any case,
+     * and in every schema when the query names none.
+     *
+     * @param parsed parsed SQL query
+     * @return relative path to size, without hosts, in path order per table
+     * @throws IOException on storage access failure
+     */
+    private Map<String, FileAssignment> listedFiles(ParquetQueryParser parsed) throws IOException {
+        Map<String, FileAssignment> result = new LinkedHashMap<>();
+        if (parsed.isJoin) {
+            for (ParquetQueryParser.JoinTable table : parsed.joinTables) {
+                addListedFiles(result, table.schema(), table.table());
+            }
+        } else {
+            addListedFiles(result, parsed.schema, parsed.table);
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
+    /**
+     * Adds the files of every table with a name to a file map.
+     *
+     * @param result file map to add to
+     * @param schema schema name, or null for every schema
+     * @param table table name
+     * @throws IOException on storage access failure
+     */
+    private void addListedFiles(Map<String, FileAssignment> result, String schema, String table)
+            throws IOException {
+        if (table == null) {
+            return;
+        }
+        for (String schemaName : new java.util.TreeSet<>(parquetAdapter.getSchemas(null).keySet())) {
+            if (schema != null && !schema.isEmpty() && !schemaName.equalsIgnoreCase(schema)) {
+                continue;
+            }
+            for (String tableName : new java.util.TreeSet<>(
+                    parquetAdapter.getTables(schemaName, null).keySet())) {
+                if (tableName.equalsIgnoreCase(table)) {
+                    for (pro.surpin.data.arrowflight.server.storage.DataFile file
+                            : parquetAdapter.tableFiles(schemaName, tableName)) {
+                        result.putIfAbsent(file.relativePath(),
+                                new FileAssignment(file.size(), Set.of()));
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -334,6 +404,125 @@ public final class QueryPlanner {
             }
         }
         return endpoints;
+    }
+
+    /**
+     * Runs a join on one node when every node reads every file equally well: the least loaded
+     * one, ties broken by a hash of the joined tables, so that joins spread over the cluster
+     * instead of all going to the node with the smallest URI.
+     *
+     * @param query SQL query
+     * @param tablesKey normalized names of the joined tables
+     * @param pathLocations files of the joined tables
+     * @param serverLoads current load by live server
+     * @param loadTracked whether the join's bytes count toward the node's load
+     * @return one endpoint
+     */
+    private List<FlightEndpoint> joinEndpointsWithoutLocality(String query, String tablesKey,
+            Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoads,
+            boolean loadTracked) {
+        String server = leastLoadedServer(tablesKey, serverLoads);
+        long addedBytes = pathLocations.values().stream()
+                .mapToLong(FileAssignment::size).sum();
+        FlightEndpoint ep = createEndpoint(server,
+                new ArrayList<>(pathLocations.keySet()), query, addedBytes, loadTracked);
+        if (loadTracked) {
+            clusterService.addLoad(server, addedBytes);
+        }
+        return List.of(ep);
+    }
+
+    private List<FlightEndpoint> distributeEndpointsWithoutLocality(String query,
+            Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad,
+            boolean loadTracked) {
+        Map<String, List<String>> serverToFiles =
+                assignWithoutLocality(pathLocations, serverLoad);
+        List<FlightEndpoint> endpoints = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : serverToFiles.entrySet()) {
+            long addedBytes = entry.getValue().stream()
+                    .mapToLong(file -> pathLocations.get(file).size()).sum();
+            endpoints.add(createEndpoint(entry.getKey(), entry.getValue(),
+                    query, addedBytes, loadTracked));
+            if (loadTracked) {
+                clusterService.addLoad(entry.getKey(), addedBytes);
+            }
+        }
+        return endpoints;
+    }
+
+    /**
+     * Assigns files to nodes when every node reads every file equally well: largest file first,
+     * each to the node with the least load so far (the load of running queries plus the files
+     * assigned here), ties broken by a rendezvous hash of file and node. A table of one file thus
+     * lands on a different node per file name instead of always on the same node.
+     *
+     * @param pathLocations files to assign
+     * @param serverLoad current load by live server; updated with the assigned bytes
+     * @return node to its files, in path order per node, nodes in URI order
+     */
+    static Map<String, List<String>> assignWithoutLocality(
+            Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad) {
+        List<Map.Entry<String, FileAssignment>> files = new ArrayList<>(pathLocations.entrySet());
+        files.sort(Comparator.<Map.Entry<String, FileAssignment>>comparingLong(
+                entry -> entry.getValue().size()).reversed()
+                .thenComparing(Map.Entry::getKey));
+        Map<String, List<String>> assigned = new java.util.TreeMap<>();
+        for (Map.Entry<String, FileAssignment> file : files) {
+            String server = leastLoadedServer(file.getKey(), serverLoad);
+            assigned.computeIfAbsent(server, k -> new ArrayList<>()).add(file.getKey());
+            serverLoad.merge(server, file.getValue().size(), Long::sum);
+        }
+        for (List<String> serverFiles : assigned.values()) {
+            Collections.sort(serverFiles);
+        }
+        return assigned;
+    }
+
+    /**
+     * Picks the node with the least load; among equally loaded nodes the one with the highest
+     * rendezvous hash for the key, which every planner computes the same way.
+     *
+     * @param key what is placed: a file path or a set of tables
+     * @param serverLoad load by live server
+     * @return server URI
+     */
+    static String leastLoadedServer(String key, Map<String, Long> serverLoad) {
+        String best = null;
+        long bestLoad = Long.MAX_VALUE;
+        long bestHash = 0;
+        for (Map.Entry<String, Long> server : serverLoad.entrySet()) {
+            long load = server.getValue() == null ? 0L : server.getValue();
+            long hash = rendezvousHash(key, server.getKey());
+            if (best == null || load < bestLoad || (load == bestLoad
+                    && (hash > bestHash || (hash == bestHash && server.getKey().compareTo(best) < 0)))) {
+                best = server.getKey();
+                bestLoad = load;
+                bestHash = hash;
+            }
+        }
+        if (best == null) {
+            throw new IllegalStateException("No live Flight servers to assign " + key + " to");
+        }
+        return best;
+    }
+
+    /**
+     * Hashes a key with a node, the same on every JVM: 64-bit FNV-1a over the UTF-8 bytes of
+     * both, finished with the SplitMix64 mixer.
+     *
+     * @param key placed key
+     * @param server server URI
+     * @return hash
+     */
+    static long rendezvousHash(String key, String server) {
+        long hash = 0xcbf29ce484222325L;
+        for (byte b : (key + "\n" + server).getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            hash ^= b & 0xff;
+            hash *= 0x100000001b3L;
+        }
+        hash = (hash ^ (hash >>> 30)) * 0xbf58476d1ce4e5b9L;
+        hash = (hash ^ (hash >>> 27)) * 0x94d049bb133111ebL;
+        return hash ^ (hash >>> 31);
     }
 
     /**

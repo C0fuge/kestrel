@@ -462,4 +462,148 @@ class QueryPlannerTest {
         assertThrows(IOException.class,
                 () -> new QueryPlanner(parquetAdapter, clusterService).plan("SELECT * FROM s.t"));
     }
+
+    // ── no locality (object stores) ─────────────────────────────────────────
+
+    private static final String S3 = "grpc://127.0.0.3:32010";
+
+    /** Verifies files go largest first to the least loaded node. */
+    @Test
+    void withoutLocalityLargestFileGoesToLeastLoadedNode() {
+        Map<String, FileAssignment> files = new LinkedHashMap<>();
+        files.put("s/t/small.parquet", new FileAssignment(10, Set.of()));
+        files.put("s/t/big.parquet", new FileAssignment(1000, Set.of()));
+        files.put("s/t/mid.parquet", new FileAssignment(600, Set.of()));
+        files.put("s/t/mid2.parquet", new FileAssignment(500, Set.of()));
+        Map<String, Long> load = new HashMap<>(Map.of(S1, 0L, S2, 300L));
+
+        Map<String, List<String>> assigned = QueryPlanner.assignWithoutLocality(files, load);
+
+        // big -> S1 (0); mid -> S2 (300 < 1000); mid2 -> S2 (900 < 1000); small -> S1 (1000 < 1400).
+        assertEquals(List.of("s/t/big.parquet", "s/t/small.parquet"), assigned.get(S1));
+        assertEquals(List.of("s/t/mid.parquet", "s/t/mid2.parquet"), assigned.get(S2));
+        assertEquals(1010L, load.get(S1));
+        assertEquals(1400L, load.get(S2));
+    }
+
+    /** Verifies equally loaded nodes are chosen by a rendezvous hash, so one-file tables spread. */
+    @Test
+    void withoutLocalityTiesSpreadSingleFileTables() {
+        Map<String, Long> idle = Map.of(S1, 0L, S2, 0L, S3, 0L);
+        Set<String> chosen = new HashSet<>();
+        for (String table : List.of("region", "nation", "supplier", "customer", "part", "orders",
+                "partsupp", "lineitem", "t1", "t2", "t3", "t4")) {
+            String file = "tpch/" + table + "/data_0.parquet";
+            String server = QueryPlanner.leastLoadedServer(file, idle);
+            assertEquals(server, QueryPlanner.leastLoadedServer(file, new TreeMap<>(idle)),
+                    "same choice whatever the map order");
+            chosen.add(server);
+        }
+
+        assertEquals(Set.of(S1, S2, S3), chosen);
+        assertEquals(S2, QueryPlanner.leastLoadedServer("x", Map.of(S1, 5L, S2, 1L, S3, 5L)));
+    }
+
+    /** Verifies the hash does not depend on the JVM. */
+    @Test
+    void rendezvousHashIsStable() {
+        assertEquals(QueryPlanner.rendezvousHash("tpch/region/data_0.parquet", S1),
+                QueryPlanner.rendezvousHash("tpch/region/data_0.parquet", S1));
+        assertNotEquals(QueryPlanner.rendezvousHash("a", S1), QueryPlanner.rendezvousHash("a", S2));
+        assertNotEquals(QueryPlanner.rendezvousHash("ab", "c"), QueryPlanner.rendezvousHash("a", "bc"));
+    }
+
+    /** Verifies planning reads the store's listing, not node inventories, and tracks load. */
+    @Test
+    void withoutLocalityPlansFromTheListingAndTracksLoad() throws Exception {
+        stubListing();
+        // S2 is busier by one byte: the larger file goes to S1, the other to S2.
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 1L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        when(parquetAdapter.estimateRowCount(anyMap())).thenReturn(7L);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan("SELECT * FROM TPCH.LINEITEM");
+
+        assertEquals(2, plan.endpoints().size());
+        assertEquals(700L, plan.totalBytes());
+        verify(clusterService, never()).fileLocations();
+        verify(clusterService).addLoad(S1, 400L);
+        verify(clusterService).addLoad(S2, 300L);
+        verify(parquetAdapter).tableFiles("tpch", "lineitem");
+    }
+
+    /** Verifies a single node gets everything without load tracking. */
+    @Test
+    void withoutLocalityOneNodeDoesNotTrackLoad() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan("SELECT * FROM lineitem");
+
+        assertEquals(1, plan.endpoints().size());
+        verify(clusterService, never()).addLoad(anyString(), anyLong());
+    }
+
+    /** Verifies joins go to the least loaded node, ties spread by the joined tables. */
+    @Test
+    void withoutLocalityJoinsSpread() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 50L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan(
+                "SELECT l.a FROM tpch.lineitem l JOIN tpch.nation n ON l.a = n.a");
+
+        assertEquals(1, plan.endpoints().size());
+        assertEquals(S1, plan.endpoints().get(0).getLocations().get(0).getUri().toString());
+        verify(clusterService).addLoad(S1, 705L);
+
+        Set<String> chosen = new HashSet<>();
+        for (String tables : List.of("tpch.a|tpch.b", "tpch.c|tpch.d", "tpch.e|tpch.f",
+                "tpch.g|tpch.h", "tpch.i|tpch.j", "tpch.k|tpch.l")) {
+            chosen.add(QueryPlanner.leastLoadedServer(tables, Map.of(S1, 0L, S2, 0L)));
+        }
+        assertEquals(Set.of(S1, S2), chosen);
+    }
+
+    /** Verifies a table missing from the listing fails like a table without files. */
+    @Test
+    void withoutLocalityMissingTableFails() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        assertThrows(IOException.class, () -> planner.plan("SELECT * FROM tpch.orders"));
+    }
+
+    private void stubListing() throws IOException {
+        when(parquetAdapter.localFileInventory()).thenReturn(Map.of());
+        lenient().when(parquetAdapter.withoutLocality()).thenReturn(true);
+        lenient().when(parquetAdapter.getSchemas(null)).thenReturn(Map.of("tpch", "s3://lake/tpch"));
+        lenient().when(parquetAdapter.getTables("tpch", null)).thenReturn(
+                Map.of("lineitem", "s3://lake/tpch/lineitem", "nation", "s3://lake/tpch/nation"));
+        lenient().when(parquetAdapter.tableFiles("tpch", "lineitem")).thenReturn(List.of(
+                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/lineitem/a.parquet",
+                        "s3://lake/tpch/lineitem/a.parquet", 400L, 1L, Set.of()),
+                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/lineitem/b.parquet",
+                        "s3://lake/tpch/lineitem/b.parquet", 300L, 1L, Set.of())));
+        lenient().when(parquetAdapter.tableFiles("tpch", "nation")).thenReturn(List.of(
+                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/nation/n.parquet",
+                        "s3://lake/tpch/nation/n.parquet", 5L, 1L, Set.of())));
+    }
 }

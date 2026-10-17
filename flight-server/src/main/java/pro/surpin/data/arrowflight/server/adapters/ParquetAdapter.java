@@ -636,6 +636,16 @@ public class ParquetAdapter {
     }
 
     /**
+     * Tells whether files have no hosts (object stores): queries are then planned from the
+     * store's listing, not from the nodes' local inventories.
+     *
+     * @return true when the store has no locality
+     */
+    public boolean withoutLocality() {
+        return !store.hasLocality();
+    }
+
+    /**
      * Scans data directory for schema directories and caches them.
      *
      * @throws IOException on storage read failure
