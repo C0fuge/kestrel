@@ -22,6 +22,7 @@ import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**
  * Main entry point for the Hadoop Arrow Flight SQL server.
@@ -131,6 +132,12 @@ public class HadoopArrowFlightServer {
                         flightSecurity.location(localhost, port).getUri().toString(),
                         storageHost, hadoopConfig))
                 .build();
+
+        // Opens the data directory before joining the cluster: storage this build cannot read
+        // fails here, with its reason, instead of after every node has joined.
+        DataStore store = component.dataStore();
+        LOGGER.info("Storage: kind={} shared={} locality={}",
+                store.kind(), store.shared(), store.hasLocality());
 
         // Wait for cluster nodes (single-node skip)
         if (hazelcastHosts.length > 1) {

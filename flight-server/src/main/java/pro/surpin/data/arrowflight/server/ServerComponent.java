@@ -8,6 +8,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**
  * Dagger component for the Flight server.
@@ -30,6 +31,13 @@ public interface ServerComponent {
      * @return cluster service
      */
     ClusterService clusterService();
+
+    /**
+     * Returns the store of the data directory.
+     *
+     * @return data store
+     */
+    DataStore dataStore();
 
     /**
      * Returns the DuckDB adapter for lifecycle management.

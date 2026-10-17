@@ -1019,6 +1019,46 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies the store's setup statements run in every connection before the lockdown. */
+    @Test
+    void storageSetupRunsBeforeLockdown(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool,
+                List.of(dir.toString()), List.of("SET VARIABLE storage_marker = 42"))) {
+            Connection conn = adapter.connection();
+            try (Statement s = conn.createStatement();
+                    ResultSet rs = s.executeQuery("SELECT getvariable('storage_marker')")) {
+                assertTrue(rs.next());
+                assertEquals(42, rs.getInt(1));
+            }
+            try (Statement s = conn.createStatement()) {
+                assertThrows(java.sql.SQLException.class, () -> s.execute("SET enable_external_access = true"));
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies a failing setup statement is not quoted, as it may hold storage credentials. */
+    @Test
+    void storageSetupFailureDoesNotQuoteTheStatement() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, List.of(),
+                List.of("SELECT 1", "CREATE SECRET broken (TYPE nosuchtype, SECRET 'hunter2')"))) {
+            RuntimeException e = assertThrows(RuntimeException.class, adapter::connection);
+            StringBuilder messages = new StringBuilder();
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                messages.append(t.getMessage()).append('\n');
+            }
+            assertTrue(messages.toString().contains("Storage setup statement 2 of 2 failed"),
+                    messages.toString());
+            assertFalse(messages.toString().contains("hunter2"), messages.toString());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /**
      * Builds a configuration for complete-answer tests.
      *

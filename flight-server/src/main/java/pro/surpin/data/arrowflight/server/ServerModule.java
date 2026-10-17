@@ -198,7 +198,8 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, DataStore store) {
-        return new DuckDbAdapter(config, ioPool, store.duckDbRoots());
+        return new DuckDbAdapter(config, ioPool, store.duckDbRoots(),
+                store.duckDbSetupStatements());
     }
 
     /**

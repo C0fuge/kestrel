@@ -61,6 +61,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final AtomicInteger sessionIds = new AtomicInteger();
     /** Directories DuckDB may read when locked down (as DuckDB sees the paths). */
     private final List<String> readableRoots;
+    /** Statements the data store needs in every connection, run before the lockdown. */
+    private final List<String> storageSetupStatements;
     /** First words of the statements a client may run in complete-answer mode. */
     private static final Set<String> QUERY_KEYWORDS = Set.of(
             "select", "with", "values", "from", "table", "describe", "show", "summarize");
@@ -148,7 +150,24 @@ public final class DuckDbAdapter implements AutoCloseable {
      *                      {@code hdfs://cluster/data/parquet}); empty disables the lockdown
      */
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, List<String> readableRoots) {
+        this(appConfig, ioPool, readableRoots, List.of());
+    }
+
+    /**
+     * Creates DuckDB adapter whose connections first run the data store's setup statements and
+     * may then read only the given directories.
+     *
+     * @param appConfig              server configuration
+     * @param ioPool                 shared I/O thread pool for parallel execution
+     * @param readableRoots          data directories as DuckDB sees them; empty disables the
+     *                               lockdown
+     * @param storageSetupStatements statements every connection runs so that it can read the
+     *                               data store, before it is locked down
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, List<String> readableRoots,
+            List<String> storageSetupStatements) {
         this.readableRoots = List.copyOf(readableRoots);
+        this.storageSetupStatements = List.copyOf(storageSetupStatements);
         this.appConfig = appConfig;
         this.ioPool = ioPool;
         this.batchSize = appConfig.batchSize();
@@ -245,6 +264,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 setOptionIfPresent(s, "hdfs_domain_socket_path",
                         appConfig.duckDbHdfsDomainSocketPath());
             }
+            runStorageSetup(s);
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                 // Clients may send any SQL in complete-answer mode, and filters reach DuckDB as
                 // written in the other mode. Only the data and this connection's spill directory
@@ -258,6 +278,24 @@ public final class DuckDbAdapter implements AutoCloseable {
                 restrictExtensions(s);
                 s.execute("SET enable_external_access = false");
                 s.execute("SET lock_configuration = true");
+            }
+        }
+    }
+
+    /**
+     * Runs the data store's setup statements. A failure names the statement by its number only:
+     * such a statement may hold storage credentials, and DuckDB quotes the statement in errors.
+     *
+     * @param s statement of the connection to set up
+     * @throws java.sql.SQLException when a setup statement fails
+     */
+    private void runStorageSetup(Statement s) throws java.sql.SQLException {
+        for (int i = 0; i < storageSetupStatements.size(); i++) {
+            try {
+                s.execute(storageSetupStatements.get(i));
+            } catch (java.sql.SQLException e) {
+                throw new java.sql.SQLException("Storage setup statement " + (i + 1) + " of "
+                        + storageSetupStatements.size() + " failed", e.getSQLState());
             }
         }
     }
