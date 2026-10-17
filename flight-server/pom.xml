@@ -69,6 +69,7 @@
         <junit.version>5.14.4</junit.version>
         <jackson.version>2.15.3</jackson.version>
         <hazelcast.version>5.6.0</hazelcast.version>
+        <aws.sdk.version>2.34.1</aws.sdk.version>
         <checkstyle.failOnViolation>true</checkstyle.failOnViolation>
         <!-- SonarCloud -->
         <sonar.projectKey>VadimSurpin_arrow-flight-server</sonar.projectKey>
@@ -85,6 +86,20 @@
                 <version>${grpc.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws.sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- The SDK's Apache client asks for httpcore 4.4.16; keep the 4.4.13 that Hadoop and
+                 target/libs already use. -->
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpcore</artifactId>
+                <version>4.4.13</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -118,6 +133,24 @@
             <artifactId>hadoop-hdfs</artifactId>
             <version>${hadoop.version}</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- S3 listing and Parquet footers; DuckDB reads the data itself through httpfs.
+             The Netty client is left out: the server uses the Apache client, and gRPC brings
+             its own Netty. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apache-client</artifactId>
         </dependency>
 
         <!-- Embedded Apache Ranger policy evaluator. Hadoop comes from this deployment. -->
