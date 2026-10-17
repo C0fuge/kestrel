@@ -35,8 +35,13 @@ public final class ClusterService implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ClusterService.class);
 
-    private static final long HEARTBEAT_INTERVAL_SEC = 15;
-    private static final long HEARTBEAT_TIMEOUT_SEC = 45;
+    // A node that stops beating is left out of plans after HEARTBEAT_TIMEOUT_SEC; until then
+    // clients may be sent to it and get "connection refused".
+    private static final long HEARTBEAT_INTERVAL_SEC = 3;
+    private static final String PARAMETERS_PREFIX = "parameters:";
+    /** Parameter values of a prepared statement are kept this long after they were sent. */
+    private static final long PARAMETERS_TTL_MINUTES = 30;
+    private static final long HEARTBEAT_TIMEOUT_SEC = 10;
     private static final long HANDLE_TTL_NANOS = TimeUnit.MINUTES.toNanos(10);
     private static final int TICKET_SECRET_BYTES = 32;
     private static final String TICKET_SECRET_KEY = "__arrowflight-ticket-secret-v1";
@@ -47,6 +52,7 @@ public final class ClusterService implements AutoCloseable {
     private final AppConfig appConfig;
     private final String serverUri;
     private final ScheduledExecutorService heartbeatExecutor;
+    private boolean registered;
     private final EndpointTicketCodec endpointTicketCodec;
     private final Map<String, LocalHandle> localHandles = new ConcurrentHashMap<>();
 
@@ -68,28 +74,34 @@ public final class ClusterService implements AutoCloseable {
      * @param serverUri  this server's URI string
      */
     public ClusterService(HazelcastAdapter hazelcast, AppConfig appConfig, String serverUri) {
+        this(hazelcast, appConfig, serverUri, true);
+    }
+
+    /**
+     * Creates a ClusterService for the given server URI, registering it now or later.
+     *
+     * @param hazelcast  Hazelcast adapter
+     * @param appConfig  server configuration
+     * @param serverUri  this server's URI string
+     * @param registerNow whether to register at once; otherwise {@link #register()} does it once
+     *        the server listens, so that no node sends clients to a port that is not open yet
+     */
+    public ClusterService(HazelcastAdapter hazelcast, AppConfig appConfig, String serverUri,
+            boolean registerNow) {
         this.hazelcast = hazelcast;
         this.appConfig = appConfig;
         this.serverUri = serverUri;
-        this.endpointTicketCodec = new EndpointTicketCodec(ticketSecret(hazelcast));
-
-        hazelcast.serverRegistry().put(serverUri, 0L);
-        hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
-
+        byte[] secret = ticketSecret(hazelcast);
+        this.endpointTicketCodec = new EndpointTicketCodec(secret);
+        pro.surpin.data.arrowflight.server.adapters.QueryParameters.useSigningKey(secret);
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "flight-heartbeat");
             t.setDaemon(true);
             return t;
         });
-        heartbeatExecutor.scheduleAtFixedRate(() -> {
-            try {
-                hazelcast.serverRegistry().putIfAbsent(serverUri, 0L);
-                hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
-                removeExpiredLocalEntries();
-            } catch (Exception e) {
-                LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
-            }
-        }, HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
+        if (registerNow) {
+            register();
+        }
 
         hazelcast.onStatementExpired((EntryExpiredListener<String, Serializable>) event -> {
             Serializable value = event.getOldValue();
@@ -104,6 +116,27 @@ public final class ClusterService implements AutoCloseable {
                 });
             }
         });
+    }
+
+    /**
+     * Puts this server in the cluster's pool and starts its heartbeat; later calls do nothing.
+     */
+    public synchronized void register() {
+        if (registered) {
+            return;
+        }
+        registered = true;
+        hazelcast.serverRegistry().put(serverUri, 0L);
+        hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
+        heartbeatExecutor.scheduleAtFixedRate(() -> {
+            try {
+                hazelcast.serverRegistry().putIfAbsent(serverUri, 0L);
+                hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
+                removeExpiredLocalEntries();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
+            }
+        }, HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
     }
 
     /**
@@ -246,6 +279,38 @@ public final class ClusterService implements AutoCloseable {
                 state, System.nanoTime() + HANDLE_TTL_NANOS));
         hazelcast.statementCache().put(handle, state, 10, TimeUnit.MINUTES);
         LogUtil.logTiming(t, "hazelcast.storeHandle");
+    }
+
+    /**
+     * Keeps the parameter values a client sent for a prepared statement, for clients that keep
+     * using the statement's first handle; every node can read them.
+     *
+     * @param statementId id in the statement's handle
+     * @param parameters one-row Arrow IPC stream with the values
+     */
+    public void rememberParameters(String statementId, byte[] parameters) {
+        hazelcast.statementCache().put(PARAMETERS_PREFIX + statementId, parameters,
+                PARAMETERS_TTL_MINUTES, TimeUnit.MINUTES);
+    }
+
+    /**
+     * Returns the parameter values last sent for a prepared statement.
+     *
+     * @param statementId id in the statement's handle
+     * @return one-row Arrow IPC stream with the values, or null
+     */
+    public byte[] recallParameters(String statementId) {
+        Serializable value = hazelcast.statementCache().get(PARAMETERS_PREFIX + statementId);
+        return value instanceof byte[] bytes ? bytes : null;
+    }
+
+    /**
+     * Drops the parameter values of a closed prepared statement.
+     *
+     * @param statementId id in the statement's handle
+     */
+    public void forgetParameters(String statementId) {
+        hazelcast.statementCache().remove(PARAMETERS_PREFIX + statementId);
     }
 
     /**

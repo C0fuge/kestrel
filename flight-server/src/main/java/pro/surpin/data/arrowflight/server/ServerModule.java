@@ -97,7 +97,8 @@ public final class ServerModule {
     @Provides
     @Singleton
     ClusterService cluster(HazelcastAdapter hazelcast, AppConfig config) {
-        return new ClusterService(hazelcast, config, serverUri);
+        // Registered by the server once it listens.
+        return new ClusterService(hazelcast, config, serverUri, false);
     }
 
     /**
@@ -201,12 +202,18 @@ public final class ServerModule {
      * Provide DuckDbAdapter singleton
      * @param config application configuration
      * @param ioPool I/O thread pool
+     * @param fs Hadoop file system of the data directory
      * @return DuckDB adapter
      */
     @Provides
     @Singleton
-    DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool) {
-        return new DuckDbAdapter(config, ioPool);
+    DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, FileSystem fs) {
+        // The data directory as DuckDB sees file paths: qualified, local paths without "file:".
+        String root = fs.makeQualified(new Path(config.dataDir())).toUri().toString();
+        if (root.startsWith("file:")) {
+            root = new Path(root).toUri().getPath();
+        }
+        return new DuckDbAdapter(config, ioPool, List.of(root));
     }
 
     /**
@@ -251,17 +258,20 @@ public final class ServerModule {
      * @param executionService execution service
      * @param clusterService cluster service
      * @param authorization authorization evaluator
+     * @param config application configuration
      * @return Flight SQL producer
      */
     @Provides
     @Singleton
+    @SuppressWarnings("java:S107") // Dependencies of the producer, wired in one place.
     FlightSqlProducer producer(BufferAllocator allocator,
             MetadataService metadataService, QueryPlanner queryPlanner,
             ExecutionService executionService, ClusterService clusterService,
-            FlightAuthorization authorization) {
+            FlightAuthorization authorization, AppConfig config) {
         Location location = new Location(URI.create(serverUri));
         return new FlightSqlProducer(location, allocator, metadataService,
-                queryPlanner, executionService, clusterService, authorization);
+                queryPlanner, executionService, clusterService, authorization,
+                config.resultMode());
     }
 
     /**

@@ -50,6 +50,8 @@ public class ParquetQueryParser {
         public final Integer decimalScale;
         public final Integer decimalPrecision;
         public final String outputName;
+        /** True for {@code count(DISTINCT x)} and {@code sum(DISTINCT x)}. */
+        public final boolean distinct;
 
         /**
          * @param func aggregation function type
@@ -76,6 +78,27 @@ public class ParquetQueryParser {
         SelectExpr(AggFunc func, String inputColumn, String inputExpression,
                 List<String> inputColumns, Integer decimalScale, Integer decimalPrecision,
                 String outputName) {
+            this(func, inputColumn, inputExpression, inputColumns, decimalScale,
+                    decimalPrecision, outputName, false);
+        }
+
+        /**
+         * Creates a parsed select expression, possibly over distinct input values.
+         *
+         * @param func aggregation function type
+         * @param inputColumn unquoted input text used by simple-column paths
+         * @param inputExpression quoted SQL expression used by DuckDB
+         * @param inputColumns physical columns referenced by the expression
+         * @param decimalScale decimal input scale, or null for non-decimal inputs
+         * @param decimalPrecision decimal input precision, or null for non-decimal inputs
+         * @param outputName rendered column alias
+         * @param distinct whether the aggregate counts or sums distinct values only
+         */
+        @SuppressWarnings("java:S107") // Mirrors the fields of one immutable value object.
+        SelectExpr(AggFunc func, String inputColumn, String inputExpression,
+                List<String> inputColumns, Integer decimalScale, Integer decimalPrecision,
+                String outputName, boolean distinct) {
+            this.distinct = distinct;
             this.func = func;
             this.inputColumn = inputColumn;
             this.inputExpression = inputExpression;
@@ -99,6 +122,17 @@ public class ParquetQueryParser {
     public final List<JoinTable> joinTables;
     public final String duckDbSql;
 
+    /** ORDER BY list as executable SQL, or null. Applied by every endpoint to its own rows. */
+    public final String orderBy;
+    /** LIMIT row count, or null. Applied by every endpoint to its own rows. */
+    public final Long limit;
+    /** OFFSET row count, or null. */
+    public final Long offset;
+    /** True for {@code SELECT DISTINCT}. Applied by every endpoint to its own rows. */
+    public final boolean distinct;
+    /** HAVING condition as executable SQL, or null. */
+    public final String having;
+
     /**
      * @param schema table schema name
      * @param table table name
@@ -111,7 +145,7 @@ public class ParquetQueryParser {
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs) {
         this(schema, table, columns, filter, hasAggregation, groupByColumnNames, selectExprs,
-                false, Collections.emptyList(), null);
+                false, Collections.emptyList(), null, null, null, null, false, null);
     }
 
     /**
@@ -125,10 +159,17 @@ public class ParquetQueryParser {
      * @param isJoin whether query involves JOINs
      * @param joinTables list of joined tables
      * @param duckDbSql rewritten SQL for DuckDB execution
+     * @param orderBy ORDER BY list as executable SQL, or null
+     * @param limit LIMIT row count, or null
+     * @param offset OFFSET row count, or null
+     * @param distinct whether the query is SELECT DISTINCT
+     * @param having HAVING condition as executable SQL, or null
      */
+    @SuppressWarnings("java:S107") // One immutable value object built in a single place.
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs,
-            boolean isJoin, List<JoinTable> joinTables, String duckDbSql) {
+            boolean isJoin, List<JoinTable> joinTables, String duckDbSql,
+            String orderBy, Long limit, Long offset, boolean distinct, String having) {
         this.schema = schema;
         this.table = table;
         this.columns = List.copyOf(columns);
@@ -139,6 +180,59 @@ public class ParquetQueryParser {
         this.isJoin = isJoin;
         this.joinTables = List.copyOf(joinTables);
         this.duckDbSql = duckDbSql;
+        this.orderBy = orderBy;
+        this.limit = limit;
+        this.offset = offset;
+        this.distinct = distinct;
+        this.having = having;
+    }
+
+    /**
+     * Names the feature that only gives a correct answer when one node sees all the rows.
+     *
+     * @return feature name, or null when every node can answer for its own files
+     */
+    public String singleNodeFeature() {
+        if (offset != null && offset > 0) {
+            return "OFFSET";
+        }
+        if (having != null) {
+            return "HAVING";
+        }
+        for (SelectExpr expr : selectExprs) {
+            if (expr.distinct) {
+                return "An aggregate over DISTINCT values";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns whether the query restricts or orders its result rows.
+     *
+     * @return true when ORDER BY, LIMIT or OFFSET is present
+     */
+    public boolean hasOrderOrLimit() {
+        return orderBy != null || limit != null || offset != null;
+    }
+
+    /**
+     * Renders the ORDER BY, LIMIT and OFFSET clauses for DuckDB.
+     *
+     * @return SQL suffix starting with a space, or an empty string
+     */
+    public String orderAndLimitSql() {
+        StringBuilder sql = new StringBuilder();
+        if (orderBy != null) {
+            sql.append(" ORDER BY ").append(orderBy);
+        }
+        if (limit != null) {
+            sql.append(" LIMIT ").append(limit);
+        }
+        if (offset != null) {
+            sql.append(" OFFSET ").append(offset);
+        }
+        return sql.toString();
     }
 
     /**
@@ -148,6 +242,124 @@ public class ParquetQueryParser {
      * @throws RuntimeException if parsing fails
      */
     public static ParquetQueryParser parse(String query) {
+        query = castTypedLiterals(withoutTrailingSemicolon(query));
+        try {
+            rejectParameterMarkers(query);
+            return parseChecked(query);
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid SQL query: " + query, e);
+        }
+    }
+
+    /**
+     * Drops the statement terminator many clients append.
+     *
+     * @param query SQL text
+     * @return SQL text without trailing semicolons and whitespace
+     */
+    static String withoutTrailingSemicolon(String query) {
+        String q = query.trim();
+        while (q.endsWith(";")) {
+            q = q.substring(0, q.length() - 1).trim();
+        }
+        return q;
+    }
+
+    /**
+     * Rewrites {@code TIME '...'} and {@code TIMESTAMPTZ '...'} literals as casts of the string.
+     * The SQL parser drops the fraction of a TIME literal ({@code 12:34:56.789} becomes
+     * {@code 12:34:56}, so an equality filter silently matches nothing) and does not know the
+     * TIMESTAMPTZ keyword; a cast keeps the text as written and DuckDB converts it exactly.
+     *
+     * @param sql SQL text
+     * @return SQL text with those literals written as casts
+     */
+    static String castTypedLiterals(String sql) {
+        StringBuilder out = new StringBuilder(sql.length() + 16);
+        char quote = 0;
+        int i = 0;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (quote != 0) {
+                out.append(c);
+                if (c == quote) {
+                    quote = 0;
+                }
+                i++;
+                continue;
+            }
+            boolean wordStart = i == 0 || !Character.isLetterOrDigit(sql.charAt(i - 1))
+                    && sql.charAt(i - 1) != '_';
+            Matcher m = TYPED_LITERAL.matcher(sql).region(i, sql.length());
+            if (wordStart && m.lookingAt()) {
+                String type = m.group(1).equalsIgnoreCase("time")
+                        ? "TIME" : "TIMESTAMP WITH TIME ZONE";
+                out.append("CAST('").append(m.group(2)).append("' AS ").append(type).append(')');
+                i = m.end();
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
+
+    private static final Pattern TYPED_LITERAL = Pattern.compile(
+            "(?i)(time|timestamptz)\\s+'((?:[^']|'')*)'");
+
+
+    /**
+     * Refuses statements with parameter markers, which would otherwise be read as NULL.
+     *
+     * @param query SQL text
+     * @throws IllegalArgumentException if a question mark occurs outside quotes
+     */
+    static void rejectParameterMarkers(String query) {
+        if (withoutQuotedText(query).indexOf('?') >= 0) {
+            throw new IllegalArgumentException(
+                    "Statement parameters (?) are not supported; put the values into the SQL text");
+        }
+    }
+
+    /**
+     * Blanks out string literals and quoted identifiers so keywords can be searched safely.
+     *
+     * @param sql SQL text
+     * @return the text with every quoted span replaced by a single space
+     */
+    static String withoutQuotedText(String sql) {
+        StringBuilder out = new StringBuilder(sql.length());
+        char quote = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (quote != 0) {
+                if (c == quote) {
+                    if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
+                        i++;
+                    } else {
+                        quote = 0;
+                    }
+                }
+            } else if (c == '\'' || c == '"') {
+                quote = c;
+                out.append(' ');
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * Parses a query that has no terminator and no parameter markers.
+     *
+     * @param query SQL SELECT query string
+     * @return parsed query representation
+     */
+    private static ParquetQueryParser parseChecked(String query) {
         // Flatten subquery wrappers before jOOQ parsing (regex is more robust)
         String flattened = flattenSubqueryWrapper(query);
         if (!flattened.equals(query)) {
@@ -225,15 +437,39 @@ public class ParquetQueryParser {
         String innerSQL = q.substring(openParen + 1, i - 1).trim();
         String afterParen = q.substring(i).trim();
 
-        Matcher aliasM = Pattern.compile("^([a-zA-Z_][a-zA-Z0-9_]*)(.*)$",
+        Matcher aliasM = Pattern.compile("^(?:(?i:as)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)(.*)$",
                 Pattern.DOTALL).matcher(afterParen);
         if (!aliasM.matches()) {
             return q;
         }
-        String outerRest = aliasM.group(2).trim();
+        // The alias disappears with the wrapper, so "alias.column" becomes "column".
+        String aliasPrefix = "(?i)\\b" + Pattern.quote(aliasM.group(1)) + "\\.";
+        beforeFrom = beforeFrom.replaceAll(aliasPrefix, "");
+        String outerRest = aliasM.group(2).trim().replaceAll(aliasPrefix, "");
 
         if (!innerSQL.toLowerCase(Locale.ROOT).startsWith("select")) {
             return q;
+        }
+
+        // The wrapper can be replaced by its table only when the inner query is a plain column
+        // list (or *) over one table with an optional WHERE. Aggregates, GROUP BY, ORDER BY or
+        // LIMIT inside would be lost, and the query would return a wrong result.
+        String innerShape = withoutQuotedText(innerSQL).toLowerCase(Locale.ROOT);
+        Matcher innerList = Pattern.compile("(?is)^select\\s+(.+?)\\s+from\\s+\\S+(\\s+where\\b.*)?$")
+                .matcher(innerSQL);
+        boolean plainInner = innerList.matches()
+                && innerList.group(1).trim().matches("\\*|[\\w\"]+(\\s*,\\s*[\\w\"]+)*")
+                && !Pattern.compile("\\b(group\\s+by|order\\s+by|having|limit|offset|union|intersect"
+                        + "|except|join|distinct)\\b|\\bselect\\b.*\\bselect\\b", Pattern.DOTALL)
+                        .matcher(innerShape).find();
+        if (!plainInner) {
+            throw new IllegalArgumentException("A subquery in FROM is supported only in the form "
+                    + "(SELECT columns FROM table [WHERE ...]) alias");
+        }
+        String innerColumns = innerList.group(1).trim();
+        if (!innerColumns.equals("*") && beforeFrom.trim().matches("(?i)select\\s+\\*")) {
+            // SELECT * over the wrapper means the inner column list.
+            beforeFrom = beforeFrom.replaceFirst("\\*\\s*$", Matcher.quoteReplacement(innerColumns) + " ");
         }
 
         Matcher innerFrom = Pattern.compile("(?i)\\bfrom\\s+(\\S+)").matcher(innerSQL);
@@ -252,10 +488,15 @@ public class ParquetQueryParser {
         StringBuilder flat = new StringBuilder(beforeFrom);
         flat.append("from ").append(realTableRef);
 
+        // The outer query may go on after its WHERE: GROUP BY ... ORDER BY ... LIMIT (this is
+        // how BI tools such as Superset wrap a dataset). That tail is kept as it is.
+        int tailStart = topLevelMatch(outerRest, OUTER_TAIL);
+        String tail = tailStart < 0 ? "" : outerRest.substring(tailStart).trim();
+        String outerHead = tailStart < 0 ? outerRest : outerRest.substring(0, tailStart).trim();
         String outerWhere = "";
-        if (outerRest.toLowerCase(Locale.ROOT).startsWith("where ")) {
-            outerWhere = outerRest.substring(5).trim();
-        } else if (!outerRest.isEmpty()) {
+        if (outerHead.toLowerCase(Locale.ROOT).startsWith("where ")) {
+            outerWhere = outerHead.substring(5).trim();
+        } else if (!outerHead.isEmpty()) {
             return q;
         }
 
@@ -268,8 +509,53 @@ public class ParquetQueryParser {
         } else if (hasOuter) {
             flat.append(" where ").append(outerWhere);
         }
+        if (!tail.isEmpty()) {
+            flat.append(' ').append(tail);
+        }
 
         return flat.toString();
+    }
+
+    private static final Pattern OUTER_TAIL = Pattern.compile(
+            "(?i)\\b(group\\s+by|having|order\\s+by|limit|offset)\\b");
+
+    /**
+     * Finds the first match of a pattern outside quotes and parentheses.
+     *
+     * @param sql SQL text
+     * @param pattern keyword pattern
+     * @return start index of the match, or -1
+     */
+    static int topLevelMatch(String sql, Pattern pattern) {
+        boolean[] nested = new boolean[sql.length()];
+        char quote = 0;
+        int depth = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (quote != 0) {
+                nested[i] = true;
+                if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+                nested[i] = true;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth = Math.max(0, depth - 1);
+            }
+            nested[i] = nested[i] || depth > 0;
+        }
+        Matcher m = pattern.matcher(sql);
+        while (m.find()) {
+            if (!nested[m.start()]) {
+                return m.start();
+            }
+        }
+        return -1;
     }
 
     /**
@@ -287,6 +573,7 @@ public class ParquetQueryParser {
             throw new IllegalArgumentException(
                     "Can only select from ONE table, but got query: " + select.getSQL());
         }
+        rejectUnsupportedClauses(select, originalSql);
 
         // Detect JOIN via jOOQ rendered output
         boolean isJoin = hasJoinKeywords(select);
@@ -295,6 +582,30 @@ public class ParquetQueryParser {
             return parseJoinSelect(select, noQuoteCtx, originalSql);
         }
         return parseSingleTableSelect(select, fromTables, noQuoteCtx);
+    }
+
+    /**
+     * Refuses clauses that the single-table execution path does not carry to DuckDB. Without
+     * this check they were dropped and the query returned a wrong result.
+     *
+     * @param select parsed query
+     * @param originalSql SQL text as received
+     * @throws IllegalArgumentException if the query uses such a clause
+     */
+    private static void rejectUnsupportedClauses(Select<?> select, String originalSql) {
+        String shape = withoutQuotedText(originalSql).toLowerCase(Locale.ROOT);
+        if (Pattern.compile("\\b(union|intersect|except)\\b").matcher(shape).find()) {
+            throw new IllegalArgumentException("UNION, INTERSECT and EXCEPT are not supported");
+        }
+        if (!select.$distinctOn().isEmpty()) {
+            throw new IllegalArgumentException("DISTINCT ON is not supported");
+        }
+        if (select.$qualify() != null || !select.$window().isEmpty()) {
+            throw new IllegalArgumentException("Window clauses are not supported");
+        }
+        if (select.$with() != null) {
+            throw new IllegalArgumentException("WITH (common table expressions) is not supported");
+        }
     }
 
     /**
@@ -326,8 +637,11 @@ public class ParquetQueryParser {
             "\\b(?:FROM|(?:(?:LEFT|RIGHT|FULL(?:\\s+OUTER)?|INNER|CROSS)\\s+)?JOIN)\\s+",
             Pattern.CASE_INSENSITIVE);
 
+    // The optional alias must not be the next keyword: in "FROM s.a JOIN s.b ON ..." the word
+    // after "s.a" is JOIN, not an alias.
     private static final Pattern TABLE_REF = Pattern.compile(
-            "^(\\w+(?:\\.\\w+)?)(?:\\s+(?:AS\\s+)?(\\w+))?",
+            "^(\\w+(?:\\.\\w+)?)(?:\\s+(?:AS\\s+)?(?!(?:JOIN|ON|USING|WHERE|LEFT|RIGHT|FULL|INNER"
+                    + "|CROSS|OUTER|NATURAL|GROUP|ORDER|HAVING|LIMIT|OFFSET|UNION|WINDOW)\\b)(\\w+))?",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -390,7 +704,9 @@ public class ParquetQueryParser {
 
         JoinTable primary = joinTables.get(0);
         return new ParquetQueryParser(primary.schema, primary.table, columns, filter,
-                false, Collections.emptyList(), exprs, true, joinTables, duckDbSql);
+                false, Collections.emptyList(), exprs, true, joinTables, duckDbSql,
+                renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
+                rowCount(select.$offset()), false, null);
     }
 
     /**
@@ -441,20 +757,20 @@ public class ParquetQueryParser {
                     exprs.add(new SelectExpr(SelectExpr.AggFunc.COUNT_STAR, null, outputName));
                 } else {
                     exprs.add(aggregateExpression(SelectExpr.AggFunc.COUNT,
-                            arg, outputName, noQuoteCtx, quotedCtx));
+                            arg, outputName, noQuoteCtx, quotedCtx, count.$distinct()));
                 }
             } else if (f instanceof org.jooq.impl.QOM.Sum sum) {
                 hasAgg = true;
                 exprs.add(aggregateExpression(SelectExpr.AggFunc.SUM,
-                        sum.$field(), outputName, noQuoteCtx, quotedCtx));
+                        sum.$field(), outputName, noQuoteCtx, quotedCtx, sum.$distinct()));
             } else if (f instanceof org.jooq.impl.QOM.Min<?> min) {
                 hasAgg = true;
                 exprs.add(aggregateExpression(SelectExpr.AggFunc.MIN,
-                        min.$field(), outputName, noQuoteCtx, quotedCtx));
+                        min.$field(), outputName, noQuoteCtx, quotedCtx, false));
             } else if (f instanceof org.jooq.impl.QOM.Max<?> max) {
                 hasAgg = true;
                 exprs.add(aggregateExpression(SelectExpr.AggFunc.MAX,
-                        max.$field(), outputName, noQuoteCtx, quotedCtx));
+                        max.$field(), outputName, noQuoteCtx, quotedCtx, false));
             } else {
                 String inputColumn = noQuoteCtx.renderInlined(f).trim();
                 exprs.add(new SelectExpr(SelectExpr.AggFunc.COLUMN, inputColumn, outputName));
@@ -464,7 +780,51 @@ public class ParquetQueryParser {
         Condition where = select.$where();
         String filter = quotedCtx.renderInlined(where);
 
-        return new ParquetQueryParser(schema, table, columns, filter, hasAgg, gbCols, exprs);
+        Condition having = select.$having();
+        return new ParquetQueryParser(schema, table, columns, filter, hasAgg, gbCols, exprs,
+                false, Collections.emptyList(), null,
+                renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
+                rowCount(select.$offset()), select.$distinct(),
+                having == null ? null : quotedCtx.renderInlined(having));
+    }
+
+    /**
+     * Renders the ORDER BY list of a query as executable SQL.
+     *
+     * @param select parsed query
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @return comma-separated sort list, or null when the query has no ORDER BY
+     */
+    private static String renderOrderBy(Select<?> select, DSLContext quotedCtx) {
+        List<String> parts = new ArrayList<>();
+        for (SortField<?> sortField : select.$orderBy()) {
+            parts.add(quotedCtx.renderInlined(sortField).trim());
+        }
+        return parts.isEmpty() ? null : String.join(", ", parts);
+    }
+
+    /**
+     * Reads a literal LIMIT or OFFSET value.
+     *
+     * @param field parsed LIMIT or OFFSET expression, or null
+     * @return non-negative row count, or null when absent
+     * @throws IllegalArgumentException if the value is not a non-negative integer literal
+     */
+    private static Long rowCount(org.jooq.Field<? extends Number> field) {
+        if (field == null) {
+            return null;
+        }
+        String rendered = DSL.using(SQLDialect.DEFAULT).renderInlined(field).trim();
+        try {
+            long value = Long.parseLong(rendered);
+            if (value < 0) {
+                throw new NumberFormatException(rendered);
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "LIMIT and OFFSET must be non-negative integer literals: " + rendered, e);
+        }
     }
 
     /**
@@ -475,18 +835,20 @@ public class ParquetQueryParser {
      * @param outputName aggregate output name
      * @param noQuoteCtx renderer for compatibility names
      * @param quotedCtx renderer for executable DuckDB SQL
+     * @param distinct whether the aggregate takes distinct input values only
      * @return parsed aggregate expression
      */
     private static SelectExpr aggregateExpression(SelectExpr.AggFunc func,
             org.jooq.Field<?> input, String outputName,
-            DSLContext noQuoteCtx, DSLContext quotedCtx) {
+            DSLContext noQuoteCtx, DSLContext quotedCtx, boolean distinct) {
         String inputColumn = noQuoteCtx.renderInlined(input).trim();
         String inputExpression = quotedCtx.renderInlined(input).trim();
         boolean decimalSum = func == SelectExpr.AggFunc.SUM && input.getDataType().isDecimal();
         Integer decimalScale = decimalSum ? input.getDataType().scale() : null;
         Integer decimalPrecision = decimalSum ? input.getDataType().precision() : null;
         return new SelectExpr(func, inputColumn, inputExpression,
-                referencedColumns(inputExpression), decimalScale, decimalPrecision, outputName);
+                referencedColumns(inputExpression), decimalScale, decimalPrecision, outputName,
+                distinct);
     }
 
     /**

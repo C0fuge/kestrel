@@ -97,9 +97,21 @@ public final class Client implements AutoCloseable {
     public CallOption[] callOptions() {
         refreshKerberosSession();
         if (timeoutOption != null) {
-            return new CallOption[] { this.bearerToken, timeoutOption };
+            return new CallOption[] { this.bearerToken, PARTIAL_RESULTS, timeoutOption };
         }
-        return new CallOption[] { this.bearerToken };
+        return new CallOption[] { this.bearerToken, PARTIAL_RESULTS };
+    }
+
+    /**
+     * Asks the server for one endpoint per node with that node's part: the Spark connector reads
+     * the parts in parallel and merges them. Other clients get one complete answer by default.
+     */
+    private static final org.apache.arrow.flight.HeaderCallOption PARTIAL_RESULTS;
+
+    static {
+        org.apache.arrow.flight.FlightCallHeaders headers = new org.apache.arrow.flight.FlightCallHeaders();
+        headers.insert("x-flight-result-mode", "partial");
+        PARTIAL_RESULTS = new org.apache.arrow.flight.HeaderCallOption(headers);
     }
 
     //the buffer

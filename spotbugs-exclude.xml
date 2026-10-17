@@ -79,4 +79,14 @@
         <Bug pattern="SF_SWITCH_NO_DEFAULT"/>
         <Class name="pro.surpin.data.arrowflight.server.adapters.SchemaConverter"/>
     </Match>
+
+    <!--
+      SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE: configureConnection sets DuckDB's allowed_directories
+      from the server's own data and spill paths, each quoted by sqlStringLiteral; no client text.
+    -->
+    <Match>
+        <Bug pattern="SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE"/>
+        <Class name="pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter"/>
+        <Method name="configureConnection"/>
+    </Match>
 </FindBugsFilter>

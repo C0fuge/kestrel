@@ -11,6 +11,7 @@ public enum ExecutionPath {
     DUCKDB_JOIN("duckdb-join", true),
     DISTRIBUTED("distributed", true),
     MIXED("mixed", true),
+    COMPLETE_ANSWER("complete-answer", true),
     FALLBACK("fallback", false),
     UNKNOWN("unknown", false);
 

@@ -9,7 +9,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- DuckDB connections of ended gRPC threads were never closed: memory grew with every new
+  executor thread. They are now closed, results are streamed instead of buffered, the DuckDB
+  external file cache is off by default and the prepared-statement cache is bounded.
+- All DuckDB connections spilled into the same `.tmp` directory; each now has its own.
+- The schema in `FlightInfo` now always equals the schema of the stream (column order, `SUM`
+  types, join column names): it is taken from DuckDB for the same SQL.
+- `MIN`/`MAX` from Parquet footers returned NULL for dates and failed for decimals; the footer
+  path is now used only for integer and date columns.
+- `GetTables` returned table schemas that stock drivers could not read.
+- A client cancel now interrupts the DuckDB query; before, it ran to its end.
+- On shared storage a dead node no longer makes its files unavailable: they go to live nodes.
+  Nodes beat every 3 s and are left out after 10 s (was 15 s / 45 s).
+- A DuckDB statement closed by a failed run is prepared again instead of failing every later
+  run of the same SQL with "Statement was closed".
+
 ### Added
+- `ORDER BY`, `LIMIT` and `OFFSET` (see README for multi-node semantics).
+- Prepared statements without parameters, empty key metadata, metadata endpoints without a
+  fixed `0.0.0.0` location: the stock Arrow Flight SQL JDBC driver works.
+- Optional access token (`authToken` / `FLIGHT_AUTH_TOKEN`).
+- Complete-answer mode, the default (`resultMode`): one endpoint with the complete answer of any
+  single read-only DuckDB query over views of all tables; clients ask for the old per-node parts
+  with the header `x-flight-result-mode: partial` (the Trino and Spark connectors do).
+- DuckDB lockdown (`duckDbLockdown`): only the data and spill directories are readable, no
+  extension installs or loads by itself, settings are locked.
+- Unsigned integer columns shown as the next wider signed type in complete mode
+  (`widenUnsignedTypes`).
+- `?` parameters of prepared statements in complete mode: the server keeps nothing and answers
+  the values with a new statement handle carrying the SQL and the values; DuckDB binds them.
+- Settings `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`,
+  `duckDbTempDirectory`.
 - Apache-2.0 LICENSE
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`
 - Issue and PR templates

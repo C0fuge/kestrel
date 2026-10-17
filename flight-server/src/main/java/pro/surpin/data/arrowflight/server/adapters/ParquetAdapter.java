@@ -278,6 +278,59 @@ public class ParquetAdapter {
     }
 
     /**
+     * Returns one Parquet file of a table, enough to bind a query against the table's columns.
+     *
+     * @param schema schema name
+     * @param table  table name
+     * @return first Parquet file in path order, or empty when the table has none
+     * @throws IOException on file-system access failure
+     */
+    public java.util.Optional<Path> sampleFile(String schema, String table) throws IOException {
+        validateName(schema);
+        validateName(table);
+        Path tablePath = tablePath(schema, table);
+        if (!fileSystem.exists(tablePath)) {
+            return java.util.Optional.empty();
+        }
+        List<LocatedFileStatus> files = parquetFiles(tablePath);
+        return files.isEmpty()
+                ? java.util.Optional.empty() : java.util.Optional.of(files.get(0).getPath());
+    }
+
+    /**
+     * Lists all Parquet files of a table.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return file statuses in path order, empty when the table has none
+     * @throws IOException on file-system access failure
+     */
+    public List<LocatedFileStatus> tableFiles(String schema, String table) throws IOException {
+        validateName(schema);
+        validateName(table);
+        Path tablePath = tablePath(schema, table);
+        if (!fileSystem.exists(tablePath)) {
+            return List.of();
+        }
+        return parquetFiles(tablePath);
+    }
+
+    /**
+     * Identifies a set of files by their paths and lengths.
+     *
+     * @param files table file statuses
+     * @return fingerprint that changes when a file is added, removed or rewritten
+     */
+    public static String filesFingerprint(List<? extends org.apache.hadoop.fs.FileStatus> files) {
+        StringBuilder fingerprint = new StringBuilder();
+        for (org.apache.hadoop.fs.FileStatus status : files) {
+            fingerprint.append(status.getPath()).append(':').append(status.getLen()).append(':')
+                    .append(status.getModificationTime()).append(';');
+        }
+        return Integer.toHexString(fingerprint.toString().hashCode()) + "/" + files.size();
+    }
+
+    /**
      * Lists sorted Parquet files below a table directory.
      *
      * @param tablePath table directory
@@ -305,8 +358,13 @@ public class ParquetAdapter {
      * @param schema schema name
      * @param table table name
      * @return resolved table path
+     * @throws IllegalArgumentException when the table is named without its schema
      */
     private Path tablePath(String schema, String table) {
+        if (schema == null || schema.isEmpty()) {
+            throw new IllegalArgumentException("Name the table with its schema (schema." + table
+                    + "): partial results need it; complete answers also find tables without a schema");
+        }
         return new Path(new Path(dataDirectory, schema), table);
     }
 
@@ -433,16 +491,11 @@ public class ParquetAdapter {
         List<Field> fields = schema.getFields();
         IntStream.range(0, fields.size()).forEach(i -> {
             Field field = fields.get(i);
-            RelDataType relDataType;
-            if (field.getType().getTypeID() == ArrowType.ArrowTypeID.Timestamp) {
-                relDataType = ArrowFieldTypeFactory.toType(new ArrowType.Int(64, true), typeFactory);
-            } else {
-                relDataType = ArrowFieldTypeFactory.toType(field.getType(), typeFactory);
-            }
             if (i > 0) {
                 result.append(",\n");
             }
-            result.append("\t\"").append(field.getName()).append("\" ").append(relDataType);
+            result.append("\t\"").append(field.getName()).append("\" ")
+                    .append(ddlTypeName(field.getType(), typeFactory));
         });
         result.append(")");
         return result.toString();
@@ -456,6 +509,26 @@ public class ParquetAdapter {
             throw new UncheckedIOException(e);
         }
     }
+
+    /**
+     * Names a column type for the informational DDL. Calcite has no type for binary, UUID,
+     * interval, list, struct or map; such a column must not stop the server from starting.
+     *
+     * @param type Arrow type of the column
+     * @param typeFactory Calcite type factory
+     * @return Calcite type name, or the Arrow type name when Calcite has none
+     */
+    static String ddlTypeName(ArrowType type, JavaTypeFactoryImpl typeFactory) {
+        try {
+            RelDataType relDataType = type.getTypeID() == ArrowType.ArrowTypeID.Timestamp
+                    ? ArrowFieldTypeFactory.toType(new ArrowType.Int(64, true), typeFactory)
+                    : ArrowFieldTypeFactory.toType(type, typeFactory);
+            return relDataType.toString();
+        } catch (RuntimeException e) {
+            return type.toString();
+        }
+    }
+
 
     /** Initializes cached DDL definitions for all discovered tables. */
     public void initCatalogReader() {
@@ -674,6 +747,17 @@ public class ParquetAdapter {
      */
     public FileSystem fileSystem() {
         return fileSystem;
+    }
+
+    /**
+     * Tells whether every node can read every file (HDFS, object stores), as opposed to a local
+     * directory per node, where a node can only read the files it holds itself.
+     *
+     * @return true unless the data directory is on the local file system
+     */
+    public boolean sharedStorage() {
+        String scheme = fileSystem.getUri().getScheme();
+        return scheme != null && !"file".equalsIgnoreCase(scheme);
     }
 
     /**

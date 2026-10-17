@@ -41,6 +41,9 @@ class ConfigAdapterTest {
         assertTrue(cfg.ioParallelism() >= 8 && cfg.ioParallelism() <= 64,
                 "ioParallelism should be within the formula range, got " + cfg.ioParallelism());
         assertEquals(2, cfg.duckDbThreads());
+        assertTrue(cfg.duckDbStreamResults());
+        assertFalse(cfg.duckDbExternalFileCache());
+        assertEquals(64, cfg.duckDbStatementCacheSize());
         assertEquals("/data/parquet", cfg.dataDir());
         assertNull(cfg.localDataDir());
         assertEquals(32010, cfg.port());

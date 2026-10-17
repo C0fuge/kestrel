@@ -374,4 +374,29 @@ class ExecutionServiceTest {
             assertEquals("hello", new String(v.get(0), StandardCharsets.UTF_8));
         }
     }
+
+    /** Verifies footer statistics of DATE columns are written as dates, not dropped. */
+    @Test
+    void setVectorValueDateDay() {
+        try (BufferAllocator alloc = new RootAllocator();
+             org.apache.arrow.vector.DateDayVector v =
+                     new org.apache.arrow.vector.DateDayVector("x", alloc)) {
+            v.allocateNew(1);
+            ExecutionService.setVectorValue(v, 0, 8035);
+            assertEquals(8035, v.get(0));
+        }
+    }
+
+    /** Verifies values are brought to the scale of the decimal vector they go into. */
+    @Test
+    void setVectorValueDecimalRescales() {
+        try (BufferAllocator alloc = new RootAllocator();
+             DecimalVector v = new DecimalVector("x", alloc, 10, 2)) {
+            v.allocateNew(2);
+            ExecutionService.setVectorValue(v, 0, new BigDecimal("1.5"));
+            ExecutionService.setVectorValue(v, 1, 7L);
+            assertEquals(new BigDecimal("1.50"), v.getObject(0));
+            assertEquals(new BigDecimal("7.00"), v.getObject(1));
+        }
+    }
 }

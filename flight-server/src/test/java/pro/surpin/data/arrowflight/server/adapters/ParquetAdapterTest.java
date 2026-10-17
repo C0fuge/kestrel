@@ -53,7 +53,7 @@ class ParquetAdapterTest {
         AppConfig config = new AppConfig(
                 3, 4096, 4, 65536, 2, 2, 2, null, false,
                 null, null, null, null, null, false, 2_147_483_648L, 67108864, 67108864, 30000L,
-                dataDirectory.toString(), null, 31001, 5701, 120, 3, 500, 0);
+                dataDirectory.toString(), null, 31001, 5701, 120, 3, 500, 0, true, false, 64, null, null, "complete", true, true);
 
         ParquetAdapter adapter = new CatalogTestParquetAdapter(config, fileSystem);
 
@@ -143,7 +143,7 @@ class ParquetAdapterTest {
         AppConfig config = new AppConfig(
                 3, 4096, 4, 65536, 2, 2, 2, null, false,
                 null, null, null, null, null, false, 2_147_483_648L, 67108864, 67108864, 30000L,
-                dataDirectory.toString(), null, 31001, 5701, 120, 3, 500, 0);
+                dataDirectory.toString(), null, 31001, 5701, 120, 3, 500, 0, true, false, 64, null, null, "complete", true, true);
         try (MockedStatic<ParquetFileReader> parquetReader =
                      mockStatic(ParquetFileReader.class)) {
             parquetReader.when(() -> ParquetFileReader.open(any()))
@@ -409,5 +409,30 @@ class ParquetAdapterTest {
         @SuppressWarnings("unchecked")
         Predicate<String> result = (Predicate<String>) m.invoke(null, pattern);
         return result;
+    }
+
+    /** Verifies arbitrary text in a name filter is matched literally instead of failing. */
+    @Test
+    void likePredicateTreatsRegexCharactersLiterally() {
+        java.util.function.Predicate<String> sqlText = ParquetAdapter.createLikePredicate(
+                "SELECT count(*) AS c FROM tpch.orders [x] {y} a+b|c");
+        java.util.function.Predicate<String> wildcards = ParquetAdapter.createLikePredicate("or_er%");
+
+        assertFalse(sqlText.test("orders"));
+        assertTrue(wildcards.test("orders"));
+        assertTrue(wildcards.test("ORDERS_2024"));
+        assertFalse(wildcards.test("border"));
+        assertFalse(ParquetAdapter.createLikePredicate("a.c").test("abc"));
+    }
+
+    /** Verifies column types Calcite does not know are named instead of failing startup. */
+    @Test
+    void ddlTypeNameToleratesTypesWithoutCalciteMapping() {
+        org.apache.calcite.jdbc.JavaTypeFactoryImpl factory =
+                new org.apache.calcite.jdbc.JavaTypeFactoryImpl(
+                        org.apache.calcite.rel.type.RelDataTypeSystem.DEFAULT);
+
+        assertEquals("Binary", ParquetAdapter.ddlTypeName(new ArrowType.Binary(), factory));
+        assertEquals("INTEGER", ParquetAdapter.ddlTypeName(new ArrowType.Int(32, true), factory));
     }
 }

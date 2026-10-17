@@ -106,6 +106,8 @@ public final class QueryPlanner {
      * @param query SQL query
      * @return endpoints with byte and row estimates
      * @throws IOException on file-system or cluster metadata failure
+     * @throws IllegalArgumentException if the query needs one node to see all rows (OFFSET,
+     *         HAVING, DISTINCT aggregates) and several nodes serve the table
      */
     public QueryPlan plan(String query) throws IOException {
         long t = LogUtil.mark();
@@ -114,6 +116,13 @@ public final class QueryPlanner {
         ClusterSnapshot cluster = validatedCluster();
         Set<String> allServerUris = cluster.serverUris();
         LogUtil.logTiming(tSv, "planning.validateServers", "servers=" + allServerUris.size());
+        String singleNodeFeature = parsed.singleNodeFeature();
+        if (singleNodeFeature != null && allServerUris.size() > 1) {
+            // Every endpoint answers for its own files only; these results cannot be combined
+            // by the client afterwards.
+            throw new IllegalArgumentException(singleNodeFeature
+                    + " is not supported when the table is served by several Flight nodes");
+        }
         long tPaths = LogUtil.mark();
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
@@ -132,6 +141,44 @@ public final class QueryPlanner {
         long totalRecords = parquetAdapter.estimateRowCount(pathLocations);
         LogUtil.logTiming(t, "planning.determineEndpoints", "endpoints=" + endpoints.size() + " files=" + pathLocations.size());
         return new QueryPlan(endpoints, totalBytes, totalRecords);
+    }
+
+    /**
+     * Plans a query whose complete answer the receiving node computes over all files.
+     *
+     * @param query client SQL
+     * @return one endpoint without a location: the client reads it over the connection it used
+     *         to plan the query
+     * @throws IllegalStateException when the nodes keep their files apart: the receiving node
+     *         cannot read the others' files, so its answer would be incomplete
+     */
+    public QueryPlan planComplete(String query) {
+        return planComplete(query, null);
+    }
+
+    /**
+     * Plans a query with parameter values whose complete answer the receiving node computes.
+     *
+     * @param query client SQL
+     * @param parameters one-row Arrow IPC stream with the values, or null
+     * @return one endpoint without a location
+     * @throws IllegalStateException when the nodes keep their files apart
+     */
+    public QueryPlan planComplete(String query, byte[] parameters) {
+        if (!parquetAdapter.sharedStorage()) {
+            int live = clusterService.filterLiveServers(clusterService.allServerLoads().keySet()).size();
+            if (live > 1) {
+                throw new IllegalStateException("A complete answer needs storage every node can read"
+                        + " (HDFS, S3); this cluster of " + live + " nodes keeps its files on local disks."
+                        + " Ask for partial results (header x-flight-result-mode: partial) or set"
+                        + " resultMode=partial");
+            }
+        }
+        HandleState state = HandleState.forCompleteAnswer(query, parameters);
+        ByteString handle = ByteString.copyFrom(clusterService.createEndpointHandle(state));
+        Ticket ticket = new Ticket(Any.pack(FlightSql.TicketStatementQuery.newBuilder()
+                .setStatementHandle(handle).build()).toByteArray());
+        return new QueryPlan(List.of(new FlightEndpoint(ticket)), -1L, -1L);
     }
 
     private ClusterSnapshot validatedCluster() throws IOException {
@@ -172,14 +219,16 @@ public final class QueryPlanner {
             pathLocations = loadFilePlan(parsed, cacheKey, now);
         }
         try {
-            validatePathLocations(pathLocations, parsed, allServerUris);
+            validatePathLocations(pathLocations, parsed, allServerUris,
+                    parquetAdapter.sharedStorage());
         } catch (IOException e) {
             if (!reusedCache) {
                 throw e;
             }
             filePlanCache.remove(cacheKey, cached);
             pathLocations = loadFilePlan(parsed, cacheKey, System.nanoTime());
-            validatePathLocations(pathLocations, parsed, allServerUris);
+            validatePathLocations(pathLocations, parsed, allServerUris,
+                    parquetAdapter.sharedStorage());
         }
         return pathLocations;
     }
@@ -211,14 +260,20 @@ public final class QueryPlanner {
      * @param pathLocations file assignments
      * @param parsed parsed SQL query
      * @param allServerUris live server URIs
+     * @param sharedStorage whether every node can read every file
      * @throws IOException when files or required shard owners are unavailable
      */
     private static void validatePathLocations(
             Map<String, FileAssignment> pathLocations,
-            ParquetQueryParser parsed, Set<String> allServerUris)
+            ParquetQueryParser parsed, Set<String> allServerUris, boolean sharedStorage)
             throws IOException {
         if (pathLocations.isEmpty()) {
             throw new IOException("No distributed Parquet files found for query: " + parsed);
+        }
+        if (sharedStorage) {
+            // Every node can read every file: a file whose nodes are all down goes to a live
+            // node (the least loaded one), so a dead node does not take its tables with it.
+            return;
         }
         for (Map.Entry<String, FileAssignment> file : pathLocations.entrySet()) {
             boolean hasLiveOwner = file.getValue().hosts().stream()
@@ -227,6 +282,8 @@ public final class QueryPlanner {
                 throw new IOException("No live Flight node owns required shard: " + file.getKey());
             }
         }
+        // With a local directory per node every node must hold its share of every table, or
+        // part of the table is missing.
         requireShardCoverage(pathLocations, parsed, allServerUris);
     }
 
@@ -235,6 +292,10 @@ public final class QueryPlanner {
             boolean loadTracked)
             throws IOException {
         String allFilesServer = findServerWithAllFiles(pathLocations, allServerUris);
+        if (allFilesServer == null && parquetAdapter.sharedStorage()) {
+            // Every node can read every file: run the join where most of its input is local.
+            allFilesServer = serverWithMostLocalBytes(pathLocations, allServerUris);
+        }
         if (allFilesServer == null) {
             throw new IOException(
                     "Server-side joins require all input shards on one Flight node; "
@@ -310,6 +371,32 @@ public final class QueryPlanner {
      * @param liveServers live server URIs
      * @return true when distributed load tracking can affect placement
      */
+    /**
+     * Picks the live server that holds the largest share of the given files.
+     *
+     * @param files file assignments
+     * @param liveServers live server URIs
+     * @return server URI, or null when there is no live server
+     */
+    static String serverWithMostLocalBytes(Map<String, FileAssignment> files,
+            Set<String> liveServers) {
+        Map<String, Long> localBytes = new HashMap<>();
+        for (String server : liveServers) {
+            localBytes.put(server, 0L);
+        }
+        for (FileAssignment file : files.values()) {
+            for (String host : file.hosts()) {
+                localBytes.computeIfPresent(host, (key, bytes) -> bytes + file.size());
+            }
+        }
+        // Most local bytes wins; ties go to the smallest URI so the choice is stable.
+        Comparator<Map.Entry<String, Long>> byBytes = Map.Entry.comparingByValue();
+        Comparator<Map.Entry<String, Long>> byUri = Map.Entry.comparingByKey();
+        return localBytes.entrySet().stream()
+                .max(byBytes.thenComparing(byUri.reversed()))
+                .map(Map.Entry::getKey).orElse(null);
+    }
+
     private static boolean hasReplicatedFiles(
             Map<String, FileAssignment> files, Set<String> liveServers) {
         return files.values().stream().anyMatch(file ->

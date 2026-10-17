@@ -18,6 +18,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.IntSupplier;
 
+import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
@@ -147,9 +148,13 @@ public class HadoopArrowFlightServer {
                     location,
                     component.producer())
                     .maxInboundMessageSize(config.grpcMaxInboundMessageSize())
-                    .backpressureThreshold(config.flightBackpressureThresholdBytes()))
+                    .backpressureThreshold(config.flightBackpressureThresholdBytes())
+                    .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory()))
                     .build();
+            LOGGER.info("Default result mode: {}; Flight security: {}", config.resultMode(), flightSecurity);
             server.start();
+            // Only now may other nodes send clients here.
+            component.clusterService().register();
 
             LOGGER.info("Server Arrow Flight SQL started on {}", location);
             if (metricsEnabled) {
@@ -225,7 +230,7 @@ public class HadoopArrowFlightServer {
      */
     private void waitForCluster(String[] hosts, int timeoutSec) {
         HazelcastInstance hazelcast = component.clusterService().getHazelcastInstance();
-        long t = LogUtil.mark();
+        long t = System.nanoTime();
         ReentrantLock membershipLock = new ReentrantLock();
         Condition membershipChanged = membershipLock.newCondition();
 

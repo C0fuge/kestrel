@@ -46,7 +46,7 @@ class ClusterServiceTest {
             null, false, null, null,
             "true", "/var/lib/hadoop-hdfs/socket/dn_socket", null,
             false, 2_147_483_648L, 1048576, 67108864, 60000L, "/data/parquet", null, 32010, 5701, 60,
-            3, 1000, 30000);
+            3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
 
     /**
      * Creates a ClusterService with the required constructor mocks.
@@ -334,5 +334,64 @@ class ClusterServiceTest {
         verify(serverRegistry).remove("s1");
         verify(serverHeartbeats).remove("s1");
         verify(hazelcast).close();
+    }
+
+    /** Verifies a complete-answer ticket keeps its mode and carries no file list. */
+    @Test
+    void completeAnswerHandleRoundTrips() {
+        HandleState state = HandleState.forCompleteAnswer("SELECT avg(x) FROM s.t");
+        ClusterService cs = createService("s1");
+
+        HandleState decoded = cs.resolveEndpointHandle(cs.createEndpointHandle(state));
+
+        assertTrue(decoded.complete());
+        assertNull(decoded.filePaths());
+        assertEquals(state.query(), decoded.query());
+        assertEquals(state, decoded);
+        cs.close();
+    }
+
+    /** Verifies a complete-answer ticket carries its parameter values. */
+    @Test
+    void completeAnswerHandleKeepsParameterValues() {
+        HandleState state = HandleState.forCompleteAnswer("SELECT ?", new byte[] {7, 8, 9});
+        ClusterService cs = createService("s1");
+
+        HandleState decoded = cs.resolveEndpointHandle(cs.createEndpointHandle(state));
+
+        assertArrayEquals(new byte[] {7, 8, 9}, decoded.parameters());
+        assertEquals(state, decoded);
+        cs.close();
+    }
+
+    /** Verifies a node joins the pool only when registered, and only once. */
+    @Test
+    void nodeJoinsThePoolWhenRegistered() {
+        when(hazelcast.serverRegistry()).thenReturn(serverRegistry);
+        when(hazelcast.serverHeartbeats()).thenReturn(serverHeartbeats);
+        when(hazelcast.statementCache()).thenReturn(statementCache);
+        ClusterService cs = new ClusterService(hazelcast, APP_CONFIG, "grpc://late:32010", false);
+        verify(serverRegistry, never()).put(eq("grpc://late:32010"), anyLong());
+
+        cs.register();
+        cs.register();
+
+        verify(serverRegistry, times(1)).put("grpc://late:32010", 0L);
+        cs.close();
+    }
+
+    /** Verifies parameter values are kept in the shared cache under the statement id. */
+    @Test
+    void parameterValuesAreSharedByStatementId() {
+        ClusterService cs = createService("s1");
+        byte[] values = {4, 2};
+        when(statementCache.get("parameters:abc")).thenReturn(values);
+
+        cs.rememberParameters("abc", values);
+
+        verify(statementCache).put(eq("parameters:abc"), eq(values), anyLong(), any());
+        assertArrayEquals(values, cs.recallParameters("abc"));
+        assertNull(cs.recallParameters("other"));
+        cs.close();
     }
 }

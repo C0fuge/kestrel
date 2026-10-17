@@ -51,7 +51,8 @@ final class EndpointTicketCodec {
                 output.writeInt(MAGIC);
                 writeString(output, state.query());
                 String[] paths = state.filePaths();
-                output.writeInt(paths == null ? -1 : paths.length);
+                // -2 marks a complete-answer ticket, which carries no file list.
+                output.writeInt(state.complete() ? -2 : paths == null ? -1 : paths.length);
                 if (paths != null) {
                     for (String path : paths) {
                         writeString(output, path);
@@ -60,6 +61,11 @@ final class EndpointTicketCodec {
                 writeString(output, state.serverUri());
                 output.writeLong(state.bytes());
                 output.writeBoolean(state.loadTracked());
+                // Parameter values, when the query has them, end the payload.
+                if (state.parameters() != null) {
+                    output.writeInt(state.parameters().length);
+                    output.write(state.parameters());
+                }
             }
             byte[] payload = payloadBytes.toByteArray();
             byte[] signature = sign(payload);
@@ -98,9 +104,10 @@ final class EndpointTicketCodec {
             }
             String query = readString(input);
             int pathCount = input.readInt();
-            if (pathCount < -1 || pathCount > MAX_FILE_COUNT) {
+            if (pathCount < -2 || pathCount > MAX_FILE_COUNT) {
                 throw new IllegalArgumentException("Invalid Flight endpoint file count");
             }
+            boolean complete = pathCount == -2;
             String[] paths = pathCount < 0 ? null : new String[pathCount];
             if (paths != null) {
                 for (int i = 0; i < paths.length; i++) {
@@ -110,10 +117,15 @@ final class EndpointTicketCodec {
             String serverUri = readString(input);
             long bytes = input.readLong();
             boolean loadTracked = input.readBoolean();
+            byte[] parameters = null;
             if (input.available() != 0) {
-                throw new IllegalArgumentException("Unexpected Flight endpoint ticket data");
+                int length = input.readInt();
+                if (length < 0 || length != input.available()) {
+                    throw new IllegalArgumentException("Unexpected Flight endpoint ticket data");
+                }
+                parameters = input.readNBytes(length);
             }
-            return new HandleState(query, paths, serverUri, bytes, loadTracked);
+            return new HandleState(query, paths, serverUri, bytes, loadTracked, complete, parameters);
         } catch (IOException e) {
             throw new IllegalArgumentException("Malformed Flight endpoint ticket", e);
         }

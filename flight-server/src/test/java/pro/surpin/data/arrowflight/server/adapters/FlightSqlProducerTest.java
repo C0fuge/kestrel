@@ -19,6 +19,8 @@ import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -170,8 +172,8 @@ class FlightSqlProducerTest {
         ClusterService clusterService = mock(ClusterService.class);
         FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
         String query = "select * from tpch.lineitem";
-        Schema schema = new Schema(List.of());
-        when(metadataService.getQuerySchema(query)).thenReturn(schema);
+        Schema schema = new Schema(List.of(Field.nullable("l_orderkey", new ArrowType.Int(64, true))));
+        when(executionService.resultSchema(allocator, query)).thenReturn(schema);
         when(queryPlanner.plan(query)).thenReturn(
                 new QueryPlan(List.of(), 4096L, 125L));
         FlightSqlProducer producer = new FlightSqlProducer(
@@ -187,5 +189,214 @@ class FlightSqlProducerTest {
         assertEquals(4096L, info.getBytes());
         assertEquals(125L, info.getRecords());
         verify(clusterService, never()).storeHandle(anyString(), any());
+    }
+
+    /** Verifies a prepared statement is its SQL text, planned again on every execution. */
+    @Test
+    void preparedStatementHandleIsTheQuery() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+        String query = "select l_orderkey from tpch.lineitem limit 5";
+        Schema schema = new Schema(List.of(Field.nullable("l_orderkey", new ArrowType.Int(64, true))));
+        when(executionService.resultSchema(allocator, query)).thenReturn(schema);
+        when(queryPlanner.plan(query)).thenReturn(new QueryPlan(List.of(), 10L, 5L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class));
+
+        producer.createPreparedStatement(
+                FlightSql.ActionCreatePreparedStatementRequest.newBuilder().setQuery(query).build(),
+                context, listener);
+
+        ArgumentCaptor<org.apache.arrow.flight.Result> result =
+                ArgumentCaptor.forClass(org.apache.arrow.flight.Result.class);
+        verify(listener).onNext(result.capture());
+        verify(listener).onCompleted();
+        FlightSql.ActionCreatePreparedStatementResult prepared = com.google.protobuf.Any
+                .parseFrom(result.getValue().getBody())
+                .unpack(FlightSql.ActionCreatePreparedStatementResult.class);
+        assertEquals(query, prepared.getPreparedStatementHandle().toStringUtf8());
+        assertEquals(schema, Schema.deserializeMessage(
+                prepared.getDatasetSchema().asReadOnlyByteBuffer()));
+
+        FlightInfo info = producer.getFlightInfoPreparedStatement(
+                FlightSql.CommandPreparedStatementQuery.newBuilder()
+                        .setPreparedStatementHandle(prepared.getPreparedStatementHandle()).build(),
+                context, FlightDescriptor.command(new byte[]{1}));
+
+        assertEquals(5L, info.getRecords());
+        verify(queryPlanner).plan(query);
+    }
+
+    /** Verifies metadata is read over the client's own connection, not a fixed address. */
+    @Test
+    void metadataEndpointsCarryNoLocation() {
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                mock(ExecutionService.class), mock(ClusterService.class));
+
+        FlightInfo info = producer.getFlightInfoCatalogs(
+                FlightSql.CommandGetCatalogs.getDefaultInstance(),
+                mock(FlightProducer.CallContext.class), FlightDescriptor.command(new byte[]{1}));
+
+        assertEquals(1, info.getEndpoints().size());
+        assertEquals(List.of(), info.getEndpoints().get(0).getLocations());
+    }
+
+    /** Verifies SQL the server cannot run is the client's error, not a server failure. */
+    @Test
+    void rejectedSqlIsInvalidArgument() {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "select nope from tpch.lineitem";
+        when(executionService.resultSchema(allocator, query))
+                .thenThrow(new IllegalArgumentException("Binder Error: column nope not found"));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                executionService, mock(ClusterService.class));
+
+        FlightRuntimeException error = org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class,
+                () -> producer.getFlightInfoStatement(
+                        FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build(),
+                        mock(FlightProducer.CallContext.class),
+                        FlightDescriptor.command(new byte[]{1})));
+
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, error.status().code());
+    }
+
+    /** Verifies key metadata requests are answered with an empty result. */
+    @Test
+    void keysAreEmpty() {
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        try (BufferAllocator allocator = new org.apache.arrow.memory.RootAllocator()) {
+            FlightSqlProducer producer = new FlightSqlProducer(
+                    Location.forGrpcInsecure("localhost", 32010), allocator,
+                    mock(MetadataService.class), mock(QueryPlanner.class),
+                    mock(ExecutionService.class), mock(ClusterService.class));
+
+            producer.getStreamPrimaryKeys(FlightSql.CommandGetPrimaryKeys.getDefaultInstance(),
+                    mock(FlightProducer.CallContext.class), listener);
+        }
+
+        verify(listener).start(any(org.apache.arrow.vector.VectorSchemaRoot.class));
+        verify(listener).completed();
+        verify(listener, never()).putNext();
+    }
+
+    /** Verifies table listings tolerate the extra table types and catalogs JDBC tools send. */
+    @Test
+    void tableListingToleratesForeignTypesAndCatalogs() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        MetadataService metadataService = mock(MetadataService.class);
+        when(metadataService.getSchemas(any())).thenReturn(java.util.Map.of());
+        when(metadataService.getTablesRoot(any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(mock(org.apache.arrow.vector.VectorSchemaRoot.class));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                metadataService, mock(QueryPlanner.class),
+                mock(ExecutionService.class), mock(ClusterService.class));
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        FlightProducer.ServerStreamListener tablesAndViews =
+                mock(FlightProducer.ServerStreamListener.class);
+        FlightProducer.ServerStreamListener viewsOnly =
+                mock(FlightProducer.ServerStreamListener.class);
+        FlightProducer.ServerStreamListener otherCatalog =
+                mock(FlightProducer.ServerStreamListener.class);
+
+        producer.getStreamTables(FlightSql.CommandGetTables.newBuilder()
+                .addTableTypes("TABLE").addTableTypes("VIEW").build(), context, tablesAndViews);
+        verify(metadataService).getSchemas(any());
+        producer.getStreamTables(FlightSql.CommandGetTables.newBuilder()
+                .addTableTypes("VIEW").build(), context, viewsOnly);
+        producer.getStreamTables(FlightSql.CommandGetTables.newBuilder()
+                .setCatalog("postgres").build(), context, otherCatalog);
+
+        verify(metadataService).getSchemas(any());
+        for (FlightProducer.ServerStreamListener listener
+                : List.of(tablesAndViews, viewsOnly, otherCatalog)) {
+            verify(listener).completed();
+            verify(listener, never()).error(any());
+        }
+    }
+
+    /** Verifies SqlInfo ids without a value are left out instead of failing the call. */
+    @Test
+    void unknownSqlInfoIsLeftOut() {
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010),
+                new org.apache.arrow.memory.RootAllocator(),
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                mock(ExecutionService.class), mock(ClusterService.class));
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        FlightProducer.ServerStreamListener mixed = mock(FlightProducer.ServerStreamListener.class);
+        FlightProducer.ServerStreamListener unknownOnly =
+                mock(FlightProducer.ServerStreamListener.class);
+        java.util.concurrent.atomic.AtomicInteger rows = new java.util.concurrent.atomic.AtomicInteger(-1);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            rows.set(((org.apache.arrow.vector.VectorSchemaRoot) invocation.getArgument(0)).getRowCount());
+            return null;
+        }).when(mixed).start(any(org.apache.arrow.vector.VectorSchemaRoot.class));
+
+        producer.getStreamSqlInfo(FlightSql.CommandGetSqlInfo.newBuilder()
+                .addInfo(0).addInfo(504).addInfo(9999).build(), context, mixed);
+        producer.getStreamSqlInfo(FlightSql.CommandGetSqlInfo.newBuilder()
+                .addInfo(9999).build(), context, unknownOnly);
+
+        assertEquals(2, rows.get());
+        verify(mixed, never()).error(any());
+        verify(unknownOnly).completed();
+        verify(unknownOnly, never()).error(any());
+    }
+
+    /** Verifies the default complete mode and the client's request for parts. */
+    @Test
+    void resultModeComesFromHeaderOrDefault() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "select avg(o_totalprice) from tpch.orders";
+        Schema schema = new Schema(List.of(Field.nullable("avg", new ArrowType.FloatingPoint(
+                org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE))));
+        when(executionService.completeSchema(allocator, query)).thenReturn(schema);
+        when(executionService.resultSchema(allocator, query)).thenReturn(schema);
+        when(queryPlanner.planComplete(query, null)).thenReturn(new QueryPlan(List.of(), -1L, -1L));
+        when(queryPlanner.plan(query)).thenReturn(new QueryPlan(List.of(), 10L, 1L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "complete");
+        FlightSql.CommandStatementQuery command =
+                FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build();
+        FlightProducer.CallContext plain = mock(FlightProducer.CallContext.class);
+        FlightProducer.CallContext partial = mock(FlightProducer.CallContext.class);
+        org.apache.arrow.flight.FlightCallHeaders headers = new org.apache.arrow.flight.FlightCallHeaders();
+        headers.insert(ResultModeMiddleware.HEADER, "partial");
+        when(partial.getMiddleware(ResultModeMiddleware.KEY))
+                .thenReturn(new ResultModeMiddleware.Factory().onCallStarted(null, headers, null));
+
+        producer.getFlightInfoStatement(command, plain, FlightDescriptor.command(new byte[]{1}));
+        verify(queryPlanner).planComplete(query, null);
+        verify(queryPlanner, never()).plan(query);
+
+        producer.getFlightInfoStatement(command, partial, FlightDescriptor.command(new byte[]{1}));
+        verify(queryPlanner).plan(query);
+    }
+
+    /** Verifies binary ticket handles give readable query ids in the log. */
+    @Test
+    void queryIdOfABinaryHandleIsHex() {
+        assertEquals("1f0c2a9e", FlightSqlProducer.qid(com.google.protobuf.ByteString.copyFromUtf8("1f0c2a9e-77aa-4bcd")));
+        org.junit.jupiter.api.Assertions.assertTrue(FlightSqlProducer.qid(com.google.protobuf.ByteString.copyFrom(new byte[] {'A', 'F', 'T', '1', 0, 0, 1, 2, 3}))
+                .matches("[0-9a-f]{8}"));
     }
 }

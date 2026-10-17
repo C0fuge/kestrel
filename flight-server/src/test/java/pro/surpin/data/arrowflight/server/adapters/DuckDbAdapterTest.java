@@ -269,7 +269,7 @@ class DuckDbAdapterTest {
                 "true", "/var/lib/hadoop-hdfs/socket/dn_socket", null,
                 false, 2_147_483_648L, 1048576, 67108864, 60000L, "/data/parquet", null,
                 32010, 5701, 60,
-                3, 1000, 30000);
+                3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
 
         try {
             DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool);
@@ -289,7 +289,7 @@ class DuckDbAdapterTest {
                 3, 2, 1, 131072, 1, 1, 1,
                 null, false, null, null,
                 null, null, null, false, 2_147_483_648L, 1048576, 67108864, 60000L, null, null,
-                32010, 5701, 60, 3, 1000, 30000);
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
         FlightProducer.ServerStreamListener listener =
                 mock(FlightProducer.ServerStreamListener.class);
         AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
@@ -324,7 +324,7 @@ class DuckDbAdapterTest {
                 3, 2, 1, 131072, 0, 1, 1,
                 null, false, null, null,
                 null, null, null, false, 2_147_483_648L, 1048576, 67108864, 60000L, null, null,
-                32010, 5701, 60, 3, 1000, 30000);
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
         FlightProducer.ServerStreamListener listener =
                 mock(FlightProducer.ServerStreamListener.class);
         when(listener.isReady()).thenReturn(true);
@@ -340,6 +340,119 @@ class DuckDbAdapterTest {
         verifyNoInteractions(ioPool);
     }
 
+    /** Verifies the connection of an ended thread is closed instead of being kept forever. */
+    @Test
+    void closesConnectionOfEndedThread() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+        AtomicReference<Connection> used = new AtomicReference<>();
+
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            Thread worker = new Thread(() -> used.set(adapter.connection()));
+            worker.start();
+            worker.join();
+            Connection own = adapter.connection();
+            assertEquals(2, adapter.openSessions());
+
+            adapter.closeSessionsOfEndedThreads();
+
+            assertEquals(1, adapter.openSessions());
+            assertTrue(used.get().isClosed());
+            assertFalse(own.isClosed());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies connections spill to directories of their own, removed with the adapter. */
+    @Test
+    void connectionsUseSeparateTempDirectories(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, base.toString(), null, "complete", true, true);
+        AtomicReference<String> other = new AtomicReference<>();
+        String own;
+
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            Thread worker = new Thread(() -> other.set(tempDirectory(adapter.connection())));
+            worker.start();
+            worker.join();
+            own = tempDirectory(adapter.connection());
+
+            assertNotEquals(own, other.get());
+            assertTrue(java.nio.file.Path.of(own).startsWith(base));
+            assertTrue(java.nio.file.Path.of(other.get()).startsWith(base));
+        } finally {
+            ioPool.shutdownNow();
+        }
+
+        try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.list(base)) {
+            assertEquals(0, left.count());
+        }
+    }
+
+    /**
+     * Reads the spill directory of a DuckDB connection.
+     *
+     * @param connection DuckDB connection
+     * @return value of temp_directory
+     */
+    private static String tempDirectory(Connection connection) {
+        try (Statement statement = connection.createStatement();
+                ResultSet rs = statement.executeQuery("SELECT current_setting('temp_directory')")) {
+            rs.next();
+            return rs.getString(1);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Verifies statements evicted from a full cache are prepared again on reuse. */
+    @Test
+    void streamSqlWorksBeyondStatementCacheSize() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "complete", true, true);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
+        AtomicInteger rows = new AtomicInteger();
+        doAnswer(invocation -> {
+            rootRef.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            rows.addAndGet(rootRef.get().getRowCount());
+            return null;
+        }).when(listener).putNext();
+
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            for (int pass = 0; pass < 2; pass++) {
+                for (int n = 1; n <= 4; n++) {
+                    adapter.streamSql(allocator,
+                            "SELECT range AS id FROM range(0, " + n + ")", listener, true);
+                }
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+
+        assertEquals(2 * (1 + 2 + 3 + 4), rows.get());
+    }
+
     /** Verifies stream completion is signalled immediately after the final batch. */
     @Test
     void streamSqlDoesNotAddPollingDelayAfterFinalBatch() throws Exception {
@@ -349,7 +462,7 @@ class DuckDbAdapterTest {
                 3, 2, 1, 131072, 1, 1, 1,
                 null, false, null, null,
                 null, null, null, false, 2_147_483_648L, 1048576, 67108864, 60000L, null, null,
-                32010, 5701, 60, 3, 1000, 30000);
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
         FlightProducer.ServerStreamListener listener =
                 mock(FlightProducer.ServerStreamListener.class);
         CountDownLatch finalBatchSent = new CountDownLatch(3);
@@ -382,7 +495,7 @@ class DuckDbAdapterTest {
                 3, 2, 1, 131072, 1, 1, 1,
                 null, false, null, null,
                 null, null, null, false, 2_147_483_648L, 1048576, 67108864, 25L, null, null,
-                32010, 5701, 60, 3, 1000, 30000);
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
         FlightProducer.ServerStreamListener listener =
                 mock(FlightProducer.ServerStreamListener.class);
 
@@ -680,5 +793,382 @@ class DuckDbAdapterTest {
 
     private static ParquetQueryParser.SelectExpr parseSingleExpr(String sql) {
         return ParquetQueryParser.parse(sql).selectExprs.get(0);
+    }
+
+    // ── ORDER BY / LIMIT, select order, result schema ─────────────────────
+
+    /** Verifies scans carry ORDER BY and LIMIT to DuckDB. */
+    @Test
+    void buildSelectSqlAppendsOrderAndLimit() {
+        ParquetQueryParser pq = ParquetQueryParser.parse(
+                "SELECT id FROM s.t WHERE id > 10 ORDER BY id DESC LIMIT 3");
+
+        String sql = DuckDbAdapter.buildSelectSql(pq, "t0");
+
+        assertTrue(sql.toLowerCase().contains(" order by \"id\" desc"), "Got: " + sql);
+        assertTrue(sql.endsWith(" LIMIT 3"), "Got: " + sql);
+    }
+
+    /** Verifies aggregates return columns in the selected order, with their aliases. */
+    @Test
+    void aggregateKeepsSelectOrderAndAliases() {
+        ParquetQueryParser pq = ParquetQueryParser.parse(
+                "SELECT count(*) AS c, flag AS f FROM s.t GROUP BY flag ORDER BY c DESC LIMIT 2");
+
+        String sql = DuckDbAdapter.buildDuckSql(pq, "t0");
+
+        assertTrue(sql.startsWith("SELECT count(*) AS \"c\", \"flag\" AS \"f\" FROM t0"),
+                "Got: " + sql);
+        assertTrue(sql.endsWith(" LIMIT 2"), "Got: " + sql);
+    }
+
+    /** Verifies grouping columns the client did not select still come first for merging. */
+    @Test
+    void aggregatePutsUnselectedGroupingColumnsFirst() {
+        ParquetQueryParser pq = ParquetQueryParser.parse(
+                "SELECT count(*) AS c FROM s.t GROUP BY flag");
+
+        String sql = DuckDbAdapter.buildDuckSql(pq, "t0");
+
+        assertTrue(sql.startsWith("SELECT \"flag\", count(*) AS \"c\" FROM t0"), "Got: " + sql);
+    }
+
+    /** Verifies the described schema is the schema of the streamed batches. */
+    @Test
+    void describeSqlReportsStreamSchema() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+        String sql = "SELECT range AS id, 'x' AS name, sum(range) AS total FROM range(0, 5) GROUP BY ALL";
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<org.apache.arrow.vector.types.pojo.Schema> streamed = new AtomicReference<>();
+        doAnswer(invocation -> {
+            streamed.set(((VectorSchemaRoot) invocation.getArgument(0)).getSchema());
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            org.apache.arrow.vector.types.pojo.Schema described = adapter.describeSql(allocator, sql);
+            adapter.streamSql(allocator, sql, listener, true);
+
+            assertEquals(List.of("id", "name", "total"),
+                    described.getFields().stream().map(f -> f.getName()).toList());
+            assertEquals(streamed.get(), described);
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies DISTINCT, HAVING and DISTINCT aggregates are rendered for DuckDB. */
+    @Test
+    void rendersDistinctAndHaving() {
+        String distinct = DuckDbAdapter.buildSelectSql(
+                ParquetQueryParser.parse("SELECT DISTINCT a FROM s.t WHERE a > 1"), "t0");
+        String having = DuckDbAdapter.buildDuckSql(ParquetQueryParser.parse(
+                "SELECT a, count(*) AS c FROM s.t GROUP BY a HAVING count(*) > 1 ORDER BY c"), "t0");
+        String countDistinct = DuckDbAdapter.buildDuckSql(
+                ParquetQueryParser.parse("SELECT count(DISTINCT a) AS d FROM s.t"), "t0");
+
+        assertTrue(distinct.startsWith("SELECT DISTINCT \"a\""), "Got: " + distinct);
+        assertTrue(having.toLowerCase().contains(" having count(*) > 1 order by "), "Got: " + having);
+        assertTrue(countDistinct.startsWith("SELECT count(DISTINCT \"a\") AS \"d\""),
+                "Got: " + countDistinct);
+    }
+
+    // ── complete-answer mode ──────────────────────────────────────────────
+
+    /** Verifies the first word of a statement is found behind comments and parentheses. */
+    @Test
+    void firstKeywordSkipsCommentsAndParentheses() {
+        assertEquals("select", DuckDbAdapter.firstKeyword("  -- note\n /* x */ ((SELECT 1))"));
+        assertEquals("with", DuckDbAdapter.firstKeyword("WITH t AS (SELECT 1) SELECT * FROM t"));
+        assertEquals("drop", DuckDbAdapter.firstKeyword("/* hidden */ DROP VIEW s.t"));
+        assertEquals("", DuckDbAdapter.firstKeyword("   "));
+    }
+
+    /** Verifies the schema of a complete answer, including two columns with the same name. */
+    @Test
+    void describeCompleteKeepsDuplicateColumnNames() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            org.apache.arrow.vector.types.pojo.Schema schema = adapter.describeComplete(allocator,
+                    "SELECT a.id, b.id, avg(a.price) AS p FROM s.t a JOIN s.t b ON a.id = b.id GROUP BY 1, 2",
+                    views());
+
+            assertEquals(List.of("id", "id", "p"),
+                    schema.getFields().stream().map(f -> f.getName()).toList());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies only statements that read are run in complete-answer mode. */
+    @Test
+    void completeAnswerRefusesStatementsThatAreNotQueries() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            for (String sql : new String[] {"DROP VIEW s.t", "CREATE TABLE x AS SELECT 1",
+                    "INSERT INTO s.t VALUES (1, 2.0)", "SET threads = 1", "PRAGMA version",
+                    "COPY (SELECT 1) TO 'x.csv'", "ATTACH 'x.db' AS x"}) {
+                assertThrows(Exception.class, () -> adapter.describeComplete(allocator, sql, views()), sql);
+            }
+            assertNotNull(adapter.describeComplete(allocator, "VALUES (1)", views()));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies queries may not switch on DuckDB's log, read it or secrets, or run SQL text. */
+    @Test
+    void completeAnswerRefusesLoggingSecretsAndDynamicSql() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            for (String sql : new String[] {"SELECT * FROM enable_logging('HTTP')",
+                    "SELECT * FROM ENABLE_LOGGING(level := 'trace')", "SELECT * FROM disable_logging()",
+                    "SELECT * FROM truncate_duckdb_logs()", "SELECT * FROM duckdb_logs",
+                    "SELECT * FROM system.main.duckdb_logs", "SELECT * FROM duckdb_log_contexts",
+                    "SELECT * FROM duckdb_secrets()", "SELECT * FROM which_secret('s3://a/b', 's3')",
+                    "SELECT * FROM query('SELECT 1')", "SELECT * FROM query_table('s.t')",
+                    "SELECT * FROM json_execute_serialized_sql(json_serialize_sql('SELECT 1'))",
+                    "SELECT id FROM s.t WHERE id IN (SELECT 1 FROM enable_logging())",
+                    "WITH l AS (SELECT * FROM duckdb_logs) SELECT count(*) FROM l"}) {
+                IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                        () -> adapter.describeComplete(allocator, sql, views()), sql);
+                assertTrue(e.getMessage().contains("is not allowed"), sql + ": " + e.getMessage());
+            }
+            // Names inside text are not calls.
+            assertNotNull(adapter.describeComplete(allocator,
+                    "SELECT 'enable_logging' AS f, 'x\",\"function_name\":\"query' AS g", views()));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies a complete answer is computed over the views and streamed. */
+    @Test
+    void streamCompleteRunsClientSqlOverViews() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
+        AtomicReference<String> values = new AtomicReference<>("");
+        doAnswer(invocation -> {
+            rootRef.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            values.set(values.get() + rootRef.get().contentToTSVString());
+            return null;
+        }).when(listener).putNext();
+
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            adapter.streamComplete(allocator,
+                    "SELECT count(*) AS n, avg(price) AS p FROM s.t WHERE id IN (SELECT id FROM s.t WHERE id > 1)",
+                    views(), listener, true);
+        } finally {
+            ioPool.shutdownNow();
+        }
+
+        assertTrue(values.get().contains("2\t25.0"), values.get());
+    }
+
+    /** Verifies a locked-down connection reads its data directory and nothing else. */
+    @Test
+    void lockdownAllowsOnlyTheDataDirectory(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path data = java.nio.file.Files.createDirectories(dir.resolve("data"));
+        java.nio.file.Path outside = java.nio.file.Files.createDirectories(dir.resolve("outside"));
+        try (Connection free = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = free.createStatement()) {
+            s.execute("COPY (SELECT 42 AS x) TO '" + data.resolve("t.parquet") + "' (FORMAT parquet)");
+            s.execute("COPY (SELECT 7 AS x) TO '" + outside.resolve("t.parquet") + "' (FORMAT parquet)");
+        }
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, List.of(data.toString()));
+            Connection conn = adapter.connection();
+            try (Statement s = conn.createStatement();
+                    ResultSet rs = s.executeQuery("SELECT x FROM read_parquet('" + data.resolve("t.parquet") + "')")) {
+                assertTrue(rs.next());
+                assertEquals(42, rs.getInt(1));
+            }
+            for (String sql : new String[] {
+                    "SELECT x FROM read_parquet('" + outside.resolve("t.parquet") + "')",
+                    "SELECT * FROM read_text('/etc/hostname')"}) {
+                try (Statement s = conn.createStatement()) {
+                    assertThrows(java.sql.SQLException.class, () -> s.executeQuery(sql), sql);
+                }
+            }
+            try (Statement s = conn.createStatement()) {
+                assertThrows(java.sql.SQLException.class, () -> s.execute("SET enable_external_access = true"));
+            }
+            adapter.close();
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Builds a configuration for complete-answer tests.
+     *
+     * @return server configuration
+     */
+    private static AppConfig completeConfig() {
+        return new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+    }
+
+    /**
+     * Builds view definitions over an in-memory table: ids 1, 2, 3 with prices 10, 20, 30.
+     *
+     * @return view definitions
+     */
+    private static pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views() {
+        return new pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot(1L,
+                List.of("CREATE SCHEMA IF NOT EXISTS s",
+                        "CREATE OR REPLACE VIEW s.t AS SELECT * FROM (VALUES (1, 10.0), (2, 20.0), (3, 30.0)) v(id, price)",
+                        "CREATE OR REPLACE VIEW main.t AS SELECT * FROM s.t"),
+                List.of("CREATE SCHEMA IF NOT EXISTS s",
+                        "CREATE OR REPLACE VIEW s.t AS SELECT CAST(NULL AS INTEGER) AS id, CAST(NULL AS DECIMAL(3,1)) AS price WHERE false",
+                        "CREATE OR REPLACE VIEW main.t AS SELECT * FROM s.t"),
+                List.of("DROP VIEW IF EXISTS main.t", "DROP SCHEMA IF EXISTS s CASCADE"));
+    }
+
+    /** Verifies a text with several statements is refused before any of them runs. */
+    @Test
+    void completeAnswerRunsNothingFromATextWithSeveralStatements() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            for (String sql : new String[] {
+                    "SELECT 1; DROP SCHEMA s CASCADE; SELECT 2",
+                    "CREATE OR REPLACE VIEW s.t AS SELECT 'x' AS id; SELECT 1",
+                    "SELECT $$'$$; DROP SCHEMA s CASCADE; SELECT '$$'",
+                    "SELECT 1; SELECT 2"}) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> adapter.describeComplete(allocator, sql, views()), sql);
+                assertThrows(IllegalArgumentException.class,
+                        () -> adapter.streamComplete(allocator, sql, views(),
+                                mock(FlightProducer.ServerStreamListener.class), true), sql);
+            }
+            assertEquals(List.of("id", "price"), adapter.describeComplete(allocator,
+                    "SELECT * FROM s.t;", views()).getFields().stream().map(f -> f.getName()).toList());
+            assertEquals("3", completeAnswer(adapter, allocator, "SELECT count(*) FROM s.t WHERE id > 0"));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies a table can be named without its schema when no other schema has that name. */
+    @Test
+    void completeAnswerFindsTablesWithoutSchema() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            assertEquals("60.0", completeAnswer(adapter, allocator, "SELECT sum(price) FROM t"));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies a query needing an extension that is not loaded fails at once instead of downloading it. */
+    @Test
+    void describeDoesNotInstallExtensions() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            long start = System.nanoTime();
+            assertThrows(java.sql.SQLException.class,
+                    () -> adapter.describeComplete(allocator, "SELECT * FROM tpch_queries()", views()));
+            assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(5));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies a client's cancel interrupts DuckDB while it computes, without the cancel callback. */
+    @Test
+    void clientCancelInterruptsTheQuery() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicBoolean cancelled = new AtomicBoolean();
+        when(listener.isCancelled()).thenAnswer(invocation -> cancelled.get());
+        java.util.concurrent.ScheduledExecutorService client = Executors.newSingleThreadScheduledExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            // As in gRPC: the flag is set at once, the callback waits for the busy call thread.
+            client.schedule(() -> cancelled.set(true), 500, TimeUnit.MILLISECONDS);
+            long start = System.nanoTime();
+            FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                    () -> adapter.streamSql(allocator,
+                            "SELECT sum(i % 7) FROM range(200000000000) r(i)", listener, true));
+            assertEquals(FlightStatusCode.CANCELLED, e.status().code());
+            assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(10));
+            assertEquals("1", completeAnswer(adapter, allocator, "SELECT 1"));
+        } finally {
+            client.shutdownNow();
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Runs a complete-answer query and returns its first value.
+     *
+     * @param adapter DuckDB adapter
+     * @param allocator Arrow allocator
+     * @param sql client SQL
+     * @return first value as text
+     * @throws Exception on failure
+     */
+    private static String completeAnswer(DuckDbAdapter adapter, RootAllocator allocator, String sql)
+            throws Exception {
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
+        AtomicReference<String> value = new AtomicReference<>();
+        doAnswer(invocation -> {
+            rootRef.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            if (value.get() == null) {
+                value.set(String.valueOf(rootRef.get().getVector(0).getObject(0)));
+            }
+            return null;
+        }).when(listener).putNext();
+        adapter.streamComplete(allocator, sql, views(), listener, true);
+        return value.get();
+    }
+
+    /** Verifies a query that failed while running fails the same way when run again. */
+    @Test
+    void queryFailingAtRunTimeCanBeRunAgain() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            String sql = "SELECT max(error('late ' || id)) FROM s.t";
+            for (int run = 0; run < 2; run++) {
+                Exception e = assertThrows(Exception.class, () -> completeAnswer(adapter, allocator, sql));
+                assertTrue(String.valueOf(e.getMessage()).contains("late"), e.getMessage());
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
     }
 }

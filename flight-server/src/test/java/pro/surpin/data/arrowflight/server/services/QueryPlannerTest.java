@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
+import java.io.IOException;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -355,5 +356,110 @@ class QueryPlannerTest {
         @SuppressWarnings("unchecked")
         Map<String, FileAssignment> r = (Map<String, FileAssignment>) m.invoke(null, inventory, pq);
         return r;
+    }
+
+    /** Verifies OFFSET is refused when several nodes would each skip rows on their own. */
+    @Test
+    void offsetNeedsSingleNode() {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> planner.plan("SELECT * FROM s.t ORDER BY id LIMIT 5 OFFSET 2"));
+    }
+
+    /** Verifies a one-file table on shared storage is planned on a cluster. */
+    @Test
+    void sharedStoragePlansTableHeldByOneNode() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/small/f.parquet", new FileAssignment(10L, Set.of(S1))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan("SELECT * FROM s.small");
+
+        assertEquals(1, plan.endpoints().size());
+        assertEquals(S1, plan.endpoints().get(0).getLocations().get(0).getUri().toString());
+    }
+
+    /** Verifies the shard check still guards a local directory per node. */
+    @Test
+    void localStorageStillNeedsEveryNodesShard() {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/small/f.parquet", new FileAssignment(10L, Set.of(S1))));
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        assertThrows(java.io.IOException.class, () -> planner.plan("SELECT * FROM s.small"));
+    }
+
+    /** Verifies a join on shared storage runs where most of its input is local. */
+    @Test
+    void sharedStorageRunsJoinOnNodeWithMostInput() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/a/f.parquet", new FileAssignment(10L, Set.of(S1)),
+                "s/b/f.parquet", new FileAssignment(500L, Set.of(S2))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan("SELECT x.id FROM s.a x JOIN s.b y ON x.id = y.id");
+
+        assertEquals(1, plan.endpoints().size());
+        assertEquals(S2, plan.endpoints().get(0).getLocations().get(0).getUri().toString());
+    }
+
+    /** Verifies a complete answer is refused on a cluster whose nodes keep their files apart. */
+    @Test
+    void completeAnswerNeedsSharedStorageOnACluster() {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        assertThrows(IllegalStateException.class, () -> planner.planComplete("SELECT 1"));
+
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        assertEquals(1, planner.planComplete("SELECT 1").endpoints().size());
+
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        assertEquals(1, planner.planComplete("SELECT 1").endpoints().size());
+    }
+
+    /** Verifies files of a dead node go to a live node on shared storage and fail on local disks. */
+    @Test
+    void filesOfADeadNodeGoToALiveNodeOnSharedStorage() throws Exception {
+        when(parquetAdapter.localFileInventory()).thenReturn(Map.of());
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(S1)).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(S1)),
+                "s/t/b.parquet", new FileAssignment(100L, Set.of(S2))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.estimateRowCount(anyMap())).thenReturn(2L);
+
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlan plan = new QueryPlanner(parquetAdapter, clusterService).plan("SELECT * FROM s.t");
+        assertEquals(1, plan.endpoints().size());
+        assertEquals(200L, plan.totalBytes());
+
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        assertThrows(IOException.class,
+                () -> new QueryPlanner(parquetAdapter, clusterService).plan("SELECT * FROM s.t"));
     }
 }

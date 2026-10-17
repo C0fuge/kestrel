@@ -92,7 +92,8 @@ public class TestFlightServerHelper implements AutoCloseable {
                 Executors.newCachedThreadPool());
 
         flightSqlProducer = new FlightSqlProducer(location, allocator,
-                metadataService, queryPlanner, executionService, clusterService);
+                metadataService, queryPlanner, executionService, clusterService,
+                b.resultMode);
 
         server = FlightServer.builder(allocator, location, flightSqlProducer).build();
         server.start();
@@ -143,11 +144,13 @@ public class TestFlightServerHelper implements AutoCloseable {
     public static class Builder {
         private BufferAllocator allocator;
         private String dataDir;
+        private String resultMode = "partial";
         private int hazelcastPort;
         private int flightPort;
 
         public Builder allocator(BufferAllocator a) { this.allocator = a; return this; }
         public Builder dataDir(String d) { this.dataDir = d; return this; }
+        public Builder resultMode(String m) { this.resultMode = m; return this; }
         public Builder hazelcastPort(int p) { this.hazelcastPort = p; return this; }
         public Builder flightPort(int p) { this.flightPort = p; return this; }
 

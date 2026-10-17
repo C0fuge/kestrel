@@ -272,11 +272,31 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory` |
+| Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
+| Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
+
+### Complete and partial answers
+
+- **complete** (default): the node that receives a query runs the whole SQL in DuckDB over views
+  of all tables and returns one endpoint with the complete answer. Any single read-only query
+  DuckDB accepts works: subqueries, `WITH`, `UNION`, window functions, any aggregate. A table can
+  be named without its schema when no other schema has a table of that name. This is what stock
+  JDBC/ODBC/ADBC drivers and BI tools need on a cluster. It needs storage every node can read
+  (HDFS, S3); a cluster on local disks refuses it.
+- **partial**: one endpoint per node with the part computed from that node's files; the client
+  merges. The Trino and Spark connectors ask for it with the header
+  `x-flight-result-mode: partial`.
+
+Only one statement per request is accepted in complete mode, checked by DuckDB's parser before
+anything runs: `SELECT`, `WITH`, `VALUES`, `FROM`, `TABLE`, `DESCRIBE`, `SHOW`, `SUMMARIZE`. With
+`duckDbLockdown=true` (default) DuckDB reads only the data directory and its spill directory,
+installs and loads no extensions by itself, and its settings cannot be changed. A client cancel
+interrupts the query in DuckDB.
 
 ---
 
@@ -291,10 +311,12 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | `GROUP BY` | Supported (requires client-side merge) |
 | `INNER JOIN` | Supported (DuckDB server-side + Spark fallback) |
 | Cross-type join coercion (INT32/INT64, FLOAT/DOUBLE, BOOL/INT8) | Experimental |
-| `ORDER BY` | Not supported (server); Supported (Spark client-side) |
-| `LIMIT` / `OFFSET` | Not supported (server); Supported (Spark client-side) |
-| Subqueries | Experimental |
-| Window functions | Not supported |
+| `ORDER BY` | Supported per endpoint: exact on one node, per-node order across several |
+| `LIMIT` | Supported per endpoint: exact on one node, at most `LIMIT` rows from each node across several |
+| `OFFSET` | Supported on one node; refused when several nodes serve the table |
+| Prepared statements | Supported (what stock Flight SQL JDBC/ADBC drivers use); `?` parameters in complete mode |
+| Access token (Bearer, or Basic with the token as password) | Supported, off by default |
+| Subqueries, `WITH`, `UNION`, window functions | Supported in complete mode |
 | Write (`INSERT` / `TRUNCATE`) | Experimental (Spark-side only) |
 | Info commands (schemas, tables, types) | Supported |
 | Distributed processing with data locality | Supported |
@@ -302,8 +324,11 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 ## Limitations
 
 **Server-side (Flight SQL):**
-- No `ORDER BY`, `LIMIT`, `OFFSET`, subqueries, or window functions.
-- `GROUP BY` results require client-side merging across nodes.
+- Partial mode: no subqueries or window functions; expressions only inside aggregates.
+  `ORDER BY`, `LIMIT` and `GROUP BY` are applied by every node to its own files; with more than
+  one node the client merges: re-sort, re-limit, combine groups.
+- Statement parameters (`?`) work in complete mode only, one set of values per execution.
+- Complete mode: `EXPLAIN` and `PIVOT` are refused.
 
 **Spark-side (DataSource V2 connector):**
 - `ORDER BY` and `LIMIT` work — Spark applies them after reading from Flight.

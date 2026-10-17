@@ -14,7 +14,6 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.impl.UnionListWriter;
-import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.apache.arrow.vector.types.Types;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -47,7 +46,6 @@ import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.adapters.SchemaConverter;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 
-import static org.apache.arrow.vector.ipc.message.MessageSerializer.serializeMetadata;
 import static java.util.Collections.singletonList;
 
 /**
@@ -276,11 +274,10 @@ public final class MetadataService {
                         "TABLE_NAME", tableName,
                         COLUMN_TABLE_TYPE, TABLE_TYPE));
                 if (tableSchemaVector != null) {
-                    java.nio.ByteBuffer buf = serializeMetadata(
-                            tableEntry.getValue(), IpcOption.DEFAULT);
-                    byte[] schemaBytes = new byte[buf.remaining()];
-                    buf.get(schemaBytes);
-                    saveToVector(schemaBytes, tableSchemaVector, data.size() - 1);
+                    // Flight SQL wants the schema as a complete IPC message; stock drivers
+                    // cannot read the bare flatbuffer.
+                    saveToVector(tableEntry.getValue().serializeAsMessage(),
+                            tableSchemaVector, data.size() - 1);
                 }
             }
         }

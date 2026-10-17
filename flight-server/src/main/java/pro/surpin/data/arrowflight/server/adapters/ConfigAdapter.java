@@ -89,6 +89,23 @@ public class ConfigAdapter {
         int clientMaxRetries = getInt("client.maxRetries", null, 3, props);
         int clientRetryBackoffMs = getInt("client.retryBackoffMs", null, 1000, props);
         int clientConnectTimeoutMs = getInt("client.connectTimeoutMs", null, 0, props);
+        boolean duckDbStreamResults = getBooleanWithEnv("duckDbStreamResults",
+                "arrowflight.duckdb.streamResults", "DUCKDB_STREAM_RESULTS", true, props);
+        boolean duckDbExternalFileCache = getBooleanWithEnv("duckDbExternalFileCache",
+                "arrowflight.duckdb.externalFileCache", "DUCKDB_EXTERNAL_FILE_CACHE",
+                false, props);
+        int duckDbStatementCacheSize = getInt("duckDbStatementCacheSize",
+                "arrowflight.duckdb.statementCacheSize", 64, props);
+        String duckDbTempDirectory = getStringWithEnv("duckDbTempDirectory",
+                "arrowflight.duckdb.tempDirectory", "DUCKDB_TEMP_DIRECTORY", null, props);
+        String authToken = getStringWithEnv("authToken",
+                "arrowflight.auth.token", "FLIGHT_AUTH_TOKEN", null, props);
+        String resultMode = getStringWithEnv("resultMode", "arrowflight.resultMode",
+                "FLIGHT_RESULT_MODE", "complete", props);
+        boolean widenUnsignedTypes = getBooleanWithEnv("widenUnsignedTypes",
+                "arrowflight.widenUnsignedTypes", "FLIGHT_WIDEN_UNSIGNED_TYPES", true, props);
+        boolean duckDbLockdown = getBooleanWithEnv("duckDbLockdown",
+                "arrowflight.duckdb.lockdown", "DUCKDB_LOCKDOWN", true, props);
 
         return new AppConfig(
                 numServers, batchSize, ioParallelism, ioFileBufferSize,
@@ -100,7 +117,9 @@ public class ConfigAdapter {
                 grpcMaxInboundMessageSize, flightBackpressureThresholdBytes,
                 flightListenerReadyTimeoutMillis,
                 dataDir, localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
-                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs);
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown);
     }
 
     /**
