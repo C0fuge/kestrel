@@ -87,6 +87,9 @@ public final class DuckDbAdapter implements AutoCloseable {
     /** A function or table name in DuckDB's serialized statement. */
     private static final java.util.regex.Pattern SERIALIZED_NAME = java.util.regex.Pattern.compile(
             "\"(?:function_name|table_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+    /** A string literal in a DuckDB error, possibly cut off before its closing quote. */
+    private static final java.util.regex.Pattern SETUP_LITERAL =
+            java.util.regex.Pattern.compile("'(?:[^']|'')*(?:'|$)");
     /** How often a running query checks whether its client has cancelled. */
     private static final long CANCEL_POLL_MILLIS = 200;
     /** Longest time a query may take to describe; it runs over views without rows. */
@@ -174,18 +177,12 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.duckDbGroups = appConfig.duckDbGroups();
 
         this.tempRoot = createTempRoot(appConfig.duckDbTempDirectory());
+        if (!this.storageSetupStatements.isEmpty()) {
+            verifyStorageSetup();
+        }
         this.threadSession = ThreadLocal.withInitial(() -> {
             try {
-                Properties props = new Properties();
-                if (appConfig.duckDbAllowUnsignedExtensions()) {
-                    props.setProperty("allow_unsigned_extensions", "true");
-                }
-                if (appConfig.duckDbStreamResults()) {
-                    // Without it DuckDB buffers the whole result before the first batch is sent.
-                    props.setProperty("jdbc_stream_results", "true");
-                }
-                Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
-                configureConnection(conn);
+                Connection conn = openConnection(false);
                 Session session = new Session(Thread.currentThread(), conn,
                         appConfig.duckDbStatementCacheSize());
                 allSessions.add(session);
@@ -223,11 +220,58 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Opens and configures a DuckDB connection for queries.
+     *
+     * @param logExtensions whether to log the storage extensions loaded
+     * @return configured connection
+     * @throws Exception when DuckDB cannot be opened or configured
+     */
+    private Connection openConnection(boolean logExtensions) throws Exception {
+        Properties props = new Properties();
+        if (appConfig.duckDbAllowUnsignedExtensions()) {
+            props.setProperty("allow_unsigned_extensions", "true");
+        }
+        if (appConfig.duckDbStreamResults()) {
+            // Without it DuckDB buffers the whole result before the first batch is sent.
+            props.setProperty("jdbc_stream_results", "true");
+        }
+        // Secrets live in memory only: none is read from or written to ~/.duckdb/stored_secrets.
+        props.setProperty("allow_persistent_secrets", "false");
+        Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
+        try {
+            configureConnection(conn, logExtensions);
+        } catch (Exception e) {
+            Session.closeQuietly(conn);
+            throw e;
+        }
+        return conn;
+    }
+
+    /**
+     * Sets up one connection the way every query connection is set up, so that storage DuckDB
+     * cannot read (a missing or mismatched extension, a refused setting) stops the server at
+     * startup instead of failing every query; logs the extensions that are loaded.
+     *
+     * @throws IllegalStateException when the storage setup fails
+     */
+    private void verifyStorageSetup() {
+        try (Connection conn = openConnection(true)) {
+            LOGGER.info("node={} duckdb=storageSetupVerified statements={} open={}", LogUtil.node(),
+                    storageSetupStatements.size(), !conn.isClosed());
+        } catch (Exception e) {
+            throw new IllegalStateException("DuckDB cannot be set up for the data store: "
+                    + sanitizeSetupError(e.getMessage()), e instanceof java.sql.SQLException ? null : e);
+        }
+    }
+
+    /**
      * Configure DuckDB connection settings
      * @param conn JDBC connection
+     * @param logExtensions whether to log the storage extensions loaded, read before the
+     *                      lockdown because the extension directory is not readable after it
      * @throws Exception on configuration failure
      */
-    private void configureConnection(Connection conn) throws Exception {
+    private void configureConnection(Connection conn, boolean logExtensions) throws Exception {
         try (Statement s = conn.createStatement()) {
             s.execute("SET threads = " + appConfig.duckDbThreads());
             String memLimit = appConfig.duckDbMemoryLimit();
@@ -265,6 +309,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                         appConfig.duckDbHdfsDomainSocketPath());
             }
             runStorageSetup(s);
+            if (logExtensions) {
+                logStorageExtensions(s);
+            }
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                 // Clients may send any SQL in complete-answer mode, and filters reach DuckDB as
                 // written in the other mode. Only the data and this connection's spill directory
@@ -295,9 +342,44 @@ public final class DuckDbAdapter implements AutoCloseable {
                 s.execute(storageSetupStatements.get(i));
             } catch (java.sql.SQLException e) {
                 throw new java.sql.SQLException("Storage setup statement " + (i + 1) + " of "
-                        + storageSetupStatements.size() + " failed", e.getSQLState());
+                        + storageSetupStatements.size() + " failed: "
+                        + sanitizeSetupError(e.getMessage()), e.getSQLState());
             }
         }
+    }
+
+    /**
+     * Logs the storage extensions loaded and the DuckDB version they run in.
+     *
+     * @param s statement of a connection after the storage setup
+     * @throws java.sql.SQLException when the extension list cannot be read
+     */
+    private static void logStorageExtensions(Statement s) throws java.sql.SQLException {
+        try (java.sql.ResultSet rs = s.executeQuery("SELECT extension_name, extension_version,"
+                + " (SELECT library_version FROM pragma_version()) FROM duckdb_extensions()"
+                + " WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')")) {
+            while (rs.next()) {
+                LOGGER.info("node={} duckdb={}Loaded version={} duckdbVersion={}", LogUtil.node(),
+                        rs.getString(1), rs.getString(2), rs.getString(3));
+            }
+        }
+    }
+
+    /**
+     * Removes what could quote a storage credential from a DuckDB error about a setup
+     * statement: every string literal (DuckDB quotes the statement near a parser error, and a
+     * literal cut short by its line limit has no closing quote) and the configured S3 secrets.
+     *
+     * @param message DuckDB error message, or null
+     * @return message without literals and secrets
+     */
+    String sanitizeSetupError(String message) {
+        if (message == null) {
+            return "";
+        }
+        String result = appConfig.s3().redact(message);
+        result = SETUP_LITERAL.matcher(result).replaceAll("'***'");
+        return result.length() > 500 ? result.substring(0, 500) + "..." : result;
     }
 
     /**

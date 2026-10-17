@@ -1040,20 +1040,70 @@ class DuckDbAdapterTest {
         }
     }
 
-    /** Verifies a failing setup statement is not quoted, as it may hold storage credentials. */
+    /**
+     * Verifies a failing setup statement stops the adapter at construction and is not quoted, in
+     * the exception or in the log, as it may hold storage credentials.
+     */
     @Test
     void storageSetupFailureDoesNotQuoteTheStatement() throws Exception {
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
-        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, List.of(),
-                List.of("SELECT 1", "CREATE SECRET broken (TYPE nosuchtype, SECRET 'hunter2')"))) {
-            RuntimeException e = assertThrows(RuntimeException.class, adapter::connection);
-            StringBuilder messages = new StringBuilder();
-            for (Throwable t = e; t != null; t = t.getCause()) {
-                messages.append(t.getMessage()).append('\n');
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        try {
+            System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+            for (String broken : List.of(
+                    "CREATE SECRET broken (TYPE nosuchtype, SECRET 'hunter2')",
+                    "CREATE SECRET broken (TYPE s3 KEY_ID 'AKIA' SECRET 'hunter2' syntax error")) {
+                IllegalStateException e = assertThrows(IllegalStateException.class,
+                        () -> new DuckDbAdapter(completeConfig(), ioPool, List.of(),
+                                List.of("SELECT 1", broken)));
+                StringBuilder messages = new StringBuilder();
+                for (Throwable t = e; t != null; t = t.getCause()) {
+                    messages.append(t.getMessage()).append('\n');
+                }
+                assertTrue(messages.toString().contains("Storage setup statement 2 of 2 failed"),
+                        messages.toString());
+                assertFalse(messages.toString().contains("hunter2"), messages.toString());
             }
-            assertTrue(messages.toString().contains("Storage setup statement 2 of 2 failed"),
-                    messages.toString());
-            assertFalse(messages.toString().contains("hunter2"), messages.toString());
+        } finally {
+            System.setErr(err);
+            ioPool.shutdownNow();
+        }
+        assertFalse(log.toString(java.nio.charset.StandardCharsets.UTF_8).contains("hunter2"));
+    }
+
+    /** Verifies a setup error loses every string literal and the configured S3 secret. */
+    @Test
+    void setupErrorsAreSanitized() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig base = completeConfig();
+        AppConfig config = new AppConfig(base.numServers(), base.batchSize(), base.ioParallelism(),
+                base.ioFileBufferSize(), base.duckDbWarmConnections(), base.duckDbGroups(),
+                base.duckDbThreads(), null, false, null, null, null, null, null, false,
+                base.grpcMaxInboundMessageSize(), base.flightBackpressureThresholdBytes(),
+                base.flightListenerReadyTimeoutMillis(), null, null, 32010, 5701, 60, 3, 1000,
+                30000, true, false, 64, null, null, "complete", true, true,
+                new pro.surpin.data.arrowflight.server.storage.S3Settings("http://h:1", null, null,
+                        null, true, "AKIA", "plainSecret", null, 30, 1, null, true));
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            assertEquals("LINE 1: SECRET '***' near plain *** and '***'",
+                    adapter.sanitizeSetupError("LINE 1: SECRET 'x''y' near plain plainSecret and 'cut off"));
+            assertEquals("", adapter.sanitizeSetupError(null));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Verifies DuckDB neither reads nor writes persistent secrets. */
+    @Test
+    void persistentSecretsAreDisabled() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            try (Statement s = adapter.connection().createStatement();
+                    ResultSet rs = s.executeQuery("SELECT current_setting('allow_persistent_secrets')")) {
+                assertTrue(rs.next());
+                assertFalse(rs.getBoolean(1));
+            }
         } finally {
             ioPool.shutdownNow();
         }
