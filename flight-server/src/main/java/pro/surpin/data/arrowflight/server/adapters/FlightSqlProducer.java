@@ -57,6 +57,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private static final java.util.concurrent.atomic.AtomicLong EXECUTIONS = new java.util.concurrent.atomic.AtomicLong();
     private static final String SCHEMA_NOT_FOUND_MESSAGE = "Could not find Arrow schema for query";
 
+    private final Location location;
     private final BufferAllocator allocator;
     private final MetadataService metadataService;
     private final QueryPlanner queryPlanner;
