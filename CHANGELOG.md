@@ -24,8 +24,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Nodes beat every 3 s and are left out after 10 s (was 15 s / 45 s).
 - A DuckDB statement closed by a failed run is prepared again instead of failing every later
   run of the same SQL with "Statement was closed".
+- Releasing the load of an endpoint no longer puts a node that was removed as stale back into
+  the registry (where, without heartbeats, it counted as a node that had just started).
 
 ### Added
+- Endpoint failover for partial results: every endpoint lists up to `endpointBackupLocations`
+  (default 2, 0 = off) other live nodes after its planned node, those that can read all its
+  files (HDFS/S3: any node; local disks: replica holders), best first (local bytes, load,
+  rendezvous hash). Tickets are unchanged and run on any node; a node running an endpoint
+  planned elsewhere logs `execution=failover` and takes over its load accounting. The planning
+  node lists itself as a backup only for clients that send `x-flight-location-failover: 1`
+  (older Trino plugins read every endpoint listing it from it). Clients may send keepalive
+  pings every 5 s. Complete answers are unchanged.
 - `ORDER BY`, `LIMIT` and `OFFSET` (see README for multi-node semantics).
 - Prepared statements without parameters, empty key metadata, metadata endpoints without a
   fixed `0.0.0.0` location: the stock Arrow Flight SQL JDBC driver works.
