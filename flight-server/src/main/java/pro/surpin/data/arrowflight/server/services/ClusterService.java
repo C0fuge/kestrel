@@ -367,7 +367,8 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
-     * Releases distributed load once for a completed signed endpoint ticket.
+     * Releases distributed load once for a completed signed endpoint ticket, from the node that
+     * holds the reservation: the planned node, or the backup node that ran the endpoint instead.
      *
      * @param handle ticket statement-handle bytes
      * @param state completed endpoint state
@@ -379,8 +380,60 @@ public final class ClusterService implements AutoCloseable {
         Serializable reservation = hazelcast.statementCache()
                 .remove(loadReservationKey(handle));
         if (reservation instanceof HandleState reserved) {
-            addLoad(reserved.serverUri(), -reserved.bytes());
+            subtractLoad(reserved.serverUri(), reserved.bytes());
         }
+    }
+
+    /**
+     * Moves the load reservation of an endpoint planned for another node to this node, which
+     * runs it instead (the client could not reach the planned node). The planned node's load
+     * drops by the endpoint's bytes and this node's load grows by them, so that
+     * {@link #releaseEndpointLoad} later releases them here. Does nothing for endpoints planned
+     * here, without tracked load, or whose reservation is already gone.
+     *
+     * @param handle ticket statement-handle bytes
+     * @param state endpoint state
+     * @return true when the endpoint was planned for another node
+     */
+    public boolean claimEndpointLoad(byte[] handle, HandleState state) {
+        if (state.complete() || state.serverUri() == null || state.serverUri().equals(serverUri)) {
+            return false;
+        }
+        if (!state.loadTracked() || state.bytes() == 0L) {
+            return true;
+        }
+        String key = loadReservationKey(handle);
+        Serializable reservation = hazelcast.statementCache().remove(key);
+        if (reservation instanceof HandleState reserved && !serverUri.equals(reserved.serverUri())) {
+            subtractLoad(reserved.serverUri(), reserved.bytes());
+            addLoad(serverUri, reserved.bytes());
+            hazelcast.statementCache().put(key, new HandleState(reserved.query(),
+                    reserved.filePaths(), serverUri, reserved.bytes(), true, false,
+                    reserved.parameters()), 10, TimeUnit.MINUTES);
+        } else if (reservation != null) {
+            hazelcast.statementCache().put(key, reservation, 10, TimeUnit.MINUTES);
+        }
+        return true;
+    }
+
+    /**
+     * Lowers a node's tracked load, never below zero. A node no longer in the registry (stale
+     * and removed) is not added back: a registry entry without heartbeats counts as a node that
+     * just started, and the planner would send clients to it.
+     *
+     * @param uri server URI
+     * @param bytes bytes to subtract
+     */
+    private void subtractLoad(String uri, long bytes) {
+        long t = LogUtil.mark();
+        hazelcast.serverRegistry().compute(uri, (k, v) -> {
+            if (v == null) {
+                return null;
+            }
+            long updated = v - bytes;
+            return updated <= 0 ? 0L : updated;
+        });
+        LogUtil.logTiming(t, "hazelcast.subtractLoad", "uri=" + uri + " bytes=" + bytes);
     }
 
     /**

@@ -227,6 +227,114 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /** Backs the registry mock's compute with a real map, as Hazelcast applies it. */
+    private Map<String, Long> registryBackedByMap() {
+        Map<String, Long> backing = new java.util.concurrent.ConcurrentHashMap<>();
+        when(serverRegistry.compute(anyString(), any())).thenAnswer(invocation -> {
+            java.util.function.BiFunction<String, Long, Long> function = invocation.getArgument(1);
+            return backing.compute(invocation.getArgument(0), function);
+        });
+        return backing;
+    }
+
+    /** Verifies a stale node removed from the registry is not added back by a late release. */
+    @Test
+    void releaseEndpointLoadDoesNotBringBackARemovedNode() {
+        Map<String, Long> registry = registryBackedByMap();
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "gone", 100L, true);
+        ClusterService cs = createService("s1");
+        byte[] handle = cs.createEndpointHandle(state);
+        when(statementCache.remove(anyString())).thenReturn(state);
+
+        cs.releaseEndpointLoad(handle, state);
+
+        assertFalse(registry.containsKey("gone"),
+                "a registry entry without heartbeats would count as a live node");
+        cs.close();
+    }
+
+    /** Verifies a backup node takes over the load reservation of the endpoint it runs. */
+    @Test
+    void claimEndpointLoadMovesTheReservationToTheBackupNode() {
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("primary", 150L);
+        registry.put("backup", 20L);
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService cs = createService("backup");
+        byte[] handle = cs.createEndpointHandle(state);
+        when(statementCache.remove(anyString())).thenReturn(state);
+
+        assertTrue(cs.claimEndpointLoad(handle, state));
+
+        assertEquals(50L, registry.get("primary"));
+        assertEquals(120L, registry.get("backup"));
+        org.mockito.ArgumentCaptor<Serializable> moved =
+                org.mockito.ArgumentCaptor.forClass(Serializable.class);
+        verify(statementCache, atLeastOnce()).put(startsWith("__arrowflight-ticket-load-v1:"),
+                moved.capture(), eq(10L), eq(java.util.concurrent.TimeUnit.MINUTES));
+        HandleState reservation = (HandleState) moved.getValue();
+        assertEquals("backup", reservation.serverUri());
+        assertEquals(100L, reservation.bytes());
+
+        // The release at the end of the stream now lowers the backup node's load.
+        when(statementCache.remove(anyString())).thenReturn(reservation, (Serializable) null);
+        cs.releaseEndpointLoad(handle, state);
+        cs.releaseEndpointLoad(handle, state);
+        assertEquals(50L, registry.get("primary"));
+        assertEquals(20L, registry.get("backup"));
+        cs.close();
+    }
+
+    /** Verifies the planned node itself, complete answers and released reservations claim nothing. */
+    @Test
+    void claimEndpointLoadIgnoresOwnCompleteAndReleasedEndpoints() {
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("primary", 100L);
+        registry.put("backup", 0L);
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService planned = createService("primary");
+        byte[] handle = planned.createEndpointHandle(state);
+        assertFalse(planned.claimEndpointLoad(handle, state));
+        assertFalse(planned.claimEndpointLoad(handle, HandleState.forCompleteAnswer("SELECT 1")));
+        verify(statementCache, never()).remove(anyString());
+
+        ClusterService backup = createService("backup");
+        when(statementCache.remove(anyString())).thenReturn(null);
+        assertTrue(backup.claimEndpointLoad(handle, state));
+        assertEquals(100L, registry.get("primary"));
+        assertEquals(0L, registry.get("backup"));
+
+        HandleState untracked = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, false);
+        assertTrue(backup.claimEndpointLoad(handle, untracked));
+        verify(statementCache, times(1)).remove(anyString());
+        planned.close();
+        backup.close();
+    }
+
+    /** Verifies a node other than the planned one can verify and run a ticket. */
+    @Test
+    void backupNodeResolvesTicketPlannedForAnotherNode() {
+        AtomicReference<Serializable> sharedSecret = new AtomicReference<>();
+        when(statementCache.putIfAbsent(anyString(), any())).thenAnswer(invocation -> {
+            sharedSecret.compareAndSet(null, invocation.getArgument(1));
+            return sharedSecret.get() == invocation.getArgument(1) ? null : sharedSecret.get();
+        });
+        ClusterService planner = createService("n1");
+        ClusterService backup = createService("n3");
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "n2", 100L, true);
+
+        HandleState decoded = backup.resolveEndpointHandle(planner.createEndpointHandle(state));
+
+        assertEquals(state, decoded);
+        planner.close();
+        backup.close();
+    }
+
     @Test
     void getHandleReturnsNullWhenNotStored() {
         when(statementCache.get("nonexistent")).thenReturn(null);
