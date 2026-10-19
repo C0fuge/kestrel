@@ -45,4 +45,22 @@ class HadoopArrowFlightServerTest {
             assertNotNull(info);
         }
     }
+
+    /** Verifies unset or long libhdfs3 timeouts are reported and short ones are not. */
+    @org.junit.jupiter.api.Test
+    void reportsLongHdfsTimeouts(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        org.junit.jupiter.api.Assertions.assertEquals(2, HadoopArrowFlightServer.longHdfsTimeouts(null).size());
+        java.nio.file.Path conf = dir.resolve("libhdfs3-client.xml");
+        java.nio.file.Files.writeString(conf, "<configuration>"
+                + "<property><name>input.connect.timeout</name><value>5000</value></property>"
+                + "<property><name>input.read.timeout</name><value>3600000</value></property></configuration>");
+        java.util.List<String> problems = HadoopArrowFlightServer.longHdfsTimeouts(conf.toString());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                java.util.List.of("libhdfs3 input.read.timeout is 3600000 ms"), problems);
+        java.nio.file.Files.writeString(conf, "<configuration>"
+                + "<property><name>input.connect.timeout</name><value>5000</value></property>"
+                + "<property><name>input.read.timeout</name><value>15000</value></property></configuration>");
+        org.junit.jupiter.api.Assertions.assertTrue(
+                HadoopArrowFlightServer.longHdfsTimeouts(conf.toString()).isEmpty());
+    }
 }

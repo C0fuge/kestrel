@@ -138,6 +138,12 @@ public class HadoopArrowFlightServer {
         DataStore store = component.dataStore();
         LOGGER.info("Storage: kind={} shared={} locality={}",
                 store.kind(), store.shared(), store.hasLocality());
+        if ("hdfs".equals(store.kind())) {
+            for (String problem : longHdfsTimeouts(System.getenv("LIBHDFS3_CONF"))) {
+                LOGGER.warn("{}: DuckDB reads from a DataNode that vanished wait that long, on every node."
+                        + " Set it to a few seconds in the LIBHDFS3_CONF file (e.g. 5000 / 15000).", problem);
+            }
+        }
         String nameEncoding = System.getProperty("sun.jnu.encoding", "");
         if (!"UTF-8".equalsIgnoreCase(nameEncoding)) {
             // Java reads file names in the locale's encoding: other names are skipped silently.
@@ -350,5 +356,54 @@ public class HadoopArrowFlightServer {
     public static void main(String... args) throws Exception {
         HadoopArrowFlightServer server = new HadoopArrowFlightServer();
         server.start(args);
+    }
+
+    /** Longest libhdfs3 connect / read timeout, in ms, that keeps a vanished DataNode from stalling reads. */
+    private static final long HDFS_TIMEOUT_LIMIT_MILLIS = 60_000;
+
+    /**
+     * Finds libhdfs3 timeouts that let DuckDB's HDFS reads wait minutes for a DataNode that has gone
+     * away: the library defaults to a 600 s connect and a 3600 s read timeout.
+     *
+     * @param confPath the LIBHDFS3_CONF file, or null
+     * @return one line per timeout that is unset or longer than a minute
+     */
+    static java.util.List<String> longHdfsTimeouts(String confPath) {
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        java.util.Map<String, String> props = new java.util.HashMap<>();
+        if (confPath != null && !confPath.isBlank()) {
+            try {
+                javax.xml.parsers.DocumentBuilderFactory factory =
+                        javax.xml.parsers.DocumentBuilderFactory.newInstance();
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                org.w3c.dom.NodeList list = factory.newDocumentBuilder()
+                        .parse(new java.io.File(confPath)).getElementsByTagName("property");
+                for (int i = 0; i < list.getLength(); i++) {
+                    org.w3c.dom.Element property = (org.w3c.dom.Element) list.item(i);
+                    org.w3c.dom.NodeList names = property.getElementsByTagName("name");
+                    org.w3c.dom.NodeList values = property.getElementsByTagName("value");
+                    if (names.getLength() > 0 && values.getLength() > 0) {
+                        props.put(names.item(0).getTextContent().trim(),
+                                values.item(0).getTextContent().trim());
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Cannot read LIBHDFS3_CONF {}: {}", confPath, e.getMessage());
+            }
+        }
+        for (String key : java.util.List.of("input.connect.timeout", "input.read.timeout")) {
+            String value = props.get(key);
+            long millis;
+            try {
+                millis = value == null ? -1 : Long.parseLong(value);
+            } catch (NumberFormatException e) {
+                millis = -1;
+            }
+            if (millis <= 0 || millis > HDFS_TIMEOUT_LIMIT_MILLIS) {
+                problems.add("libhdfs3 " + key + " is "
+                        + (value == null ? "not set (library default: minutes)" : value + " ms"));
+            }
+        }
+        return problems;
     }
 }
