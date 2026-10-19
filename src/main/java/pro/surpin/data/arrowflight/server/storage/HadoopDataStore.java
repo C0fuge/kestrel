@@ -151,7 +151,7 @@ public final class HadoopDataStore implements DataStore {
         // The data directory as DuckDB sees file paths: qualified, local paths without "file:".
         String root = fileSystem.makeQualified(new Path(dataDirectory)).toUri().toString();
         if (root.startsWith("file:")) {
-            root = new Path(root).toUri().getPath();
+            root = URI.create(root).getPath();
         }
         return List.of(root);
     }
@@ -180,7 +180,8 @@ public final class HadoopDataStore implements DataStore {
             LocatedFileStatus file = files.next();
             scanned++;
             if (isParquetFile(file) && hasLocalBlock(fileLocality(file).keySet(), host)) {
-                String relativePath = base.relativize(file.getPath().toUri()).toString();
+                // Decoded, as every other relative path: "part 1.parquet", not "part%201.parquet".
+                String relativePath = base.relativize(file.getPath().toUri()).getPath();
                 result.put(relativePath, file.getLen());
             }
         }
@@ -268,7 +269,7 @@ public final class HadoopDataStore implements DataStore {
      */
     private static DataFile dataFile(URI root, LocatedFileStatus file, Set<String> hosts) {
         URI uri = file.getPath().toUri();
-        return new DataFile(root.relativize(uri).toString(), uri.toString(), file.getLen(),
+        return new DataFile(root.relativize(uri).getPath(), uri.toString(), file.getLen(),
                 file.getModificationTime(), hosts);
     }
 

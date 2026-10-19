@@ -138,6 +138,12 @@ public class HadoopArrowFlightServer {
         DataStore store = component.dataStore();
         LOGGER.info("Storage: kind={} shared={} locality={}",
                 store.kind(), store.shared(), store.hasLocality());
+        String nameEncoding = System.getProperty("sun.jnu.encoding", "");
+        if (!"UTF-8".equalsIgnoreCase(nameEncoding)) {
+            // Java reads file names in the locale's encoding: other names are skipped silently.
+            LOGGER.warn("File names are read as {}, not UTF-8: files whose names are not ASCII are"
+                    + " skipped. Start the server with a UTF-8 locale (LANG=C.UTF-8).", nameEncoding);
+        }
 
         // Wait for cluster nodes (single-node skip)
         if (hazelcastHosts.length > 1) {

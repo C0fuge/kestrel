@@ -194,6 +194,18 @@ class HadoopDataStoreTest {
         String path = store("localhost").duckDbUri("s3/t 1/part 1%.parquet");
         assertTrue(Files.exists(java.nio.file.Path.of(path)), path);
         assertEquals("/data/a b/c%d.parquet", HadoopDataStore.duckDbPath("file:/data/a%20b/c%25d.parquet"));
+        HadoopDataStore store = store("localhost");
+        assertTrue(store.parquetFiles("s3").stream()
+                .anyMatch(f -> f.relativePath().equals("s3/t 1/part 1%.parquet")), "listing");
+        assertTrue(store.localInventory("localhost").containsKey("s3/t 1/part 1%.parquet"), "inventory");
+    }
+
+    /** Verifies a data directory whose name needs escaping is the root DuckDB may read. */
+    @Test
+    void duckDbRootOfEscapedLocalDirectoryIsItsPath() throws Exception {
+        java.nio.file.Path spaced = Files.createDirectories(root.resolve("my lake"));
+        HadoopDataStore store = new HadoopDataStore(fileSystem, spaced.toString(), "localhost");
+        assertEquals(List.of(spaced.toString()), store.duckDbRoots());
     }
 
     /** Verifies URIs of shared file systems reach DuckDB unchanged. */
