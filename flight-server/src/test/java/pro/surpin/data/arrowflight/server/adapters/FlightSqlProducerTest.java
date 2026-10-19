@@ -104,8 +104,8 @@ class FlightSqlProducerTest {
         BufferAllocator allocator = mock(BufferAllocator.class);
         MetadataService metadataService = mock(MetadataService.class);
         when(metadataService.getSchemas(null)).thenReturn(Map.of(
-                "sales", new org.apache.hadoop.fs.Path("/sales"),
-                "private", new org.apache.hadoop.fs.Path("/private")));
+                "sales", "/sales",
+                "private", "/private"));
         VectorSchemaRoot root = mock(VectorSchemaRoot.class);
         when(metadataService.getSchemasRoot(any(), eq(allocator))).thenReturn(root);
         FlightAuthorization authorization = mock(FlightAuthorization.class);

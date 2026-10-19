@@ -272,6 +272,27 @@ public final class ServerModule {
     }
 
     /**
+     * Producer with upstream's signature (upstream signature, used by its tests); the result mode
+     * comes from the loaded configuration.
+     *
+     * @param allocator buffer allocator
+     * @param metadataService metadata service
+     * @param queryPlanner query planner
+     * @param executionService execution service
+     * @param clusterService cluster service
+     * @param authorization authorization evaluator
+     * @return Flight SQL producer
+     */
+    FlightSqlProducer producer(BufferAllocator allocator,
+            MetadataService metadataService, QueryPlanner queryPlanner,
+            ExecutionService executionService, ClusterService clusterService,
+            FlightAuthorization authorization) {
+        return producer(allocator, metadataService, queryPlanner, executionService,
+                clusterService, authorization,
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.getConfig());
+    }
+
+    /**
      * Provide ExecutionService singleton
      * @param parquetAdapter parquet adapter
      * @param duckDbAdapter DuckDB adapter

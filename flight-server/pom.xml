@@ -96,6 +96,12 @@
             </dependency>
             <!-- The SDK's Apache client asks for httpcore 4.4.16; keep the 4.4.13 that Hadoop and
                  target/libs already use. -->
+            <!-- Hadoop 3.5.0 brings bcprov 1.82; bcpkix/bcutil are 1.85: keep the three in step. -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>1.85</version>
+            </dependency>
             <dependency>
                 <groupId>org.apache.httpcomponents</groupId>
                 <artifactId>httpcore</artifactId>

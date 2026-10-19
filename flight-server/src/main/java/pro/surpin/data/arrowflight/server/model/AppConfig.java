@@ -140,4 +140,34 @@ public record AppConfig(
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 true, false, 64, null, null, "partial", true, true, S3Settings.NONE);
     }
+
+    /**
+     * Configuration in the fork's pre-merge shape with S3 settings (pre-merge shape with S3;
+     * Arrow allocator limit: upstream's 2 GiB).
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    public AppConfig(int numServers, int batchSize, int ioParallelism, int ioFileBufferSize,
+            int duckDbWarmConnections, int duckDbGroups, int duckDbThreads,
+            String duckDbHdfsExtension, boolean duckDbAllowUnsignedExtensions,
+            String duckDbHdfsDefaultNamenode, String duckDbHdfsHaNamenodes,
+            String duckDbHdfsShortcircuit, String duckDbHdfsDomainSocketPath,
+            String duckDbMemoryLimit, boolean metricsEnabled,
+            int grpcMaxInboundMessageSize, int flightBackpressureThresholdBytes,
+            long flightListenerReadyTimeoutMillis, String dataDir, String localDataDir, int port,
+            int hazelcastPort, int hazelcastClusterJoinTimeoutSec, int clientMaxRetries,
+            int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
+            boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
+            String duckDbTempDirectory, String authToken, String resultMode,
+            boolean widenUnsignedTypes, boolean duckDbLockdown, S3Settings s3) {
+        this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
+                duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
+                duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes, duckDbHdfsShortcircuit,
+                duckDbHdfsDomainSocketPath, duckDbMemoryLimit, metricsEnabled,
+                2_147_483_648L, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3);
+    }
 }
