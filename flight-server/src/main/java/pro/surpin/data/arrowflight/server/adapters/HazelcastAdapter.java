@@ -42,6 +42,11 @@ public final class HazelcastAdapter implements AutoCloseable {
      */
     public HazelcastAdapter(AppConfig appConfig, String... hosts) {
         Config config = new Config();
+        // A member whose host vanished (machine down, container gone) sends no reset: by default
+        // Hazelcast waits up to 60 s for it, and every map operation on its partitions waits too.
+        // Same 10 s as the server's own heartbeat; -D system properties still override.
+        setDefault(config, "hazelcast.heartbeat.interval.seconds", "1");
+        setDefault(config, "hazelcast.max.no.heartbeat.seconds", "10");
         NetworkConfig network = config.getNetworkConfig();
         network.setPort(appConfig.hazelcastPort());
         network.setPortAutoIncrement(false);
@@ -58,6 +63,17 @@ public final class HazelcastAdapter implements AutoCloseable {
         this.statementCache = instance.getMap(STATEMENT_CACHE_MAP);
         this.serverHeartbeats = instance.getMap(SERVER_HEARTBEAT_MAP);
         this.serverFiles = instance.getMap(SERVER_FILES_MAP);
+    }
+
+    /**
+     * Sets a Hazelcast property unless the JVM was started with it.
+     *
+     * @param config Hazelcast configuration
+     * @param name property name
+     * @param value default value
+     */
+    private static void setDefault(Config config, String name, String value) {
+        config.setProperty(name, System.getProperty(name, value));
     }
 
     /**
