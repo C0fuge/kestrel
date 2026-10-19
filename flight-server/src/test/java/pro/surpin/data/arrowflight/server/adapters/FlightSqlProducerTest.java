@@ -392,6 +392,77 @@ class FlightSqlProducerTest {
         verify(queryPlanner).plan(query);
     }
 
+    /** Verifies only a client that tries locations in order may get the planning node as a backup. */
+    @Test
+    void locationFailoverHeaderLetsThePlannerListItself() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "select l_orderkey from tpch.lineitem";
+        Schema schema = new Schema(List.of(Field.nullable("l_orderkey", new ArrowType.Int(64, true))));
+        when(executionService.resultSchema(allocator, query)).thenReturn(schema);
+        when(queryPlanner.plan(query)).thenReturn(new QueryPlan(List.of(), 10L, 1L));
+        when(queryPlanner.plan(query, true)).thenReturn(new QueryPlan(List.of(), 10L, 1L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "partial");
+        FlightSql.CommandStatementQuery command =
+                FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build();
+        FlightProducer.CallContext older = mock(FlightProducer.CallContext.class);
+        FlightProducer.CallContext failover = mock(FlightProducer.CallContext.class);
+        org.apache.arrow.flight.FlightCallHeaders headers = new org.apache.arrow.flight.FlightCallHeaders();
+        headers.insert(ResultModeMiddleware.LOCATION_FAILOVER_HEADER, "1");
+        when(failover.getMiddleware(ResultModeMiddleware.KEY))
+                .thenReturn(new ResultModeMiddleware.Factory().onCallStarted(null, headers, null));
+
+        producer.getFlightInfoStatement(command, older, FlightDescriptor.command(new byte[]{1}));
+        verify(queryPlanner).plan(query);
+        verify(queryPlanner, never()).plan(query, true);
+
+        producer.getFlightInfoStatement(command, failover, FlightDescriptor.command(new byte[]{1}));
+        verify(queryPlanner).plan(query, true);
+    }
+
+    /** Verifies the header values that turn location failover on. */
+    @Test
+    void locationFailoverHeaderValues() {
+        org.junit.jupiter.api.Assertions.assertTrue(ResultModeMiddleware.isEnabled("1"));
+        org.junit.jupiter.api.Assertions.assertTrue(ResultModeMiddleware.isEnabled(" TRUE "));
+        org.junit.jupiter.api.Assertions.assertFalse(ResultModeMiddleware.isEnabled(null));
+        org.junit.jupiter.api.Assertions.assertFalse(ResultModeMiddleware.isEnabled("0"));
+        org.junit.jupiter.api.Assertions.assertFalse(ResultModeMiddleware.isEnabled("yes"));
+    }
+
+    /** Verifies a node running an endpoint planned elsewhere takes over its load, then releases it. */
+    @Test
+    void endpointPlannedForAnotherNodeClaimsThenReleasesLoad() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        ByteString handle = ByteString.copyFromUtf8("planned-elsewhere");
+        HandleState state = HandleState.forServerFiles("select * from tpch.lineitem",
+                new String[]{"tpch/lineitem/a.parquet"}, "grpc+tcp://gone:32010", 100L, true);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        when(clusterService.claimEndpointLoad(handle.toByteArray(), state)).thenReturn(true);
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService);
+
+        producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class), listener);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(clusterService, executionService);
+        order.verify(clusterService).claimEndpointLoad(handle.toByteArray(), state);
+        order.verify(executionService).readParquet(eq(allocator), eq(state.query()),
+                eq(state.filePaths()), eq(listener), anyBoolean(), any(ExecutionPathTracker.class));
+        order.verify(clusterService).releaseEndpointLoad(handle.toByteArray(), state);
+        verify(listener).completed();
+    }
+
     /** Verifies binary ticket handles give readable query ids in the log. */
     @Test
     void queryIdOfABinaryHandleIsHex() {

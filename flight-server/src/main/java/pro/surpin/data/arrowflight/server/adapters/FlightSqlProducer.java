@@ -232,6 +232,16 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
 
         String serverUri = state.serverUri() != null ? state.serverUri() : "local";
+        try {
+            if (clusterService.claimEndpointLoad(handle.toByteArray(), state)) {
+                // A backup location: the client could not reach the planned node.
+                LOGGER.info("qid={} node={} execution=failover planned={} files={}",
+                        qid, LogUtil.node(), serverUri, filePaths.length);
+            }
+        } catch (RuntimeException e) {
+            LOGGER.warn("qid={} could not move the load of an endpoint planned for {}: {}",
+                    qid, serverUri, e.toString());
+        }
         long bytes = state.bytes();
         long tExec = LogUtil.mark();
         long executionStartNanos = System.nanoTime();
@@ -358,6 +368,20 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
+     * Tells whether the client of a call tries an endpoint's locations in order.
+     *
+     * @param context call context, or null
+     * @return true when the client said so in its headers
+     */
+    private static boolean locationFailover(FlightProducer.CallContext context) {
+        if (context == null) {
+            return false;
+        }
+        ResultModeMiddleware middleware = context.getMiddleware(ResultModeMiddleware.KEY);
+        return middleware != null && middleware.locationFailover();
+    }
+
+    /**
      * Describes the complete answer to a client's query.
      *
      * @param query client SQL
@@ -455,7 +479,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
         Schema arrowSchema = schemaForQuery(query);
         try {
-            QueryPlan plan = queryPlanner.plan(query);
+            // A client that tries locations in order may also get this node as a backup.
+            QueryPlan plan = locationFailover(context)
+                    ? queryPlanner.plan(query, true) : queryPlanner.plan(query);
             return new FlightInfo(arrowSchema, descriptor, plan.endpoints(),
                     plan.totalBytes(), plan.totalRecords());
         } catch (IllegalArgumentException e) {

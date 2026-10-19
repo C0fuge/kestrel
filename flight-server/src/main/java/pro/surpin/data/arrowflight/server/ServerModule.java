@@ -217,12 +217,14 @@ public final class ServerModule {
      * Provide QueryPlanner singleton
      * @param parquetAdapter parquet adapter
      * @param clusterService cluster service
+     * @param config application configuration
      * @return query planner
      */
     @Provides
     @Singleton
-    QueryPlanner queryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService) {
-        return new QueryPlanner(parquetAdapter, clusterService);
+    QueryPlanner queryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
+            AppConfig config) {
+        return new QueryPlanner(parquetAdapter, clusterService, config.endpointBackupLocations());
     }
 
     /**

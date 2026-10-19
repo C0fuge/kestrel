@@ -45,9 +45,12 @@ public final class QueryPlanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryPlanner.class);
     private static final long FILE_PLAN_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    /** Backup locations per partial-result endpoint unless configured otherwise. */
+    public static final int DEFAULT_BACKUP_LOCATIONS = 2;
 
     private final ParquetAdapter parquetAdapter;
     private final ClusterService clusterService;
+    private final int backupLocations;
     private final Map<String, CachedFilePlan> filePlanCache = new ConcurrentHashMap<>();
 
     /**
@@ -71,14 +74,32 @@ public final class QueryPlanner {
     }
 
     /**
-     * Creates QueryPlanner.
+     * Creates QueryPlanner with the default number of backup locations.
      *
      * @param parquetAdapter Parquet metadata adapter
      * @param clusterService cluster coordination service
      */
     public QueryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService) {
+        this(parquetAdapter, clusterService, DEFAULT_BACKUP_LOCATIONS);
+    }
+
+    /**
+     * Creates QueryPlanner.
+     *
+     * @param parquetAdapter Parquet metadata adapter
+     * @param clusterService cluster coordination service
+     * @param backupLocations other nodes listed after the planned node of a partial-result
+     *        endpoint, which a client tries in order when the planned node cannot be reached;
+     *        0 lists the planned node only
+     */
+    public QueryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
+            int backupLocations) {
+        if (backupLocations < 0) {
+            throw new IllegalArgumentException("backupLocations must not be negative: " + backupLocations);
+        }
         this.parquetAdapter = parquetAdapter;
         this.clusterService = clusterService;
+        this.backupLocations = backupLocations;
         try {
             this.clusterService.registerLocalFiles(this.parquetAdapter.localFileInventory());
             this.parquetAdapter.initCatalogReader();
@@ -110,6 +131,22 @@ public final class QueryPlanner {
      *         HAVING, DISTINCT aggregates) and several nodes serve the table
      */
     public QueryPlan plan(String query) throws IOException {
+        return plan(query, false);
+    }
+
+    /**
+     * Plans endpoints and estimates Parquet input statistics, listing backup nodes per endpoint.
+     *
+     * @param query SQL query
+     * @param plannerAsBackup whether this node may be listed as a backup: only for a client that
+     *        tries the locations in order. An older client reads an endpoint from the node it
+     *        planned with whenever that node is among the locations.
+     * @return endpoints with byte and row estimates
+     * @throws IOException on file-system or cluster metadata failure
+     * @throws IllegalArgumentException if the query needs one node to see all rows and several
+     *         nodes serve the table
+     */
+    public QueryPlan plan(String query, boolean plannerAsBackup) throws IOException {
         long t = LogUtil.mark();
         ParquetQueryParser parsed = ParquetQueryParser.parse(query);
         long tSv = LogUtil.mark();
@@ -127,25 +164,28 @@ public final class QueryPlanner {
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
 
+        Map<String, Long> loads = new HashMap<>(cluster.serverLoads());
+        Backups backups = new Backups(pathLocations, loads, parquetAdapter.sharedStorage(),
+                plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
         List<FlightEndpoint> endpoints;
         if (parquetAdapter.withoutLocality()) {
             // Every node reads every file equally well: balance by bytes, also across queries.
             boolean loadTracked = allServerUris.size() > 1;
             if (parsed.isJoin) {
                 endpoints = joinEndpointsWithoutLocality(query, sourceCacheKey(parsed),
-                        pathLocations, cluster.serverLoads(), loadTracked);
+                        pathLocations, loads, loadTracked, backups);
             } else {
                 endpoints = distributeEndpointsWithoutLocality(query, pathLocations,
-                        new HashMap<>(cluster.serverLoads()), loadTracked);
+                        loads, loadTracked, backups);
             }
         } else {
             boolean loadTracked = hasReplicatedFiles(pathLocations, allServerUris);
             if (parsed.isJoin) {
                 endpoints = joinEndpoints(
-                        query, pathLocations, allServerUris, loadTracked);
+                        query, pathLocations, allServerUris, loadTracked, backups);
             } else {
                 endpoints = distributeEndpoints(query, pathLocations,
-                        new HashMap<>(cluster.serverLoads()), loadTracked);
+                        loads, loadTracked, backups);
             }
         }
         long totalBytes = pathLocations.values().stream()
@@ -359,7 +399,7 @@ public final class QueryPlanner {
 
     private List<FlightEndpoint> joinEndpoints(String query,
             Map<String, FileAssignment> pathLocations, Set<String> allServerUris,
-            boolean loadTracked)
+            boolean loadTracked, Backups backups)
             throws IOException {
         String allFilesServer = findServerWithAllFiles(pathLocations, allServerUris);
         if (allFilesServer == null && parquetAdapter.sharedStorage()) {
@@ -373,8 +413,9 @@ public final class QueryPlanner {
         }
         long addedBytes = pathLocations.values().stream()
                 .mapToLong(FileAssignment::size).sum();
-        FlightEndpoint ep = createEndpoint(allFilesServer,
-                new ArrayList<>(pathLocations.keySet()), query, addedBytes, loadTracked);
+        List<String> files = new ArrayList<>(pathLocations.keySet());
+        FlightEndpoint ep = createEndpoint(allFilesServer, files, query, addedBytes, loadTracked,
+                backups.forEndpoint(allFilesServer, files));
         if (loadTracked) {
             clusterService.addLoad(allFilesServer, addedBytes);
         }
@@ -383,7 +424,7 @@ public final class QueryPlanner {
 
     private List<FlightEndpoint> distributeEndpoints(String query,
             Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad,
-            boolean loadTracked) {
+            boolean loadTracked, Backups backups) {
         Map<String, List<String>> serverToFiles = new LinkedHashMap<>();
         Map<String, Long> serverAdditions = new HashMap<>();
         for (Map.Entry<String, FileAssignment> entry : pathLocations.entrySet()) {
@@ -398,7 +439,8 @@ public final class QueryPlanner {
         for (Map.Entry<String, List<String>> entry : serverToFiles.entrySet()) {
             long addedBytes = serverAdditions.getOrDefault(entry.getKey(), 0L);
             endpoints.add(createEndpoint(entry.getKey(), entry.getValue(),
-                    query, addedBytes, loadTracked));
+                    query, addedBytes, loadTracked,
+                    backups.forEndpoint(entry.getKey(), entry.getValue())));
             if (loadTracked) {
                 clusterService.addLoad(entry.getKey(), addedBytes);
             }
@@ -416,16 +458,18 @@ public final class QueryPlanner {
      * @param pathLocations files of the joined tables
      * @param serverLoads current load by live server
      * @param loadTracked whether the join's bytes count toward the node's load
+     * @param backups chooses the backup nodes of the endpoint
      * @return one endpoint
      */
     private List<FlightEndpoint> joinEndpointsWithoutLocality(String query, String tablesKey,
             Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoads,
-            boolean loadTracked) {
+            boolean loadTracked, Backups backups) {
         String server = leastLoadedServer(tablesKey, serverLoads);
         long addedBytes = pathLocations.values().stream()
                 .mapToLong(FileAssignment::size).sum();
-        FlightEndpoint ep = createEndpoint(server,
-                new ArrayList<>(pathLocations.keySet()), query, addedBytes, loadTracked);
+        List<String> files = new ArrayList<>(pathLocations.keySet());
+        FlightEndpoint ep = createEndpoint(server, files, query, addedBytes, loadTracked,
+                backups.forEndpoint(server, files));
         if (loadTracked) {
             clusterService.addLoad(server, addedBytes);
         }
@@ -434,7 +478,7 @@ public final class QueryPlanner {
 
     private List<FlightEndpoint> distributeEndpointsWithoutLocality(String query,
             Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad,
-            boolean loadTracked) {
+            boolean loadTracked, Backups backups) {
         Map<String, List<String>> serverToFiles =
                 assignWithoutLocality(pathLocations, serverLoad);
         List<FlightEndpoint> endpoints = new ArrayList<>();
@@ -442,12 +486,94 @@ public final class QueryPlanner {
             long addedBytes = entry.getValue().stream()
                     .mapToLong(file -> pathLocations.get(file).size()).sum();
             endpoints.add(createEndpoint(entry.getKey(), entry.getValue(),
-                    query, addedBytes, loadTracked));
+                    query, addedBytes, loadTracked,
+                    backups.forEndpoint(entry.getKey(), entry.getValue())));
             if (loadTracked) {
                 clusterService.addLoad(entry.getKey(), addedBytes);
             }
         }
         return endpoints;
+    }
+
+    /**
+     * Chooses the backup nodes of the endpoints of one plan.
+     *
+     * @param files files of the plan with their sizes and the nodes that hold them
+     * @param serverLoad load by live server, including what the plan assigned so far
+     * @param sharedStorage whether every node can read every file
+     * @param excluded node never listed as a backup, or null
+     * @param limit maximum number of backups per endpoint
+     */
+    private record Backups(Map<String, FileAssignment> files, Map<String, Long> serverLoad,
+            boolean sharedStorage, String excluded, int limit) {
+
+        /**
+         * Lists the backup nodes of one endpoint.
+         *
+         * @param primary planned node
+         * @param endpointFiles files of the endpoint
+         * @return backup node URIs, best first
+         */
+        List<String> forEndpoint(String primary, List<String> endpointFiles) {
+            return backupServers(primary, endpointFiles, files, serverLoad, sharedStorage,
+                    excluded, limit);
+        }
+    }
+
+    /**
+     * Lists the live nodes that can run an endpoint instead of its planned node: on shared
+     * storage every other live node, otherwise only nodes that hold every file of the endpoint
+     * (replicas), because a node resolves the endpoint's relative paths against its own data
+     * directory. Nodes holding more of the endpoint's bytes come first (locality), then the less
+     * loaded ones, ties broken by a rendezvous hash of the endpoint's first file and the node.
+     *
+     * @param primary planned node
+     * @param endpointFiles relative paths of the endpoint's files
+     * @param files sizes and holders of the plan's files
+     * @param serverLoad load by live server
+     * @param sharedStorage whether every node can read every file
+     * @param excluded node never listed, or null
+     * @param limit maximum number of backups; 0 lists none
+     * @return backup node URIs, best first
+     */
+    static List<String> backupServers(String primary, List<String> endpointFiles,
+            Map<String, FileAssignment> files, Map<String, Long> serverLoad,
+            boolean sharedStorage, String excluded, int limit) {
+        if (limit <= 0 || endpointFiles.isEmpty()) {
+            return List.of();
+        }
+        String key = endpointFiles.get(0);
+        Map<String, Long> localBytes = new HashMap<>();
+        List<String> candidates = new ArrayList<>();
+        for (String server : serverLoad.keySet()) {
+            if (server.equals(primary) || server.equals(excluded)) {
+                continue;
+            }
+            long local = 0L;
+            boolean holdsAll = true;
+            for (String path : endpointFiles) {
+                FileAssignment file = files.get(path);
+                if (file != null && file.hosts().contains(server)) {
+                    local += file.size();
+                } else {
+                    holdsAll = false;
+                }
+            }
+            if (sharedStorage || holdsAll) {
+                candidates.add(server);
+                localBytes.put(server, local);
+            }
+        }
+        Comparator<String> order = Comparator.<String>comparingLong(localBytes::get).reversed()
+                .thenComparingLong(server -> {
+                    Long load = serverLoad.get(server);
+                    return load == null ? 0L : load;
+                })
+                .thenComparing(Comparator.<String>comparingLong(
+                        server -> rendezvousHash(key, server)).reversed())
+                .thenComparing(Comparator.naturalOrder());
+        candidates.sort(order);
+        return List.copyOf(candidates.subList(0, Math.min(limit, candidates.size())));
     }
 
     /**
@@ -661,7 +787,7 @@ public final class QueryPlanner {
      */
     public FlightEndpoint createEndpoint(String serverUri, List<String> filePaths,
             String query, long bytes) {
-        return createEndpoint(serverUri, filePaths, query, bytes, true);
+        return createEndpoint(serverUri, filePaths, query, bytes, true, List.of());
     }
 
     /**
@@ -672,16 +798,20 @@ public final class QueryPlanner {
      * @param query SQL query
      * @param bytes estimated byte count
      * @param loadTracked whether bytes were added to distributed server load
+     * @param backups other nodes that can run the endpoint, listed after the planned one
      * @return Flight endpoint
      */
     private FlightEndpoint createEndpoint(String serverUri, List<String> filePaths,
-            String query, long bytes, boolean loadTracked) {
+            String query, long bytes, boolean loadTracked, List<String> backups) {
         long t = LogUtil.mark();
-        URI parsedUri = URI.create(serverUri);
         // Preserve the registered URI (including grpc+tls). Reconstructing every
         // location as insecure both loses transport information and can cause the
         // client to send a ticket to the wrong connection.
-        Location serverLoc = new Location(parsedUri);
+        Location[] locations = new Location[1 + backups.size()];
+        locations[0] = new Location(URI.create(serverUri));
+        for (int i = 0; i < backups.size(); i++) {
+            locations[i + 1] = new Location(URI.create(backups.get(i)));
+        }
         HandleState state = HandleState.forServerFiles(
                 query, filePaths.toArray(new String[0]),
                 serverUri, bytes, loadTracked);
@@ -691,8 +821,9 @@ public final class QueryPlanner {
                 FlightSql.TicketStatementQuery.newBuilder()
                         .setStatementHandle(serverHandle).build())
                 .toByteArray());
-        LogUtil.logTiming(t, "planning.createEndpoint", "server=" + serverUri + " files=" + filePaths.size() + " bytes=" + bytes);
-        return new FlightEndpoint(serverTicket, serverLoc);
+        LogUtil.logTiming(t, "planning.createEndpoint", "server=" + serverUri + " backups=" + backups
+                + " files=" + filePaths.size() + " bytes=" + bytes);
+        return new FlightEndpoint(serverTicket, locations);
     }
 
     /**

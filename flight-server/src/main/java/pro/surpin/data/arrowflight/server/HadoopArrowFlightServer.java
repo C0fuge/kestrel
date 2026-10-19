@@ -29,6 +29,9 @@ import pro.surpin.data.arrowflight.server.storage.DataStore;
  * Uses Dagger for dependency injection and manages the Flight server lifecycle.
  */
 public class HadoopArrowFlightServer {
+
+    /** Shortest interval between client keepalive pings the server accepts. */
+    static final long KEEPALIVE_PERMIT_SECONDS = 5;
     private static final String DEFAULT_LOG_LEVEL_PROPERTY = "org.slf4j.simpleLogger.defaultLogLevel";
 
     static {
@@ -168,7 +171,8 @@ public class HadoopArrowFlightServer {
                     component.producer())
                     .maxInboundMessageSize(config.grpcMaxInboundMessageSize())
                     .backpressureThreshold(config.flightBackpressureThresholdBytes())
-                    .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory()))
+                    .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
+                    .transportHint("grpc.builderConsumer", keepAlivePermit()))
                     .build();
             LOGGER.info("Default result mode: {}; Flight security: {}", config.resultMode(), flightSecurity);
             server.start();
@@ -239,6 +243,21 @@ public class HadoopArrowFlightServer {
             }
             flightSecurity = null;
         }
+    }
+
+    /**
+     * Lets clients send HTTP/2 keepalive pings as often as every
+     * {@value #KEEPALIVE_PERMIT_SECONDS} seconds, also on idle connections. Clients use them to
+     * notice a node that vanished without closing its connections (host or address gone) within
+     * seconds, and read from a backup location instead; gRPC's default (one ping per 5 minutes)
+     * closes the connection of such a client, and every stream on it, after a few pings.
+     *
+     * @return gRPC Netty server builder customizer
+     */
+    static java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> keepAlivePermit() {
+        return builder -> builder
+                .permitKeepAliveTime(KEEPALIVE_PERMIT_SECONDS, TimeUnit.SECONDS)
+                .permitKeepAliveWithoutCalls(true);
     }
 
     /**

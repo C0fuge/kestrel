@@ -292,6 +292,180 @@ class QueryPlannerTest {
                 planner.determineEndpoints("SELECT * FROM s.t"));
     }
 
+    // ── backup locations ───────────────────────────────────────────────────
+
+    private static final String N1 = "grpc+tcp://n1:32010";
+    private static final String N2 = "grpc+tcp://n2:32010";
+    private static final String N3 = "grpc+tcp://n3:32010";
+    private static final String N4 = "grpc+tcp://n4:32010";
+
+    private static Map<String, Long> loads(Object... serverAndLoad) {
+        Map<String, Long> result = new LinkedHashMap<>();
+        for (int i = 0; i < serverAndLoad.length; i += 2) {
+            result.put((String) serverAndLoad[i], ((Number) serverAndLoad[i + 1]).longValue());
+        }
+        return result;
+    }
+
+    /** Verifies shared storage lists the other nodes, least loaded first, up to the limit. */
+    @Test
+    void backupServersOnSharedStorageAreTheLeastLoadedOtherNodes() {
+        Map<String, FileAssignment> files = Map.of("s/t/a.parquet", new FileAssignment(100L, Set.of()));
+        Map<String, Long> load = loads(N1, 0, N2, 300, N3, 100, N4, 200);
+
+        assertEquals(List.of(N3, N4), QueryPlanner.backupServers(
+                N1, List.of("s/t/a.parquet"), files, load, true, null, 2));
+        assertEquals(List.of(N3, N4, N2), QueryPlanner.backupServers(
+                N1, List.of("s/t/a.parquet"), files, load, true, null, 10));
+        assertEquals(List.of(), QueryPlanner.backupServers(
+                N1, List.of("s/t/a.parquet"), files, load, true, null, 0));
+        assertEquals(List.of(), QueryPlanner.backupServers(
+                N1, List.of("s/t/a.parquet"), files, loads(N1, 0), true, null, 2));
+    }
+
+    /** Verifies equally loaded backups follow the rendezvous hash, whatever the map order. */
+    @Test
+    void backupServersBreakTiesByRendezvousHash() {
+        Map<String, FileAssignment> files = Map.of("s/t/a.parquet", new FileAssignment(1L, Set.of()));
+        List<String> forward = QueryPlanner.backupServers(N1, List.of("s/t/a.parquet"), files,
+                loads(N1, 0, N2, 0, N3, 0, N4, 0), true, null, 3);
+        List<String> reverse = QueryPlanner.backupServers(N1, List.of("s/t/a.parquet"), files,
+                loads(N4, 0, N3, 0, N2, 0, N1, 0), true, null, 3);
+
+        assertEquals(forward, reverse);
+        List<String> byHash = new ArrayList<>(List.of(N2, N3, N4));
+        byHash.sort(Comparator.comparingLong(
+                (String server) -> QueryPlanner.rendezvousHash("s/t/a.parquet", server)).reversed());
+        assertEquals(byHash, forward);
+    }
+
+    /** Verifies HDFS backups prefer nodes holding replicas of the endpoint's files. */
+    @Test
+    void backupServersPreferNodesWithLocalReplicas() {
+        Map<String, FileAssignment> files = Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(N1, N3)),
+                "s/t/b.parquet", new FileAssignment(50L, Set.of(N1, N2)));
+
+        assertEquals(List.of(N3, N2), QueryPlanner.backupServers(N1,
+                List.of("s/t/a.parquet", "s/t/b.parquet"), files,
+                loads(N1, 0, N2, 0, N3, 900, N4, 0), true, null, 2));
+    }
+
+    /** Verifies local disks only list nodes holding every file of the endpoint. */
+    @Test
+    void backupServersOnLocalDisksNeedEveryFile() {
+        Map<String, FileAssignment> files = Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(N1, N2, N3)),
+                "s/t/b.parquet", new FileAssignment(50L, Set.of(N1, N2)));
+
+        assertEquals(List.of(N2), QueryPlanner.backupServers(N1,
+                List.of("s/t/a.parquet", "s/t/b.parquet"), files,
+                loads(N1, 0, N2, 0, N3, 0), false, null, 2));
+        assertEquals(List.of(N2, N3), QueryPlanner.backupServers(N1,
+                List.of("s/t/a.parquet"), files, loads(N1, 0, N2, 0, N3, 10), false, null, 2));
+    }
+
+    /** Verifies the excluded node (the planning node, for older clients) is never listed. */
+    @Test
+    void backupServersSkipTheExcludedNode() {
+        Map<String, FileAssignment> files = Map.of("s/t/a.parquet", new FileAssignment(1L, Set.of()));
+
+        assertEquals(List.of(N3), QueryPlanner.backupServers(N1, List.of("s/t/a.parquet"), files,
+                loads(N1, 0, N2, 0, N3, 0), true, N2, 2));
+    }
+
+    /** Verifies a negative number of backups is refused. */
+    @Test
+    void negativeBackupLocationsAreRefused() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new QueryPlanner(parquetAdapter, clusterService, -1));
+    }
+
+    private static final String P1 = "grpc+tcp://127.0.0.1:32010";
+    private static final String P2 = "grpc+tcp://127.0.0.2:32010";
+    private static final String P3 = "grpc+tcp://127.0.0.3:32010";
+
+    private static List<String> locations(FlightEndpoint endpoint) {
+        return endpoint.getLocations().stream().map(l -> l.getUri().toString()).toList();
+    }
+
+    /** Verifies shared-storage endpoints list backups after the planned node, the planner only on request. */
+    @Test
+    void planListsBackupLocationsAfterThePlannedNode() throws Exception {
+        when(clusterService.serverUri()).thenReturn(P1);
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2)),
+                "s/t/b.parquet", new FileAssignment(100L, Set.of(P3))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        Map<String, List<String>> byPrimary = new HashMap<>();
+        for (FlightEndpoint endpoint : planner.plan("SELECT * FROM s.t").endpoints()) {
+            byPrimary.put(locations(endpoint).get(0), locations(endpoint));
+        }
+        // Without the client's consent the planning node P1 is never a backup: an older client
+        // would read every endpoint listing P1 from P1.
+        assertEquals(List.of(P2, P3), byPrimary.get(P2));
+        assertEquals(List.of(P3, P2), byPrimary.get(P3));
+
+        for (FlightEndpoint endpoint : planner.plan("SELECT * FROM s.t", true).endpoints()) {
+            List<String> locations = locations(endpoint);
+            assertEquals(3, locations.size());
+            assertEquals(Set.of(P1, P2, P3), Set.copyOf(locations));
+        }
+
+        // Complete answers are unchanged: one endpoint without a location.
+        assertTrue(planner.planComplete("SELECT 1").endpoints().get(0).getLocations().isEmpty());
+    }
+
+    /** Verifies 0 backup locations gives the planned node only. */
+    @Test
+    void zeroBackupLocationsKeepOneLocation() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 0);
+
+        QueryPlan plan = planner.plan("SELECT * FROM s.t", true);
+
+        assertEquals(List.of(List.of(P2)), plan.endpoints().stream().map(QueryPlannerTest::locations).toList());
+    }
+
+    /** Verifies local disks list a backup only where the endpoint's files are replicated. */
+    @Test
+    void planOnLocalDisksListsOnlyReplicaHolders() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P1, P2)),
+                "s/t/b.parquet", new FileAssignment(500L, Set.of(P2))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        QueryPlan plan = planner.plan("SELECT * FROM s.t", true);
+
+        assertFalse(plan.endpoints().isEmpty());
+        for (FlightEndpoint endpoint : plan.endpoints()) {
+            List<String> locations = locations(endpoint);
+            if (locations.get(0).equals(P2)) {
+                // P2 holds b, which P1 does not have.
+                assertEquals(List.of(P2), locations);
+            } else {
+                assertEquals(List.of(P1, P2), locations);
+            }
+        }
+    }
+
     // ── Reflection helpers ─────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")

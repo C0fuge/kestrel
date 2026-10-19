@@ -111,6 +111,13 @@ public class ConfigAdapter {
         boolean duckDbLockdown = getBooleanWithEnv("duckDbLockdown",
                 "arrowflight.duckdb.lockdown", "DUCKDB_LOCKDOWN", true, props);
         S3Settings s3 = s3Settings(props, ioParallelism, S3Uri.isS3(dataDir), System.getenv());
+        int endpointBackupLocations = getIntWithEnv("endpointBackupLocations",
+                "arrowflight.cluster.endpointBackupLocations", "FLIGHT_ENDPOINT_BACKUP_LOCATIONS",
+                AppConfig.DEFAULT_ENDPOINT_BACKUP_LOCATIONS, props);
+        if (endpointBackupLocations < 0) {
+            throw new IllegalArgumentException(
+                    "endpointBackupLocations must not be negative: " + endpointBackupLocations);
+        }
 
         return new AppConfig(
                 numServers, batchSize, ioParallelism, ioFileBufferSize,
@@ -125,7 +132,7 @@ public class ConfigAdapter {
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
-                s3);
+                s3, endpointBackupLocations);
     }
 
     /**
@@ -261,6 +268,29 @@ public class ConfigAdapter {
      */
     private static int getInt(String key, String sysAlias, int fallback, Properties props) {
         String raw = getString(key, sysAlias, String.valueOf(fallback), props);
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid integer for " + key + ": " + raw, e);
+        }
+    }
+
+    /**
+     * Reads an integer config with environment variable fallback.
+     *
+     * @param key      primary config key
+     * @param sysAlias secondary system property key
+     * @param envName  environment variable name
+     * @param fallback default value
+     * @param props    loaded properties
+     * @return resolved value
+     */
+    private static int getIntWithEnv(String key, String sysAlias, String envName,
+            int fallback, Properties props) {
+        String raw = getStringWithEnv(key, sysAlias, envName, null, props);
+        if (raw == null) {
+            return fallback;
+        }
         try {
             return Integer.parseInt(raw);
         } catch (NumberFormatException e) {
