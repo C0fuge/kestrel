@@ -287,6 +287,39 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /** Verifies the background claim moves the reservation before the release that waits for it. */
+    @Test
+    void backgroundClaimCompletesBeforeTheRelease() {
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("primary", 100L);
+        registry.put("backup", 0L);
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService cs = createService("backup");
+        byte[] handle = cs.createEndpointHandle(state);
+        when(statementCache.remove(anyString())).thenReturn(state);
+
+        assertTrue(cs.plannedElsewhere(state));
+        cs.claimEndpointLoadLater(handle, state).join();
+
+        assertEquals(0L, registry.get("primary"));
+        assertEquals(100L, registry.get("backup"));
+        cs.close();
+    }
+
+    /** Verifies a failing background claim is logged, not thrown at the release that waits for it. */
+    @Test
+    void failingBackgroundClaimDoesNotFailTheStream() {
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService cs = createService("backup");
+        byte[] handle = cs.createEndpointHandle(state);
+        when(statementCache.remove(anyString())).thenThrow(new IllegalStateException("member gone"));
+
+        cs.claimEndpointLoadLater(handle, state).join();
+        cs.close();
+    }
+
     /** Verifies the planned node itself, complete answers and released reservations claim nothing. */
     @Test
     void claimEndpointLoadIgnoresOwnCompleteAndReleasedEndpoints() {

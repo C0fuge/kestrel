@@ -232,15 +232,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
 
         String serverUri = state.serverUri() != null ? state.serverUri() : "local";
-        try {
-            if (clusterService.claimEndpointLoad(handle.toByteArray(), state)) {
-                // A backup location: the client could not reach the planned node.
-                LOGGER.info("qid={} node={} execution=failover planned={} files={}",
-                        qid, LogUtil.node(), serverUri, filePaths.length);
-            }
-        } catch (RuntimeException e) {
-            LOGGER.warn("qid={} could not move the load of an endpoint planned for {}: {}",
-                    qid, serverUri, e.toString());
+        java.util.concurrent.CompletableFuture<Void> loadClaim = null;
+        if (clusterService.plannedElsewhere(state)) {
+            // A backup location: the client could not reach the planned node.
+            LOGGER.info("qid={} node={} execution=failover planned={} files={}",
+                    qid, LogUtil.node(), serverUri, filePaths.length);
+            loadClaim = clusterService.claimEndpointLoadLater(handle.toByteArray(), state);
         }
         long bytes = state.bytes();
         long tExec = LogUtil.mark();
@@ -310,6 +307,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             observation.close();
             MDC.remove("qid");
             LogUtil.setQid(null);
+            if (loadClaim != null) {
+                // The client has its answer already; release only what the claim moved here.
+                loadClaim.join();
+            }
             clusterService.releaseEndpointLoad(handle.toByteArray(), state);
         }
     }

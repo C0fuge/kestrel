@@ -14,7 +14,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +54,9 @@ public final class ClusterService implements AutoCloseable {
     private final AppConfig appConfig;
     private final String serverUri;
     private final ScheduledExecutorService heartbeatExecutor;
+    // Moves load accounting of endpoints run here for another node, off the query's path: while
+    // the planned node is still a cluster member that does not answer, map calls wait for it.
+    private final ExecutorService loadClaimExecutor;
     private boolean registered;
     private final EndpointTicketCodec endpointTicketCodec;
     private final Map<String, LocalHandle> localHandles = new ConcurrentHashMap<>();
@@ -96,6 +101,11 @@ public final class ClusterService implements AutoCloseable {
         pro.surpin.data.arrowflight.server.adapters.QueryParameters.useSigningKey(secret);
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "flight-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
+        this.loadClaimExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "flight-load-claim");
             t.setDaemon(true);
             return t;
         });
@@ -396,7 +406,7 @@ public final class ClusterService implements AutoCloseable {
      * @return true when the endpoint was planned for another node
      */
     public boolean claimEndpointLoad(byte[] handle, HandleState state) {
-        if (state.complete() || state.serverUri() == null || state.serverUri().equals(serverUri)) {
+        if (!plannedElsewhere(state)) {
             return false;
         }
         if (!state.loadTracked() || state.bytes() == 0L) {
@@ -414,6 +424,38 @@ public final class ClusterService implements AutoCloseable {
             hazelcast.statementCache().put(key, reservation, 10, TimeUnit.MINUTES);
         }
         return true;
+    }
+
+    /**
+     * Tells whether an endpoint was planned for another node: this node runs it as a backup
+     * location.
+     *
+     * @param state endpoint state
+     * @return true for a partial-result endpoint whose planned node is not this one
+     */
+    public boolean plannedElsewhere(HandleState state) {
+        return !state.complete() && state.serverUri() != null && !state.serverUri().equals(serverUri);
+    }
+
+    /**
+     * Runs {@link #claimEndpointLoad} in the background, so that the stream starts at once even
+     * while the cluster still waits for the vanished planned node. Wait for the result before
+     * {@link #releaseEndpointLoad}, so the release finds the moved reservation.
+     *
+     * @param handle ticket statement-handle bytes
+     * @param state endpoint state
+     * @return completion of the claim; it never completes exceptionally
+     */
+    public CompletableFuture<Void> claimEndpointLoadLater(byte[] handle, HandleState state) {
+        byte[] copy = handle.clone();
+        return CompletableFuture.runAsync(() -> {
+            try {
+                claimEndpointLoad(copy, state);
+            } catch (RuntimeException e) {
+                LOGGER.warn("Could not move the load of an endpoint planned for {}: {}",
+                        state.serverUri(), e.toString());
+            }
+        }, loadClaimExecutor);
     }
 
     /**
@@ -517,6 +559,7 @@ public final class ClusterService implements AutoCloseable {
             LOGGER.warn("Failed to deregister server from cluster: {}", e.getMessage());
         }
         heartbeatExecutor.shutdownNow();
+        loadClaimExecutor.shutdownNow();
         localHandles.clear();
         try {
             hazelcast.close();

@@ -446,7 +446,9 @@ class FlightSqlProducerTest {
         HandleState state = HandleState.forServerFiles("select * from tpch.lineitem",
                 new String[]{"tpch/lineitem/a.parquet"}, "grpc+tcp://gone:32010", 100L, true);
         when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
-        when(clusterService.claimEndpointLoad(handle.toByteArray(), state)).thenReturn(true);
+        when(clusterService.plannedElsewhere(state)).thenReturn(true);
+        when(clusterService.claimEndpointLoadLater(handle.toByteArray(), state))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
         FlightSqlProducer producer = new FlightSqlProducer(
                 Location.forGrpcInsecure("localhost", 32010), allocator,
                 mock(MetadataService.class), mock(QueryPlanner.class), executionService,
@@ -456,7 +458,7 @@ class FlightSqlProducerTest {
                 .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class), listener);
 
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(clusterService, executionService);
-        order.verify(clusterService).claimEndpointLoad(handle.toByteArray(), state);
+        order.verify(clusterService).claimEndpointLoadLater(handle.toByteArray(), state);
         order.verify(executionService).readParquet(eq(allocator), eq(state.query()),
                 eq(state.filePaths()), eq(listener), anyBoolean(), any(ExecutionPathTracker.class));
         order.verify(clusterService).releaseEndpointLoad(handle.toByteArray(), state);
