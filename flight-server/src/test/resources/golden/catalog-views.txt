@@ -1,0 +1,70 @@
+# widenUnsignedTypes=true
+## data
+CREATE SCHEMA IF NOT EXISTS "other"
+CREATE OR REPLACE VIEW "other"."LineItem" AS SELECT * FROM read_parquet(['<DATA>/other/LineItem/part-0.parquet'])
+CREATE SCHEMA IF NOT EXISTS "test_schema"
+CREATE OR REPLACE VIEW "test_schema"."test_table" AS SELECT * FROM read_parquet(['<DATA>/test_schema/test_table/part-00000.snappy.parquet'])
+CREATE SCHEMA IF NOT EXISTS "tpch"
+CREATE OR REPLACE VIEW "tpch"."lineitem" AS SELECT * FROM read_parquet(['<DATA>/tpch/lineitem/lineitem_tiny.parquet'])
+CREATE OR REPLACE VIEW "tpch"."nation" AS SELECT CAST("n_nationkey" AS SMALLINT) AS "n_nationkey", "n_name", CAST("n_regionkey" AS INTEGER) AS "n_regionkey", CAST("n_u32" AS BIGINT) AS "n_u32", CAST("n_u64" AS DECIMAL(20,0)) AS "n_u64" FROM read_parquet(['<DATA>/tpch/nation/part-0.parquet', '<DATA>/tpch/nation/part-1.parquet'])
+CREATE SCHEMA IF NOT EXISTS "types"
+CREATE OR REPLACE VIEW "types"."all_types" AS SELECT * FROM read_parquet(['<DATA>/types/all_types/part-0.parquet'])
+CREATE OR REPLACE VIEW main."all_types" AS SELECT * FROM "types"."all_types"
+CREATE OR REPLACE VIEW main."nation" AS SELECT * FROM "tpch"."nation"
+CREATE OR REPLACE VIEW main."test_table" AS SELECT * FROM "test_schema"."test_table"
+## empty
+CREATE SCHEMA IF NOT EXISTS "other"
+CREATE OR REPLACE VIEW "other"."LineItem" AS SELECT CAST(NULL AS BIGINT) AS "l_orderkey", CAST(NULL AS BIGINT) AS "l_partkey", CAST(NULL AS BIGINT) AS "l_suppkey", CAST(NULL AS INTEGER) AS "l_linenumber", CAST(NULL AS DECIMAL(15,2)) AS "l_quantity", CAST(NULL AS DECIMAL(15,2)) AS "l_extendedprice", CAST(NULL AS DECIMAL(15,2)) AS "l_discount", CAST(NULL AS DECIMAL(15,2)) AS "l_tax", CAST(NULL AS VARCHAR) AS "l_returnflag", CAST(NULL AS VARCHAR) AS "l_linestatus", CAST(NULL AS DATE) AS "l_shipdate", CAST(NULL AS DATE) AS "l_commitdate", CAST(NULL AS DATE) AS "l_receiptdate", CAST(NULL AS VARCHAR) AS "l_shipinstruct", CAST(NULL AS VARCHAR) AS "l_shipmode", CAST(NULL AS VARCHAR) AS "l_comment" WHERE false
+CREATE SCHEMA IF NOT EXISTS "test_schema"
+CREATE OR REPLACE VIEW "test_schema"."test_table" AS SELECT CAST(NULL AS INTEGER) AS "id", CAST(NULL AS BOOLEAN) AS "bool_col", CAST(NULL AS TINYINT) AS "tinyint_col", CAST(NULL AS SMALLINT) AS "smallint_col", CAST(NULL AS INTEGER) AS "int_col", CAST(NULL AS BIGINT) AS "bigint_col", CAST(NULL AS FLOAT) AS "float_col", CAST(NULL AS DOUBLE) AS "double_col", CAST(NULL AS VARCHAR) AS "date_string_col", CAST(NULL AS VARCHAR) AS "string_col", CAST(NULL AS BIGINT) AS "timestamp_col", CAST(NULL AS INTEGER) AS "year", CAST(NULL AS INTEGER) AS "month" WHERE false
+CREATE SCHEMA IF NOT EXISTS "tpch"
+CREATE OR REPLACE VIEW "tpch"."lineitem" AS SELECT CAST(NULL AS BIGINT) AS "l_orderkey", CAST(NULL AS BIGINT) AS "l_partkey", CAST(NULL AS BIGINT) AS "l_suppkey", CAST(NULL AS INTEGER) AS "l_linenumber", CAST(NULL AS DECIMAL(15,2)) AS "l_quantity", CAST(NULL AS DECIMAL(15,2)) AS "l_extendedprice", CAST(NULL AS DECIMAL(15,2)) AS "l_discount", CAST(NULL AS DECIMAL(15,2)) AS "l_tax", CAST(NULL AS VARCHAR) AS "l_returnflag", CAST(NULL AS VARCHAR) AS "l_linestatus", CAST(NULL AS DATE) AS "l_shipdate", CAST(NULL AS DATE) AS "l_commitdate", CAST(NULL AS DATE) AS "l_receiptdate", CAST(NULL AS VARCHAR) AS "l_shipinstruct", CAST(NULL AS VARCHAR) AS "l_shipmode", CAST(NULL AS VARCHAR) AS "l_comment" WHERE false
+CREATE OR REPLACE VIEW "tpch"."nation" AS SELECT CAST(NULL AS SMALLINT) AS "n_nationkey", CAST(NULL AS VARCHAR) AS "n_name", CAST(NULL AS INTEGER) AS "n_regionkey", CAST(NULL AS BIGINT) AS "n_u32", CAST(NULL AS DECIMAL(20,0)) AS "n_u64" WHERE false
+CREATE SCHEMA IF NOT EXISTS "types"
+CREATE OR REPLACE VIEW "types"."all_types" AS SELECT CAST(NULL AS BOOLEAN) AS "b", CAST(NULL AS TINYINT) AS "i8", CAST(NULL AS SMALLINT) AS "i16", CAST(NULL AS INTEGER) AS "i32", CAST(NULL AS BIGINT) AS "i64", CAST(NULL AS FLOAT) AS "f32", CAST(NULL AS DOUBLE) AS "f64", CAST(NULL AS DECIMAL(4,1)) AS "d4", CAST(NULL AS DECIMAL(18,3)) AS "d18", CAST(NULL AS DECIMAL(38,10)) AS "d38", CAST(NULL AS VARCHAR) AS "s", CAST(NULL AS BLOB) AS "bin", CAST(NULL AS DATE) AS "dt", CAST(NULL AS TIME) AS "tm", CAST(NULL AS TIMESTAMP) AS "ts", CAST(NULL AS TIMESTAMP WITH TIME ZONE) AS "tstz", CAST(NULL AS VARCHAR) AS "Mixed Case", CAST(NULL AS INTEGER[]) AS "lst", CAST(NULL AS STRUCT(a INTEGER)) AS "st" WHERE false
+CREATE OR REPLACE VIEW main."all_types" AS SELECT * FROM "types"."all_types"
+CREATE OR REPLACE VIEW main."nation" AS SELECT * FROM "tpch"."nation"
+CREATE OR REPLACE VIEW main."test_table" AS SELECT * FROM "test_schema"."test_table"
+## drop
+DROP VIEW IF EXISTS main."test_table"
+DROP VIEW IF EXISTS main."nation"
+DROP VIEW IF EXISTS main."all_types"
+DROP SCHEMA IF EXISTS "other" CASCADE
+DROP SCHEMA IF EXISTS "test_schema" CASCADE
+DROP SCHEMA IF EXISTS "tpch" CASCADE
+DROP SCHEMA IF EXISTS "types" CASCADE
+# widenUnsignedTypes=false
+## data
+CREATE SCHEMA IF NOT EXISTS "other"
+CREATE OR REPLACE VIEW "other"."LineItem" AS SELECT * FROM read_parquet(['<DATA>/other/LineItem/part-0.parquet'])
+CREATE SCHEMA IF NOT EXISTS "test_schema"
+CREATE OR REPLACE VIEW "test_schema"."test_table" AS SELECT * FROM read_parquet(['<DATA>/test_schema/test_table/part-00000.snappy.parquet'])
+CREATE SCHEMA IF NOT EXISTS "tpch"
+CREATE OR REPLACE VIEW "tpch"."lineitem" AS SELECT * FROM read_parquet(['<DATA>/tpch/lineitem/lineitem_tiny.parquet'])
+CREATE OR REPLACE VIEW "tpch"."nation" AS SELECT * FROM read_parquet(['<DATA>/tpch/nation/part-0.parquet', '<DATA>/tpch/nation/part-1.parquet'])
+CREATE SCHEMA IF NOT EXISTS "types"
+CREATE OR REPLACE VIEW "types"."all_types" AS SELECT * FROM read_parquet(['<DATA>/types/all_types/part-0.parquet'])
+CREATE OR REPLACE VIEW main."all_types" AS SELECT * FROM "types"."all_types"
+CREATE OR REPLACE VIEW main."nation" AS SELECT * FROM "tpch"."nation"
+CREATE OR REPLACE VIEW main."test_table" AS SELECT * FROM "test_schema"."test_table"
+## empty
+CREATE SCHEMA IF NOT EXISTS "other"
+CREATE OR REPLACE VIEW "other"."LineItem" AS SELECT CAST(NULL AS BIGINT) AS "l_orderkey", CAST(NULL AS BIGINT) AS "l_partkey", CAST(NULL AS BIGINT) AS "l_suppkey", CAST(NULL AS INTEGER) AS "l_linenumber", CAST(NULL AS DECIMAL(15,2)) AS "l_quantity", CAST(NULL AS DECIMAL(15,2)) AS "l_extendedprice", CAST(NULL AS DECIMAL(15,2)) AS "l_discount", CAST(NULL AS DECIMAL(15,2)) AS "l_tax", CAST(NULL AS VARCHAR) AS "l_returnflag", CAST(NULL AS VARCHAR) AS "l_linestatus", CAST(NULL AS DATE) AS "l_shipdate", CAST(NULL AS DATE) AS "l_commitdate", CAST(NULL AS DATE) AS "l_receiptdate", CAST(NULL AS VARCHAR) AS "l_shipinstruct", CAST(NULL AS VARCHAR) AS "l_shipmode", CAST(NULL AS VARCHAR) AS "l_comment" WHERE false
+CREATE SCHEMA IF NOT EXISTS "test_schema"
+CREATE OR REPLACE VIEW "test_schema"."test_table" AS SELECT CAST(NULL AS INTEGER) AS "id", CAST(NULL AS BOOLEAN) AS "bool_col", CAST(NULL AS TINYINT) AS "tinyint_col", CAST(NULL AS SMALLINT) AS "smallint_col", CAST(NULL AS INTEGER) AS "int_col", CAST(NULL AS BIGINT) AS "bigint_col", CAST(NULL AS FLOAT) AS "float_col", CAST(NULL AS DOUBLE) AS "double_col", CAST(NULL AS VARCHAR) AS "date_string_col", CAST(NULL AS VARCHAR) AS "string_col", CAST(NULL AS BIGINT) AS "timestamp_col", CAST(NULL AS INTEGER) AS "year", CAST(NULL AS INTEGER) AS "month" WHERE false
+CREATE SCHEMA IF NOT EXISTS "tpch"
+CREATE OR REPLACE VIEW "tpch"."lineitem" AS SELECT CAST(NULL AS BIGINT) AS "l_orderkey", CAST(NULL AS BIGINT) AS "l_partkey", CAST(NULL AS BIGINT) AS "l_suppkey", CAST(NULL AS INTEGER) AS "l_linenumber", CAST(NULL AS DECIMAL(15,2)) AS "l_quantity", CAST(NULL AS DECIMAL(15,2)) AS "l_extendedprice", CAST(NULL AS DECIMAL(15,2)) AS "l_discount", CAST(NULL AS DECIMAL(15,2)) AS "l_tax", CAST(NULL AS VARCHAR) AS "l_returnflag", CAST(NULL AS VARCHAR) AS "l_linestatus", CAST(NULL AS DATE) AS "l_shipdate", CAST(NULL AS DATE) AS "l_commitdate", CAST(NULL AS DATE) AS "l_receiptdate", CAST(NULL AS VARCHAR) AS "l_shipinstruct", CAST(NULL AS VARCHAR) AS "l_shipmode", CAST(NULL AS VARCHAR) AS "l_comment" WHERE false
+CREATE OR REPLACE VIEW "tpch"."nation" AS SELECT CAST(NULL AS UTINYINT) AS "n_nationkey", CAST(NULL AS VARCHAR) AS "n_name", CAST(NULL AS USMALLINT) AS "n_regionkey", CAST(NULL AS UINTEGER) AS "n_u32", CAST(NULL AS UBIGINT) AS "n_u64" WHERE false
+CREATE SCHEMA IF NOT EXISTS "types"
+CREATE OR REPLACE VIEW "types"."all_types" AS SELECT CAST(NULL AS BOOLEAN) AS "b", CAST(NULL AS TINYINT) AS "i8", CAST(NULL AS SMALLINT) AS "i16", CAST(NULL AS INTEGER) AS "i32", CAST(NULL AS BIGINT) AS "i64", CAST(NULL AS FLOAT) AS "f32", CAST(NULL AS DOUBLE) AS "f64", CAST(NULL AS DECIMAL(4,1)) AS "d4", CAST(NULL AS DECIMAL(18,3)) AS "d18", CAST(NULL AS DECIMAL(38,10)) AS "d38", CAST(NULL AS VARCHAR) AS "s", CAST(NULL AS BLOB) AS "bin", CAST(NULL AS DATE) AS "dt", CAST(NULL AS TIME) AS "tm", CAST(NULL AS TIMESTAMP) AS "ts", CAST(NULL AS TIMESTAMP WITH TIME ZONE) AS "tstz", CAST(NULL AS VARCHAR) AS "Mixed Case", CAST(NULL AS INTEGER[]) AS "lst", CAST(NULL AS STRUCT(a INTEGER)) AS "st" WHERE false
+CREATE OR REPLACE VIEW main."all_types" AS SELECT * FROM "types"."all_types"
+CREATE OR REPLACE VIEW main."nation" AS SELECT * FROM "tpch"."nation"
+CREATE OR REPLACE VIEW main."test_table" AS SELECT * FROM "test_schema"."test_table"
+## drop
+DROP VIEW IF EXISTS main."test_table"
+DROP VIEW IF EXISTS main."nation"
+DROP VIEW IF EXISTS main."all_types"
+DROP SCHEMA IF EXISTS "other" CASCADE
+DROP SCHEMA IF EXISTS "test_schema" CASCADE
+DROP SCHEMA IF EXISTS "tpch" CASCADE
+DROP SCHEMA IF EXISTS "types" CASCADE

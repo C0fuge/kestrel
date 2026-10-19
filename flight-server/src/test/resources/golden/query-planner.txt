@@ -1,0 +1,198 @@
+# scenario hdfs-replicated loads={grpc://127.0.0.1:32010=1000, grpc://127.0.0.2:32010=0, grpc://127.0.0.3:32010=500} shared=true locality=true
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.2:32010 bytes=1500 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet]
+endpoint grpc://127.0.0.1:32010 bytes=700 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-2.parquet]
+addLoad {grpc://127.0.0.1:32010=700, grpc://127.0.0.2:32010=1500, grpc://127.0.0.3:32010=1300}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.2:32010 bytes=1500 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1350 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet, other/lineitem/part-0.parquet]
+endpoint grpc://127.0.0.1:32010 bytes=700 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-2.parquet]
+addLoad {grpc://127.0.0.1:32010=700, grpc://127.0.0.2:32010=1500, grpc://127.0.0.3:32010=1350}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.2:32010 bytes=400 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/orders/part-0.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.2:32010=400, grpc://127.0.0.3:32010=300}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.2:32010 bytes=4200 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet, tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.2:32010=4200}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.1:32010 bytes=15 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {grpc://127.0.0.1:32010=15}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.2:32010 bytes=70 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {}
+# scenario hdfs-replicated idle shared=true locality=true
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.1:32010 bytes=900 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1500 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1100 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.1:32010=900, grpc://127.0.0.2:32010=1100, grpc://127.0.0.3:32010=1500}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.1:32010 bytes=900 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1550 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, other/lineitem/part-0.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1100 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.1:32010=900, grpc://127.0.0.2:32010=1100, grpc://127.0.0.3:32010=1550}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.1:32010 bytes=400 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/orders/part-0.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.1:32010=400, grpc://127.0.0.3:32010=300}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.2:32010 bytes=4200 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet, tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.2:32010=4200}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.1:32010 bytes=15 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {grpc://127.0.0.1:32010=15}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.2:32010 bytes=70 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {}
+# scenario hdfs-single-node shared=true locality=true
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.1:32010 bytes=3500 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.1:32010 bytes=3550 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet, other/lineitem/part-0.parquet]
+addLoad {}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.1:32010 bytes=700 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.1:32010 bytes=4200 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet, tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.1:32010 bytes=15 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.1:32010 bytes=70 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {}
+# scenario local-disks idle shared=false locality=true
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=624 totalRecords=60
+endpoint grpc://127.0.0.1:32010 bytes=108 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/127.0.0.1-part-0.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=208 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/lineitem/127.0.0.2-part-1.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=308 loadTracked=false server=grpc://127.0.0.3:32010 files=[tpch/lineitem/127.0.0.3-part-2.parquet]
+addLoad {}
+## SELECT count(*) FROM lineitem
+totalBytes=624 totalRecords=60
+endpoint grpc://127.0.0.1:32010 bytes=108 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/127.0.0.1-part-0.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=208 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/lineitem/127.0.0.2-part-1.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=308 loadTracked=false server=grpc://127.0.0.3:32010 files=[tpch/lineitem/127.0.0.3-part-2.parquet]
+addLoad {}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=618 totalRecords=60
+endpoint grpc://127.0.0.1:32010 bytes=106 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/orders/127.0.0.1-part-0.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=206 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/orders/127.0.0.2-part-1.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=306 loadTracked=false server=grpc://127.0.0.3:32010 files=[tpch/orders/127.0.0.3-part-2.parquet]
+addLoad {}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+error IOException: Server-side joins require all input shards on one Flight node; Spark must execute this distributed join
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+error IOException: Server-side joins require all input shards on one Flight node; Spark must execute this distributed join
+## SELECT * FROM tpch.supplier
+totalBytes=624 totalRecords=60
+endpoint grpc://127.0.0.1:32010 bytes=108 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/supplier/127.0.0.1-part-0.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=208 loadTracked=false server=grpc://127.0.0.2:32010 files=[tpch/supplier/127.0.0.2-part-1.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=308 loadTracked=false server=grpc://127.0.0.3:32010 files=[tpch/supplier/127.0.0.3-part-2.parquet]
+addLoad {}
+# scenario s3 loads={grpc://127.0.0.1:32010=1000, grpc://127.0.0.2:32010=0, grpc://127.0.0.3:32010=500} shared=true locality=false
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.1:32010 bytes=600 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1600 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-2.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.1:32010=600, grpc://127.0.0.2:32010=1600, grpc://127.0.0.3:32010=1300}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.1:32010 bytes=650 loadTracked=true server=grpc://127.0.0.1:32010 files=[other/lineitem/part-0.parquet, tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1600 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-2.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.1:32010=650, grpc://127.0.0.2:32010=1600, grpc://127.0.0.3:32010=1300}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.2:32010 bytes=700 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.2:32010=700}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.2:32010 bytes=4200 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet, tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.2:32010=4200}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.2:32010 bytes=15 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {grpc://127.0.0.2:32010=15}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.2:32010 bytes=70 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {grpc://127.0.0.2:32010=70}
+# scenario s3 idle shared=true locality=false
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.1:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=900 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/lineitem/part-0.parquet]
+addLoad {grpc://127.0.0.1:32010=1300, grpc://127.0.0.2:32010=1300, grpc://127.0.0.3:32010=900}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.1:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-1.parquet, tpch/lineitem/part-4.parquet]
+endpoint grpc://127.0.0.2:32010 bytes=1300 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=950 loadTracked=true server=grpc://127.0.0.3:32010 files=[other/lineitem/part-0.parquet, tpch/lineitem/part-0.parquet]
+addLoad {grpc://127.0.0.1:32010=1300, grpc://127.0.0.2:32010=1300, grpc://127.0.0.3:32010=950}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.2:32010 bytes=400 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/orders/part-0.parquet]
+endpoint grpc://127.0.0.3:32010 bytes=300 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/orders/part-1.parquet]
+addLoad {grpc://127.0.0.2:32010=400, grpc://127.0.0.3:32010=300}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.3:32010 bytes=4200 loadTracked=true server=grpc://127.0.0.3:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet, tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {grpc://127.0.0.3:32010=4200}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.2:32010 bytes=15 loadTracked=true server=grpc://127.0.0.2:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {grpc://127.0.0.2:32010=15}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.1:32010 bytes=70 loadTracked=true server=grpc://127.0.0.1:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {grpc://127.0.0.1:32010=70}
+# scenario s3-single-node shared=true locality=false
+## SELECT l_orderkey, l_quantity FROM tpch.lineitem WHERE l_quantity > 10
+totalBytes=3500 totalRecords=350
+endpoint grpc://127.0.0.1:32010 bytes=3500 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {}
+## SELECT count(*) FROM lineitem
+totalBytes=3550 totalRecords=355
+endpoint grpc://127.0.0.1:32010 bytes=3550 loadTracked=false server=grpc://127.0.0.1:32010 files=[other/lineitem/part-0.parquet, tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {}
+## SELECT o_orderstatus, count(*) FROM TPCH.ORDERS GROUP BY o_orderstatus
+totalBytes=700 totalRecords=70
+endpoint grpc://127.0.0.1:32010 bytes=700 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet]
+addLoad {}
+## SELECT o.o_orderkey, l.l_quantity FROM tpch.orders o JOIN tpch.lineitem l ON o.o_orderkey = l.l_orderkey
+totalBytes=4200 totalRecords=420
+endpoint grpc://127.0.0.1:32010 bytes=4200 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/orders/part-0.parquet, tpch/orders/part-1.parquet, tpch/lineitem/part-0.parquet, tpch/lineitem/part-1.parquet, tpch/lineitem/part-2.parquet, tpch/lineitem/part-3.parquet, tpch/lineitem/part-4.parquet]
+addLoad {}
+## SELECT n.n_name FROM tpch.nation n JOIN tpch.region r ON n.n_regionkey = r.r_regionkey
+totalBytes=15 totalRecords=1
+endpoint grpc://127.0.0.1:32010 bytes=15 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/nation/part-0.parquet, tpch/region/part-0.parquet]
+addLoad {}
+## SELECT * FROM tpch.supplier
+totalBytes=70 totalRecords=7
+endpoint grpc://127.0.0.1:32010 bytes=70 loadTracked=false server=grpc://127.0.0.1:32010 files=[tpch/supplier/part-0.parquet]
+addLoad {}

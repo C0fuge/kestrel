@@ -42,6 +42,9 @@ public final class HazelcastAdapter implements AutoCloseable {
      */
     public HazelcastAdapter(AppConfig appConfig, String... hosts) {
         Config config = new Config();
+        // Hazelcast otherwise resolves the classes of map values through the thread's context
+        // class loader, which may belong to a plugin when a member is created or deserializes.
+        config.setClassLoader(HazelcastAdapter.class.getClassLoader());
         // A member whose host vanished (machine down, container gone) sends no reset: by default
         // Hazelcast waits up to 60 s for it, and every map operation on its partitions waits too.
         // Same 10 s as the server's own heartbeat; -D system properties still override.

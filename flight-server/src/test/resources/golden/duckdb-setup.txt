@@ -1,0 +1,407 @@
+# config hdfs
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DnumServers=1
+# -DdataDir=hdfs://hdfs-ns1/data/parquet
+# -DduckDbHdfsExtension=/ext/hadoopfs.duckdb_extension
+# -DduckDbAllowUnsignedExtensions=true
+# -DduckDbHdfsDefaultNamenode=hdfs-ns1
+# -DduckDbHdfsHaNamenodes=nn1=nn:8020,nn2=nn2:8020
+# -DduckDbHdfsShortcircuit=true
+# -DduckDbHdfsDomainSocketPath=/var/lib/hadoop-hdfs/dn_socket
+store kind=hdfs roots=[hdfs://hdfs-ns1/data/parquet]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, allow_unsigned_extensions=true, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['hdfs://hdfs-ns1/data/parquet']
+LOAD '/ext/hadoopfs.duckdb_extension'
+SET hdfs_default_namenode = 'hdfs-ns1'
+SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
+SET hdfs_shortcircuit = true
+SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
+SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config local
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=<TMP>/local/parquet
+# -DduckDbStreamResults=false
+# -DduckDbExternalFileCache=true
+store kind=file roots=[<TMP>/local/parquet]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET allowed_paths = ARRAY['<TMP>/local/parquet']
+SET allowed_directories = ['<TMP>/local/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-path
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3://lake/parquet
+# -Ds3Endpoint=http://minio:9000
+# -Ds3CredentialsFile=<TMP>/s3.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+store kind=s3 roots=[s3://lake/parquet/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-vhost-token
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3a://lake/parquet/
+# -Ds3Endpoint=https://s3.example.com
+# -Ds3Region=eu-west-3
+# -Ds3UrlStyle=vhost
+# -Ds3CredentialsFile=<TMP>/s3-token.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+store kind=s3 roots=[s3://lake/parquet/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3a://lake/parquet/']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = true
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'ASIAGOLDEN', SECRET 'goldensecret2', SESSION_TOKEN 'golden-token', REGION 'eu-west-3', ENDPOINT 's3.example.com', URL_STYLE 'vhost', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3a://lake/parquet/']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = true
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'ASIAGOLDEN', SECRET 'goldensecret2', SESSION_TOKEN 'golden-token', REGION 'eu-west-3', ENDPOINT 's3.example.com', URL_STYLE 'vhost', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-tls-ca
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3://lake/parquet
+# -Ds3Endpoint=https://minio:9443
+# -Ds3CaFile=<TMP>/ca.pem
+# -Ds3CredentialsFile=<TMP>/s3.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+store kind=s3 roots=[s3://lake/parquet/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = true
+SET ca_cert_file = '<TMP>/ca.pem'
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9443', URL_STYLE 'path', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = true
+SET ca_cert_file = '<TMP>/ca.pem'
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9443', URL_STYLE 'path', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-tls-noverify
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3://lake/parquet
+# -Ds3Endpoint=https://minio:9443
+# -Ds3CredentialsFile=<TMP>/s3.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+# -Ds3VerifyTls=false
+store kind=s3 roots=[s3://lake/parquet/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9443', URL_STYLE 'path', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET enable_server_cert_verification = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9443', URL_STYLE 'path', USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+SET allowed_directories = ['s3://lake/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-metadata-cache-off
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3n://lake
+# -Ds3Endpoint=http://minio:9000
+# -Ds3CredentialsFile=<TMP>/s3.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+# -DduckDbS3MetadataCache=false
+store kind=s3 roots=[s3://lake/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3n://lake']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['s3://lake/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3n://lake']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/')
+SET allowed_directories = ['s3://lake/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+
+# config s3-no-lockdown
+# -DduckDbWarmConnections=0
+# -DduckDbTempDirectory=<TMP>/duckdb-tmp
+# -DioParallelism=8
+# -DduckDbMemoryLimit=1GB
+# -DduckDbThreads=2
+# -DdataDir=s3://lake/parquet
+# -Ds3Endpoint=http://minio:9000
+# -Ds3CredentialsFile=<TMP>/s3.credentials
+# -DduckDbHttpfsExtension=<TMP>/httpfs.duckdb_extension
+# -DduckDbLockdown=false
+store kind=s3 roots=[s3://lake/parquet/]
+-- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET enable_external_file_cache = false
+SET allowed_paths = ARRAY['s3://lake/parquet']
+LOAD '<TMP>/httpfs.duckdb_extension'
+SET s3_access_key_id = ''
+SET s3_secret_access_key = ''
+SET s3_session_token = ''
+SET s3_endpoint = ''
+SET s3_region = ''
+SET s3_url_compatibility_mode = true
+SET enable_http_logging = false
+SET parquet_metadata_cache = true
+SET enable_http_metadata_cache = true
+CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIAGOLDEN', SECRET 'golden''secret', REGION 'us-east-1', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')
+
