@@ -1,4 +1,4 @@
-package pro.surpin.data.arrowflight.server.storage;
+package pro.surpin.data.arrowflight.plugin.s3;
 
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
@@ -34,7 +34,7 @@ import java.util.Date;
  * @param certificate the certificate
  * @param serverContext TLS context of a server presenting it
  */
-record TestTls(X509Certificate certificate, SSLContext serverContext) {
+public record TestTls(X509Certificate certificate, SSLContext serverContext) {
 
     /**
      * Creates a new key pair and certificate.
@@ -43,7 +43,7 @@ record TestTls(X509Certificate certificate, SSLContext serverContext) {
      * @return certificate and server context
      * @throws Exception when the JDK cannot create them
      */
-    static TestTls create(String commonName) throws Exception {
+    public static TestTls create(String commonName) throws Exception {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
         generator.initialize(2048);
         KeyPair keys = generator.generateKeyPair();
@@ -76,7 +76,7 @@ record TestTls(X509Certificate certificate, SSLContext serverContext) {
      * @return the file
      * @throws IOException when it cannot be written
      */
-    Path writePem(Path file) throws IOException {
+    public Path writePem(Path file) throws IOException {
         try {
             String pem = "-----BEGIN CERTIFICATE-----\n"
                     + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII))

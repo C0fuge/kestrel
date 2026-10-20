@@ -92,10 +92,10 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     /**
      * Returns the storage providers built into the server.
      *
-     * @return built-in providers (besides the Hadoop file system)
+     * @return built-in providers besides the Hadoop file system: none, S3 is the s3 plugin
      */
     static List<DataStoreProvider> builtInProviders() {
-        return List.of(new S3DataStoreProvider());
+        return List.of();
     }
 
     /**

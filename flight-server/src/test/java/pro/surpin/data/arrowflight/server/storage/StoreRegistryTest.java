@@ -40,15 +40,6 @@ class StoreRegistryTest {
         assertNull(StoreRegistry.schemeOf(null));
     }
 
-    /** Verifies an S3 data directory without credentials fails before anything is listed. */
-    @Test
-    void s3WithoutCredentialsIsRefused() {
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> open("s3://lake/parquet", List.of(new S3DataStoreProvider())));
-
-        assertTrue(e.getMessage().contains("without credentials"), e.getMessage());
-    }
-
     /** Verifies s3:// without a provider names the plugin it needs. */
     @Test
     void s3WithoutThePluginIsAClearStartupError() {

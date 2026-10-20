@@ -21,7 +21,8 @@ import java.util.concurrent.Executors;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
-import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
+import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
+import pro.surpin.data.arrowflight.plugin.s3.TestTls;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
@@ -36,8 +37,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Needs the extension file of the bundled DuckDB: {@code -Ds3.it.httpfs=<path>} or
  * {@code DUCKDB_HTTPFS_EXTENSION}; skipped without it. The S3 server is the fake one, or a real
  * one when {@code FLIGHT_S3_IT_ENDPOINT} (with {@code FLIGHT_S3_ACCESS_KEY} and
- * {@code FLIGHT_S3_SECRET_KEY}) is set: the test then writes and reads
- * {@code s3://<FLIGHT_S3_IT_BUCKET, default lake>/flight-it/}.
+ * {@code FLIGHT_S3_SECRET_KEY}) is set: the test then reads
+ * {@code s3://<FLIGHT_S3_IT_BUCKET, default lake>/flight-it/}, where {@code t/x.parquet} (5000
+ * rows: id, name) must have been uploaded beforehand. The store comes from the real s3 plugin
+ * (flight-plugin-s3/target/plugin/s3) loaded the way the server loads it.
  */
 @Tag("s3")
 class S3IntegrationTest {
@@ -51,7 +54,9 @@ class S3IntegrationTest {
     private FakeS3 s3;
     private FakeS3 evil;
     private ExecutorService ioPool;
-    private S3DataStore store;
+    private S3PluginSupport plugin;
+    private StoreRegistry registry;
+    private DataStore store;
     private DuckDbAdapter duckDb;
     private String endpoint;
     private String accessKey;
@@ -84,12 +89,8 @@ class S3IntegrationTest {
         } else {
             accessKey = System.getenv("FLIGHT_S3_ACCESS_KEY");
             secretKey = System.getenv("FLIGHT_S3_SECRET_KEY");
-            S3Settings upload = settings(null);
-            try (software.amazon.awssdk.services.s3.S3Client client = S3DataStore.createClient(upload)) {
-                client.putObject(r -> r.bucket(bucket).key("flight-it/t/x.parquet"),
-                        software.amazon.awssdk.core.sync.RequestBody.fromBytes(bytes));
-            }
         }
+        plugin = new S3PluginSupport(dir);
         ioPool = Executors.newFixedThreadPool(2);
     }
 
@@ -98,8 +99,8 @@ class S3IntegrationTest {
         if (duckDb != null) {
             duckDb.close();
         }
-        if (store != null) {
-            store.close();
+        if (registry != null) {
+            registry.close();
         }
         if (ioPool != null) {
             ioPool.shutdownNow();
@@ -115,7 +116,7 @@ class S3IntegrationTest {
     /** Verifies DuckDB reads the data directory and the Java client reads the same footer. */
     @Test
     void duckDbReadsTheDataDirectory() throws Exception {
-        open(settings(null));
+        open(null);
         DataFile file = store.parquetFiles("t").get(0);
 
         try (Statement s = duckDb.connection().createStatement();
@@ -134,7 +135,7 @@ class S3IntegrationTest {
     /** Verifies settings show no credentials and cannot be changed, and the secret is redacted. */
     @Test
     void credentialsDoNotShow() throws Exception {
-        open(settings(null));
+        open(null);
         Statement s = duckDb.connection().createStatement();
 
         for (String setting : List.of("s3_secret_access_key", "s3_access_key_id", "s3_session_token",
@@ -178,7 +179,7 @@ class S3IntegrationTest {
     /** Verifies reads outside the data directory and query parameters on S3 URLs are refused. */
     @Test
     void otherPathsAndEndpointsAreRefused() throws Exception {
-        open(settings(null));
+        open(null);
         int evilPort = Integer.parseInt(evil.endpoint().substring(evil.endpoint().lastIndexOf(':') + 1));
         String root = "s3://" + bucket + "/flight-it/";
         Statement s = duckDb.connection().createStatement();
@@ -217,14 +218,13 @@ class S3IntegrationTest {
     @Test
     void endpointParameterReachesAnotherHostWithoutCompatibilityMode() throws Exception {
         Assumptions.assumeTrue(s3 != null, "fake S3 only");
-        S3Settings settings = settings(null);
-        store = new S3DataStore("s3://" + bucket + "/flight-it", settings, S3DataStore.createClient(settings));
-        DuckDbSetupPlan plan = plan();
+        openRegistry(null);
+        DuckDbSetupPlan plan = registry.duckDbSetup();
         List<String> unsafe = plan.statements().stream()
                 .map(st -> st.replace("s3_url_compatibility_mode = true", "s3_url_compatibility_mode = false")
                         .replace("URL_COMPATIBILITY_MODE true", "URL_COMPATIBILITY_MODE false"))
                 .toList();
-        duckDb = new DuckDbAdapter(config(settings), ioPool, new DuckDbSetupPlan(unsafe, plan.roots(),
+        duckDb = new DuckDbAdapter(config(), ioPool, new DuckDbSetupPlan(unsafe, plan.roots(),
                 plan.extraRefusedFunctions(), plan.redactor(), plan.extensions(), plan.secrets()));
         int evilPort = Integer.parseInt(evil.endpoint().substring(evil.endpoint().lastIndexOf(':') + 1));
 
@@ -252,7 +252,7 @@ class S3IntegrationTest {
         try (FakeS3 tls = FakeS3.startTls(server.serverContext())) {
             tls.put(bucket, "flight-it/t/x.parquet", Files.readAllBytes(dir.resolve("data.parquet")));
             endpoint = tls.endpoint();
-            open(settings(server.writePem(dir.resolve("ca.pem")).toString()));
+            open((server.writePem(dir.resolve("ca.pem")).toString()));
             try (Statement s = duckDb.connection().createStatement();
                     ResultSet rs = s.executeQuery("SELECT count(*) FROM read_parquet('s3://" + bucket
                             + "/flight-it/t/x.parquet')")) {
@@ -260,8 +260,8 @@ class S3IntegrationTest {
                 assertEquals(5000, rs.getLong(1));
             }
             duckDb.close();
-            store.close();
-            open(settings(other.writePem(dir.resolve("other.pem")).toString()));
+            registry.close();
+            open((other.writePem(dir.resolve("other.pem")).toString()));
             try (Statement s = duckDb.connection().createStatement()) {
                 assertThrows(SQLException.class, () -> s.executeQuery("SELECT count(*) FROM read_parquet('s3://"
                         + bucket + "/flight-it/t/x.parquet')"));
@@ -269,21 +269,28 @@ class S3IntegrationTest {
         }
     }
 
-    private S3Settings settings(String caFile) {
-        return new S3Settings(endpoint, null, "path", caFile, true, accessKey, secretKey, null, 30, 4, true);
+    private void openRegistry(String caFile) {
+        plugin.properties.put("s3Endpoint", endpoint);
+        plugin.properties.put("s3UrlStyle", "path");
+        plugin.properties.put("s3MaxConnections", "4");
+        plugin.properties.put("duckDbHttpfsExtension", httpfs);
+        if (caFile != null) {
+            plugin.properties.put("s3CaFile", caFile);
+        } else {
+            plugin.properties.remove("s3CaFile");
+        }
+        plugin.environment.put("FLIGHT_S3_ACCESS_KEY", accessKey);
+        plugin.environment.put("FLIGHT_S3_SECRET_KEY", secretKey);
+        registry = plugin.open(StoreRegistryTest.config("s3://" + bucket + "/flight-it"));
+        store = registry.dataDirectory();
     }
 
-    private void open(S3Settings settings) {
-        store = new S3DataStore("s3://" + bucket + "/flight-it", settings, S3DataStore.createClient(settings));
-        duckDb = new DuckDbAdapter(config(settings), ioPool, plan());
+    private void open(String caFile) {
+        openRegistry(caFile);
+        duckDb = new DuckDbAdapter(config(), ioPool, registry.duckDbSetup());
     }
 
-    private DuckDbSetupPlan plan() {
-        return new DuckDbSetupValidator(name -> httpfs).plan(
-                DuckDbSetupValidator.Contribution.ofStore("s3", store), List.of(), List.of());
-    }
-
-    private AppConfig config(S3Settings settings) {
+    private AppConfig config() {
         return new AppConfig(3, 1024, 2, 131072, 0, 1, 1, null, false, null, null, null,
                 null, "512MB", false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
                 5701, 60, 3, 1000, 0, true, false, 16, dir.resolve("spill").toString(), null,

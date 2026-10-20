@@ -1,4 +1,4 @@
-package pro.surpin.data.arrowflight.server.storage;
+package pro.surpin.data.arrowflight.plugin.s3;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -31,14 +31,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * one byte range. It checks no signature but records every request, so tests can count calls
  * and look at the headers.
  */
-final class FakeS3 implements AutoCloseable {
+public final class FakeS3 implements AutoCloseable {
 
     /** One object. */
-    record StoredObject(byte[] data, Instant lastModified) {
+    public record StoredObject(byte[] data, Instant lastModified) {
     }
 
     /** One request as received. */
-    record Request(String method, String path, Map<String, String> query, Map<String, String> headers) {
+    public record Request(String method, String path, Map<String, String> query, Map<String, String> headers) {
     }
 
     private final HttpServer server;
@@ -65,7 +65,7 @@ final class FakeS3 implements AutoCloseable {
      * @return running server
      * @throws IOException when no port can be bound
      */
-    static FakeS3 start() throws IOException {
+    public static FakeS3 start() throws IOException {
         return new FakeS3(HttpServer.create(
                 new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0), "http");
     }
@@ -77,7 +77,7 @@ final class FakeS3 implements AutoCloseable {
      * @return running server
      * @throws IOException when no port can be bound
      */
-    static FakeS3 startTls(SSLContext tls) throws IOException {
+    public static FakeS3 startTls(SSLContext tls) throws IOException {
         HttpsServer server = HttpsServer.create(
                 new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.setHttpsConfigurator(new HttpsConfigurator(tls));
@@ -89,7 +89,7 @@ final class FakeS3 implements AutoCloseable {
      *
      * @return {@code http[s]://127.0.0.1:port}
      */
-    String endpoint() {
+    public String endpoint() {
         return scheme + "://127.0.0.1:" + server.getAddress().getPort();
     }
 
@@ -101,7 +101,7 @@ final class FakeS3 implements AutoCloseable {
      * @param data content
      * @param lastModified modification time
      */
-    void put(String bucket, String key, byte[] data, Instant lastModified) {
+    public void put(String bucket, String key, byte[] data, Instant lastModified) {
         objects.put(bucket + "/" + key, new StoredObject(data, lastModified));
     }
 
@@ -112,7 +112,7 @@ final class FakeS3 implements AutoCloseable {
      * @param key key
      * @param data content
      */
-    void put(String bucket, String key, byte[] data) {
+    public void put(String bucket, String key, byte[] data) {
         put(bucket, key, data, Instant.parse("2026-10-17T08:00:00Z"));
     }
 
@@ -121,7 +121,7 @@ final class FakeS3 implements AutoCloseable {
      *
      * @param size keys per page
      */
-    void pageSize(int size) {
+    public void pageSize(int size) {
         pageSize.set(size);
     }
 
@@ -130,7 +130,7 @@ final class FakeS3 implements AutoCloseable {
      *
      * @return requests in order
      */
-    List<Request> requests() {
+    public List<Request> requests() {
         synchronized (requests) {
             return List.copyOf(requests);
         }
@@ -142,12 +142,12 @@ final class FakeS3 implements AutoCloseable {
      * @param method HTTP method
      * @return number of requests
      */
-    long count(String method) {
+    public long count(String method) {
         return requests().stream().filter(r -> r.method().equals(method)).count();
     }
 
     /** Forgets the requests received so far. */
-    void clearRequests() {
+    public void clearRequests() {
         requests.clear();
     }
 
