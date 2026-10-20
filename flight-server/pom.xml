@@ -417,6 +417,10 @@
                 <version>3.0.0</version>
                 <configuration>
                     <excludedGroups>${excludedGroups}</excludedGroups>
+                    <systemPropertyVariables>
+                        <!-- s3:// data directories in tests load the real s3 plugin, built before this module -->
+                        <arrowflight.plugins.dir>${project.basedir}/../flight-plugin-s3/target/plugin</arrowflight.plugins.dir>
+                    </systemPropertyVariables>
                     <argLine>
                         @{argLine}
                         -ea
