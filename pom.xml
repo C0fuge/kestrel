@@ -9,6 +9,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>flight-spi</module>
+        <module>flight-plugin-fixture</module>
         <module>flight-server</module>
         <module>flight-client-core</module>
         <module>flight-spark</module>

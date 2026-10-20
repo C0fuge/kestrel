@@ -9,6 +9,7 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
+import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 
 /**
  * Dagger component for the Flight server.
@@ -38,6 +39,13 @@ public interface ServerComponent {
      * @return data store
      */
     DataStore dataStore();
+
+    /**
+     * Returns the stores and plugins, for lifecycle management.
+     *
+     * @return store registry
+     */
+    StoreRegistry storeRegistry();
 
     /**
      * Returns the DuckDB adapter for lifecycle management.

@@ -97,6 +97,7 @@ public final class DuckDbSetupValidator {
             Map.entry("http_retries", Rule.NON_NEGATIVE));
 
     private final UnaryOperator<String> extensionResolver;
+    private final SecretRedactor redactor;
 
     /**
      * One store or catalog and what it asks for.
@@ -150,7 +151,18 @@ public final class DuckDbSetupValidator {
      *                          IllegalArgumentException when it is not configured
      */
     public DuckDbSetupValidator(UnaryOperator<String> extensionResolver) {
+        this(extensionResolver, new SecretRedactor());
+    }
+
+    /**
+     * Creates a validator that registers the sensitive secret values in a given redactor.
+     *
+     * @param extensionResolver resolves an extension name to its file
+     * @param redactor receives the sensitive values; the plan carries it
+     */
+    public DuckDbSetupValidator(UnaryOperator<String> extensionResolver, SecretRedactor redactor) {
         this.extensionResolver = Objects.requireNonNull(extensionResolver, "extensionResolver");
+        this.redactor = Objects.requireNonNull(redactor, "redactor");
     }
 
     /**
@@ -183,7 +195,7 @@ public final class DuckDbSetupValidator {
             writer.write(recorder);
         }
         return new DuckDbSetupPlan(writer.statements, new ArrayList<>(writer.roots),
-                writer.refused, writer.redactor, new ArrayList<>(writer.extensions.keySet()),
+                writer.refused, redactor, new ArrayList<>(writer.extensions.keySet()),
                 writer.secrets);
     }
 
@@ -500,7 +512,6 @@ public final class DuckDbSetupValidator {
         private final Map<String, String> settings = new LinkedHashMap<>();
         private final List<DuckDbSetupPlan.DeclaredSecret> secrets = new ArrayList<>();
         private final Set<String> refused = new LinkedHashSet<>();
-        private final SecretRedactor redactor = new SecretRedactor();
 
         /**
          * Writes one contributor's items.
@@ -533,7 +544,7 @@ public final class DuckDbSetupValidator {
                 secrets.add(new DuckDbSetupPlan.DeclaredSecret(secret[0], secret[1]));
                 statements.add(secret[2]);
             }
-            recorder.sensitive.forEach(redactor::add);
+            recorder.sensitive.forEach(DuckDbSetupValidator.this.redactor::add);
             refused.addAll(recorder.refused);
         }
     }
