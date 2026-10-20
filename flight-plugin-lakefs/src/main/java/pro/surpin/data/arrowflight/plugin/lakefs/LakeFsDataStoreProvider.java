@@ -45,6 +45,16 @@ public final class LakeFsDataStoreProvider implements DataStoreProvider {
         return Set.of(LakeFsUri.SCHEME);
     }
 
+    /**
+     * DuckDB reads pinned commits through the S3 gateway: roots and the secret are s3://.
+     *
+     * @return {@code s3}
+     */
+    @Override
+    public Set<String> duckDbSchemes() {
+        return Set.of("s3");
+    }
+
     @Override
     public List<ConfigKey> configKeys() {
         return CONFIG_KEYS;

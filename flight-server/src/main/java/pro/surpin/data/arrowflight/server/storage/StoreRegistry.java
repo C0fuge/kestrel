@@ -49,7 +49,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     private static final Pattern SCHEME = Pattern.compile("^([A-Za-z][A-Za-z0-9+.-]*)://");
     /** Schemes that only a plugin provides, to the plugin's name. */
     private static final Map<String, String> PLUGIN_SCHEMES = Map.of(
-            "s3", "s3", "s3a", "s3", "s3n", "s3");
+            "s3", "s3", "s3a", "s3", "s3n", "s3", "lakefs", "lakefs");
 
     private final DataStore dataDirectory;
     private final String provider;
@@ -151,7 +151,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                         pluginSource, node);
                 providerName = chosen.name();
                 contribution = new DuckDbSetupValidator.Contribution(chosen.name(),
-                        chosen.schemes(), store.duckDbRoots(), store::contributeDuckDb);
+                        chosen.duckDbSchemes(), store.duckDbRoots(), store::contributeDuckDb);
             } else {
                 DataStoreProvider builtIn = scheme == null ? null : builtIns.stream()
                         .filter(p -> p.schemes().contains(scheme)).findFirst().orElse(null);

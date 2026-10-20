@@ -16,8 +16,8 @@
         lakeFS repositories (lakefs://repo/branch-or-commit/prefix) as data directories, read through
         the lakeFS S3 gateway with the s3 plugin's store and DuckDB httpfs setup; the lakeFS REST API
         is used only to resolve a branch to its commit id, so that one query reads one snapshot.
-        Installed as plugins/lakefs/ (target/plugin/lakefs): this jar, the s3 plugin jar, its runtime
-        libraries and SHA256SUMS (tools/make-plugin-dir.sh ... lakefs).
+        Installed as plugins/lakefs/ (target/plugin/lakefs): this jar, the s3 plugin's classes without
+        its descriptor (-s3.jar), their runtime libraries and SHA256SUMS (tools/make-plugin-dir.sh ... lakefs).
     </description>
 
     <properties>
@@ -122,12 +122,29 @@
                 </configuration>
             </plugin>
             <!-- target/plugin/lakefs: the plugin jar and its runtime libraries, the plugins/lakefs layout.
-                 slf4j-api is the server's (shared), so it is left out. -->
+                 slf4j-api is the server's (shared), so it is left out. The s3 plugin jar is not copied
+                 as is: its descriptor and Plugin service would make plugins/lakefs a second s3 plugin
+                 (the server allows one descriptor and one Plugin service per directory). Its classes
+                 go in as arrow-flight-plugin-lakefs-<version>-s3.jar, without those two files. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
                 <version>3.7.0</version>
                 <executions>
+                    <execution>
+                        <id>s3-classes</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>unpack-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <includeArtifactIds>arrow-flight-plugin-s3</includeArtifactIds>
+                            <excludeTypes>test-jar</excludeTypes>
+                            <excludes>META-INF/arrowflight/**,META-INF/services/pro.surpin.data.arrowflight.spi.Plugin,META-INF/maven/**</excludes>
+                            <outputDirectory>${project.build.directory}/s3-classes</outputDirectory>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>plugin-libs</id>
                         <phase>package</phase>
@@ -136,8 +153,30 @@
                         </goals>
                         <configuration>
                             <includeScope>runtime</includeScope>
-                            <excludeArtifactIds>slf4j-api</excludeArtifactIds>
+                            <excludeArtifactIds>slf4j-api,arrow-flight-plugin-s3</excludeArtifactIds>
                             <outputDirectory>${project.build.directory}/plugin/lakefs</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <executions>
+                    <execution>
+                        <id>s3-classes</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classesDirectory>${project.build.directory}/s3-classes</classesDirectory>
+                            <classifier>s3</classifier>
+                            <outputDirectory>${project.build.directory}/plugin/lakefs</outputDirectory>
+                            <archive>
+                                <addMavenDescriptor>false</addMavenDescriptor>
+                            </archive>
                         </configuration>
                     </execution>
                 </executions>

@@ -26,6 +26,17 @@ public interface DataStoreProvider {
     Set<String> schemes();
 
     /**
+     * Names the URI schemes the stores of this provider give DuckDB (roots and secret scopes),
+     * lower case; the server refuses any other. A provider that reads through another protocol
+     * (lakeFS through its S3 gateway) names that protocol's scheme here.
+     *
+     * @return schemes DuckDB reads with, {@link #schemes()} by default
+     */
+    default Set<String> duckDbSchemes() {
+        return schemes();
+    }
+
+    /**
      * Declares the configuration keys of this provider, with their legacy aliases.
      *
      * @return configuration keys

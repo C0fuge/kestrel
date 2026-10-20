@@ -35,9 +35,21 @@ final class S3PluginSupport {
      * @throws IOException when the plugin cannot be copied
      */
     S3PluginSupport(Path dir) throws IOException {
+        this(dir, "s3", PLUGIN);
+    }
+
+    /**
+     * Copies a built plugin into a plugins directory.
+     *
+     * @param dir test directory
+     * @param name plugin name, the directory below plugins
+     * @param plugin built plugin directory
+     * @throws IOException when the plugin cannot be copied
+     */
+    S3PluginSupport(Path dir, String name, Path plugin) throws IOException {
         plugins = Files.createDirectories(dir.resolve("plugins"));
-        Path s3 = Files.createDirectories(plugins.resolve("s3"));
-        try (Stream<Path> jars = Files.list(PLUGIN)) {
+        Path s3 = Files.createDirectories(plugins.resolve(name));
+        try (Stream<Path> jars = Files.list(plugin)) {
             for (Path jar : jars.toList()) {
                 Files.copy(jar, s3.resolve(jar.getFileName().toString()));
             }
