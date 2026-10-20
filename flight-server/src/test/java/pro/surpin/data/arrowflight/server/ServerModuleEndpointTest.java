@@ -7,7 +7,9 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
+import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
@@ -17,9 +19,10 @@ import java.net.URI;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
-/** Verifies metadata endpoints advertise the configured server address. */
+/** Verifies where metadata endpoints point: nowhere by default, or the configured server address. */
 @Tag("unit")
 class ServerModuleEndpointTest {
 
@@ -34,7 +37,9 @@ class ServerModuleEndpointTest {
             FlightSqlProducer producer = module.producer(
                     mock(BufferAllocator.class), mock(MetadataService.class),
                     mock(QueryPlanner.class), mock(ExecutionService.class),
-                    mock(ClusterService.class), new AllowAllAuthorization());
+                    mock(ClusterService.class), new AllowAllAuthorization(),
+                    ConfigAdapter.getConfig().withMetadataEndpointLocation(
+                            AppConfig.METADATA_LOCATION_ADVERTISED));
 
             FlightInfo info = producer.getFlightInfoCatalogs(
                     FlightSql.CommandGetCatalogs.getDefaultInstance(), null,
@@ -43,5 +48,35 @@ class ServerModuleEndpointTest {
             assertEquals(URI.create(advertisedUri),
                     info.getEndpoints().get(0).getLocations().get(0).getUri());
         }
+    }
+
+    /** Checks that by default metadata endpoints carry no location (read over the client's connection). */
+    @Test
+    void metadataEndpointsCarryNoLocationByDefault() {
+        ServerModule module = new ServerModule(
+                new String[]{"flight.example"}, "grpc+tls://flight.example:32010",
+                "flight.example", new Configuration());
+        FlightSqlProducer producer = module.producer(
+                mock(BufferAllocator.class), mock(MetadataService.class),
+                mock(QueryPlanner.class), mock(ExecutionService.class),
+                mock(ClusterService.class), new AllowAllAuthorization());
+
+        FlightInfo info = producer.getFlightInfoCatalogs(
+                FlightSql.CommandGetCatalogs.getDefaultInstance(), null,
+                FlightDescriptor.command(new byte[]{1}));
+
+        assertEquals(List.of(), info.getEndpoints().get(0).getLocations());
+    }
+
+    /** Checks the accepted values of the setting. */
+    @Test
+    void metadataEndpointLocationSettingIsValidated() {
+        AppConfig config = ConfigAdapter.getConfig();
+        assertEquals(AppConfig.METADATA_LOCATION_NONE, config.metadataEndpointLocation());
+        assertEquals(true, config.withMetadataEndpointLocation(" Advertised ")
+                .advertiseMetadataLocation());
+        assertEquals(false, config.withMetadataEndpointLocation(null).advertiseMetadataLocation());
+        assertThrows(IllegalArgumentException.class,
+                () -> config.withMetadataEndpointLocation("planner"));
     }
 }

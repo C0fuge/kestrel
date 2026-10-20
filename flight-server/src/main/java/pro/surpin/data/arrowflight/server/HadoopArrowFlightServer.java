@@ -174,7 +174,8 @@ public class HadoopArrowFlightServer {
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                     .transportHint("grpc.builderConsumer", keepAlivePermit()))
                     .build();
-            LOGGER.info("Default result mode: {}; Flight security: {}", config.resultMode(), flightSecurity);
+            LOGGER.info("Default result mode: {}; metadata endpoint location: {}; Flight security: {}",
+                    config.resultMode(), config.metadataEndpointLocation(), flightSecurity);
             server.start();
             // Only now may other nodes send clients here.
             component.clusterService().register();

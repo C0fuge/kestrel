@@ -259,7 +259,7 @@ public final class ServerModule {
         Location location = new Location(URI.create(serverUri));
         return new FlightSqlProducer(location, allocator, metadataService,
                 queryPlanner, executionService, clusterService, authorization,
-                config.resultMode());
+                config.resultMode(), config.advertiseMetadataLocation());
     }
 
     /**

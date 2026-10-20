@@ -57,7 +57,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private static final java.util.concurrent.atomic.AtomicLong EXECUTIONS = new java.util.concurrent.atomic.AtomicLong();
     private static final String SCHEMA_NOT_FOUND_MESSAGE = "Could not find Arrow schema for query";
 
-    private final Location location;
+    /** Location of metadata endpoints; null = none, the client reads over its own connection. */
+    private final Location metadataLocation;
     private final BufferAllocator allocator;
     private final MetadataService metadataService;
     private final QueryPlanner queryPlanner;
@@ -86,7 +87,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     /**
      * Creates a producer with authorization enforcement.
      *
-     * @param location server location for endpoint registration
+     * @param location server location; metadata endpoints carry no location
      * @param allocator Arrow buffer allocator
      * @param metadataService metadata lookup service
      * @param queryPlanner query planning service
@@ -105,7 +106,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     /**
      * Creates the producer with the result mode clients get when they do not ask for one.
      *
-     * @param location server location for endpoint registration
+     * @param location server location; metadata endpoints carry no location
      * @param allocator Arrow buffer allocator
      * @param metadataService metadata lookup service
      * @param queryPlanner query planning and endpoint determination
@@ -125,7 +126,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     /**
      * Creates the producer with authorization and a default result mode.
      *
-     * @param location server location for endpoint registration
+     * @param location server location; metadata endpoints carry no location
      * @param allocator Arrow buffer allocator
      * @param metadataService metadata lookup service
      * @param queryPlanner query planning and endpoint determination
@@ -139,8 +140,34 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             MetadataService metadataService, QueryPlanner queryPlanner,
             ExecutionService executionService, ClusterService clusterService,
             FlightAuthorization authorization, String defaultResultMode) {
+        this(location, allocator, metadataService, queryPlanner, executionService,
+                clusterService, authorization, defaultResultMode, false);
+    }
+
+    /**
+     * Creates the producer with authorization, a default result mode and the choice of where
+     * clients read metadata from.
+     *
+     * @param location server location (the advertised URI)
+     * @param allocator Arrow buffer allocator
+     * @param metadataService metadata lookup service
+     * @param queryPlanner query planning and endpoint determination
+     * @param executionService query execution service
+     * @param clusterService cluster state management
+     * @param authorization authorization evaluator
+     * @param defaultResultMode {@code complete} or {@code partial}
+     * @param advertiseMetadataLocation true: metadata endpoints carry {@code location};
+     *                                  false: no location, the client reads them over the
+     *                                  connection it already has
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"}) // Wired in one place.
+    public FlightSqlProducer(Location location, BufferAllocator allocator,
+            MetadataService metadataService, QueryPlanner queryPlanner,
+            ExecutionService executionService, ClusterService clusterService,
+            FlightAuthorization authorization, String defaultResultMode,
+            boolean advertiseMetadataLocation) {
         this.defaultResultMode = defaultResultMode == null ? "partial" : defaultResultMode.trim();
-        this.location = location;
+        this.metadataLocation = advertiseMetadataLocation ? location : null;
         this.allocator = allocator;
         this.metadataService = metadataService;
         this.queryPlanner = queryPlanner;
@@ -719,8 +746,13 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 LogUtil.logTiming(t, "planning.determineEndpoints", "endpoints=" + endpoints.size());
                 return endpoints;
             } else {
+                // Without a location the client reads metadata over the connection it already
+                // has, whatever name or address it reached this server by; a stock JDBC driver
+                // opens a new connection (and TLS handshake) for every advertised location.
                 Ticket ticket = new Ticket(Any.pack(request).toByteArray());
-                return List.of(new FlightEndpoint(ticket, location));
+                return List.of(metadataLocation == null
+                        ? new FlightEndpoint(ticket)
+                        : new FlightEndpoint(ticket, metadataLocation));
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
