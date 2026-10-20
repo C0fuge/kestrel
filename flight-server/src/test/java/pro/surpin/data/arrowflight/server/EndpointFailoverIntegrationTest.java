@@ -99,7 +99,7 @@ class EndpointFailoverIntegrationTest {
         assertEquals(expected, rows(ticket(handle)));
 
         assertEquals(700L, registry.get(GONE), "the planned node's load is handed over");
-        assertEquals(selfBefore, registry.getOrDefault(self, 0L),
+        assertEquals(selfBefore, awaitLoad(registry, self, selfBefore),
                 "the running node took the load over and released it at the end");
         registry.remove(GONE);
     }
@@ -121,8 +121,29 @@ class EndpointFailoverIntegrationTest {
 
         assertFalse(rows(ticket(handle)).isEmpty());
 
+        assertEquals(selfBefore, awaitLoad(registry, self, selfBefore));
         assertFalse(registry.containsKey(GONE), "a stale node must stay out of the pool");
-        assertEquals(selfBefore, registry.getOrDefault(self, 0L));
         assertTrue(helper.clusterService.filterLiveServers(registry.keySet()).contains(self));
+    }
+
+    /**
+     * Waits up to 10 s for a node's load to reach a value: the server releases an endpoint's
+     * load when its stream ends, which can be just after the client has read the last batch.
+     *
+     * @param registry load registry
+     * @param node     node URI
+     * @param expected expected load
+     * @return the load at the end of the wait
+     * @throws InterruptedException when interrupted
+     */
+    private static long awaitLoad(IMap<String, Long> registry, String node, long expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        long load = registry.getOrDefault(node, 0L);
+        while (load != expected && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+            load = registry.getOrDefault(node, 0L);
+        }
+        return load;
     }
 }

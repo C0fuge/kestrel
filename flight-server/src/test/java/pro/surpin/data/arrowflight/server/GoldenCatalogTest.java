@@ -72,7 +72,8 @@ class GoldenCatalogTest {
         assertTrue(start >= 0, logged);
         int end = logged.indexOf("\n[", start);
         String ddl = logged.substring(start + marker.length(), end < 0 ? logged.length() : end);
-        Golden.assertMatches("parsed-ddl.txt", ddl.replace(data.toString(), "<DATA>"));
+        Golden.assertMatches("parsed-ddl.txt",
+                sortedStatements(ddl.replace(data.toString(), "<DATA>")));
 
         StringBuilder out = new StringBuilder();
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
@@ -272,5 +273,20 @@ class GoldenCatalogTest {
                 null, null, null, false, 1048576, 67108864, 60000L, dataDir, null,
                 32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete",
                 widenUnsigned, true);
+    }
+
+    /**
+     * Sorts the CREATE TABLE statements of the logged DDL: their order follows the catalog
+     * snapshot's maps (upstream #25 builds them with Map.copyOf, whose iteration order changes
+     * from one JVM run to the next) and is not behaviour.
+     *
+     * @param ddl logged DDL
+     * @return the same statements in sorted order
+     */
+    private static String sortedStatements(String ddl) {
+        List<String> statements = new ArrayList<>(List.of(ddl.split("(?=CREATE TABLE )")));
+        statements.removeIf(String::isBlank);
+        java.util.Collections.sort(statements);
+        return String.join("", statements);
     }
 }

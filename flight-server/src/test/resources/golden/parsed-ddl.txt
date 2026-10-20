@@ -1,3 +1,5 @@
+CREATE TABLE main.t(
+	"x" INTEGER);
 CREATE TABLE other.LineItem(
 	"l_orderkey" BIGINT,
 	"l_partkey" BIGINT,
@@ -15,6 +17,46 @@ CREATE TABLE other.LineItem(
 	"l_shipinstruct" VARCHAR,
 	"l_shipmode" VARCHAR,
 	"l_comment" VARCHAR);
+CREATE TABLE test_schema.test_table(
+	"id" INTEGER,
+	"bool_col" BOOLEAN,
+	"tinyint_col" TINYINT,
+	"smallint_col" SMALLINT,
+	"int_col" INTEGER,
+	"bigint_col" BIGINT,
+	"float_col" REAL,
+	"double_col" DOUBLE,
+	"date_string_col" VARCHAR,
+	"string_col" VARCHAR,
+	"timestamp_col" BIGINT,
+	"year" INTEGER,
+	"month" INTEGER);
+
+CREATE TABLE tpch.empty_table(
+);
+CREATE TABLE tpch.lineitem(
+	"l_orderkey" BIGINT,
+	"l_partkey" BIGINT,
+	"l_suppkey" BIGINT,
+	"l_linenumber" INTEGER,
+	"l_quantity" DECIMAL(15, 2),
+	"l_extendedprice" DECIMAL(15, 2),
+	"l_discount" DECIMAL(15, 2),
+	"l_tax" DECIMAL(15, 2),
+	"l_returnflag" VARCHAR,
+	"l_linestatus" VARCHAR,
+	"l_shipdate" DATE,
+	"l_commitdate" DATE,
+	"l_receiptdate" DATE,
+	"l_shipinstruct" VARCHAR,
+	"l_shipmode" VARCHAR,
+	"l_comment" VARCHAR);
+CREATE TABLE tpch.nation(
+	"n_nationkey" TINYINT,
+	"n_name" VARCHAR,
+	"n_regionkey" SMALLINT,
+	"n_u32" INTEGER,
+	"n_u64" BIGINT);
 CREATE TABLE types.all_types(
 	"b" BOOLEAN,
 	"i8" TINYINT,
@@ -35,45 +77,3 @@ CREATE TABLE types.all_types(
 	"Mixed Case" VARCHAR,
 	"lst.list.element" INTEGER,
 	"st.a" INTEGER);
-CREATE TABLE tpch.nation(
-	"n_nationkey" TINYINT,
-	"n_name" VARCHAR,
-	"n_regionkey" SMALLINT,
-	"n_u32" INTEGER,
-	"n_u64" BIGINT);
-CREATE TABLE tpch.lineitem(
-	"l_orderkey" BIGINT,
-	"l_partkey" BIGINT,
-	"l_suppkey" BIGINT,
-	"l_linenumber" INTEGER,
-	"l_quantity" DECIMAL(15, 2),
-	"l_extendedprice" DECIMAL(15, 2),
-	"l_discount" DECIMAL(15, 2),
-	"l_tax" DECIMAL(15, 2),
-	"l_returnflag" VARCHAR,
-	"l_linestatus" VARCHAR,
-	"l_shipdate" DATE,
-	"l_commitdate" DATE,
-	"l_receiptdate" DATE,
-	"l_shipinstruct" VARCHAR,
-	"l_shipmode" VARCHAR,
-	"l_comment" VARCHAR);
-CREATE TABLE tpch.empty_table(
-);
-CREATE TABLE main.t(
-	"x" INTEGER);
-CREATE TABLE test_schema.test_table(
-	"id" INTEGER,
-	"bool_col" BOOLEAN,
-	"tinyint_col" TINYINT,
-	"smallint_col" SMALLINT,
-	"int_col" INTEGER,
-	"bigint_col" BIGINT,
-	"float_col" REAL,
-	"double_col" DOUBLE,
-	"date_string_col" VARCHAR,
-	"string_col" VARCHAR,
-	"timestamp_col" BIGINT,
-	"year" INTEGER,
-	"month" INTEGER);
-
