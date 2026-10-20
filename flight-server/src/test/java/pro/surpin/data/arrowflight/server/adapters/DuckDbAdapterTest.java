@@ -453,6 +453,37 @@ class DuckDbAdapterTest {
         assertEquals(2 * (1 + 2 + 3 + 4), rows.get());
     }
 
+    /**
+     * Verifies the statement cache (upstream's LRU inside our per-thread session) prepares a
+     * statement again after DuckDB closed it: a run-time error closes the cached statement, and
+     * reusing it would fail every later run of that SQL with "Statement was closed".
+     */
+    @Test
+    void streamSqlFailingAtRunTimeCanBeRunAgain() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "partial", true, true);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        when(listener.isReady()).thenReturn(true);
+        String failing = "SELECT CAST('x' || range AS INTEGER) AS v FROM range(0, 3)";
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            for (int run = 0; run < 3; run++) {
+                Exception e = assertThrows(Exception.class,
+                        () -> adapter.streamSql(allocator, failing, listener, true));
+                assertTrue(String.valueOf(e.getMessage()).contains("Conversion Error"),
+                        "run " + run + ": " + e.getMessage());
+            }
+            adapter.streamSql(allocator, "SELECT range AS id FROM range(0, 2)", listener, true);
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies stream completion is signalled immediately after the final batch. */
     @Test
     void streamSqlDoesNotAddPollingDelayAfterFinalBatch() throws Exception {
