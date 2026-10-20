@@ -99,6 +99,7 @@ public final class S3DataStore implements DataStore {
     private final AtomicBoolean refreshing = new AtomicBoolean();
     private final Object initialListing = new Object();
     private volatile Snapshot snapshot;
+    private final boolean ownsClient;
 
     /**
      * One complete listing of the data directory.
@@ -146,6 +147,24 @@ public final class S3DataStore implements DataStore {
      */
     public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
             LongSupplier nanoClock, ThreadFactory threads, String node) {
+        this(dataDirectory, settings, client, nanoClock, threads, node, true);
+    }
+
+    /**
+     * Creates a store that may share its client with other stores (the lakefs plugin keeps one
+     * store per pinned commit over one client).
+     *
+     * @param dataDirectory data directory, {@code s3://bucket/prefix}
+     * @param settings S3 settings
+     * @param client S3 client
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param threads creates the thread of background listings
+     * @param node name of this server node, for logs
+     * @param ownsClient whether {@link #close()} closes the client
+     */
+    public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
+            LongSupplier nanoClock, ThreadFactory threads, String node, boolean ownsClient) {
+        this.ownsClient = ownsClient;
         this.root = S3Uri.parse(dataDirectory);
         this.settings = Objects.requireNonNull(settings, "settings");
         this.client = Objects.requireNonNull(client, "client");
@@ -170,7 +189,7 @@ public final class S3DataStore implements DataStore {
      * @param settings S3 settings with credentials
      * @return S3 client
      */
-    static S3Client createClient(S3Settings settings) {
+    public static S3Client createClient(S3Settings settings) {
         if (System.getProperty(SdkSystemSetting.AWS_EC2_METADATA_DISABLED.property()) == null) {
             System.setProperty(SdkSystemSetting.AWS_EC2_METADATA_DISABLED.property(), "true");
         }
@@ -225,7 +244,7 @@ public final class S3DataStore implements DataStore {
      * @return trust managers
      * @throws IllegalArgumentException when the file holds no certificate or cannot be read
      */
-    static TrustManager[] trustManagers(Path caFile) {
+    public static TrustManager[] trustManagers(Path caFile) {
         try (InputStream input = Files.newInputStream(caFile)) {
             Collection<? extends Certificate> certificates =
                     CertificateFactory.getInstance("X.509").generateCertificates(input);
@@ -380,7 +399,9 @@ public final class S3DataStore implements DataStore {
     @Override
     public void close() {
         refresher.shutdownNow();
-        client.close();
+        if (ownsClient) {
+            client.close();
+        }
     }
 
     /**
@@ -394,7 +415,7 @@ public final class S3DataStore implements DataStore {
      * @param settings S3 settings with credentials
      * @param root data directory
      */
-    static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root) {
+    public static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root) {
         setup.loadExtension("httpfs");
         for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
                 "s3_session_token", "s3_endpoint", "s3_region")) {
