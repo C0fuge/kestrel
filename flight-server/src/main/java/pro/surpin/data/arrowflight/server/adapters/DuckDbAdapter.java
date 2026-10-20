@@ -486,6 +486,59 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Closes and forgets this thread's session when DuckDB reported an error after which its
+     * database is unusable: after a FATAL or INTERNAL error DuckDB invalidates the database, and
+     * every later statement of the session would fail with "database has been invalidated" until
+     * the server restarts. The thread's next query opens a fresh DuckDB.
+     *
+     * @param session this thread's session
+     * @param error   error of a statement run in that session
+     */
+    private void dropSessionIfInvalidated(Session session, Throwable error) {
+        if (!invalidatesDatabase(error)) {
+            return;
+        }
+        if (Thread.currentThread() == session.owner) {
+            threadSession.remove();
+        }
+        if (allSessions.remove(session)) {
+            session.close();
+            LOGGER.warn("node={} duckdb=sessionDropped reason=invalidated thread={} open={} error={}",
+                    LogUtil.node(), session.owner.getName(), allSessions.size(),
+                    firstLine(String.valueOf(error.getMessage())));
+        }
+    }
+
+    /**
+     * Tells whether an error, or one of its causes, leaves DuckDB's database invalidated.
+     *
+     * @param error error of a statement
+     * @return true for FATAL and INTERNAL errors and for "database has been invalidated"
+     */
+    static boolean invalidatesDatabase(Throwable error) {
+        for (Throwable e = error; e != null; e = e.getCause() == e ? null : e.getCause()) {
+            String message = e.getMessage();
+            if (message != null && (message.contains("FATAL Error")
+                    || message.contains("INTERNAL Error")
+                    || message.contains("database has been invalidated"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns the first line of a message.
+     *
+     * @param message message
+     * @return text before the first line break
+     */
+    private static String firstLine(String message) {
+        int end = message.indexOf('\n');
+        return end < 0 ? message : message.substring(0, end);
+    }
+
+    /**
      * Set DuckDB option if value is non-null
      * @param statement JDBC statement
      * @param optionName option name
@@ -571,6 +624,28 @@ public final class DuckDbAdapter implements AutoCloseable {
     public void streamSql(BufferAllocator allocator, String duckSql,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
+        Session session = threadSession.get();
+        try {
+            streamSql(session, allocator, duckSql, listener, startListener);
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Streams DuckDB SQL query results of one thread's session to a Flight listener.
+     *
+     * @param session      this thread's session
+     * @param allocator    Arrow buffer allocator
+     * @param duckSql      DuckDB SQL query
+     * @param listener     Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on query or stream failure
+     */
+    private void streamSql(Session session, BufferAllocator allocator, String duckSql,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            boolean startListener) throws Exception {
         String qid = LogUtil.qid();
         long t = LogUtil.mark();
         long streamStartNanos = System.nanoTime();
@@ -578,7 +653,6 @@ public final class DuckDbAdapter implements AutoCloseable {
                 qid, LogUtil.node(), Thread.currentThread().getName(), batchSize, duckSql);
         long firstBatchNanos = -1;
         long backpressureNanos = 0;
-        Session session = threadSession.get();
         // Filters of the other mode reach DuckDB as the client wrote them.
         requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
         PreparedStatement ps = session.statement(duckSql);
@@ -671,14 +745,17 @@ public final class DuckDbAdapter implements AutoCloseable {
     public org.apache.arrow.vector.types.pojo.Schema describeSql(BufferAllocator allocator,
             String duckSql) throws Exception {
         long t = LogUtil.mark();
-        Connection conn = threadSession.get().conn;
-        try (PreparedStatement ps = conn.prepareStatement(duckSql);
+        Session session = threadSession.get();
+        try (PreparedStatement ps = session.conn.prepareStatement(duckSql);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) ps.executeQuery();
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             org.apache.arrow.vector.types.pojo.Schema schema =
                     reader.getVectorSchemaRoot().getSchema();
             LogUtil.logTiming(t, "duckdb.describeSql", "fields=" + schema.getFields().size());
             return schema;
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
         }
     }
 
@@ -1064,6 +1141,32 @@ public final class DuckDbAdapter implements AutoCloseable {
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
         Session session = threadSession.get();
+        try {
+            streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Streams the complete answer of a client's query in one thread's session.
+     *
+     * @param session       this thread's session
+     * @param allocator     Arrow buffer allocator
+     * @param sql           client SQL
+     * @param parameters    values of the query's parameters, in order
+     * @param views         current view definitions
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on refusal, query or stream failure
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    private void streamComplete(Session session, BufferAllocator allocator, String sql,
+            List<Object> parameters,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            boolean startListener) throws Exception {
         if (session.viewsVersion != views.version()) {
             session.viewDrops = applyViews(session.conn, session.viewDrops,
                     views.dataStatements(), views.dropStatements());
@@ -1083,7 +1186,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         for (int i = 0; i < parameters.size(); i++) {
             ps.setObject(i + 1, parameters.get(i));
         }
-        streamSql(allocator, sql, listener, startListener);
+        streamSql(session, allocator, sql, listener, startListener);
     }
 
     /**
@@ -1118,7 +1221,31 @@ public final class DuckDbAdapter implements AutoCloseable {
             String sql, List<Object> parameters,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
-        Connection conn = describeConnection(sql, views);
+        Session session = threadSession.get();
+        try {
+            return describeComplete(session, allocator, sql, parameters, views);
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Returns the Arrow schema of a client's query in one thread's session.
+     *
+     * @param session    this thread's session
+     * @param allocator  Arrow buffer allocator
+     * @param sql        client SQL
+     * @param parameters values of the query's parameters, or an empty list
+     * @param views      current view definitions
+     * @return schema of the complete answer
+     * @throws Exception on refusal or when DuckDB rejects the query
+     */
+    private org.apache.arrow.vector.types.pojo.Schema describeComplete(Session session,
+            BufferAllocator allocator, String sql, List<Object> parameters,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
+            throws Exception {
+        Connection conn = describeConnection(session, sql, views);
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             requireQuery(sql, ps);
             java.sql.ParameterMetaData parameterMetaData = ps.getParameterMetaData();
@@ -1200,10 +1327,16 @@ public final class DuckDbAdapter implements AutoCloseable {
     public org.apache.arrow.vector.types.pojo.Schema describeParameters(String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
-        Connection conn = describeConnection(sql, views);
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            requireQuery(sql, ps);
-            return QueryParameters.schema(ps.getParameterMetaData());
+        Session session = threadSession.get();
+        try {
+            Connection conn = describeConnection(session, sql, views);
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                requireQuery(sql, ps);
+                return QueryParameters.schema(ps.getParameterMetaData());
+            }
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
         }
     }
 
@@ -1211,15 +1344,15 @@ public final class DuckDbAdapter implements AutoCloseable {
      * Returns this thread's DuckDB for describing, with current empty views, after checking that
      * the text is one query.
      *
-     * @param sql   client SQL
-     * @param views current view definitions
+     * @param session this thread's session
+     * @param sql     client SQL
+     * @param views   current view definitions
      * @return DuckDB connection
      * @throws Exception on refusal or when DuckDB cannot be opened
      */
-    private Connection describeConnection(String sql,
+    private static Connection describeConnection(Session session, String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
-        Session session = threadSession.get();
         if (session.describeConn == null) {
             session.describeConn = openDescribeConnection();
         }

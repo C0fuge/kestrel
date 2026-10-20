@@ -484,6 +484,60 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies which DuckDB errors leave the database invalidated. */
+    @Test
+    void recognisesErrorsThatInvalidateTheDatabase() {
+        assertTrue(DuckDbAdapter.invalidatesDatabase(new java.sql.SQLException(
+                "INTERNAL Error: Attempted to access index 0 within vector of size 0")));
+        assertTrue(DuckDbAdapter.invalidatesDatabase(new java.sql.SQLException(
+                "FATAL Error: Failed: database has been invalidated because of a previous fatal "
+                        + "error. The database must be restarted prior to being used again.")));
+        assertTrue(DuckDbAdapter.invalidatesDatabase(new RuntimeException("stream failed",
+                new java.io.IOException("database has been invalidated"))));
+        assertFalse(DuckDbAdapter.invalidatesDatabase(new java.sql.SQLException(
+                "Conversion Error: Could not convert string 'x0' to INT32")));
+        assertFalse(DuckDbAdapter.invalidatesDatabase(new java.sql.SQLException((String) null)));
+    }
+
+    /**
+     * Verifies a thread whose DuckDB reported an error that invalidates the database gets a fresh
+     * DuckDB for its next query, while an ordinary error keeps the session. The invalidating error
+     * is simulated with DuckDB's error() function carrying the text of such an error.
+     */
+    @Test
+    void sessionIsReplacedAfterAnErrorThatInvalidatesTheDatabase() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "partial", true, true);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        when(listener.isReady()).thenReturn(true);
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            java.sql.Connection first = adapter.connection();
+            assertThrows(Exception.class, () -> adapter.streamSql(allocator,
+                    "SELECT CAST('x' || range AS INTEGER) AS v FROM range(0, 3)", listener, true));
+            assertSame(first, adapter.connection(), "an ordinary error keeps the session");
+
+            Exception e = assertThrows(Exception.class, () -> adapter.streamSql(allocator,
+                    "SELECT error('INTERNAL Error: simulated ' || range) FROM range(0, 1)",
+                    listener, true));
+            assertTrue(DuckDbAdapter.invalidatesDatabase(e), e.getMessage());
+            assertTrue(first.isClosed(), "the invalidated DuckDB is closed");
+            assertEquals(0, adapter.openSessions());
+
+            java.sql.Connection fresh = adapter.connection();
+            assertNotSame(first, fresh);
+            assertEquals(1, adapter.openSessions());
+            adapter.streamSql(allocator, "SELECT range AS id FROM range(0, 2)", listener, true);
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies stream completion is signalled immediately after the final batch. */
     @Test
     void streamSqlDoesNotAddPollingDelayAfterFinalBatch() throws Exception {

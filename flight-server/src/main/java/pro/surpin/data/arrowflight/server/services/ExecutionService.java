@@ -553,6 +553,10 @@ public final class ExecutionService {
     private static void dropJoinViews(Connection conn, List<String> aliases)
             throws java.sql.SQLException {
         long tDrop = LogUtil.mark();
+        if (conn.isClosed()) {
+            // The session was dropped after DuckDB invalidated its database; its views are gone.
+            return;
+        }
         try (Statement stmt = conn.createStatement()) {
             for (String alias : aliases) {
                 try {
