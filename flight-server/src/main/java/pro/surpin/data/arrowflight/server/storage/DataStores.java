@@ -58,7 +58,7 @@ public final class DataStores {
     public static DataStore open(AppConfig config, Configuration hadoopConfig, String storageHost) {
         String dataDirectory = config.dataDir();
         if ("s3".equals(kindOf(dataDirectory))) {
-            return S3DataStore.open(config);
+            return new SpiDataStore(S3DataStore.open(config), null, "s3");
         }
         hadoopConfig.setInt("io.file.buffer.size", config.ioFileBufferSize());
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);

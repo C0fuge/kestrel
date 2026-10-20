@@ -44,7 +44,7 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.LogUtil;
-import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.math.BigDecimal;

@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
-import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.io.IOException;

@@ -1,4 +1,4 @@
-package pro.surpin.data.arrowflight.server.storage;
+package pro.surpin.data.arrowflight.spi.storage;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -8,7 +8,7 @@ import java.util.Set;
 /**
  * One data file as its store lists it.
  *
- * @param relativePath path below the data directory, the name used in tickets and inventories
+ * @param relativePath path below the store's root, the name used in tickets and inventories
  * @param location the store's own name for the file, used to open it and to name it to DuckDB
  * @param size file length in bytes
  * @param modificationTime modification time in milliseconds since the epoch
@@ -21,7 +21,7 @@ public record DataFile(String relativePath, String location, long size, long mod
     /**
      * Creates a data file and keeps its own copy of the hosts, in their order.
      *
-     * @param relativePath path below the data directory
+     * @param relativePath path below the store's root
      * @param location the store's own name for the file
      * @param size file length in bytes
      * @param modificationTime modification time in milliseconds since the epoch

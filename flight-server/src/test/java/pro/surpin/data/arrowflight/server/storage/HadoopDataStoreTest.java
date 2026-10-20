@@ -23,6 +23,10 @@ import java.util.Set;
 
 import org.apache.parquet.io.InputFile;
 
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
+
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -78,7 +82,10 @@ class HadoopDataStoreTest {
         assertFalse(store.shared());
         assertTrue(store.hasLocality());
         assertEquals(root.toString(), store.root());
-        assertEquals(List.of(), store.duckDbSetupStatements());
+        assertEquals(List.of(), new DuckDbSetupValidator(name -> {
+            throw new AssertionError("no extension expected: " + name);
+        }).plan(DuckDbSetupValidator.Contribution.ofStore("hadoop", store), List.of(), List.of())
+                .statements());
     }
 
     /** Verifies schemas and tables are the directories of the first two levels. */

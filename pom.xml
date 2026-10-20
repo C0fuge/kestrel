@@ -8,6 +8,7 @@
     <version>1.0.0</version>
     <packaging>pom</packaging>
     <modules>
+        <module>flight-spi</module>
         <module>flight-server</module>
         <module>flight-client-core</module>
         <module>flight-spark</module>

@@ -20,7 +20,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -121,7 +125,8 @@ class S3IntegrationTest {
             assertEquals(5000, rs.getLong(1));
             assertEquals(5000L * 4999 / 2, rs.getLong(2));
         }
-        try (ParquetFileReader reader = ParquetFileReader.open(store.inputFile(file))) {
+        try (ParquetFileReader reader = ParquetFileReader.open(
+                ParquetInputFiles.of(store.open(file), file.location()))) {
             assertEquals(5000, reader.getRecordCount());
         }
     }
@@ -214,11 +219,13 @@ class S3IntegrationTest {
         Assumptions.assumeTrue(s3 != null, "fake S3 only");
         S3Settings settings = settings(null);
         store = new S3DataStore("s3://" + bucket + "/flight-it", settings, S3DataStore.createClient(settings));
-        List<String> unsafe = store.duckDbSetupStatements().stream()
+        DuckDbSetupPlan plan = plan();
+        List<String> unsafe = plan.statements().stream()
                 .map(st -> st.replace("s3_url_compatibility_mode = true", "s3_url_compatibility_mode = false")
                         .replace("URL_COMPATIBILITY_MODE true", "URL_COMPATIBILITY_MODE false"))
                 .toList();
-        duckDb = new DuckDbAdapter(config(settings), ioPool, store.duckDbRoots(), unsafe);
+        duckDb = new DuckDbAdapter(config(settings), ioPool, new DuckDbSetupPlan(unsafe, plan.roots(),
+                plan.extraRefusedFunctions(), plan.redactor(), plan.extensions(), plan.secrets()));
         int evilPort = Integer.parseInt(evil.endpoint().substring(evil.endpoint().lastIndexOf(':') + 1));
 
         try (Statement s = duckDb.connection().createStatement();
@@ -269,7 +276,12 @@ class S3IntegrationTest {
 
     private void open(S3Settings settings) {
         store = new S3DataStore("s3://" + bucket + "/flight-it", settings, S3DataStore.createClient(settings));
-        duckDb = new DuckDbAdapter(config(settings), ioPool, store.duckDbRoots(), store.duckDbSetupStatements());
+        duckDb = new DuckDbAdapter(config(settings), ioPool, plan());
+    }
+
+    private DuckDbSetupPlan plan() {
+        return new DuckDbSetupValidator(name -> httpfs).plan(
+                DuckDbSetupValidator.Contribution.ofStore("s3", store), List.of(), List.of());
     }
 
     private AppConfig config(S3Settings settings) {

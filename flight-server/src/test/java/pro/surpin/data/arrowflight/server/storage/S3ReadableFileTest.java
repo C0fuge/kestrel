@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server.storage;
 
+import org.apache.parquet.io.InputFile;
 import org.apache.parquet.io.SeekableInputStream;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -16,14 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Tests ranged reads of an S3 object. */
 @Tag("unit")
-class S3InputFileTest {
+class S3ReadableFileTest {
 
     private static final int LENGTH = 300_000;
 
     private final byte[] data = new byte[LENGTH];
     private final List<long[]> requests = new ArrayList<>();
 
-    S3InputFileTest() {
+    S3ReadableFileTest() {
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 31);
         }
@@ -43,8 +44,8 @@ class S3InputFileTest {
             assertArrayEquals(Arrays.copyOfRange(data, LENGTH - 8, LENGTH), tail);
             assertArrayEquals(Arrays.copyOfRange(data, LENGTH - 8 - footer.length, LENGTH - 8), footer);
             assertEquals(1, requests.size());
-            assertEquals(LENGTH - S3InputFile.BLOCK_SIZE, requests.get(0)[0]);
-            assertEquals(S3InputFile.BLOCK_SIZE, requests.get(0)[1]);
+            assertEquals(LENGTH - S3ReadableFile.BLOCK_SIZE, requests.get(0)[0]);
+            assertEquals(S3ReadableFile.BLOCK_SIZE, requests.get(0)[1]);
         }
     }
 
@@ -61,7 +62,7 @@ class S3InputFileTest {
             assertArrayEquals(Arrays.copyOfRange(data, 5000, 105_000), buffer.array());
             assertEquals(105_000, in.getPos());
             assertEquals(1000, requests.get(0)[0]);
-            assertEquals(S3InputFile.BLOCK_SIZE, requests.get(0)[1]);
+            assertEquals(S3ReadableFile.BLOCK_SIZE, requests.get(0)[1]);
         }
     }
 
@@ -80,8 +81,26 @@ class S3InputFileTest {
         }
     }
 
-    private S3InputFile file() {
-        return new S3InputFile((start, count) -> {
+    /** Verifies positional reads straight on the readable file, across blocks. */
+    @Test
+    void positionalReadsAcrossBlocks() throws Exception {
+        S3ReadableFile file = readable();
+        byte[] bytes = new byte[150_000];
+        file.readFully(10, bytes, 0, bytes.length);
+
+        assertArrayEquals(Arrays.copyOfRange(data, 10, 150_010), bytes);
+        assertEquals(1, requests.size());
+        assertEquals(150_000, requests.get(0)[1]);
+        assertThrows(EOFException.class, () -> file.readFully(LENGTH - 1, new byte[2], 0, 2));
+        assertThrows(EOFException.class, () -> file.readFully(-1, new byte[2], 0, 2));
+    }
+
+    private InputFile file() {
+        return ParquetInputFiles.of(readable(), "s3://lake/x.parquet");
+    }
+
+    private S3ReadableFile readable() {
+        return new S3ReadableFile((start, count) -> {
             requests.add(new long[] {start, count});
             return Arrays.copyOfRange(data, (int) start, (int) start + count);
         }, "s3://lake/x.parquet", LENGTH);

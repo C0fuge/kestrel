@@ -1094,6 +1094,17 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies functions a plugin refuses are refused in client queries too, on top of ours. */
+    @Test
+    void pluginRefusalsReachTheQueryCheck() {
+        pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.addAll(
+                java.util.Set.of("Fixture_Refused_Fn"));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> DuckDbAdapter.requireAllowedFunctions("{\"function_name\":\"fixture_refused_fn\"}"));
+        assertTrue(e.getMessage().contains("fixture_refused_fn"));
+        DuckDbAdapter.requireAllowedFunctions("{\"function_name\":\"sum\"}");
+    }
+
     /** Verifies DuckDB neither reads nor writes persistent secrets. */
     @Test
     void persistentSecretsAreDisabled() throws Exception {

@@ -1,6 +1,5 @@
 package pro.surpin.data.arrowflight.server.storage;
 
-import org.apache.parquet.io.InputFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,6 +61,11 @@ import javax.net.ssl.TrustManagerFactory;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
+import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataStore;
+import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 
 /**
  * Data directory below a key prefix of an S3 bucket, read only.
@@ -73,9 +77,9 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
  * until the new one is complete. Objects have no hosts: every node reads every file equally.
  *
  * <p>The Java client reads only listings and Parquet footers; DuckDB reads the data through its
- * httpfs extension, set up by {@link #duckDbSetupStatements()}.
+ * httpfs extension, set up by {@link #contributeDuckDb(DuckDbSetup)}.
  */
-public final class S3DataStore implements DataStore, AutoCloseable {
+public final class S3DataStore implements DataStore {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(S3DataStore.class);
     private static final String PARQUET_EXTENSION = ".parquet";
@@ -89,7 +93,6 @@ public final class S3DataStore implements DataStore, AutoCloseable {
     private final S3Client client;
     private final long listingTtlNanos;
     private final LongSupplier nanoClock;
-    private final List<String> setupStatements;
     private final ExecutorService refresher;
     private final AtomicBoolean refreshing = new AtomicBoolean();
     private final Object initialListing = new Object();
@@ -131,7 +134,6 @@ public final class S3DataStore implements DataStore, AutoCloseable {
         this.client = Objects.requireNonNull(client, "client");
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
         this.listingTtlNanos = TimeUnit.SECONDS.toNanos(settings.listingTtlSeconds());
-        this.setupStatements = List.copyOf(duckDbSetupStatements(settings, root));
         this.refresher = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "s3-listing");
             t.setDaemon(true);
@@ -346,14 +348,14 @@ public final class S3DataStore implements DataStore, AutoCloseable {
     }
 
     @Override
-    public InputFile inputFile(String relativePath) throws IOException {
-        return inputFile(file(relativePath));
+    public ReadableFile open(String relativePath) throws IOException {
+        return open(file(relativePath));
     }
 
     @Override
-    public InputFile inputFile(DataFile file) {
+    public ReadableFile open(DataFile file) {
         String key = root.key(file.relativePath());
-        return new S3InputFile((start, count) -> readRange(key, start, count),
+        return new S3ReadableFile((start, count) -> readRange(key, start, count),
                 root.objectUri(key), file.size());
     }
 
@@ -373,8 +375,8 @@ public final class S3DataStore implements DataStore, AutoCloseable {
     }
 
     @Override
-    public List<String> duckDbSetupStatements() {
-        return setupStatements;
+    public void contributeDuckDb(DuckDbSetup setup) {
+        contribute(setup, settings, root);
     }
 
     @Override
@@ -390,55 +392,50 @@ public final class S3DataStore implements DataStore, AutoCloseable {
     }
 
     /**
-     * Builds the statements that let a DuckDB connection read the data directory and nothing
-     * else on S3. The settings httpfs fills from AWS_* and DUCKDB_S3_* environment variables are
-     * blanked; the credentials go into a temporary secret scoped to the data directory, never
-     * into a setting, because settings can be read back; query parameters on s3:// URLs, which
-     * could point a read at another endpoint, are switched off.
+     * Describes what lets a DuckDB connection read the data directory and nothing else on S3.
+     * The settings httpfs fills from AWS_* and DUCKDB_S3_* environment variables are blanked;
+     * the credentials go into a temporary secret scoped to the data directory, never into a
+     * setting, because settings can be read back; query parameters on s3:// URLs, which could
+     * point a read at another endpoint, are switched off.
      *
+     * @param setup receives the extension, settings and secret, in this order
      * @param settings S3 settings with credentials
      * @param root data directory
-     * @return setup statements, run in this order before the lockdown
      */
-    static List<String> duckDbSetupStatements(S3Settings settings, S3Uri root) {
-        List<String> statements = new ArrayList<>();
+    static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root) {
         if (settings.httpfsExtension() != null) {
-            statements.add("LOAD " + literal(settings.httpfsExtension()));
+            setup.loadExtension("httpfs");
         }
         for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
                 "s3_session_token", "s3_endpoint", "s3_region")) {
-            statements.add("SET " + setting + " = ''");
+            setup.set(setting, "");
         }
-        statements.add("SET s3_url_compatibility_mode = true");
-        statements.add("SET enable_http_logging = false");
+        setup.set("s3_url_compatibility_mode", true);
+        setup.set("enable_http_logging", false);
         if (settings.useSsl()) {
-            statements.add("SET enable_server_cert_verification = " + settings.verifyTls());
+            setup.set("enable_server_cert_verification", settings.verifyTls());
             if (settings.caFile() != null) {
-                statements.add("SET ca_cert_file = " + literal(settings.caFile()));
+                setup.set("ca_cert_file", settings.caFile());
             }
         }
         if (settings.metadataCache()) {
-            statements.add("SET parquet_metadata_cache = true");
-            statements.add("SET enable_http_metadata_cache = true");
+            setup.set("parquet_metadata_cache", true);
+            setup.set("enable_http_metadata_cache", true);
         }
-        StringBuilder secret = new StringBuilder("CREATE TEMPORARY SECRET ")
-                .append(DUCKDB_SECRET_NAME).append(" (TYPE s3");
+        Map<String, SecretValue> options = new LinkedHashMap<>();
         if (settings.hasCredentials()) {
-            secret.append(", KEY_ID ").append(literal(settings.accessKey()))
-                    .append(", SECRET ").append(literal(settings.secretKey()));
+            options.put("KEY_ID", SecretValue.plain(settings.accessKey()));
+            options.put("SECRET", SecretValue.sensitive(settings.secretKey()));
             if (settings.sessionToken() != null) {
-                secret.append(", SESSION_TOKEN ").append(literal(settings.sessionToken()));
+                options.put("SESSION_TOKEN", SecretValue.sensitive(settings.sessionToken()));
             }
         }
-        secret.append(", REGION ").append(literal(settings.region()))
-                .append(", ENDPOINT ").append(literal(settings.duckDbEndpoint()))
-                .append(", URL_STYLE ").append(literal(settings.urlStyle()))
-                .append(", USE_SSL ").append(settings.useSsl())
-                .append(", URL_COMPATIBILITY_MODE true")
-                .append(", SCOPE ").append(literal(root.root()))
-                .append(')');
-        statements.add(secret.toString());
-        return statements;
+        options.put("REGION", SecretValue.plain(settings.region()));
+        options.put("ENDPOINT", SecretValue.plain(settings.duckDbEndpoint()));
+        options.put("URL_STYLE", SecretValue.plain(settings.urlStyle()));
+        options.put("USE_SSL", SecretValue.of(settings.useSsl()));
+        options.put("URL_COMPATIBILITY_MODE", SecretValue.of(true));
+        setup.createSecret(DUCKDB_SECRET_NAME, "s3", root.root(), options);
     }
 
     /**
@@ -666,15 +663,5 @@ public final class S3DataStore implements DataStore, AutoCloseable {
      */
     private static boolean isParquet(String path) {
         return path.toLowerCase(Locale.ROOT).endsWith(PARQUET_EXTENSION);
-    }
-
-    /**
-     * Quotes a value as a DuckDB string literal.
-     *
-     * @param value value
-     * @return literal
-     */
-    private static String literal(String value) {
-        return "'" + value.replace("'", "''") + "'";
     }
 }

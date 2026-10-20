@@ -354,7 +354,7 @@ public final class QueryPlanner {
             for (String tableName : new java.util.TreeSet<>(
                     parquetAdapter.getTables(schemaName, null).keySet())) {
                 if (tableName.equalsIgnoreCase(table)) {
-                    for (pro.surpin.data.arrowflight.server.storage.DataFile file
+                    for (pro.surpin.data.arrowflight.spi.storage.DataFile file
                             : parquetAdapter.tableFiles(schemaName, tableName)) {
                         result.putIfAbsent(file.relativePath(),
                                 new FileAssignment(file.size(), Set.of()));

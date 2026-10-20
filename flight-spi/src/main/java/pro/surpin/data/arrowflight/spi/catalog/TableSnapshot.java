@@ -1,0 +1,42 @@
+package pro.surpin.data.arrowflight.spi.catalog;
+
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * The readable content of a table at one point in time.
+ *
+ * @param name table name
+ * @param snapshotId opaque snapshot ID (Iceberg snapshot ID; for other catalogs a hash of the
+ *                   files); another node reads the same snapshot through it
+ * @param fingerprint changes whenever the readable content changes; views and caches key on it
+ * @param columns declared columns; empty when the server should read the first file's footer
+ * @param partitionColumns partition columns whose values are not stored in the files
+ * @param files data files, in a stable order
+ * @param read how the files are read
+ */
+public record TableSnapshot(TableName name, String snapshotId, String fingerprint,
+        List<ColumnSpec> columns, List<String> partitionColumns, List<TableFile> files,
+        ReadSpec read) {
+
+    /**
+     * Checks the parts and copies the lists.
+     *
+     * @param name table name
+     * @param snapshotId snapshot ID
+     * @param fingerprint content fingerprint
+     * @param columns declared columns
+     * @param partitionColumns partition columns
+     * @param files data files
+     * @param read read specification
+     */
+    public TableSnapshot {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(snapshotId, "snapshotId");
+        Objects.requireNonNull(fingerprint, "fingerprint");
+        Objects.requireNonNull(read, "read");
+        columns = columns == null ? List.of() : List.copyOf(columns);
+        partitionColumns = partitionColumns == null ? List.of() : List.copyOf(partitionColumns);
+        files = files == null ? List.of() : List.copyOf(files);
+    }
+}

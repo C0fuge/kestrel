@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -29,7 +28,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
-import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**

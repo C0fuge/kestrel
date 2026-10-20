@@ -24,7 +24,10 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
@@ -198,8 +201,10 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, DataStore store) {
-        return new DuckDbAdapter(config, ioPool, store.duckDbRoots(),
-                store.duckDbSetupStatements());
+        return new DuckDbAdapter(config, ioPool,
+                new DuckDbSetupValidator(new DuckDbExtensions(ConfigSource.system())).plan(
+                        DuckDbSetupValidator.Contribution.ofStore(store.kind(), store),
+                        List.of(), List.of()));
     }
 
     /**

@@ -22,6 +22,11 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
+
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -204,14 +209,15 @@ class S3DataStoreTest {
         s3.clearRequests();
 
         long rows;
-        try (ParquetFileReader reader = ParquetFileReader.open(store.inputFile(listed))) {
+        try (ParquetFileReader reader = ParquetFileReader.open(
+                ParquetInputFiles.of(store.open(listed), listed.location()))) {
             rows = reader.getFooter().getBlocks().stream().mapToLong(BlockMetaData::getRowCount).sum();
         }
 
         assertEquals(5000, rows);
         assertEquals(1, s3.count("GET"), "requests: " + s3.requests());
         String range = s3.requests().get(0).headers().get("range");
-        long start = Math.max(0, data.length - S3InputFile.BLOCK_SIZE);
+        long start = Math.max(0, data.length - S3ReadableFile.BLOCK_SIZE);
         assertEquals("bytes=" + start + "-" + (data.length - 1), range);
     }
 
@@ -250,15 +256,19 @@ class S3DataStoreTest {
         }
     }
 
-    /** Verifies the DuckDB setup: settings blanked, credentials only in a scoped secret. */
+    /**
+     * Golden: the DuckDB setup written by the validator from the store's typed contribution is
+     * exactly the statement list S3DataStore wrote itself before the SPI: settings blanked,
+     * credentials only in a scoped secret.
+     */
     @Test
-    void duckDbSetupStatements() {
+    void duckDbSetupStatements(@TempDir Path dir) throws IOException {
+        Path ca = Files.writeString(dir.resolve("ca.pem"), "pem");
         S3Settings settings = new S3Settings("https://s3.local:9443", "eu-west-3", "vhost",
-                "/etc/ca.pem", true, "AKIATEST", "SEC'RET", null, 30, 4,
+                ca.toString(), true, "AKIATEST", "SEC'RET", null, 30, 4,
                 "/ext/httpfs.duckdb_extension", true);
 
-        List<String> statements = S3DataStore.duckDbSetupStatements(settings,
-                S3Uri.parse("s3a://lake/parquet/"));
+        DuckDbSetupPlan plan = plan(settings, "s3a://lake/parquet/");
 
         assertEquals(List.of(
                 "LOAD '/ext/httpfs.duckdb_extension'",
@@ -270,30 +280,79 @@ class S3DataStoreTest {
                 "SET s3_url_compatibility_mode = true",
                 "SET enable_http_logging = false",
                 "SET enable_server_cert_verification = true",
-                "SET ca_cert_file = '/etc/ca.pem'",
+                "SET ca_cert_file = '" + ca + "'",
                 "SET parquet_metadata_cache = true",
                 "SET enable_http_metadata_cache = true",
                 "CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIATEST', SECRET 'SEC''RET',"
                         + " REGION 'eu-west-3', ENDPOINT 's3.local:9443', URL_STYLE 'vhost',"
                         + " USE_SSL true, URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/parquet/')"),
-                statements);
-        assertEquals(1, statements.stream().filter(st -> st.contains("SEC''RET")).count());
+                plan.statements());
+        assertEquals(1, plan.statements().stream().filter(st -> st.contains("SEC''RET")).count());
+        assertEquals(List.of("s3://lake/parquet/"), plan.roots());
+        assertEquals(List.of(new DuckDbSetupPlan.DeclaredSecret("flight_s3", "s3://lake/parquet/")),
+                plan.secrets());
+        assertEquals("x *** y", plan.redactor().redact("x SEC'RET y"));
     }
 
-    /** Verifies plain HTTP leaves the certificate settings alone and the cache can be off. */
+    /** Golden: plain HTTP leaves the certificate settings alone and the cache can be off. */
     @Test
     void duckDbSetupOverPlainHttp() {
         S3Settings settings = new S3Settings("http://minio:9000", null, null, null, true,
                 "AKIATEST", "SECRETTEST", "TOKEN", 30, 4, "/ext/httpfs.duckdb_extension", false);
 
-        List<String> statements = S3DataStore.duckDbSetupStatements(settings, S3Uri.parse("s3://lake"));
+        DuckDbSetupPlan plan = plan(settings, "s3://lake");
+        List<String> statements = plan.statements();
 
-        assertTrue(statements.stream().noneMatch(st -> st.contains("cert")), statements.toString());
-        assertTrue(statements.stream().noneMatch(st -> st.contains("metadata_cache")));
-        assertEquals("CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIATEST',"
+        assertEquals(List.of(
+                "LOAD '/ext/httpfs.duckdb_extension'",
+                "SET s3_access_key_id = ''",
+                "SET s3_secret_access_key = ''",
+                "SET s3_session_token = ''",
+                "SET s3_endpoint = ''",
+                "SET s3_region = ''",
+                "SET s3_url_compatibility_mode = true",
+                "SET enable_http_logging = false",
+                "CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIATEST',"
                 + " SECRET 'SECRETTEST', SESSION_TOKEN 'TOKEN', REGION 'us-east-1',"
                 + " ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false,"
-                + " URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/')", statements.get(statements.size() - 1));
+                + " URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/')"), statements);
+        assertEquals("*** ***", plan.redactor().redact("SECRETTEST TOKEN"));
+    }
+
+    /** Golden: without credentials or an extension the secret has no keys and nothing is loaded. */
+    @Test
+    void duckDbSetupWithoutCredentials() {
+        S3Settings settings = new S3Settings("https://s3.local", null, null, null, false,
+                null, null, null, 30, 4, null, true);
+
+        List<String> statements = plan(settings, "s3://lake/a/b").statements();
+
+        assertEquals(List.of(
+                "SET s3_access_key_id = ''",
+                "SET s3_secret_access_key = ''",
+                "SET s3_session_token = ''",
+                "SET s3_endpoint = ''",
+                "SET s3_region = ''",
+                "SET s3_url_compatibility_mode = true",
+                "SET enable_http_logging = false",
+                "SET enable_server_cert_verification = false",
+                "SET parquet_metadata_cache = true",
+                "SET enable_http_metadata_cache = true",
+                "CREATE TEMPORARY SECRET flight_s3 (TYPE s3, REGION 'us-east-1',"
+                + " ENDPOINT 's3.local', URL_STYLE 'path', USE_SSL true,"
+                + " URL_COMPATIBILITY_MODE true, SCOPE 's3://lake/a/b/')"), statements);
+    }
+
+    private static DuckDbSetupPlan plan(S3Settings settings, String dataDirectory) {
+        S3DataStore s3Store = new S3DataStore(dataDirectory, settings,
+                S3DataStore.createClient(new S3Settings("http://127.0.0.1:1", null, null, null, true,
+                        "A", "B", null, 30, 1, null, true)));
+        try {
+            return new DuckDbSetupValidator(name -> "/ext/" + name + ".duckdb_extension").plan(
+                    DuckDbSetupValidator.Contribution.ofStore("s3", s3Store), List.of(), List.of());
+        } finally {
+            s3Store.close();
+        }
     }
 
     private S3DataStore store(int ttlSeconds) {
