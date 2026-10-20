@@ -62,7 +62,9 @@
         <arrow.version>19.0.0</arrow.version>
         <guava.version>32.1.3-jre</guava.version>
         <jooq.version>3.21.6</jooq.version>
-        <duckdb.version>1.5.6.0</duckdb.version>
+        <!-- Pinned to 1.4.1: the hadoopfs (docker/scripts/build_duckdb_hdfs.sh) and httpfs extension
+             files are built for DuckDB v1.4.1 and newer DuckDB refuses to load them. Bump together. -->
+        <duckdb.version>1.4.1.0</duckdb.version>
         <spark.version>3.5.9</spark.version>
         <grpc.version>1.84.2</grpc.version>
         <netty.version>4.2.9.Final</netty.version>

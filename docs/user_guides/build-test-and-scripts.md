@@ -7,7 +7,10 @@ This guide explains how to set up the project locally or on a server, how to run
 You need:
 
 - Linux/WSL or a Linux server
-- JDK 21
+- JDK 21 (build and run time). Newer JDKs (24+) do not work: Netty 4.2 then gives Arrow no
+  Unsafe memory address and the Arrow `RootAllocator` fails to start (28 server tests error on JDK 25).
+- DuckDB is pinned to 1.4.1 (`duckdb.version` in `flight-server/pom.xml`) because the `hadoopfs`
+  and `httpfs` extension files are built for v1.4.1; DuckDB refuses extensions of another version.
 - Maven
 - Git
 - Hadoop/Spark environment for HDFS/Spark scenarios

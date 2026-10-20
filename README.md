@@ -25,7 +25,7 @@ High-performance **Arrow Flight SQL** server for analytical queries on Parquet d
 git clone https://github.com/VadimSurpin/arrow-flight-server.git
 cd arrow-flight-server
 
-# Build (Java 21 required, Maven Wrapper included — no Maven install needed)
+# Build (Java 21 required for build and run — Netty 4.2 + Arrow fail on JDK 24+; Maven Wrapper included)
 ./mvnw package -DskipTests
 
 # Start a single-node server with test data

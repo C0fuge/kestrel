@@ -7,7 +7,10 @@
 Нужны:
 
 - Linux/WSL или серверная Linux-машина
-- JDK 21
+- JDK 21 (для сборки и запуска). Более новые JDK (24+) не подходят: Netty 4.2 не отдаёт Arrow
+  адрес памяти через Unsafe, и `RootAllocator` Arrow не запускается (на JDK 25 падают 28 тестов сервера).
+- DuckDB закреплён на 1.4.1 (`duckdb.version` в `flight-server/pom.xml`): расширения `hadoopfs`
+  и `httpfs` собраны для v1.4.1, другую версию DuckDB не загружает.
 - Maven
 - Git
 - Hadoop/Spark окружение, если запускаются HDFS/Spark сценарии
