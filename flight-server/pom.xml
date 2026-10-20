@@ -309,12 +309,6 @@
             <version>4.34.1</version>
         </dependency>
 
-        <dependency>
-            <groupId>org.apache.calcite</groupId>
-            <artifactId>calcite-arrow</artifactId>
-            <version>1.42.0</version>
-        </dependency>
-
         <!-- Apache Spark -->
         <!-- Core Spark functions -->
         <dependency>
@@ -442,6 +436,7 @@
                 <version>3.6.2</version>
                 <executions>
                     <execution>
+                        <id>shade</id>
                         <phase>package</phase>
                         <goals>
                             <goal>shade</goal>
@@ -531,5 +526,59 @@
         </plugins>
     </build>
 
+    <profiles>
+        <!-- Server jar for Linux on x86-64 and ARM64 only (-Plinux-only): leaves out the DuckDB,
+             zstd-jni and netty-tcnative native libraries of other platforms. -->
+        <profile>
+            <id>linux-only</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-shade-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>shade</id>
+                                <configuration>
+                                    <artifactSet>
+                                        <excludes combine.children="append">
+                                            <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-x86_64</exclude>
+                                            <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-aarch_64</exclude>
+                                            <exclude>io.netty:netty-tcnative-boringssl-static:jar:windows-x86_64</exclude>
+                                        </excludes>
+                                    </artifactSet>
+                                    <filters combine.children="append">
+                                        <filter>
+                                            <artifact>org.duckdb:duckdb_jdbc</artifact>
+                                            <excludes>
+                                                <exclude>libduckdb_java.so_osx_*</exclude>
+                                                <exclude>libduckdb_java.so_windows_*</exclude>
+                                            </excludes>
+                                        </filter>
+                                        <filter>
+                                            <artifact>com.github.luben:zstd-jni</artifact>
+                                            <excludes>
+                                                <exclude>darwin/**</exclude>
+                                                <exclude>freebsd/**</exclude>
+                                                <exclude>win/**</exclude>
+                                                <exclude>linux/arm/**</exclude>
+                                                <exclude>linux/i386/**</exclude>
+                                                <exclude>linux/loongarch64/**</exclude>
+                                                <exclude>linux/mips64/**</exclude>
+                                                <exclude>linux/ppc64/**</exclude>
+                                                <exclude>linux/ppc64le/**</exclude>
+                                                <exclude>linux/riscv64/**</exclude>
+                                                <exclude>linux/s390x/**</exclude>
+                                            </excludes>
+                                        </filter>
+                                    </filters>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

@@ -24,6 +24,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Nodes beat every 3 s and are left out after 10 s (was 15 s / 45 s).
 - A DuckDB statement closed by a failed run is prepared again instead of failing every later
   run of the same SQL with "Statement was closed".
+- After a DuckDB error that invalidates its database (FATAL or INTERNAL, e.g. a hash-aggregate
+  failure under memory pressure) the thread's DuckDB is closed and replaced; before, every
+  later query on that thread failed with "database has been invalidated" until a restart.
 - Releasing the load of an endpoint no longer puts a node that was removed as stale back into
   the registry (where, without heartbeats, it counted as a node that had just started).
 
@@ -60,6 +63,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Package renamed from `net.surpin` to `pro.surpin`
 
 ### Changed
+- Metadata endpoints (catalogs, schemas, tables, SqlInfo, type info) carry no location by
+  default: clients read them over their own connection (stock JDBC metadata 1.4-1.6x faster in
+  plaintext, 3.2x with TLS). `metadataEndpointLocation=advertised`
+  (`FLIGHT_METADATA_ENDPOINT_LOCATION`) restores the advertised server URI.
+- DuckDB is pinned to 1.4.1.0: the hadoopfs and httpfs extension files are built for v1.4.1.
+  The server needs JDK 21 (Netty 4.2 + Arrow fail on JDK 24+).
+- Calcite and with it Arrow Gandiva are gone from the server jar (318 MB -> 166 MB): the DDL
+  logged at startup names its types itself, with the same names. `-Plinux-only` leaves out the
+  DuckDB, zstd-jni and netty-tcnative native libraries of other platforms than Linux
+  x86-64/ARM64 (113 MB).
 - GitHub Actions pinned to full commit SHAs (supply-chain hardening)
 - `groupId` updated from `com.example` to `pro.surpin.arrowflight`
 - SonarCloud project key and organization updated to `VadimSurpin`

@@ -421,14 +421,13 @@ class ParquetAdapterTest {
         assertFalse(ParquetAdapter.createLikePredicate("a.c").test("abc"));
     }
 
-    /** Verifies column types Calcite does not know are named instead of failing startup. */
+    /** Verifies column types without a SQL name are named instead of failing startup. */
     @Test
-    void ddlTypeNameToleratesTypesWithoutCalciteMapping() {
-        org.apache.calcite.jdbc.JavaTypeFactoryImpl factory =
-                new org.apache.calcite.jdbc.JavaTypeFactoryImpl(
-                        org.apache.calcite.rel.type.RelDataTypeSystem.DEFAULT);
-
-        assertEquals("Binary", ParquetAdapter.ddlTypeName(new ArrowType.Binary(), factory));
-        assertEquals("INTEGER", ParquetAdapter.ddlTypeName(new ArrowType.Int(32, true), factory));
+    void ddlTypeNameToleratesTypesWithoutSqlName() {
+        assertEquals("Binary", DdlTypeNames.of(new ArrowType.Binary()));
+        assertEquals("INTEGER", DdlTypeNames.of(new ArrowType.Int(32, true)));
+        assertEquals("DECIMAL(19, 10)", DdlTypeNames.of(new ArrowType.Decimal(38, 10, 128)));
+        assertEquals("BIGINT", DdlTypeNames.of(new ArrowType.Timestamp(
+                org.apache.arrow.vector.types.TimeUnit.MICROSECOND, "UTC")));
     }
 }

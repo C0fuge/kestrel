@@ -1,12 +1,7 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
-import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.calcite.adapter.arrow.ArrowFieldTypeFactory;
-import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
-import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.schema.MessageType;
 import org.slf4j.Logger;
@@ -45,7 +40,6 @@ public class ParquetAdapter {
     private final DataStore store;
     private final String dataDirectory;
     private final String localhost;
-    private final JavaTypeFactoryImpl typeFactory;
 
     private volatile CatalogSnapshot catalog;
     private final Map<TableKey, CachedTableSchema> arrowSchemaCache =
@@ -120,7 +114,6 @@ public class ParquetAdapter {
         this.store = Objects.requireNonNull(store, "store");
         this.dataDirectory = store.root();
         this.localhost = localhost;
-        this.typeFactory = new JavaTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
 
         refreshCatalog();
     }
@@ -438,7 +431,7 @@ public class ParquetAdapter {
                 result.append(",\n");
             }
             result.append("\t\"").append(field.getName()).append("\" ")
-                    .append(ddlTypeName(field.getType(), typeFactory));
+                    .append(DdlTypeNames.of(field.getType()));
         });
         result.append(")");
         return result.toString();
@@ -452,26 +445,6 @@ public class ParquetAdapter {
             throw new UncheckedIOException(e);
         }
     }
-
-    /**
-     * Names a column type for the informational DDL. Calcite has no type for binary, UUID,
-     * interval, list, struct or map; such a column must not stop the server from starting.
-     *
-     * @param type Arrow type of the column
-     * @param typeFactory Calcite type factory
-     * @return Calcite type name, or the Arrow type name when Calcite has none
-     */
-    static String ddlTypeName(ArrowType type, JavaTypeFactoryImpl typeFactory) {
-        try {
-            RelDataType relDataType = type.getTypeID() == ArrowType.ArrowTypeID.Timestamp
-                    ? ArrowFieldTypeFactory.toType(new ArrowType.Int(64, true), typeFactory)
-                    : ArrowFieldTypeFactory.toType(type, typeFactory);
-            return relDataType.toString();
-        } catch (RuntimeException e) {
-            return type.toString();
-        }
-    }
-
 
     /** Initializes cached DDL definitions for all discovered tables. */
     public void initCatalogReader() {
