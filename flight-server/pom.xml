@@ -545,6 +545,14 @@
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-x86_64</exclude>
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-aarch_64</exclude>
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:windows-x86_64</exclude>
+                                            <!-- Netty 4.2 (upstream U-00): HTTP/3 quiche, kqueue and macOS DNS natives -->
+                                            <exclude>io.netty:netty-codec-native-quic:jar:osx-x86_64</exclude>
+                                            <exclude>io.netty:netty-codec-native-quic:jar:osx-aarch_64</exclude>
+                                            <exclude>io.netty:netty-codec-native-quic:jar:windows-x86_64</exclude>
+                                            <exclude>io.netty:netty-transport-native-kqueue:jar:osx-x86_64</exclude>
+                                            <exclude>io.netty:netty-transport-native-kqueue:jar:osx-aarch_64</exclude>
+                                            <exclude>io.netty:netty-resolver-dns-native-macos:jar:osx-x86_64</exclude>
+                                            <exclude>io.netty:netty-resolver-dns-native-macos:jar:osx-aarch_64</exclude>
                                         </excludes>
                                     </artifactSet>
                                     <filters combine.children="append">
@@ -553,6 +561,23 @@
                                             <excludes>
                                                 <exclude>libduckdb_java.so_osx_*</exclude>
                                                 <exclude>libduckdb_java.so_windows_*</exclude>
+                                            </excludes>
+                                        </filter>
+                                        <filter>
+                                            <artifact>net.java.dev.jna:jna</artifact>
+                                            <excludes>
+                                                <exclude>com/sun/jna/aix-*/**</exclude>
+                                                <exclude>com/sun/jna/darwin*/**</exclude>
+                                                <exclude>com/sun/jna/freebsd-*/**</exclude>
+                                                <exclude>com/sun/jna/openbsd-*/**</exclude>
+                                                <exclude>com/sun/jna/sunos-*/**</exclude>
+                                                <exclude>com/sun/jna/win32-*/**</exclude>
+                                                <exclude>com/sun/jna/linux-arm/**</exclude>
+                                                <exclude>com/sun/jna/linux-armel/**</exclude>
+                                                <exclude>com/sun/jna/linux-mips64el/**</exclude>
+                                                <exclude>com/sun/jna/linux-ppc*/**</exclude>
+                                                <exclude>com/sun/jna/linux-s390x/**</exclude>
+                                                <exclude>com/sun/jna/linux-x86/**</exclude>
                                             </excludes>
                                         </filter>
                                         <filter>
