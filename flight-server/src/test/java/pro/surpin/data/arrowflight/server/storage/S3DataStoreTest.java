@@ -265,10 +265,10 @@ class S3DataStoreTest {
     void duckDbSetupStatements(@TempDir Path dir) throws IOException {
         Path ca = Files.writeString(dir.resolve("ca.pem"), "pem");
         S3Settings settings = new S3Settings("https://s3.local:9443", "eu-west-3", "vhost",
-                ca.toString(), true, "AKIATEST", "SEC'RET", null, 30, 4,
-                "/ext/httpfs.duckdb_extension", true);
+                ca.toString(), true, "AKIATEST", "SEC'RET", null, 30, 4, true);
 
         DuckDbSetupPlan plan = plan(settings, "s3a://lake/parquet/");
+        // Before plugins the file came from S3Settings.httpfsExtension; now core resolves "httpfs".
 
         assertEquals(List.of(
                 "LOAD '/ext/httpfs.duckdb_extension'",
@@ -298,7 +298,7 @@ class S3DataStoreTest {
     @Test
     void duckDbSetupOverPlainHttp() {
         S3Settings settings = new S3Settings("http://minio:9000", null, null, null, true,
-                "AKIATEST", "SECRETTEST", "TOKEN", 30, 4, "/ext/httpfs.duckdb_extension", false);
+                "AKIATEST", "SECRETTEST", "TOKEN", 30, 4, false);
 
         DuckDbSetupPlan plan = plan(settings, "s3://lake");
         List<String> statements = plan.statements();
@@ -319,15 +319,16 @@ class S3DataStoreTest {
         assertEquals("*** ***", plan.redactor().redact("SECRETTEST TOKEN"));
     }
 
-    /** Golden: without credentials or an extension the secret has no keys and nothing is loaded. */
+    /** Golden: without credentials the secret has no keys; httpfs is always loaded. */
     @Test
     void duckDbSetupWithoutCredentials() {
         S3Settings settings = new S3Settings("https://s3.local", null, null, null, false,
-                null, null, null, 30, 4, null, true);
+                null, null, null, 30, 4, true);
 
         List<String> statements = plan(settings, "s3://lake/a/b").statements();
 
         assertEquals(List.of(
+                "LOAD '/ext/httpfs.duckdb_extension'",
                 "SET s3_access_key_id = ''",
                 "SET s3_secret_access_key = ''",
                 "SET s3_session_token = ''",
@@ -346,7 +347,7 @@ class S3DataStoreTest {
     private static DuckDbSetupPlan plan(S3Settings settings, String dataDirectory) {
         S3DataStore s3Store = new S3DataStore(dataDirectory, settings,
                 S3DataStore.createClient(new S3Settings("http://127.0.0.1:1", null, null, null, true,
-                        "A", "B", null, 30, 1, null, true)));
+                        "A", "B", null, 30, 1, true)));
         try {
             return new DuckDbSetupValidator(name -> "/ext/" + name + ".duckdb_extension").plan(
                     DuckDbSetupValidator.Contribution.ofStore("s3", s3Store), List.of(), List.of());
@@ -363,6 +364,6 @@ class S3DataStoreTest {
 
     private static S3Settings settings(String endpoint, String caFile, int ttlSeconds) {
         return new S3Settings(endpoint, "eu-west-3", "path", caFile, true, "AKIATEST",
-                "SECRETTEST", null, ttlSeconds, 4, null, true);
+                "SECRETTEST", null, ttlSeconds, 4, true);
     }
 }

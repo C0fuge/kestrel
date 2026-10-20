@@ -2,13 +2,9 @@ package pro.surpin.data.arrowflight.server.adapters;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.util.Map;
 import java.util.Properties;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
-import pro.surpin.data.arrowflight.server.storage.S3Settings;
-import pro.surpin.data.arrowflight.server.storage.S3Uri;
 
 /**
  * Loads configuration from arrowflight.properties, system properties, and environment variables.
@@ -110,7 +106,6 @@ public class ConfigAdapter {
                 "arrowflight.widenUnsignedTypes", "FLIGHT_WIDEN_UNSIGNED_TYPES", true, props);
         boolean duckDbLockdown = getBooleanWithEnv("duckDbLockdown",
                 "arrowflight.duckdb.lockdown", "DUCKDB_LOCKDOWN", true, props);
-        S3Settings s3 = s3Settings(props, ioParallelism, S3Uri.isS3(dataDir), System.getenv());
         int endpointBackupLocations = getIntWithEnv("endpointBackupLocations",
                 "arrowflight.cluster.endpointBackupLocations", "FLIGHT_ENDPOINT_BACKUP_LOCATIONS",
                 AppConfig.DEFAULT_ENDPOINT_BACKUP_LOCATIONS, props);
@@ -132,56 +127,7 @@ public class ConfigAdapter {
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
-                s3, endpointBackupLocations);
-    }
-
-    /**
-     * Reads the S3 settings. Credentials come from the environment or a credentials file only,
-     * and are read only for an S3 data directory.
-     *
-     * @param props loaded properties
-     * @param ioParallelism I/O thread count, the default number of HTTP connections
-     * @param s3DataDir whether the data directory is on S3
-     * @param environment process environment
-     * @return S3 settings
-     * @throws IllegalArgumentException when credentials are passed as properties or a setting is
-     *         invalid
-     */
-    static S3Settings s3Settings(Properties props, int ioParallelism, boolean s3DataDir,
-            Map<String, String> environment) {
-        S3Settings.requireNoCredentialProperties(System::getProperty);
-        S3Settings.requireNoCredentialProperties(props::getProperty);
-        String endpoint = getStringWithEnv("s3Endpoint", "arrowflight.s3.endpoint",
-                "FLIGHT_S3_ENDPOINT", null, props);
-        String region = getStringWithEnv("s3Region", "arrowflight.s3.region",
-                "FLIGHT_S3_REGION", S3Settings.DEFAULT_REGION, props);
-        String urlStyle = getStringWithEnv("s3UrlStyle", "arrowflight.s3.urlStyle",
-                "FLIGHT_S3_URL_STYLE", "path", props);
-        String caFile = getStringWithEnv("s3CaFile", "arrowflight.s3.caFile",
-                "FLIGHT_S3_CA_FILE", null, props);
-        boolean verifyTls = getBooleanWithEnv("s3VerifyTls", "arrowflight.s3.verifyTls",
-                "FLIGHT_S3_VERIFY_TLS", true, props);
-        String credentialsFile = getStringWithEnv("s3CredentialsFile",
-                "arrowflight.s3.credentialsFile", "FLIGHT_S3_CREDENTIALS_FILE", null, props);
-        int listingTtlSeconds = getInt("s3ListingTtlSeconds", "arrowflight.s3.listingTtlSeconds",
-                S3Settings.DEFAULT_LISTING_TTL_SECONDS, props);
-        int maxConnections = getInt("s3MaxConnections", "arrowflight.s3.maxConnections", 0, props);
-        String httpfsExtension = getStringWithEnv("duckDbHttpfsExtension",
-                "arrowflight.duckdb.httpfs.extension", "DUCKDB_HTTPFS_EXTENSION", null, props);
-        boolean metadataCache = getBooleanWithEnv("duckDbS3MetadataCache",
-                "arrowflight.duckdb.s3MetadataCache", "FLIGHT_S3_METADATA_CACHE", true, props);
-        S3Settings settings = new S3Settings(endpoint, region, urlStyle, caFile, verifyTls,
-                null, null, null, listingTtlSeconds,
-                maxConnections > 0 ? maxConnections : Math.max(1, ioParallelism),
-                httpfsExtension, metadataCache);
-        if (!s3DataDir) {
-            return settings;
-        }
-        try {
-            return settings.withCredentials(S3Settings.loadCredentials(credentialsFile, environment));
-        } catch (IOException e) {
-            throw new UncheckedIOException("Cannot read s3CredentialsFile " + credentialsFile, e);
-        }
+                endpointBackupLocations);
     }
 
     /**

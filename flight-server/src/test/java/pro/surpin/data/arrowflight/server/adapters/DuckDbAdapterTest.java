@@ -1076,16 +1076,13 @@ class DuckDbAdapterTest {
     @Test
     void setupErrorsAreSanitized() throws Exception {
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
-        AppConfig base = completeConfig();
-        AppConfig config = new AppConfig(base.numServers(), base.batchSize(), base.ioParallelism(),
-                base.ioFileBufferSize(), base.duckDbWarmConnections(), base.duckDbGroups(),
-                base.duckDbThreads(), null, false, null, null, null, null, null, false,
-                base.grpcMaxInboundMessageSize(), base.flightBackpressureThresholdBytes(),
-                base.flightListenerReadyTimeoutMillis(), null, null, 32010, 5701, 60, 3, 1000,
-                30000, true, false, 64, null, null, "complete", true, true,
-                new pro.surpin.data.arrowflight.server.storage.S3Settings("http://h:1", null, null,
-                        null, true, "AKIA", "plainSecret", null, 30, 1, null, true));
-        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+        pro.surpin.data.arrowflight.spi.config.SecretRedactor redactor =
+                new pro.surpin.data.arrowflight.spi.config.SecretRedactor();
+        redactor.add("plainSecret");
+        pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan plan =
+                new pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan(List.of(), List.of(),
+                        java.util.Set.of(), redactor, List.of(), List.of());
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, plan)) {
             assertEquals("LINE 1: SECRET '***' near plain *** and '***'",
                     adapter.sanitizeSetupError("LINE 1: SECRET 'x''y' near plain plainSecret and 'cut off"));
             assertEquals("", adapter.sanitizeSetupError(null));

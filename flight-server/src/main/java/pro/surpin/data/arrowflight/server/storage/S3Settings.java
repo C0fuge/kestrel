@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.storage;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
@@ -14,12 +15,15 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
-import java.util.function.UnaryOperator;
+
+import pro.surpin.data.arrowflight.spi.config.ConfigKey;
+import pro.surpin.data.arrowflight.spi.config.PluginConfig;
 
 /**
- * How the server reaches an S3 data directory: the endpoint, the credentials and the DuckDB
- * httpfs extension that reads the data. The secret key never comes from a system property or the
- * properties file, which other users of the host can read; {@link #toString()} leaves it out.
+ * How the server reaches an S3 data directory: the endpoint and the credentials. DuckDB reads the
+ * data through its httpfs extension, which the server resolves from its own configuration. The
+ * secret key never comes from a system property or the properties file, which other users of the
+ * host can read; {@link #toString()} leaves it out.
  *
  * @param endpoint endpoint URL ({@code https://host:port}); null for AWS in {@code region}
  * @param region signing region (for Ceph RGW the zonegroup name)
@@ -32,20 +36,16 @@ import java.util.function.UnaryOperator;
  * @param listingTtlSeconds how long a listing of the data directory is used before it is
  *                          refreshed in the background; 0 lists on every use
  * @param maxConnections HTTP connections of the Java client
- * @param httpfsExtension path of DuckDB's httpfs extension file
  * @param metadataCache whether DuckDB caches Parquet footers and HTTP metadata
  */
 public record S3Settings(String endpoint, String region, String urlStyle, String caFile,
         boolean verifyTls, String accessKey, String secretKey, String sessionToken,
-        int listingTtlSeconds, int maxConnections, String httpfsExtension, boolean metadataCache) {
+        int listingTtlSeconds, int maxConnections, boolean metadataCache) {
 
     /** Region when none is configured. */
     public static final String DEFAULT_REGION = "us-east-1";
     /** Seconds a listing is used when nothing is configured. */
     public static final int DEFAULT_LISTING_TTL_SECONDS = 30;
-    /** Settings of a server whose data directory is not on S3. */
-    public static final S3Settings NONE = new S3Settings(null, DEFAULT_REGION, "path", null, true,
-            null, null, null, DEFAULT_LISTING_TTL_SECONDS, 1, null, true);
 
     /** Environment variable with the access key ID. */
     public static final String ACCESS_KEY_ENV = "FLIGHT_S3_ACCESS_KEY";
@@ -54,12 +54,29 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
     /** Environment variable with the session token of temporary credentials. */
     public static final String SESSION_TOKEN_ENV = "FLIGHT_S3_SESSION_TOKEN";
     /**
-     * Property names under which somebody might try to pass credentials. A system property shows
-     * in the process list; the properties file sits in the jar or next to it.
+     * Configuration keys of the s3 namespace ({@code arrowflight.s3.<key>}, {@code s3.<key>},
+     * {@code FLIGHT_S3_<KEY>}), with the flat names the server read before plugins as aliases.
+     * The credentials are secrets: environment or file only, any property form is refused.
      */
-    private static final List<String> REFUSED_PROPERTIES = List.of(
-            "s3AccessKey", "s3SecretKey", "s3SessionToken",
-            "arrowflight.s3.accessKey", "arrowflight.s3.secretKey", "arrowflight.s3.sessionToken");
+    public static final List<ConfigKey> CONFIG_KEYS = List.of(
+            ConfigKey.of("endpoint", "Endpoint URL; empty = AWS in the region", null, "s3Endpoint"),
+            ConfigKey.of("region", "Signing region", DEFAULT_REGION, "s3Region"),
+            ConfigKey.of("urlStyle", "path or vhost", "path", "s3UrlStyle"),
+            ConfigKey.of("caFile", "PEM file with the only CAs trusted for TLS", null, "s3CaFile"),
+            ConfigKey.of("verifyTls", "false accepts any certificate (lab only)", "true",
+                    "s3VerifyTls"),
+            ConfigKey.of("credentialsFile", "Properties file with accessKey, secretKey and"
+                    + " sessionToken, not world-readable", null, "s3CredentialsFile"),
+            ConfigKey.of("listingTtlSeconds", "Seconds a listing of the data directory is used",
+                    Integer.toString(DEFAULT_LISTING_TTL_SECONDS), "s3ListingTtlSeconds"),
+            ConfigKey.of("maxConnections", "HTTP connections of the Java client; 0 ="
+                    + " ioParallelism", "0", "s3MaxConnections"),
+            ConfigKey.of("metadataCache", "DuckDB caches Parquet footers and HTTP metadata", "true",
+                    "duckDbS3MetadataCache", "arrowflight.duckdb.s3MetadataCache"),
+            ConfigKey.secret("accessKey", "Access key ID", "s3AccessKey"),
+            ConfigKey.secret("secretKey", "Secret access key", "s3SecretKey"),
+            ConfigKey.secret("sessionToken", "Session token of temporary credentials",
+                    "s3SessionToken"));
     /** Environment variables the AWS tools and DuckDB's httpfs read on their own. */
     private static final List<String> AWS_ENVIRONMENT = List.of(
             "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION",
@@ -82,7 +99,6 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
      * @param sessionToken session token, or null
      * @param listingTtlSeconds listing lifetime in seconds
      * @param maxConnections HTTP connections of the Java client
-     * @param httpfsExtension path of the httpfs extension, or null
      * @param metadataCache whether DuckDB caches metadata
      */
     public S3Settings {
@@ -93,7 +109,6 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
         accessKey = blankToNull(accessKey);
         secretKey = blankToNull(secretKey);
         sessionToken = blankToNull(sessionToken);
-        httpfsExtension = blankToNull(httpfsExtension);
         if (!"path".equals(urlStyle) && !"vhost".equals(urlStyle)) {
             throw new IllegalArgumentException("s3UrlStyle must be path or vhost: " + urlStyle);
         }
@@ -171,7 +186,43 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
     public S3Settings withCredentials(Credentials credentials) {
         return new S3Settings(endpoint, region, urlStyle, caFile, verifyTls,
                 credentials.accessKey(), credentials.secretKey(), credentials.sessionToken(),
-                listingTtlSeconds, maxConnections, httpfsExtension, metadataCache);
+                listingTtlSeconds, maxConnections, metadataCache);
+    }
+
+    /**
+     * Reads the settings of the s3 namespace. Credentials are read only when asked for: from
+     * {@code credentialsFile} when set, otherwise from {@code FLIGHT_S3_ACCESS_KEY},
+     * {@code FLIGHT_S3_SECRET_KEY} and {@code FLIGHT_S3_SESSION_TOKEN}.
+     *
+     * @param config configuration of the s3 namespace
+     * @param ioParallelism I/O threads, the default number of HTTP connections
+     * @param withCredentials whether to read the credentials
+     * @return settings
+     * @throws IllegalArgumentException when a setting is invalid or a credential is passed as a
+     *         property
+     */
+    public static S3Settings from(PluginConfig config, int ioParallelism, boolean withCredentials) {
+        int maxConnections = config.getInt("maxConnections", 0);
+        S3Settings settings = new S3Settings(config.get("endpoint", null),
+                config.get("region", DEFAULT_REGION), config.get("urlStyle", "path"),
+                config.get("caFile", null), config.getBoolean("verifyTls", true), null, null, null,
+                config.getInt("listingTtlSeconds", DEFAULT_LISTING_TTL_SECONDS),
+                maxConnections > 0 ? maxConnections : Math.max(1, ioParallelism),
+                config.getBoolean("metadataCache", true));
+        if (!withCredentials) {
+            return settings;
+        }
+        Credentials fromEnvironment = new Credentials(config.secret("accessKey").orElse(null),
+                config.secret("secretKey").orElse(null), config.secret("sessionToken").orElse(null));
+        String credentialsFile = config.get("credentialsFile", null);
+        if (credentialsFile == null) {
+            return settings.withCredentials(fromEnvironment);
+        }
+        try {
+            return settings.withCredentials(readCredentialsFile(Path.of(credentialsFile)));
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read s3CredentialsFile " + credentialsFile, e);
+        }
     }
 
     /**
@@ -183,14 +234,6 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
         if (!hasCredentials()) {
             throw new IllegalArgumentException("S3 data directory without credentials: set "
                     + ACCESS_KEY_ENV + " and " + SECRET_KEY_ENV + " or s3CredentialsFile");
-        }
-        if (httpfsExtension == null) {
-            throw new IllegalArgumentException("S3 data directory without duckDbHttpfsExtension:"
-                    + " DuckDB reads S3 through its httpfs extension file");
-        }
-        if (!Files.isReadable(Path.of(httpfsExtension))) {
-            throw new IllegalArgumentException("duckDbHttpfsExtension is not a readable file: "
-                    + httpfsExtension);
         }
         if (caFile != null && !Files.isReadable(Path.of(caFile))) {
             throw new IllegalArgumentException("s3CaFile is not a readable file: " + caFile);
@@ -222,24 +265,7 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                 + ", secretKey=" + (secretKey == null ? null : REDACTED)
                 + ", sessionToken=" + (sessionToken == null ? null : REDACTED)
                 + ", listingTtlSeconds=" + listingTtlSeconds + ", maxConnections=" + maxConnections
-                + ", httpfsExtension=" + httpfsExtension + ", metadataCache=" + metadataCache + "]";
-    }
-
-    /**
-     * Refuses credentials passed as system properties or in the properties file.
-     *
-     * @param lookup reads a property from one source (system properties, the properties file)
-     * @throws IllegalArgumentException when such a property is set
-     */
-    public static void requireNoCredentialProperties(UnaryOperator<String> lookup) {
-        for (String name : REFUSED_PROPERTIES) {
-            String value = lookup.apply(name);
-            if (value != null && !value.isBlank()) {
-                throw new IllegalArgumentException("S3 credentials are not read from properties ("
-                        + name + "): -D values show in the process list. Set " + ACCESS_KEY_ENV
-                        + " and " + SECRET_KEY_ENV + " in the environment or use s3CredentialsFile");
-            }
-        }
+                + ", metadataCache=" + metadataCache + "]";
     }
 
     /**

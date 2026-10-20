@@ -11,7 +11,14 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
+import pro.surpin.data.arrowflight.server.plugin.DefaultStoreContext;
+import pro.surpin.data.arrowflight.server.plugin.PropertiesPluginConfig;
+import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.storage.DataStoreProvider;
+import pro.surpin.data.arrowflight.spi.storage.StoreUse;
 
 /**
  * Opens the store of the data directory, chosen by the scheme of its URI: {@code s3://} (also
@@ -24,6 +31,9 @@ public final class DataStores {
     private static final Set<String> S3_SCHEMES = Set.of("s3", "s3a", "s3n");
     /** A URI scheme followed by "//", which a Windows drive letter is not. */
     private static final Pattern SCHEME = Pattern.compile("^([A-Za-z][A-Za-z0-9+.-]*)://");
+
+    /** Secrets of the stores opened here. */
+    private static final SecretRedactor REDACTOR = new SecretRedactor();
 
     /** Not instantiable. */
     private DataStores() {
@@ -58,7 +68,18 @@ public final class DataStores {
     public static DataStore open(AppConfig config, Configuration hadoopConfig, String storageHost) {
         String dataDirectory = config.dataDir();
         if ("s3".equals(kindOf(dataDirectory))) {
-            return new SpiDataStore(S3DataStore.open(config), null, "s3");
+            DataStoreProvider provider = new S3DataStoreProvider();
+            PropertiesPluginConfig s3Config = new PropertiesPluginConfig(provider.name(),
+                    ConfigSource.system(), provider.configKeys());
+            s3Config.requireNoSecretProperties();
+            DefaultStoreContext context = new DefaultStoreContext(s3Config, LogUtil.node(),
+                    storageHost, config.ioParallelism(), REDACTOR, null);
+            try {
+                return new SpiDataStore(provider.open(context, dataDirectory, StoreUse.DATA_DIRECTORY),
+                        null, provider.name());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
         hadoopConfig.setInt("io.file.buffer.size", config.ioFileBufferSize());
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);

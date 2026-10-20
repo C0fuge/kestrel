@@ -403,7 +403,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (message == null) {
             return "";
         }
-        String result = redactor.redact(appConfig.s3().redact(message));
+        String result = redactor.redact(message);
         result = SETUP_LITERAL.matcher(result).replaceAll("'***'");
         return result.length() > 500 ? result.substring(0, 500) + "..." : result;
     }

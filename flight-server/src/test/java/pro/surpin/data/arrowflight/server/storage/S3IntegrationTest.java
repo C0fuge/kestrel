@@ -270,8 +270,7 @@ class S3IntegrationTest {
     }
 
     private S3Settings settings(String caFile) {
-        return new S3Settings(endpoint, null, "path", caFile, true, accessKey, secretKey, null, 30, 4,
-                httpfs, true);
+        return new S3Settings(endpoint, null, "path", caFile, true, accessKey, secretKey, null, 30, 4, true);
     }
 
     private void open(S3Settings settings) {
@@ -288,6 +287,6 @@ class S3IntegrationTest {
         return new AppConfig(3, 1024, 2, 131072, 0, 1, 1, null, false, null, null, null,
                 null, "512MB", false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
                 5701, 60, 3, 1000, 0, true, false, 16, dir.resolve("spill").toString(), null,
-                "complete", true, true, settings);
+                "complete", true, true);
     }
 }

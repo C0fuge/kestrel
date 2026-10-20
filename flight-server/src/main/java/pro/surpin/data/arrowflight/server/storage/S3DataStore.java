@@ -53,14 +53,13 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 
-import pro.surpin.data.arrowflight.server.LogUtil;
-import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
 import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
@@ -82,6 +81,8 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 public final class S3DataStore implements DataStore {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(S3DataStore.class);
+    /** The server's timing log ("Timing", DEBUG), written in its format. */
+    private static final Logger TIMING_LOG = LoggerFactory.getLogger("Timing");
     private static final String PARQUET_EXTENSION = ".parquet";
     /** Name of the DuckDB secret that holds the credentials. */
     static final String DUCKDB_SECRET_NAME = "flight_s3";
@@ -93,6 +94,7 @@ public final class S3DataStore implements DataStore {
     private final S3Client client;
     private final long listingTtlNanos;
     private final LongSupplier nanoClock;
+    private final String node;
     private final ExecutorService refresher;
     private final AtomicBoolean refreshing = new AtomicBoolean();
     private final Object initialListing = new Object();
@@ -129,44 +131,34 @@ public final class S3DataStore implements DataStore {
      * @param nanoClock monotonic clock in nanoseconds
      */
     S3DataStore(String dataDirectory, S3Settings settings, S3Client client, LongSupplier nanoClock) {
+        this(dataDirectory, settings, client, nanoClock, Thread::new, "-");
+    }
+
+    /**
+     * Creates a store.
+     *
+     * @param dataDirectory data directory, {@code s3://bucket/prefix}
+     * @param settings S3 settings
+     * @param client S3 client; the store closes it
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param threads creates the thread of background listings
+     * @param node name of this server node, for logs
+     */
+    public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
+            LongSupplier nanoClock, ThreadFactory threads, String node) {
         this.root = S3Uri.parse(dataDirectory);
         this.settings = Objects.requireNonNull(settings, "settings");
         this.client = Objects.requireNonNull(client, "client");
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
+        this.node = Objects.requireNonNull(node, "node");
+        Objects.requireNonNull(threads, "threads");
         this.listingTtlNanos = TimeUnit.SECONDS.toNanos(settings.listingTtlSeconds());
         this.refresher = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "s3-listing");
+            Thread t = threads.newThread(r);
+            t.setName("s3-listing");
             t.setDaemon(true);
             return t;
         });
-    }
-
-    /**
-     * Opens the store of the configured S3 data directory.
-     *
-     * @param config server configuration
-     * @return data store
-     * @throws IllegalArgumentException when the S3 settings cannot reach the data directory
-     */
-    public static S3DataStore open(AppConfig config) {
-        S3Settings settings = config.s3();
-        settings.requireUsable();
-        List<String> ignored = S3Settings.awsEnvironmentVariables(System.getenv());
-        if (!ignored.isEmpty()) {
-            LOGGER.warn("node={} s3=awsEnvironmentIgnored variables={} (this server reads only"
-                    + " FLIGHT_S3_* and its own settings)", LogUtil.node(), ignored);
-        }
-        if (settings.useSsl() && !settings.verifyTls()) {
-            LOGGER.warn("node={} s3=tlsNotVerified endpoint={} (s3VerifyTls=false: any certificate"
-                    + " is accepted)", LogUtil.node(), settings.endpointUri());
-        }
-        S3Client client = createClient(settings);
-        LOGGER.info("node={} s3=open dataDir={} endpoint={} region={} urlStyle={} tls={}"
-                + " caFile={} listingTtlSeconds={} maxConnections={}", LogUtil.node(),
-                S3Uri.parse(config.dataDir()).uri(), settings.endpointUri(), settings.region(),
-                settings.urlStyle(), settings.useSsl(), settings.caFile(),
-                settings.listingTtlSeconds(), settings.maxConnections());
-        return new S3DataStore(config.dataDir(), settings, client);
     }
 
     /**
@@ -403,9 +395,7 @@ public final class S3DataStore implements DataStore {
      * @param root data directory
      */
     static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root) {
-        if (settings.httpfsExtension() != null) {
-            setup.loadExtension("httpfs");
-        }
+        setup.loadExtension("httpfs");
         for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
                 "s3_session_token", "s3_endpoint", "s3_region")) {
             setup.set(setting, "");
@@ -468,7 +458,7 @@ public final class S3DataStore implements DataStore {
                 refresher.execute(this::refresh);
             } catch (RuntimeException e) {
                 refreshing.set(false);
-                LOGGER.warn("node={} s3=refreshNotStarted error={}", LogUtil.node(), e.toString());
+                LOGGER.warn("node={} s3=refreshNotStarted error={}", node, e.toString());
             }
         }
         return current;
@@ -483,7 +473,7 @@ public final class S3DataStore implements DataStore {
             snapshot = list();
         } catch (IOException | RuntimeException e) {
             LOGGER.warn("node={} s3=listingRefreshFailed dataDir={} error={}",
-                    LogUtil.node(), root.uri(), settings.redact(e.getMessage()));
+                    node, root.uri(), settings.redact(e.getMessage()));
         } finally {
             refreshing.set(false);
         }
@@ -496,7 +486,7 @@ public final class S3DataStore implements DataStore {
      * @throws IOException on storage access failure
      */
     private Snapshot list() throws IOException {
-        long t = LogUtil.mark();
+        long t = TIMING_LOG.isDebugEnabled() ? System.nanoTime() : -1L;
         long started = nanoClock.getAsLong();
         TreeMap<String, DataFile> files = new TreeMap<>();
         TreeSet<String> directories = new TreeSet<>();
@@ -527,10 +517,14 @@ public final class S3DataStore implements DataStore {
         }
         if (skipped > 0) {
             LOGGER.warn("node={} s3=keysSkipped count={} dataDir={} (keys with characters a"
-                    + " data path may not have)", LogUtil.node(), skipped, root.uri());
+                    + " data path may not have)", node, skipped, root.uri());
         }
-        LogUtil.logTiming(t, "s3.list", "files=" + files.size() + " directories="
-                + directories.size() + " pages=" + pages);
+        if (t >= 0) {
+            TIMING_LOG.debug("qid=null node={} TIMING thread={} durationUs={} tag=s3.list files={}"
+                    + " directories={} pages={}", node, Thread.currentThread().getName(),
+                    TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - t), files.size(),
+                    directories.size(), pages);
+        }
         return new Snapshot(started, Collections.unmodifiableNavigableMap(files),
                 Collections.unmodifiableNavigableSet(directories));
     }

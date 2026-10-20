@@ -36,7 +36,7 @@ class S3SettingsTest {
         assertTrue(noScheme.useSsl());
 
         S3Settings aws = new S3Settings(null, "eu-west-3", "vhost", null, true, "AK", "SK", null,
-                30, 8, null, true);
+                30, 8, true);
         assertEquals("https://s3.eu-west-3.amazonaws.com", aws.endpointUri().toString());
         assertEquals("s3.eu-west-3.amazonaws.com", aws.duckDbEndpoint());
         assertTrue(aws.useSsl());
@@ -51,11 +51,11 @@ class S3SettingsTest {
             assertThrows(IllegalArgumentException.class, () -> settings(endpoint, "AK", "SK"), endpoint);
         }
         assertThrows(IllegalArgumentException.class, () -> new S3Settings(null, null, "virtual",
-                null, true, null, null, null, 30, 1, null, true));
+                null, true, null, null, null, 30, 1, true));
         assertThrows(IllegalArgumentException.class, () -> new S3Settings(null, "eu west", null,
-                null, true, null, null, null, 30, 1, null, true));
+                null, true, null, null, null, 30, 1, true));
         assertThrows(IllegalArgumentException.class, () -> new S3Settings(null, null, null,
-                null, true, null, null, null, -1, 1, null, true));
+                null, true, null, null, null, -1, 1, true));
         assertThrows(IllegalArgumentException.class, () -> settings("http://h:1", "AK", null));
     }
 
@@ -63,7 +63,7 @@ class S3SettingsTest {
     @Test
     void toStringRedactsSecrets() {
         S3Settings settings = new S3Settings("http://minio:9000", null, null, null, true,
-                "AKIAEXAMPLE", "very-secret-key", "session-token-value", 30, 1, null, true);
+                "AKIAEXAMPLE", "very-secret-key", "session-token-value", 30, 1, true);
 
         String text = settings.toString();
 
@@ -75,19 +75,6 @@ class S3SettingsTest {
                 .contains("very-secret-key"));
         assertEquals("error *** and *** end",
                 settings.redact("error very-secret-key and session-token-value end"));
-    }
-
-    /** Verifies credentials as system or file properties are a startup error. */
-    @Test
-    void credentialPropertiesAreRefused() {
-        for (String name : List.of("s3SecretKey", "arrowflight.s3.secretKey", "s3AccessKey",
-                "s3SessionToken")) {
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> S3Settings.requireNoCredentialProperties(key -> key.equals(name) ? "x" : null));
-            assertTrue(e.getMessage().contains(name), e.getMessage());
-            assertTrue(e.getMessage().contains(S3Settings.SECRET_KEY_ENV), e.getMessage());
-        }
-        S3Settings.requireNoCredentialProperties(key -> null);
     }
 
     /** Verifies credentials come from the environment. */
@@ -129,22 +116,56 @@ class S3SettingsTest {
                 () -> S3Settings.loadCredentials(incomplete.toString(), Map.of()));
     }
 
-    /** Verifies an S3 data directory needs credentials and the httpfs extension file. */
+    /** Verifies an S3 data directory needs credentials and a readable CA file when one is set. */
     @Test
-    void usableSettingsNeedCredentialsAndExtension(@TempDir Path dir) throws IOException {
+    void usableSettingsNeedCredentials(@TempDir Path dir) {
         IllegalArgumentException noKeys = assertThrows(IllegalArgumentException.class,
                 () -> settings("http://h:1", null, null).requireUsable());
         assertTrue(noKeys.getMessage().contains(S3Settings.ACCESS_KEY_ENV), noKeys.getMessage());
-        IllegalArgumentException noExtension = assertThrows(IllegalArgumentException.class,
-                () -> settings("http://h:1", "AK", "SK").requireUsable());
-        assertTrue(noExtension.getMessage().contains("duckDbHttpfsExtension"), noExtension.getMessage());
 
-        Path extension = Files.writeString(dir.resolve("httpfs.duckdb_extension"), "x");
-        new S3Settings("http://h:1", null, null, null, true, "AK", "SK", null, 30, 1,
-                extension.toString(), true).requireUsable();
+        settings("http://h:1", "AK", "SK").requireUsable();
         assertThrows(IllegalArgumentException.class, () -> new S3Settings("http://h:1", null, null,
-                dir.resolve("missing.pem").toString(), true, "AK", "SK", null, 30, 1,
-                extension.toString(), true).requireUsable());
+                dir.resolve("missing.pem").toString(), true, "AK", "SK", null, 30, 1, true).requireUsable());
+    }
+
+    /** Verifies the settings read from the s3 namespace, defaults included. */
+    @Test
+    void settingsFromThePluginConfiguration() {
+        S3Settings defaults = S3Settings.from(new MapPluginConfig(Map.of(), Map.of(
+                "accessKey", "AK", "secretKey", "SK")), 16, false);
+        assertNull(defaults.endpoint());
+        assertEquals("us-east-1", defaults.region());
+        assertEquals("path", defaults.urlStyle());
+        assertTrue(defaults.verifyTls());
+        assertEquals(30, defaults.listingTtlSeconds());
+        assertEquals(16, defaults.maxConnections());
+        assertTrue(defaults.metadataCache());
+        assertFalse(defaults.hasCredentials(), "credentials only for an S3 data directory");
+
+        S3Settings set = S3Settings.from(new MapPluginConfig(Map.of("endpoint", "http://minio:9000",
+                "region", "eu-west-3", "urlStyle", "VHOST", "listingTtlSeconds", "5",
+                "maxConnections", "7", "metadataCache", "false"),
+                Map.of("accessKey", "AK", "secretKey", "SK")), 16, true);
+        assertEquals("http://minio:9000", set.endpoint());
+        assertEquals("eu-west-3", set.region());
+        assertEquals("vhost", set.urlStyle());
+        assertEquals(5, set.listingTtlSeconds());
+        assertEquals(7, set.maxConnections());
+        assertFalse(set.metadataCache());
+        assertEquals("AK", set.accessKey());
+        assertEquals("SK", set.secretKey());
+    }
+
+    /** Verifies a credentials file wins over the environment. */
+    @Test
+    void credentialsFileWinsOverTheEnvironment(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("s3.properties");
+        Files.writeString(file, "accessKey=FILEAK\nsecretKey=FILESK\n");
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"));
+        S3Settings settings = S3Settings.from(new MapPluginConfig(Map.of("credentialsFile",
+                file.toString()), Map.of("accessKey", "AK", "secretKey", "SK")), 4, true);
+        assertEquals("FILEAK", settings.accessKey());
+        assertEquals("FILESK", settings.secretKey());
     }
 
     /** Verifies the AWS variables that are set are named, so the server can warn about them. */
@@ -156,7 +177,6 @@ class S3SettingsTest {
     }
 
     private static S3Settings settings(String endpoint, String accessKey, String secretKey) {
-        return new S3Settings(endpoint, null, null, null, true, accessKey, secretKey, null, 30, 1,
-                null, true);
+        return new S3Settings(endpoint, null, null, null, true, accessKey, secretKey, null, 30, 1, true);
     }
 }
