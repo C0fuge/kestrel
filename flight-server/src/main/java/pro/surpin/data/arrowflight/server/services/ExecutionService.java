@@ -77,6 +77,8 @@ public final class ExecutionService {
     private final ExecutorService ioPool;
     private final AppConfig appConfig;
     private final CatalogViews catalogViews;
+    /** Whether unsigned integer columns are read as wider signed types, in both result modes. */
+    private final boolean widenUnsigned;
 
     /**
      * Creates ExecutionService.
@@ -95,8 +97,47 @@ public final class ExecutionService {
         this.metadataService = metadataService;
         this.appConfig = appConfig;
         this.ioPool = ioPool;
-        this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter,
-                appConfig == null || appConfig.widenUnsignedTypes());
+        this.widenUnsigned = appConfig == null || appConfig.widenUnsignedTypes();
+        this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter, widenUnsigned);
+    }
+
+    /**
+     * Names some of a table's Parquet files as a DuckDB FROM source with the column types of the
+     * complete-answer views: unsigned integer columns widened as {@link CatalogViews} does, so
+     * that both result modes stream the types the table metadata announces.
+     *
+     * @param schema schema name, or null when unknown
+     * @param table table name
+     * @param duckDbPaths files as DuckDB reads them
+     * @return {@code read_parquet([...])}, wrapped in a widening projection when needed
+     */
+    String tableSource(String schema, String table, List<String> duckDbPaths) {
+        String files = DuckDbAdapter.readParquetFromClause(duckDbPaths);
+        if (!widenUnsigned || schema == null) {
+            return files;
+        }
+        List<String> replaced = new ArrayList<>();
+        for (Field field : parquetAdapter.getTableSchema(schema, table).getFields()) {
+            String wider = CatalogViews.widerSignedType(field.getType());
+            if (wider != null) {
+                String name = DuckDbAdapter.quoteIdentifier(field.getName());
+                replaced.add("CAST(" + name + " AS " + wider + ") AS " + name);
+            }
+        }
+        return replaced.isEmpty() ? files
+                : "(SELECT * REPLACE (" + String.join(", ", replaced) + ") FROM " + files + ")";
+    }
+
+    /**
+     * Describes a table from its Parquet footers with the column types queries stream.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return column schema
+     */
+    public Schema footerTableSchema(String schema, String table) {
+        Schema footer = metadataService.getTableSchema(schema, table, null);
+        return widenUnsigned ? CatalogViews.widenUnsigned(footer) : footer;
     }
 
     /**
@@ -246,6 +287,9 @@ public final class ExecutionService {
             // Files may be unreadable from this node; the table metadata still describes them.
             LOGGER.debug("node={} schema=describeFallback error='{}'", LogUtil.node(), message);
             schema = metadataService.getQuerySchema(query);
+            if (schema != null && widenUnsigned) {
+                schema = CatalogViews.widenUnsigned(schema);
+            }
         }
         if (schema != null) {
             synchronized (schemaCache) {
@@ -280,7 +324,7 @@ public final class ExecutionService {
         DataFile sample = parquetAdapter.sampleFile(pq.schema, pq.table)
                 .orElseThrow(() -> new IOException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
-        String from = "(SELECT * FROM " + DuckDbAdapter.readParquetFromClause(List.of(
+        String from = "(SELECT * FROM " + tableSource(pq.schema, pq.table, List.of(
                 parquetAdapter.dataStore().duckDbUri(sample)))
                 + " LIMIT 0)";
         String duckSql = pq.hasAggregation
@@ -360,7 +404,7 @@ public final class ExecutionService {
         LOGGER.debug("qid={} node={} execution=engine engine=DuckDB files={}",
                 LogUtil.qid(), LogUtil.node(), resolvedUris.size());
         String duckSql = DuckDbAdapter.buildSelectSql(parsedQuery,
-                DuckDbAdapter.readParquetFromClause(resolvedUris));
+                tableSource(parsedQuery.schema, parsedQuery.table, resolvedUris));
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
     }
 
@@ -470,7 +514,7 @@ public final class ExecutionService {
         }
 
         String duckSql = DuckDbAdapter.buildDuckSqlWithFilter(pq,
-                DuckDbAdapter.readParquetFromClause(resolvedUris), false);
+                tableSource(pq.schema, pq.table, resolvedUris), false);
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
     }
 
@@ -535,7 +579,7 @@ public final class ExecutionService {
                 stmt.execute("CREATE OR REPLACE TEMP VIEW "
                         + DuckDbAdapter.quoteIdentifier(jt.alias())
                         + " AS SELECT * FROM "
-                        + DuckDbAdapter.readParquetFromClause(duckDbPaths)
+                        + tableSource(jt.schema(), jt.table(), duckDbPaths)
                         + (empty ? " LIMIT 0" : ""));
             }
             LogUtil.logTiming(tView, "engine:join.createView", "alias=" + jt.alias() + " " + FILES_TIMING_PREFIX + duckDbPaths.size());

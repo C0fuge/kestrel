@@ -181,4 +181,39 @@ class ParquetQueryParserUnitTest {
                 "SELECT c FROM s.t WHERE c = TIME '12:34:56.789012'");
         assertTrue(pq.filter.contains("12:34:56.789012"), pq.filter);
     }
+
+    /** Verifies plain columns and plain aggregates are answered by every endpoint for its files. */
+    @Test
+    void plainColumnsAndAggregatesNeedNoCompleteAnswer() {
+        for (String sql : new String[] {
+                "SELECT a, \"Mixed Case\" AS m FROM s.t WHERE b > 1 ORDER BY a LIMIT 5",
+                "SELECT a, count(*), count(b), sum(b * 2) AS s, min(c), max(c) FROM s.t GROUP BY a",
+                "SELECT count(DISTINCT b) FROM s.t", "SELECT * FROM s.t",
+                "SELECT n_name, r_name FROM s.nation JOIN s.region ON n_regionkey = r_regionkey"}) {
+            assertNull(ParquetQueryParser.parse(sql).completeAnswerReason, sql);
+        }
+    }
+
+    /**
+     * Verifies select items the endpoints cannot compute ask for the complete answer: before,
+     * expressions became quoted column names (Binder Error) and FILTER/OVER were dropped.
+     */
+    @Test
+    void expressionsOverAggregatesNeedTheCompleteAnswer() {
+        for (String sql : new String[] {
+                "SELECT CAST(sum(x) AS DECIMAL(38,2)) AS a FROM s.t",
+                "SELECT g, sum(x) / count(*) AS r FROM s.t GROUP BY g",
+                "SELECT avg(x) FROM s.t",
+                "SELECT count(*) FILTER (WHERE x > 1) FROM s.t",
+                "SELECT max(x) FILTER (WHERE y > 0) AS m FROM s.t",
+                "SELECT x, sum(x) OVER () FROM s.t",
+                "SELECT x + 1 AS y FROM s.t",
+                "SELECT g, count(*) FROM s.t GROUP BY g, x + 1"}) {
+            assertNotNull(ParquetQueryParser.parse(sql).completeAnswerReason, sql);
+        }
+        assertEquals("The select item 'cast(sum(x) as decimal(38, 2))' is not a column or a plain"
+                        + " count, sum, min or max",
+                ParquetQueryParser.parse("SELECT CAST(sum(x) AS DECIMAL(38,2)) AS a FROM s.t")
+                        .completeAnswerReason);
+    }
 }

@@ -22,6 +22,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A client cancel now interrupts the DuckDB query; before, it ran to its end.
 - On shared storage a dead node no longer makes its files unavailable: they go to live nodes.
   Nodes beat every 3 s and are left out after 10 s (was 15 s / 45 s).
+- Partial results: a select item other than a column or a plain `count`/`sum`/`min`/`max`
+  (`CAST(sum(x) AS DECIMAL(38,2))`, `avg(x)`, `sum(x) / count(*)`, `x + 1`) failed with
+  "Binder Error: Referenced column ... not found", and `FILTER (WHERE ...)` or `OVER (...)` on
+  an aggregate was silently dropped (wrong results). Such queries now get the complete answer
+  from one endpoint (logged as `query=answeredCompletely`); a cluster that keeps its files on
+  local disks refuses them with the reason.
+- Partial results streamed unsigned integers unwidened (uint64) while `GetTables` and complete
+  answers said `decimal128(20,0)`; with `widenUnsignedTypes` (default) both modes now stream the
+  same wider signed types (uint8/16/32/64 as int16/int32/int64/decimal128(20,0)).
 - A DuckDB statement closed by a failed run is prepared again instead of failing every later
   run of the same SQL with "Statement was closed".
 - After a DuckDB error that invalidates its database (FATAL or INTERNAL, e.g. a hash-aggregate

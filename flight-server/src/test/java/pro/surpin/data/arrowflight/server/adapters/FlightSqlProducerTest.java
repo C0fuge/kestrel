@@ -364,8 +364,8 @@ class FlightSqlProducerTest {
         BufferAllocator allocator = mock(BufferAllocator.class);
         QueryPlanner queryPlanner = mock(QueryPlanner.class);
         ExecutionService executionService = mock(ExecutionService.class);
-        String query = "select avg(o_totalprice) from tpch.orders";
-        Schema schema = new Schema(List.of(Field.nullable("avg", new ArrowType.FloatingPoint(
+        String query = "select sum(o_totalprice) from tpch.orders";
+        Schema schema = new Schema(List.of(Field.nullable("sum", new ArrowType.FloatingPoint(
                 org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE))));
         when(executionService.completeSchema(allocator, query)).thenReturn(schema);
         when(executionService.resultSchema(allocator, query)).thenReturn(schema);
@@ -390,6 +390,73 @@ class FlightSqlProducerTest {
 
         producer.getFlightInfoStatement(command, partial, FlightDescriptor.command(new byte[]{1}));
         verify(queryPlanner).plan(query);
+    }
+
+    /**
+     * Verifies a query asked for in parts whose select list endpoints cannot compute (an
+     * expression over an aggregate) gets one endpoint with the complete answer and its schema.
+     */
+    @Test
+    void partialQueryWithExpressionOverAggregateIsAnsweredCompletely() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "SELECT CAST(sum(o_totalprice) AS DECIMAL(38,2)) AS a FROM tpch.orders";
+        Schema schema = new Schema(List.of(Field.nullable("a", new ArrowType.Decimal(38, 2, 128))));
+        when(executionService.completeSchema(allocator, query, null)).thenReturn(schema);
+        when(executionService.completeSchema(allocator, query)).thenReturn(schema);
+        QueryPlan plan = new QueryPlan(List.of(new org.apache.arrow.flight.FlightEndpoint(
+                new org.apache.arrow.flight.Ticket(new byte[] {1}))), -1L, -1L);
+        when(queryPlanner.planComplete(query, null)).thenReturn(plan);
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "partial");
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        FlightSql.CommandStatementQuery command =
+                FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build();
+
+        FlightInfo info = producer.getFlightInfoStatement(command, context,
+                FlightDescriptor.command(new byte[]{1}));
+
+        assertEquals(schema, info.getSchemaOptional().orElseThrow());
+        assertEquals(1, info.getEndpoints().size());
+        verify(queryPlanner, never()).plan(anyString());
+        verify(queryPlanner, never()).plan(anyString(), anyBoolean());
+        verify(executionService, never()).resultSchema(any(), anyString());
+        assertEquals(schema, producer.getSchemaStatement(command, context,
+                FlightDescriptor.command(new byte[]{1})).getSchema());
+    }
+
+    /**
+     * Verifies such a query is refused with the reason on a cluster that keeps its files on
+     * local disks, where no node can compute the complete answer.
+     */
+    @Test
+    void partialQueryNeedingCompleteAnswerIsRefusedWithoutSharedStorage() {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        String query = "SELECT avg(o_totalprice) FROM tpch.orders";
+        when(queryPlanner.planComplete(query, null)).thenThrow(new IllegalStateException(
+                "A complete answer needs storage every node can read (HDFS, S3); this cluster of 3"
+                        + " nodes keeps its files on local disks. Ask for partial results (header"
+                        + " x-flight-result-mode: partial) or set resultMode=partial"));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, mock(ExecutionService.class),
+                mock(ClusterService.class), "partial");
+        FlightSql.CommandStatementQuery command =
+                FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build();
+
+        FlightRuntimeException e = org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class, () -> producer.getFlightInfoStatement(command,
+                        mock(FlightProducer.CallContext.class), FlightDescriptor.command(new byte[]{1})));
+
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, e.status().code());
+        assertEquals("The select item 'avg(o_totalprice)' is not a column or a plain count, sum, min"
+                + " or max, so the query needs one node to see all rows; A complete answer needs"
+                + " storage every node can read (HDFS, S3); this cluster of 3 nodes keeps its files"
+                + " on local disks.", e.getMessage());
     }
 
     /** Verifies only a client that tries locations in order may get the planning node as a backup. */

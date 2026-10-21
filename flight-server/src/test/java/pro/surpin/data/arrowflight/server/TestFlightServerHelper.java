@@ -5,6 +5,7 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
@@ -97,7 +98,10 @@ public class TestFlightServerHelper implements AutoCloseable {
                 metadataService, queryPlanner, executionService, clusterService,
                 b.resultMode);
 
-        server = FlightServer.builder(allocator, location, flightSqlProducer).build();
+        // As HadoopArrowFlightServer does: the client's x-flight-result-mode header decides.
+        server = FlightServer.builder(allocator, location, flightSqlProducer)
+                .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
+                .build();
         server.start();
 
         flightClient = FlightClient.builder(allocator, location).build();

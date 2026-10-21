@@ -505,6 +505,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     .withDescription("Parameters need complete answers; do not ask for partial results")
                     .toRuntimeException();
         }
+        String completeReason = completeAnswerReason(query);
+        if (completeReason != null) {
+            return completeFlightInfo(query, descriptor, completeReason);
+        }
         Schema arrowSchema = schemaForQuery(query);
         try {
             // A client that tries locations in order may also get this node as a backup.
@@ -533,6 +537,52 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
+     * Tells why a query asked for in parts gets its complete answer instead: each endpoint
+     * answers for its own files only, and some queries cannot be computed that way (see
+     * {@code ParquetQueryParser.completeAnswerReason}).
+     *
+     * @param query client SQL
+     * @return reason, or null when endpoints answer for their own files (also for SQL the parser
+     *         rejects: the partial path reports that error)
+     */
+    private static String completeAnswerReason(String query) {
+        try {
+            return pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(query)
+                    .completeAnswerReason;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Plans the complete answer to a query asked for in parts that endpoints cannot compute.
+     * One endpoint returns the whole answer, so a client that merges parts still gets the right
+     * result; a cluster that keeps its files on local disks refuses the query.
+     *
+     * @param query client SQL
+     * @param descriptor flight descriptor of the request
+     * @param reason why the query cannot be answered in parts
+     * @return complete-answer plan
+     * @throws FlightRuntimeException INVALID_ARGUMENT when no node can read every file
+     */
+    private FlightInfo completeFlightInfo(String query, FlightDescriptor descriptor, String reason) {
+        QueryPlan plan;
+        try {
+            plan = queryPlanner.planComplete(query, null);
+        } catch (IllegalStateException e) {
+            String why = String.valueOf(e.getMessage());
+            int hint = why.indexOf(" Ask for partial results");
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription(reason + ", so the query needs one node to see all rows; "
+                            + (hint > 0 ? why.substring(0, hint) : why))
+                    .withCause(e).toRuntimeException();
+        }
+        LOGGER.info("node={} query=answeredCompletely mode=partial reason='{}' query='{}'",
+                LogUtil.node(), reason, query);
+        return new FlightInfo(completeSchemaFor(query), descriptor, plan.endpoints(), -1, -1);
+    }
+
+    /**
      * Returns the schema of the batches a query streams.
      *
      * @param query SQL query
@@ -541,6 +591,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      *         for an unknown table
      */
     private Schema schemaForQuery(String query) {
+        if (completeAnswerReason(query) != null) {
+            // Planned as a complete answer (see completeFlightInfo): describe that answer.
+            return completeSchemaFor(query);
+        }
         Schema arrowSchema;
         try {
             arrowSchema = executionService.resultSchema(allocator, query);
@@ -965,14 +1019,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 + DuckDbAdapter.quoteIdentifier(table);
         try {
             // Metadata calls carry no mode of their own: describe the columns the way the
-            // default mode returns them (complete answers widen unsigned integers).
+            // default mode returns them (both modes widen unsigned integers alike).
             return "complete".equalsIgnoreCase(defaultResultMode)
                     ? executionService.completeSchema(allocator, selectAll)
                     : executionService.resultSchema(allocator, selectAll);
         } catch (RuntimeException e) {
             LOGGER.debug("Table {}.{} described from its Parquet footer: {}",
                     schema, table, e.getMessage());
-            return metadataService.getTableSchema(schema, table, null);
+            return executionService.footerTableSchema(schema, table);
         }
     }
 

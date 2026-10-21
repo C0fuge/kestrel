@@ -1,5 +1,9 @@
 package pro.surpin.data.arrowflight.server.services;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
@@ -218,6 +222,67 @@ public final class CatalogViews {
             case "USMALLINT" -> "INTEGER";
             case "UINTEGER" -> "BIGINT";
             case "UBIGINT" -> "DECIMAL(20,0)";
+            default -> null;
+        };
+    }
+
+    /**
+     * Names the DuckDB signed type that holds every value of an unsigned Arrow integer type, the
+     * same as {@link #widerSignedType(String)} does for the DuckDB type of the column.
+     *
+     * @param type Arrow type of a Parquet column
+     * @return wider signed DuckDB type, or null when the type is not an unsigned integer
+     */
+    public static String widerSignedType(ArrowType type) {
+        if (!(type instanceof ArrowType.Int integer) || integer.getIsSigned()) {
+            return null;
+        }
+        return switch (integer.getBitWidth()) {
+            case 8 -> "SMALLINT";
+            case 16 -> "INTEGER";
+            case 32 -> "BIGINT";
+            case 64 -> "DECIMAL(20,0)";
+            default -> null;
+        };
+    }
+
+    /**
+     * Returns a schema with its unsigned integer columns as DuckDB streams them once widened.
+     *
+     * @param schema schema read from Parquet footers
+     * @return schema with uint8/16/32 as int16/32/64 and uint64 as decimal128(20,0)
+     */
+    public static Schema widenUnsigned(Schema schema) {
+        List<Field> fields = new ArrayList<>(schema.getFields().size());
+        boolean changed = false;
+        for (Field field : schema.getFields()) {
+            ArrowType wider = widerArrowType(field.getType());
+            if (wider == null) {
+                fields.add(field);
+            } else {
+                fields.add(new Field(field.getName(), new FieldType(field.isNullable(), wider,
+                        field.getDictionary(), field.getMetadata()), field.getChildren()));
+                changed = true;
+            }
+        }
+        return changed ? new Schema(fields, schema.getCustomMetadata()) : schema;
+    }
+
+    /**
+     * Names the Arrow type DuckDB streams for a widened unsigned integer.
+     *
+     * @param type Arrow type
+     * @return wider signed Arrow type, or null when the type is not an unsigned integer
+     */
+    private static ArrowType widerArrowType(ArrowType type) {
+        if (!(type instanceof ArrowType.Int integer) || integer.getIsSigned()) {
+            return null;
+        }
+        return switch (integer.getBitWidth()) {
+            case 8 -> new ArrowType.Int(16, true);
+            case 16 -> new ArrowType.Int(32, true);
+            case 32 -> new ArrowType.Int(64, true);
+            case 64 -> new ArrowType.Decimal(20, 0, 128);
             default -> null;
         };
     }

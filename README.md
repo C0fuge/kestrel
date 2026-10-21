@@ -290,7 +290,13 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
   (HDFS, S3); a cluster on local disks refuses it.
 - **partial**: one endpoint per node with the part computed from that node's files; the client
   merges. The Trino and Spark connectors ask for it with the header
-  `x-flight-result-mode: partial`.
+  `x-flight-result-mode: partial`. A query whose select list has anything but columns and plain
+  `count`/`sum`/`min`/`max` (`CAST(sum(x) AS ...)`, `avg(x)`, `x + 1`, an aggregate with `FILTER`
+  or `OVER`), or that groups by an expression, gets the complete answer as one endpoint instead,
+  since its parts could not be merged; a cluster on local disks refuses it.
+
+Unsigned integer columns are shown and streamed as the next wider signed type in both modes
+(uint64 as `decimal128(20,0)`) unless `widenUnsignedTypes=false`.
 
 Only one statement per request is accepted in complete mode, checked by DuckDB's parser before
 anything runs: `SELECT`, `WITH`, `VALUES`, `FROM`, `TABLE`, `DESCRIBE`, `SHOW`, `SUMMARIZE`. With
@@ -324,7 +330,8 @@ interrupts the query in DuckDB.
 ## Limitations
 
 **Server-side (Flight SQL):**
-- Partial mode: no subqueries or window functions; expressions only inside aggregates.
+- Partial mode: no subqueries; expressions only inside aggregates (other select expressions are
+  answered completely by one node, see above).
   `ORDER BY`, `LIMIT` and `GROUP BY` are applied by every node to its own files; with more than
   one node the client merges: re-sort, re-limit, combine groups.
 - Statement parameters (`?`) work in complete mode only, one set of values per execution.

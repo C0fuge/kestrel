@@ -132,6 +132,14 @@ public class ParquetQueryParser {
     public final boolean distinct;
     /** HAVING condition as executable SQL, or null. */
     public final String having;
+    /**
+     * Why each endpoint cannot answer this query for its own files, or null when it can. Set for
+     * select items other than plain columns and plain count, sum, min and max (an expression over
+     * an aggregate, avg, an aggregate with FILTER or OVER, any other expression) and for GROUP BY
+     * expressions: the per-endpoint SQL cannot render them, and the client could not merge the
+     * per-endpoint values of most of them.
+     */
+    public final String completeAnswerReason;
 
     /**
      * @param schema table schema name
@@ -145,7 +153,7 @@ public class ParquetQueryParser {
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs) {
         this(schema, table, columns, filter, hasAggregation, groupByColumnNames, selectExprs,
-                false, Collections.emptyList(), null, null, null, null, false, null);
+                false, Collections.emptyList(), null, null, null, null, false, null, null);
     }
 
     /**
@@ -164,12 +172,14 @@ public class ParquetQueryParser {
      * @param offset OFFSET row count, or null
      * @param distinct whether the query is SELECT DISTINCT
      * @param having HAVING condition as executable SQL, or null
+     * @param completeAnswerReason why endpoints cannot answer for their own files, or null
      */
     @SuppressWarnings("java:S107") // One immutable value object built in a single place.
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs,
             boolean isJoin, List<JoinTable> joinTables, String duckDbSql,
-            String orderBy, Long limit, Long offset, boolean distinct, String having) {
+            String orderBy, Long limit, Long offset, boolean distinct, String having,
+            String completeAnswerReason) {
         this.schema = schema;
         this.table = table;
         this.columns = List.copyOf(columns);
@@ -185,6 +195,7 @@ public class ParquetQueryParser {
         this.offset = offset;
         this.distinct = distinct;
         this.having = having;
+        this.completeAnswerReason = completeAnswerReason;
     }
 
     /**
@@ -706,7 +717,7 @@ public class ParquetQueryParser {
         return new ParquetQueryParser(primary.schema, primary.table, columns, filter,
                 false, Collections.emptyList(), exprs, true, joinTables, duckDbSql,
                 renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
-                rowCount(select.$offset()), false, null);
+                rowCount(select.$offset()), false, null, null);
     }
 
     /**
@@ -727,8 +738,13 @@ public class ParquetQueryParser {
         String table = fromTables.get(0).getName();
 
         List<String> gbCols = new ArrayList<>();
+        String completeAnswerReason = null;
         for (GroupField gf : select.$groupBy()) {
             gbCols.add(noQuoteCtx.render(gf).trim());
+            if (completeAnswerReason == null && !(gf instanceof TableField<?, ?>)) {
+                completeAnswerReason = "The GROUP BY expression '" + noQuoteCtx.renderInlined(gf).trim()
+                        + "' is not a column";
+            }
         }
 
         List<String> columns = new ArrayList<>();
@@ -749,6 +765,9 @@ public class ParquetQueryParser {
                 outputName = selected.getName();
             }
             columns.add(selected.getName());
+            if (completeAnswerReason == null) {
+                completeAnswerReason = completeAnswerReason(f, noQuoteCtx);
+            }
 
             if (f instanceof org.jooq.impl.QOM.Count count) {
                 hasAgg = true;
@@ -785,7 +804,37 @@ public class ParquetQueryParser {
                 false, Collections.emptyList(), null,
                 renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
                 rowCount(select.$offset()), select.$distinct(),
-                having == null ? null : quotedCtx.renderInlined(having));
+                having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason);
+    }
+
+    /**
+     * Tells why one select item keeps endpoints from answering for their own files. Each endpoint
+     * renders plain columns and plain count, sum, min and max only; anything else used to be
+     * quoted as a column name (DuckDB: "Referenced column ... not found") or, for FILTER and OVER,
+     * silently dropped.
+     *
+     * @param field select item without its alias
+     * @param noQuoteCtx renderer for messages
+     * @return reason, or null when every endpoint can compute the item
+     */
+    private static String completeAnswerReason(org.jooq.Field<?> field, DSLContext noQuoteCtx) {
+        if (field instanceof TableField<?, ?>) {
+            return null;
+        }
+        boolean plainAggregate = field instanceof org.jooq.impl.QOM.Count
+                || field instanceof org.jooq.impl.QOM.Sum
+                || field instanceof org.jooq.impl.QOM.Min<?>
+                || field instanceof org.jooq.impl.QOM.Max<?>;
+        String text = noQuoteCtx.renderInlined(field).trim();
+        if (!plainAggregate) {
+            return "The select item '" + text + "' is not a column or a plain count, sum, min or max";
+        }
+        org.jooq.impl.QOM.AggregateFunction<?, ?> aggregate = (org.jooq.impl.QOM.AggregateFunction<?, ?>) field;
+        if (aggregate.$filterWhere() != null || aggregate.$windowSpecification() != null
+                || aggregate.$windowDefinition() != null || aggregate.$windowName() != null) {
+            return "The aggregate '" + text + "' has a FILTER or OVER clause";
+        }
+        return null;
     }
 
     /**
