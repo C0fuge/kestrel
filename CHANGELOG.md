@@ -67,6 +67,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the values with a new statement handle carrying the SQL and the values; DuckDB binds them.
 - Settings `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`,
   `duckDbTempDirectory`.
+- Storage plugins: module `flight-spi` (plugin API: stores, typed DuckDB setup, namespaced
+  settings), plugins loaded from `<arrowflight.plugins.dir>/<name>/` (`FLIGHT_PLUGINS_DIR`,
+  default `../plugins` beside the jar) in their own class loader, only when the data directory
+  needs them; `SHA256SUMS` checked (`arrowflight.plugins.requireChecksums`). Plugins describe
+  their DuckDB setup; the server writes and checks the SQL and reads the lockdown back at
+  startup (settings, allowed directories, secrets) before the node joins the cluster.
+- lakeFS data directories (`lakefs://<repository>/<ref>/<prefix>`, plugin `lakefs`): read
+  through the lakeFS S3 gateway; a branch is pinned to its head commit per listing, so all
+  endpoints of a query read the same commit. Settings `arrowflight.lakefs.*` /
+  `FLIGHT_LAKEFS_*`.
 - Apache-2.0 LICENSE
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`
 - Issue and PR templates
@@ -87,6 +97,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (default 5000) and `duckDbHdfsReadTimeoutMs` (default 15000), as `hdfs_connect_timeout_ms` /
   `hdfs_read_timeout_ms`; they win over `LIBHDFS3_CONF`, `0` leaves them to the extension. An
   extension built without these settings keeps its own timeouts (one warning).
+- S3 moved into the plugin `s3` (`plugins/s3`, built by `tools/make-plugin-dir.sh`): the AWS
+  SDK is no longer in the server jar, and an `s3://` data directory without the plugin is a
+  startup error naming it. All S3 settings keep their names (also `arrowflight.s3.*`,
+  `FLIGHT_S3_*`, `etc/plugins/s3.properties`). `arrowflight.duckdb.extensionDir` may replace
+  the per-extension file settings (`<dir>/v1.4.5/linux_amd64/<name>.duckdb_extension`).
+- The DuckDB lockdown is read back at startup also for HDFS (hadoopfs) data directories.
 - Calcite and with it Arrow Gandiva are gone from the server jar (318 MB -> 166 MB): the DDL
   logged at startup names its types itself, with the same names. `-Plinux-only` leaves out the
   DuckDB, zstd-jni and netty-tcnative native libraries of other platforms than Linux
