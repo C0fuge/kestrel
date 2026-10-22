@@ -539,4 +539,23 @@ class FlightSqlProducerTest {
         org.junit.jupiter.api.Assertions.assertTrue(FlightSqlProducer.qid(com.google.protobuf.ByteString.copyFrom(new byte[] {'A', 'F', 'T', '1', 0, 0, 1, 2, 3}))
                 .matches("[0-9a-f]{8}"));
     }
+
+    /**
+     * A failure whose root cause has no text (ConnectException under a store's "lakeFS not
+     * reachable") is described by the deepest cause that has one; a root with text is kept.
+     */
+    @Test
+    void failureDescriptionNamesTheDeepestCauseWithText() {
+        java.io.IOException store = new java.io.IOException(
+                "lakeFS API GET http://lakefs:8000/api/v1/x failed, lakeFS not reachable",
+                new java.net.ConnectException());
+        assertEquals("Query execution failed: IOException: lakeFS API GET http://lakefs:8000/api/v1/x"
+                + " failed, lakeFS not reachable",
+                FlightSqlProducer.failureDescription(new RuntimeException(store)));
+        assertEquals("Query execution failed: SQLException: IO Error: x",
+                FlightSqlProducer.failureDescription(new RuntimeException("outer",
+                        new java.sql.SQLException("IO Error: x"))));
+        assertEquals("Query execution failed: ConnectException",
+                FlightSqlProducer.failureDescription(new java.net.ConnectException()));
+    }
 }

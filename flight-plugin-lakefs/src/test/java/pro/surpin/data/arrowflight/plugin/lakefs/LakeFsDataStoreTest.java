@@ -190,8 +190,11 @@ class LakeFsDataStoreTest {
         try (LakeFsDataStore store = store("lakefs://lake/v1/wh", true, resolver)) {
             store.tableFiles("tpch", "nation");
             clock.addAndGet(5_000_000_000L);
-            store.tableFiles("tpch", "nation");
-            assertEquals("v1", store.dataVersion());
+            List<DataFile> files = store.tableFiles("tpch", "nation");
+            // The tag is read through the commit it names, fixed for the store's lifetime.
+            assertEquals(List.of("tpch/nation/part-0.parquet"), paths(files));
+            assertEquals("s3://lake/c1/wh/tpch/nation/part-0.parquet", files.get(0).location());
+            assertEquals("c1", store.dataVersion());
             assertEquals(1, resolutions.get());
             assertEquals(1, confirmations.get());
         }
@@ -206,6 +209,10 @@ class LakeFsDataStoreTest {
     void duckDbReadsTheRepositoryThroughTheGateway() {
         try (LakeFsDataStore store = store("lakefs://lake/main/wh", true)) {
             assertEquals(List.of("s3://lake/"), store.duckDbRoots());
+            assertEquals("tpch/nation/part-0.parquet",
+                    store.unversionedPath("@c1/tpch/nation/part-0.parquet"));
+            assertEquals("tpch/nation/part-0.parquet",
+                    store.unversionedPath("tpch/nation/part-0.parquet"));
             assertEquals("lakefs", store.kind());
             assertTrue(store.shared());
         }

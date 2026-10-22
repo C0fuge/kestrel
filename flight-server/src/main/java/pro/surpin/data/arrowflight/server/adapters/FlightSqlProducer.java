@@ -372,10 +372,19 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         return null;
     }
 
-    private static String failureDescription(Throwable failure) {
+    static String failureDescription(Throwable failure) {
         Throwable root = failure;
-        while (root.getCause() != null && root.getCause() != root) {
-            root = root.getCause();
+        Throwable described = null;   // deepest cause that says something
+        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            root = t;
+            if (t.getMessage() != null && !t.getMessage().isBlank()) {
+                described = t;
+            }
+        }
+        if ((root.getMessage() == null || root.getMessage().isBlank()) && described != null) {
+            // e.g. ConnectException/UnresolvedAddressException without text under the store's
+            // "lakeFS API GET ... not reachable": name the cause that explains it.
+            root = described;
         }
         String message = root.getMessage();
         String description = "Query execution failed: " + root.getClass().getSimpleName();

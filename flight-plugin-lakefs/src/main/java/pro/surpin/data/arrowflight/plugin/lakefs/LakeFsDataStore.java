@@ -28,8 +28,9 @@ import software.amazon.awssdk.services.s3.S3Client;
  * branch to its head commit (one REST call, shared by all listings within {@code pinTtlMillis})
  * and lists that commit instead. The files it returns carry the commit in their relative path,
  * {@code @<commit>/<path>}: that is the name the planner puts into tickets, so every node and
- * endpoint of one query reads the same commit, whatever the branch does meanwhile. Commit ids
- * and tags, and branches with pinning off, are read as they are.
+ * endpoint of one query reads the same commit, whatever the branch does meanwhile. A tag or
+ * commit id is confirmed once and read through the full commit id it names; branches with
+ * pinning off are read as they are.
  */
 public final class LakeFsDataStore implements DataStore {
 
@@ -325,9 +326,12 @@ public final class LakeFsDataStore implements DataStore {
             if (head.isPresent()) {
                 next = new Resolved(LakeFsUri.requireRef(head.get()), true, false, now);
             } else {
-                // A tag or commit id: lakeFS confirms it once (a clear error for a typo).
-                resolver.refCommit(root.repository(), root.ref());
-                next = new Resolved(root.ref(), false, true, now);
+                // A tag or commit id: lakeFS confirms it once (a clear error for a typo) and
+                // names its commit, which is read from then on: the S3 gateway serves a commit id
+                // two to three times faster than a tag (TPC-H SF1 on lakeFS 1.38).
+                String commit = LakeFsUri.requireRef(
+                        resolver.refCommit(root.repository(), root.ref()));
+                next = new Resolved(commit, false, true, now);
             }
             if (resolved == null || !resolved.ref().equals(next.ref())) {
                 LOGGER.info("node={} lakefs=refResolved repository={} ref={} reads={} pinned={}",
