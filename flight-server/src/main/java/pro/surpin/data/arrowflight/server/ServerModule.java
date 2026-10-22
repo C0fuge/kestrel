@@ -88,7 +88,7 @@ public final class ServerModule {
     @Provides
     @Singleton
     HazelcastAdapter hazelcast(AppConfig config) {
-        return new HazelcastAdapter(config, hazelcastHosts);
+        return new HazelcastAdapter(config, serverUri, hazelcastHosts);
     }
 
     /**

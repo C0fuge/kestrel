@@ -91,6 +91,8 @@ public final class QueryParameters {
      * cluster sets one key on every node ({@link #useSigningKey}); until then a key of this JVM.
      */
     private static volatile byte[] signingKey = randomKey();
+    /** Key before the last {@link #useSigningKey}: handles signed with it still verify. */
+    private static volatile byte[] previousKey;
 
     private QueryParameters() {
     }
@@ -100,10 +102,25 @@ public final class QueryParameters {
      *
      * @param secret cluster secret, at least 32 bytes
      */
-    public static void useSigningKey(byte[] secret) {
+    public static synchronized void useSigningKey(byte[] secret) {
         // A key of its own, so that a handle signature can never pass for a ticket's.
-        signingKey = mac(secret, "prepared-statement-values".getBytes(StandardCharsets.UTF_8), 0,
+        byte[] key = mac(secret, "prepared-statement-values".getBytes(StandardCharsets.UTF_8), 0,
                 "prepared-statement-values".length());
+        if (!java.security.MessageDigest.isEqual(key, signingKey)) {
+            // A node that adopts the cluster's secret later keeps accepting what it signed.
+            previousKey = signingKey;
+            signingKey = key;
+        }
+    }
+
+    private static boolean signedHere(byte[] bytes, int signed) {
+        byte[] signature = Arrays.copyOfRange(bytes, signed, bytes.length);
+        if (java.security.MessageDigest.isEqual(mac(signingKey, bytes, 0, signed), signature)) {
+            return true;
+        }
+        byte[] previous = previousKey;
+        return previous != null
+                && java.security.MessageDigest.isEqual(mac(previous, bytes, 0, signed), signature);
     }
 
     private static byte[] randomKey() {
@@ -161,8 +178,7 @@ public final class QueryParameters {
             return new Handle(handle.toStringUtf8(), null, null);
         }
         int signed = bytes.length - MAC_BYTES;
-        if (signed < BOUND_MAGIC.length || !java.security.MessageDigest.isEqual(
-                mac(signingKey, bytes, 0, signed), Arrays.copyOfRange(bytes, signed, bytes.length))) {
+        if (signed < BOUND_MAGIC.length || !signedHere(bytes, signed)) {
             // Damaged, forged, or signed by another cluster (or before a restart of this node).
             throw new IllegalArgumentException("Malformed prepared statement handle");
         }

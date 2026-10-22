@@ -299,11 +299,15 @@ public final class QueryPlanner {
      * @param cacheKey normalized source-table key
      * @param now current monotonic time
      * @return immutable file assignments
+     * @throws IOException when shared storage cannot be listed
      */
     private Map<String, FileAssignment> loadFilePlan(
-            ParquetQueryParser parsed, String cacheKey, long now) {
+            ParquetQueryParser parsed, String cacheKey, long now) throws IOException {
         Map<String, FileAssignment> loaded = filterForQuery(
                 clusterService.fileLocations(), parsed);
+        if (parquetAdapter.sharedStorage()) {
+            loaded = withListedFiles(loaded, listedFiles(parsed), cacheKey);
+        }
         Map<String, FileAssignment> immutable = Collections.unmodifiableMap(
                 new LinkedHashMap<>(loaded));
         if (!immutable.isEmpty()) {
@@ -311,6 +315,48 @@ public final class QueryPlanner {
                     immutable, now + FILE_PLAN_TTL_NANOS));
         }
         return immutable;
+    }
+
+    /**
+     * Takes the files of a plan on shared storage from the store's listing, with the nodes that
+     * hold them from the node inventories. The inventories only tell locality: a node publishes
+     * them once at startup, so they miss files written later, and the cluster map that keeps
+     * them can lose a dead node's entry (several members lost at once). Planning from the
+     * inventories alone then silently left those files out (B5: a survivor of a 3-node cluster
+     * answered with half of lineitem). A listed file in no inventory goes to the least loaded
+     * live node; an inventory file the listing no longer has is gone from storage.
+     *
+     * @param inventory files of the query's tables in the node inventories, with their holders
+     * @param listed files of the query's tables in the store, in path order
+     * @param tables tables of the query, for the log
+     * @return listed files with their holders
+     */
+    static Map<String, FileAssignment> withListedFiles(Map<String, FileAssignment> inventory,
+            Map<String, FileAssignment> listed, String tables) {
+        // Inventory order first (plans stay as they were while every inventory is there),
+        // then the files no inventory names.
+        Map<String, FileAssignment> result = new LinkedHashMap<>();
+        int gone = 0;
+        for (Map.Entry<String, FileAssignment> file : inventory.entrySet()) {
+            FileAssignment current = listed.get(file.getKey());
+            if (current == null) {
+                gone++;
+            } else {
+                result.put(file.getKey(), new FileAssignment(current.size(), file.getValue().hosts()));
+            }
+        }
+        int withoutHolder = 0;
+        for (Map.Entry<String, FileAssignment> file : listed.entrySet()) {
+            if (!result.containsKey(file.getKey())) {
+                result.put(file.getKey(), new FileAssignment(file.getValue().size(), Set.of()));
+                withoutHolder++;
+            }
+        }
+        if (withoutHolder > 0 || gone > 0) {
+            LOGGER.info("node={} planning=storageListing tables={} listed={} notInInventories={}"
+                    + " inventoryOnly={}", LogUtil.node(), tables, listed.size(), withoutHolder, gone);
+        }
+        return result;
     }
 
     /**

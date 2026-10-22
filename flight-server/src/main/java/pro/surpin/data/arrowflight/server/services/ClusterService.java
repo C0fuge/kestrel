@@ -59,7 +59,10 @@ public final class ClusterService implements AutoCloseable {
     private final ExecutorService loadClaimExecutor;
     private boolean registered;
     private final EndpointTicketCodec endpointTicketCodec;
+    private volatile byte[] currentSecret;
     private final Map<String, LocalHandle> localHandles = new ConcurrentHashMap<>();
+    /** This node's published inventory, published again when the cluster lost it. */
+    private volatile Map<String, Long> localInventory;
 
     /**
      * Associates locally cached state with its expiration deadline.
@@ -97,6 +100,7 @@ public final class ClusterService implements AutoCloseable {
         this.appConfig = appConfig;
         this.serverUri = serverUri;
         byte[] secret = ticketSecret(hazelcast);
+        this.currentSecret = secret.clone();
         this.endpointTicketCodec = new EndpointTicketCodec(secret);
         pro.surpin.data.arrowflight.server.adapters.QueryParameters.useSigningKey(secret);
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -146,6 +150,11 @@ public final class ClusterService implements AutoCloseable {
             } catch (Exception e) {
                 LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
             }
+            try {
+                repairClusterState();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to check the cluster state of {}: {}", serverUri, e.getMessage());
+            }
         }, HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
     }
 
@@ -160,11 +169,18 @@ public final class ClusterService implements AutoCloseable {
         long now = System.currentTimeMillis();
         long deadline = now - HEARTBEAT_TIMEOUT_SEC * 1000;
 
+        Set<String> members = memberServerUris();
         Map<String, Long> heartbeats = hazelcast.serverHeartbeats().getAll(serverUris);
         Set<String> live = new LinkedHashSet<>();
         for (String uri : serverUris) {
             Long lastHb = heartbeats.get(uri);
-            if (lastHb == null) {
+            if (members != null && !members.contains(uri)) {
+                // Its Hazelcast member left: the node is gone, whatever the maps still say (a
+                // lost partition can drop its heartbeat entry, which reads as "just registered").
+                LOGGER.warn("Server {} is no longer a cluster member, removing from pool", uri);
+                hazelcast.serverRegistry().remove(uri);
+                hazelcast.serverHeartbeats().remove(uri);
+            } else if (lastHb == null) {
                 // Registration and the first heartbeat are separate distributed-map writes.
                 // Keep a newly registered node eligible during that short window.
                 live.add(uri);
@@ -213,6 +229,7 @@ public final class ClusterService implements AutoCloseable {
      * @param files relative file path to byte size
      */
     public void registerLocalFiles(Map<String, Long> files) {
+        localInventory = new LinkedHashMap<>(files);
         hazelcast.serverFiles().put(this.serverUri, new LinkedHashMap<>(files));
         LOGGER.info("Registered {} local Parquet file(s) for {}", files.size(), this.serverUri);
     }
@@ -489,6 +506,56 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
+     * Lists the Flight URIs of the current cluster members.
+     *
+     * @return URIs, or null when membership cannot tell (a member without its URI)
+     */
+    private Set<String> memberServerUris() {
+        try {
+            Set<String> uris = hazelcast.memberServerUris();
+            // This node is always a member: no URI at all means none was told.
+            return uris == null || uris.isEmpty() ? null : uris;
+        } catch (RuntimeException e) {
+            LOGGER.warn("Cluster membership unavailable: {}", e.toString());
+            return null;
+        }
+    }
+
+    /**
+     * Repairs what the cluster lost of this node's state, at every heartbeat: Hazelcast keeps
+     * map entries on a limited number of members, and members lost together take entries
+     * with them. Publishes this node's inventory again when it is missing, and makes this node
+     * sign tickets with the cluster's secret (putting its own back when the cluster has none),
+     * so that every node accepts the tickets of every other.
+     */
+    void repairClusterState() {
+        Map<String, Long> inventory = localInventory;
+        if (inventory != null && !hazelcast.serverFiles().containsKey(serverUri)) {
+            hazelcast.serverFiles().put(serverUri, new LinkedHashMap<>(inventory));
+            LOGGER.warn("The cluster had lost the file inventory of {}; published it again ({} files)",
+                    serverUri, inventory.size());
+        }
+        Serializable shared = hazelcast.clusterSecrets().get(TICKET_SECRET_KEY);
+        if (shared == null) {
+            byte[] own = currentSecret;
+            shared = hazelcast.clusterSecrets().putIfAbsent(TICKET_SECRET_KEY, own);
+            if (shared == null) {
+                LOGGER.warn("The cluster had lost the endpoint ticket secret; {} put its own back",
+                        serverUri);
+                return;
+            }
+        }
+        if (shared instanceof byte[] secret && secret.length >= TICKET_SECRET_BYTES
+                && endpointTicketCodec.useSecret(secret)) {
+            currentSecret = secret.clone();
+            pro.surpin.data.arrowflight.server.adapters.QueryParameters.useSigningKey(secret);
+            LOGGER.warn("{} signed endpoint tickets with a secret the cluster does not share;"
+                    + " now signs with the cluster's (tickets signed before still verify here)",
+                    serverUri);
+        }
+    }
+
+    /**
      * Obtains the cluster-shared secret used to authenticate endpoint tickets.
      *
      * @param hazelcast Hazelcast adapter
@@ -497,7 +564,7 @@ public final class ClusterService implements AutoCloseable {
     private static byte[] ticketSecret(HazelcastAdapter hazelcast) {
         byte[] candidate = new byte[TICKET_SECRET_BYTES];
         SECURE_RANDOM.nextBytes(candidate);
-        Serializable existing = hazelcast.statementCache()
+        Serializable existing = hazelcast.clusterSecrets()
                 .putIfAbsent(TICKET_SECRET_KEY, candidate);
         if (existing == null) {
             return candidate;

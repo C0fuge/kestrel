@@ -24,7 +24,11 @@ final class EndpointTicketCodec {
     private static final int MAX_FILE_COUNT = 1_000_000;
     private static final String HMAC_ALGORITHM = "HmacSHA256";
 
-    private final byte[] secret;
+    /** Secrets replaced by {@link #useSecret} that still verify tickets signed before. */
+    private static final int PREVIOUS_SECRETS = 4;
+
+    private volatile byte[] secret;
+    private volatile java.util.List<byte[]> previousSecrets = java.util.List.of();
 
     /**
      * Creates a codec using a cluster-shared signing secret.
@@ -32,10 +36,49 @@ final class EndpointTicketCodec {
      * @param secret cluster ticket secret
      */
     EndpointTicketCodec(byte[] secret) {
+        this.secret = checked(secret).clone();
+    }
+
+    private static byte[] checked(byte[] secret) {
         if (secret == null || secret.length < SIGNATURE_BYTES) {
             throw new IllegalArgumentException("Ticket secret must contain at least 32 bytes");
         }
-        this.secret = secret.clone();
+        return secret;
+    }
+
+    /**
+     * Signs new tickets with another secret: the cluster's, when this node's differs from it.
+     * Tickets signed with the earlier secrets (the last few) still verify, so that endpoints
+     * already handed to clients keep working.
+     *
+     * @param newSecret secret to sign with from now on
+     * @return true when the secret changed
+     */
+    synchronized boolean useSecret(byte[] newSecret) {
+        checked(newSecret);
+        if (MessageDigest.isEqual(newSecret, secret)) {
+            return false;
+        }
+        java.util.List<byte[]> previous = new java.util.ArrayList<>();
+        previous.add(secret);
+        for (byte[] old : previousSecrets) {
+            if (previous.size() < PREVIOUS_SECRETS && !MessageDigest.isEqual(old, newSecret)) {
+                previous.add(old);
+            }
+        }
+        previousSecrets = java.util.List.copyOf(previous);
+        secret = newSecret.clone();
+        return true;
+    }
+
+    /**
+     * Tells whether new tickets are signed with this secret.
+     *
+     * @param candidate secret
+     * @return true when it is the current one
+     */
+    boolean signsWith(byte[] candidate) {
+        return candidate != null && MessageDigest.isEqual(candidate, secret);
     }
 
     /**
@@ -93,7 +136,7 @@ final class EndpointTicketCodec {
         byte[] signature = new byte[SIGNATURE_BYTES];
         System.arraycopy(encoded, 0, payload, 0, payloadLength);
         System.arraycopy(encoded, payloadLength, signature, 0, SIGNATURE_BYTES);
-        if (!MessageDigest.isEqual(signature, sign(payload))) {
+        if (!verifies(signature, payload)) {
             throw new IllegalArgumentException("Invalid Flight endpoint ticket signature");
         }
 
@@ -189,9 +232,32 @@ final class EndpointTicketCodec {
      * @return HMAC signature
      */
     private byte[] sign(byte[] payload) {
+        return sign(secret, payload);
+    }
+
+    /**
+     * Checks a signature against the current secret and the previous ones.
+     *
+     * @param signature signature in the ticket
+     * @param payload signed payload
+     * @return true when one of the secrets made the signature
+     */
+    private boolean verifies(byte[] signature, byte[] payload) {
+        if (MessageDigest.isEqual(signature, sign(secret, payload))) {
+            return true;
+        }
+        for (byte[] old : previousSecrets) {
+            if (MessageDigest.isEqual(signature, sign(old, payload))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static byte[] sign(byte[] key, byte[] payload) {
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
-            mac.init(new SecretKeySpec(secret, HMAC_ALGORITHM));
+            mac.init(new SecretKeySpec(key, HMAC_ALGORITHM));
             return mac.doFinal(payload);
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("Unable to sign Flight endpoint ticket", e);

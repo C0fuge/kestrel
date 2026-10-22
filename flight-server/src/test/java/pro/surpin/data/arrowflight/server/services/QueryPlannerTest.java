@@ -401,6 +401,7 @@ class QueryPlannerTest {
                 "s/t/b.parquet", new FileAssignment(100L, Set.of(P3))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
 
         Map<String, List<String>> byPrimary = new HashMap<>();
@@ -432,6 +433,7 @@ class QueryPlannerTest {
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(P2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 0);
 
         QueryPlan plan = planner.plan("SELECT * FROM s.t", true);
@@ -554,6 +556,7 @@ class QueryPlannerTest {
                 "s/small/f.parquet", new FileAssignment(10L, Set.of(S1))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
 
         QueryPlan plan = planner.plan("SELECT * FROM s.small");
@@ -587,6 +590,7 @@ class QueryPlannerTest {
                 "s/b/f.parquet", new FileAssignment(500L, Set.of(S2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
 
         QueryPlan plan = planner.plan("SELECT x.id FROM s.a x JOIN s.b y ON x.id = y.id");
@@ -614,6 +618,95 @@ class QueryPlannerTest {
         assertEquals(1, planner.planComplete("SELECT 1").endpoints().size());
     }
 
+    /**
+     * Makes the mocked store list exactly the files of the mocked node inventories, as HDFS
+     * does when every node published its inventory.
+     *
+     * @throws IOException never (mock)
+     */
+    private void storageListsTheInventories() throws IOException {
+        storageLists(clusterService.fileLocations().keySet(), clusterService.fileLocations());
+    }
+
+    /**
+     * Makes the mocked store list files, grouped into schema and table by their paths.
+     *
+     * @param paths relative paths schema/table/file
+     * @param sizes sizes by path
+     * @throws IOException never (mock)
+     */
+    private void storageLists(Collection<String> paths, Map<String, FileAssignment> sizes)
+            throws IOException {
+        Map<String, Map<String, List<pro.surpin.data.arrowflight.spi.storage.DataFile>>> listing =
+                new TreeMap<>();
+        for (String path : new TreeSet<>(paths)) {
+            String[] parts = path.split("/");
+            listing.computeIfAbsent(parts[0], k -> new TreeMap<>())
+                    .computeIfAbsent(parts[1], k -> new ArrayList<>())
+                    .add(new pro.surpin.data.arrowflight.spi.storage.DataFile(path,
+                            "hdfs://ns/data/" + path, sizes.get(path).size(), 0L, Set.of()));
+        }
+        Map<String, String> schemas = new TreeMap<>();
+        listing.keySet().forEach(schema -> schemas.put(schema, "/" + schema));
+        lenient().when(parquetAdapter.getSchemas(isNull())).thenReturn(schemas);
+        for (var schema : listing.entrySet()) {
+            Map<String, String> tables = new TreeMap<>();
+            schema.getValue().keySet().forEach(t -> tables.put(t, "/" + schema.getKey() + "/" + t));
+            lenient().when(parquetAdapter.getTables(eq(schema.getKey()), isNull())).thenReturn(tables);
+            for (var table : schema.getValue().entrySet()) {
+                lenient().when(parquetAdapter.tableFiles(schema.getKey(), table.getKey()))
+                        .thenReturn(table.getValue());
+            }
+        }
+    }
+
+    /**
+     * B5 (stand, 3-node HDFS cluster, two nodes killed): the survivor's map of node inventories
+     * had lost the dead nodes' entries and it planned half of the table without an error. On
+     * shared storage the store's listing decides which files a plan reads.
+     */
+    @Test
+    void sharedStoragePlansEveryListedFileEvenWithoutItsInventory() throws Exception {
+        when(parquetAdapter.localFileInventory()).thenReturn(Map.of());
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(S1)).thenReturn(true);
+        // Only the survivor's inventory is left; it also names a file deleted since.
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(S1)),
+                "s/t/gone.parquet", new FileAssignment(5L, Set.of(S1))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.estimateRowCount(anyMap())).thenReturn(3L);
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageLists(List.of("s/t/a.parquet", "s/t/b.parquet", "s/t/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of()),
+                "s/t/b.parquet", new FileAssignment(200L, Set.of()),
+                "s/t/c.parquet", new FileAssignment(300L, Set.of())));
+
+        QueryPlan plan = new QueryPlanner(parquetAdapter, clusterService).plan("SELECT * FROM s.t");
+
+        assertEquals(600L, plan.totalBytes(), "every listed file, none from the inventory only");
+        org.mockito.ArgumentCaptor<pro.surpin.data.arrowflight.server.model.HandleState> states =
+                org.mockito.ArgumentCaptor.forClass(pro.surpin.data.arrowflight.server.model.HandleState.class);
+        verify(clusterService, atLeastOnce()).createEndpointHandle(states.capture());
+        Set<String> planned = new TreeSet<>();
+        states.getAllValues().forEach(state -> planned.addAll(List.of(state.filePaths())));
+        assertEquals(Set.of("s/t/a.parquet", "s/t/b.parquet", "s/t/c.parquet"), planned);
+    }
+
+    /** Verifies the listing keeps the holders the inventories name (locality). */
+    @Test
+    void listedFilesKeepTheirHoldersFromTheInventories() {
+        Map<String, FileAssignment> merged = QueryPlanner.withListedFiles(
+                Map.of("s/t/a.parquet", new FileAssignment(1L, Set.of(S1, S2))),
+                new LinkedHashMap<>(Map.of(
+                        "s/t/a.parquet", new FileAssignment(7L, Set.of()),
+                        "s/t/b.parquet", new FileAssignment(9L, Set.of()))), "s.t");
+        assertEquals(new FileAssignment(7L, Set.of(S1, S2)), merged.get("s/t/a.parquet"));
+        assertEquals(new FileAssignment(9L, Set.of()), merged.get("s/t/b.parquet"));
+        assertEquals(2, merged.size());
+    }
+
     /** Verifies files of a dead node go to a live node on shared storage and fail on local disks. */
     @Test
     void filesOfADeadNodeGoToALiveNodeOnSharedStorage() throws Exception {
@@ -628,6 +721,7 @@ class QueryPlannerTest {
         when(parquetAdapter.estimateRowCount(anyMap())).thenReturn(2L);
 
         when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
         QueryPlan plan = new QueryPlanner(parquetAdapter, clusterService).plan("SELECT * FROM s.t");
         assertEquals(1, plan.endpoints().size());
         assertEquals(200L, plan.totalBytes());

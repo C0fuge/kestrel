@@ -56,7 +56,75 @@ class ClusterServiceTest {
         when(hazelcast.serverHeartbeats()).thenReturn(serverHeartbeats);
         when(hazelcast.statementCache()).thenReturn(statementCache);
         when(hazelcast.serverFiles()).thenReturn(serverFiles);
+        when(hazelcast.clusterSecrets()).thenReturn(statementCache);
         return new ClusterService(hazelcast, APP_CONFIG, serverUri);
+    }
+
+    /** Verifies a node whose Hazelcast member left is not live, even without a heartbeat entry. */
+    @Test
+    void filterLiveServersDropsServerWhoseMemberLeft() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1));
+        // s2's heartbeat entry was lost with a partition: alone it reads as "just registered".
+        when(serverHeartbeats.getAll(Set.of(s1, s2))).thenReturn(Map.of(s1, System.currentTimeMillis()));
+
+        ClusterService cs = createService(s1);
+        assertEquals(Set.of(s1), cs.filterLiveServers(Set.of(s1, s2)));
+        verify(serverRegistry).remove(s2);
+        verify(serverHeartbeats).remove(s2);
+        cs.close();
+    }
+
+    /** Verifies membership does not decide when a member does not tell its URI. */
+    @Test
+    void filterLiveServersKeepsHeartbeatRuleWithoutMemberUris() {
+        String s1 = "grpc://n1:32010";
+        when(hazelcast.memberServerUris()).thenReturn(null);
+        when(serverHeartbeats.getAll(Set.of(s1))).thenReturn(Map.of());
+
+        ClusterService cs = createService(s1);
+        assertEquals(Set.of(s1), cs.filterLiveServers(Set.of(s1)));
+        cs.close();
+    }
+
+    /** Verifies a node publishes its inventory again when the cluster lost it. */
+    @Test
+    void repairClusterStatePublishesLostInventoryAgain() {
+        ClusterService cs = createService("s1");
+        cs.registerLocalFiles(Map.of("s/t/a.parquet", 10L));
+        when(serverFiles.containsKey("s1")).thenReturn(false);
+
+        cs.repairClusterState();
+
+        verify(serverFiles, times(2)).put(eq("s1"), eq(Map.of("s/t/a.parquet", 10L)));
+        cs.close();
+    }
+
+    /** Verifies a node switches to the cluster's ticket secret and still accepts its old tickets. */
+    @Test
+    void repairClusterStateAdoptsTheClusterSecret() {
+        AtomicReference<Serializable> stored = new AtomicReference<>();
+        when(statementCache.putIfAbsent(anyString(), any())).thenAnswer(invocation -> {
+            stored.compareAndSet(null, invocation.getArgument(1));
+            return stored.get() == invocation.getArgument(1) ? null : stored.get();
+        });
+        ClusterService survivor = createService("s1");
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "s1", 1L, false);
+        byte[] old = survivor.createEndpointHandle(state);
+        // The entry was lost and a restarted node put a secret of its own.
+        stored.set(null);
+        ClusterService restarted = createService("s2");
+        when(statementCache.get(anyString())).thenAnswer(invocation -> stored.get());
+
+        survivor.repairClusterState();
+
+        assertEquals(state, restarted.resolveEndpointHandle(survivor.createEndpointHandle(state)));
+        assertEquals(state, survivor.resolveEndpointHandle(restarted.createEndpointHandle(state)));
+        assertEquals(state, survivor.resolveEndpointHandle(old));
+        survivor.close();
+        restarted.close();
     }
 
     // ── filterLiveServers ─────────────────────────────────────────────────
@@ -511,6 +579,7 @@ class ClusterServiceTest {
         when(hazelcast.serverRegistry()).thenReturn(serverRegistry);
         when(hazelcast.serverHeartbeats()).thenReturn(serverHeartbeats);
         when(hazelcast.statementCache()).thenReturn(statementCache);
+        when(hazelcast.clusterSecrets()).thenReturn(statementCache);
         ClusterService cs = new ClusterService(hazelcast, APP_CONFIG, "grpc://late:32010", false);
         verify(serverRegistry, never()).put(eq("grpc://late:32010"), anyLong());
 
