@@ -8,7 +8,7 @@ import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.model.HandleState;
 import pro.surpin.data.arrowflight.server.model.QueryPlan;
-import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;

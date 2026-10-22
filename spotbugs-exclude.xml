@@ -89,4 +89,12 @@
         <Class name="pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter"/>
         <Method name="configureConnection"/>
     </Match>
+    <!--
+      NM_SAME_SIMPLE_NAME_AS_INTERFACE: the server's storage.DataStore extends the plugin SPI's
+      DataStore on purpose (it adds Parquet footer reads), so the server code keeps its name.
+    -->
+    <Match>
+        <Bug pattern="NM_SAME_SIMPLE_NAME_AS_INTERFACE"/>
+        <Class name="pro.surpin.data.arrowflight.server.storage.DataStore"/>
+    </Match>
 </FindBugsFilter>

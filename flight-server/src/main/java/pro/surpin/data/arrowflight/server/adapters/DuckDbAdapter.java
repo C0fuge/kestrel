@@ -43,6 +43,10 @@ import java.util.stream.Stream;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
+import pro.surpin.data.arrowflight.server.duckdb.LockdownCheck;
+import pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions;
+import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 
 /**
  * Manages DuckDB connection pool and SQL execution.
@@ -63,6 +67,10 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final List<String> readableRoots;
     /** Statements the data store needs in every connection, run before the lockdown. */
     private final List<String> storageSetupStatements;
+    /** Removes the secret values of the setup from errors. */
+    private final SecretRedactor redactor;
+    /** Secrets the setup declares, read back at startup. */
+    private final List<DuckDbSetupPlan.DeclaredSecret> declaredSecrets;
     /** First words of the statements a client may run in complete-answer mode. */
     private static final Set<String> QUERY_KEYWORDS = Set.of(
             "select", "with", "values", "from", "table", "describe", "show", "summarize");
@@ -171,8 +179,23 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, List<String> readableRoots,
             List<String> storageSetupStatements) {
-        this.readableRoots = List.copyOf(readableRoots);
-        this.storageSetupStatements = List.copyOf(storageSetupStatements);
+        this(appConfig, ioPool, DuckDbSetupPlan.of(readableRoots, storageSetupStatements));
+    }
+
+    /**
+     * Creates DuckDB adapter whose connections first run the checked setup of the stores and
+     * catalogs and may then read only their roots.
+     *
+     * @param appConfig server configuration
+     * @param ioPool    shared I/O thread pool for parallel execution
+     * @param setup     setup written by the DuckDbSetupValidator; empty roots disable the lockdown
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup) {
+        this.readableRoots = setup.roots();
+        this.storageSetupStatements = setup.statements();
+        this.redactor = setup.redactor();
+        this.declaredSecrets = setup.secrets();
+        PluginRefusedFunctions.addAll(setup.extraRefusedFunctions());
         this.appConfig = appConfig;
         this.ioPool = ioPool;
         this.batchSize = appConfig.batchSize();
@@ -260,6 +283,9 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private void verifyStorageSetup() {
         try (Connection conn = openConnection(true)) {
+            if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
+                LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
+            }
             LOGGER.info("node={} duckdb=storageSetupVerified statements={} open={}", LogUtil.node(),
                     storageSetupStatements.size(), !conn.isClosed());
         } catch (Exception e) {
@@ -427,7 +453,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (message == null) {
             return "";
         }
-        String result = appConfig.s3().redact(message);
+        String result = redactor.redact(message);
         result = SETUP_LITERAL.matcher(result).replaceAll("'***'");
         return result.length() > 500 ? result.substring(0, 500) + "..." : result;
     }
@@ -1471,7 +1497,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         java.util.regex.Matcher m = SERIALIZED_NAME.matcher(serialized);
         while (m.find()) {
             String name = m.group(1).toLowerCase(java.util.Locale.ROOT);
-            if (REFUSED_FUNCTIONS.contains(name)) {
+            if (REFUSED_FUNCTIONS.contains(name) || PluginRefusedFunctions.contains(name)) {
                 throw new IllegalArgumentException("Function or view " + name + " is not allowed");
             }
         }

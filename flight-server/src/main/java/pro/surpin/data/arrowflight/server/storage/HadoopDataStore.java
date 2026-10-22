@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.storage;
 
 import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
@@ -28,6 +29,8 @@ import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.HostUtils;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 
 /**
  * Data directory on a Hadoop file system: HDFS, or a local directory through Hadoop's local file
@@ -136,6 +139,17 @@ public final class HadoopDataStore implements DataStore {
     }
 
     @Override
+    public ReadableFile open(String relativePath) throws IOException {
+        Path path = resolve(relativePath);
+        return readableFile(path, fileSystem.getFileStatus(path).getLen());
+    }
+
+    @Override
+    public ReadableFile open(DataFile file) {
+        return readableFile(new Path(URI.create(file.location())), file.size());
+    }
+
+    @Override
     public String duckDbUri(String relativePath) {
         return duckDbPath(fileSystem.makeQualified(resolve(relativePath)).toUri().toString());
     }
@@ -154,12 +168,6 @@ public final class HadoopDataStore implements DataStore {
             root = URI.create(root).getPath();
         }
         return List.of(root);
-    }
-
-    @Override
-    public List<String> duckDbSetupStatements() {
-        // The hadoopfs extension and its options come from the server configuration.
-        return List.of();
     }
 
     @Override
@@ -297,6 +305,36 @@ public final class HadoopDataStore implements DataStore {
             rootUri = result;
         }
         return result;
+    }
+
+    /**
+     * Opens a file whose length is known for positional reads; every read opens the file. The
+     * server reads footers through {@link #inputFile(DataFile)}, which keeps one stream.
+     *
+     * @param path file path
+     * @param length file length
+     * @return readable file
+     */
+    private ReadableFile readableFile(Path path, long length) {
+        return new ReadableFile() {
+            @Override
+            public long length() {
+                return length;
+            }
+
+            @Override
+            public void readFully(long position, byte[] buffer, int offset, int count)
+                    throws IOException {
+                try (FSDataInputStream input = fileSystem.open(path)) {
+                    input.readFully(position, buffer, offset, count);
+                }
+            }
+
+            @Override
+            public String toString() {
+                return path.toString();
+            }
+        };
     }
 
     /**

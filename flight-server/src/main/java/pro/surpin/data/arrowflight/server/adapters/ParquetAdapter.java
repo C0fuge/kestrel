@@ -23,7 +23,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
-import pro.surpin.data.arrowflight.server.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**

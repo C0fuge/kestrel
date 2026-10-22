@@ -1,7 +1,5 @@
 package pro.surpin.data.arrowflight.server.model;
 
-import pro.surpin.data.arrowflight.server.storage.S3Settings;
-
 /**
  * Server configuration loaded at startup.
  * Values are resolved from arrowflight.properties, system properties, and environment variables.
@@ -42,7 +40,6 @@ public record AppConfig(
     String resultMode,
     boolean widenUnsignedTypes,
     boolean duckDbLockdown,
-    S3Settings s3,
     int endpointBackupLocations,
     String metadataEndpointLocation,
     int duckDbHdfsConnectTimeoutMs,
@@ -71,9 +68,6 @@ public record AppConfig(
      * Fills in defaults that cannot be null.
      */
     public AppConfig {
-        if (s3 == null) {
-            s3 = S3Settings.NONE;
-        }
         if (endpointBackupLocations < 0) {
             throw new IllegalArgumentException(
                     "endpointBackupLocations must not be negative: " + endpointBackupLocations);
@@ -114,7 +108,7 @@ public record AppConfig(
             int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
             boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
             String duckDbTempDirectory, String authToken, String resultMode,
-            boolean widenUnsignedTypes, boolean duckDbLockdown, S3Settings s3,
+            boolean widenUnsignedTypes, boolean duckDbLockdown,
             int endpointBackupLocations, String metadataEndpointLocation) {
         this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
                 duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
@@ -125,7 +119,7 @@ public record AppConfig(
                 localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation,
                 DEFAULT_HDFS_CONNECT_TIMEOUT_MS, DEFAULT_HDFS_READ_TIMEOUT_MS);
     }
@@ -146,7 +140,7 @@ public record AppConfig(
             int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
             boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
             String duckDbTempDirectory, String authToken, String resultMode,
-            boolean widenUnsignedTypes, boolean duckDbLockdown, S3Settings s3,
+            boolean widenUnsignedTypes, boolean duckDbLockdown,
             int endpointBackupLocations) {
         this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
                 duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
@@ -157,7 +151,7 @@ public record AppConfig(
                 localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, METADATA_LOCATION_NONE);
     }
 
@@ -177,7 +171,7 @@ public record AppConfig(
                 localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, location, duckDbHdfsConnectTimeoutMs,
                 duckDbHdfsReadTimeoutMs);
     }
@@ -199,7 +193,7 @@ public record AppConfig(
                 localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation, connectTimeoutMs,
                 readTimeoutMs);
     }
@@ -240,7 +234,7 @@ public record AppConfig(
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
-                S3Settings.NONE, DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
+                DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
     }
 
     /**
@@ -270,7 +264,7 @@ public record AppConfig(
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
-                S3Settings.NONE, DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
+                DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
     }
 
     /**
@@ -297,67 +291,6 @@ public record AppConfig(
                 flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
                 localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
-                true, false, 64, null, null, "partial", true, true, S3Settings.NONE, DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
-    }
-
-    /**
-     * Configuration in the fork's pre-merge shape with S3 settings (pre-merge shape with S3;
-     * Arrow allocator limit: upstream's 2 GiB).
-     */
-    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
-    public AppConfig(int numServers, int batchSize, int ioParallelism, int ioFileBufferSize,
-            int duckDbWarmConnections, int duckDbGroups, int duckDbThreads,
-            String duckDbHdfsExtension, boolean duckDbAllowUnsignedExtensions,
-            String duckDbHdfsDefaultNamenode, String duckDbHdfsHaNamenodes,
-            String duckDbHdfsShortcircuit, String duckDbHdfsDomainSocketPath,
-            String duckDbMemoryLimit, boolean metricsEnabled,
-            int grpcMaxInboundMessageSize, int flightBackpressureThresholdBytes,
-            long flightListenerReadyTimeoutMillis, String dataDir, String localDataDir, int port,
-            int hazelcastPort, int hazelcastClusterJoinTimeoutSec, int clientMaxRetries,
-            int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
-            boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
-            String duckDbTempDirectory, String authToken, String resultMode,
-            boolean widenUnsignedTypes, boolean duckDbLockdown, S3Settings s3) {
-        this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
-                duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
-                duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes, duckDbHdfsShortcircuit,
-                duckDbHdfsDomainSocketPath, duckDbMemoryLimit, metricsEnabled,
-                2_147_483_648L, grpcMaxInboundMessageSize,
-                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
-                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
-                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
-                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
-                DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
-    }
-
-    /**
-     * Configuration without the endpoint backup setting (default backups).
-     */
-    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
-    public AppConfig(int numServers, int batchSize, int ioParallelism, int ioFileBufferSize,
-            int duckDbWarmConnections, int duckDbGroups, int duckDbThreads,
-            String duckDbHdfsExtension, boolean duckDbAllowUnsignedExtensions,
-            String duckDbHdfsDefaultNamenode, String duckDbHdfsHaNamenodes,
-            String duckDbHdfsShortcircuit, String duckDbHdfsDomainSocketPath,
-            String duckDbMemoryLimit, boolean metricsEnabled, long arrowAllocatorLimitBytes,
-            int grpcMaxInboundMessageSize, int flightBackpressureThresholdBytes,
-            long flightListenerReadyTimeoutMillis, String dataDir, String localDataDir, int port,
-            int hazelcastPort, int hazelcastClusterJoinTimeoutSec, int clientMaxRetries,
-            int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
-            boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
-            String duckDbTempDirectory, String authToken, String resultMode,
-            boolean widenUnsignedTypes, boolean duckDbLockdown, S3Settings s3) {
-        this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
-                duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
-                duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes, duckDbHdfsShortcircuit,
-                duckDbHdfsDomainSocketPath, duckDbMemoryLimit, metricsEnabled,
-                arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
-                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
-                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
-                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
-                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
-                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown, s3,
-                DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
+                true, false, 64, null, null, "partial", true, true, DEFAULT_ENDPOINT_BACKUP_LOCATIONS);
     }
 }

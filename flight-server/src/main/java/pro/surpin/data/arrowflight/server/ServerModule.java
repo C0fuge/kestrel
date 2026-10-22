@@ -24,13 +24,18 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
-import pro.surpin.data.arrowflight.server.storage.DataStores;
+import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
+import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 
 /**
  * Dagger module that wires all server components as singletons.
@@ -166,14 +171,26 @@ public final class ServerModule {
     }
 
     /**
-     * Provide DataStore singleton, chosen by the scheme of the data directory
+     * Provide StoreRegistry singleton: the stores and the plugins they need, chosen by the
+     * scheme of the data directory
      * @param config application configuration
+     * @return store registry
+     */
+    @Provides
+    @Singleton
+    StoreRegistry storeRegistry(AppConfig config) {
+        return StoreRegistry.open(config, hadoopConfig, localStorageHost);
+    }
+
+    /**
+     * Provide DataStore singleton, the store of the data directory
+     * @param registry store registry
      * @return store of the data directory
      */
     @Provides
     @Singleton
-    DataStore dataStore(AppConfig config) {
-        return DataStores.open(config, hadoopConfig, localStorageHost);
+    DataStore dataStore(StoreRegistry registry) {
+        return registry.dataDirectory();
     }
 
     /**
@@ -192,14 +209,41 @@ public final class ServerModule {
      * Provide DuckDbAdapter singleton
      * @param config application configuration
      * @param ioPool I/O thread pool
-     * @param store store of the data directory
+     * @param registry stores, whose checked DuckDB setup every connection runs
      * @return DuckDB adapter
      */
     @Provides
     @Singleton
+    DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
+        return new DuckDbAdapter(config, ioPool, registry.duckDbSetup());
+    }
+
+    /**
+     * Store of the data directory with the pre-plugin signature (not a provider; for tests that
+     * build stores and adapters one by one). The store's plugin stays loaded until the JVM ends.
+     *
+     * @param config application configuration
+     * @return store of the data directory
+     */
+    DataStore dataStore(AppConfig config) {
+        return storeRegistry(config).dataDirectory();
+    }
+
+    /**
+     * DuckDB adapter for one store with the pre-plugin signature (not a provider; for tests): the
+     * store's DuckDB setup is checked and written as the server does it.
+     *
+     * @param config application configuration
+     * @param ioPool I/O thread pool
+     * @param store store of the data directory
+     * @return DuckDB adapter
+     */
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, DataStore store) {
-        return new DuckDbAdapter(config, ioPool, store.duckDbRoots(),
-                store.duckDbSetupStatements());
+        DuckDbSetupPlan plan = new DuckDbSetupValidator(
+                new DuckDbExtensions(ConfigSource.system()), new SecretRedactor())
+                .plan(DuckDbSetupValidator.Contribution.ofStore(store.kind(), store),
+                        List.of(), List.of());
+        return new DuckDbAdapter(config, ioPool, plan);
     }
 
     /**

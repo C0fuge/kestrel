@@ -772,12 +772,12 @@ class QueryPlannerTest {
         lenient().when(parquetAdapter.getTables("tpch", null)).thenReturn(
                 Map.of("lineitem", "s3://lake/tpch/lineitem", "nation", "s3://lake/tpch/nation"));
         lenient().when(parquetAdapter.tableFiles("tpch", "lineitem")).thenReturn(List.of(
-                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/lineitem/a.parquet",
+                new pro.surpin.data.arrowflight.spi.storage.DataFile("tpch/lineitem/a.parquet",
                         "s3://lake/tpch/lineitem/a.parquet", 400L, 1L, Set.of()),
-                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/lineitem/b.parquet",
+                new pro.surpin.data.arrowflight.spi.storage.DataFile("tpch/lineitem/b.parquet",
                         "s3://lake/tpch/lineitem/b.parquet", 300L, 1L, Set.of())));
         lenient().when(parquetAdapter.tableFiles("tpch", "nation")).thenReturn(List.of(
-                new pro.surpin.data.arrowflight.server.storage.DataFile("tpch/nation/n.parquet",
+                new pro.surpin.data.arrowflight.spi.storage.DataFile("tpch/nation/n.parquet",
                         "s3://lake/tpch/nation/n.parquet", 5L, 1L, Set.of())));
     }
 }
