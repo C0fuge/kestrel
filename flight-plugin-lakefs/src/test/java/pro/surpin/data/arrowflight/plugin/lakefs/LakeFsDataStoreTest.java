@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.plugin.lakefs;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,7 @@ import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.plugin.s3.S3DataStore;
 import pro.surpin.data.arrowflight.plugin.s3.S3Settings;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataStore;
 import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 
 /** Branch pinning over a fake S3 gateway (bucket = repository, first segment = ref). */
@@ -46,12 +49,16 @@ class LakeFsDataStoreTest {
     }
 
     private LakeFsDataStore store(String root, boolean pin) {
-        S3Settings settings = new S3Settings(gateway.endpoint(), "us-east-1", "path", null, true,
-                "AKIALAKEFS", "secret", null, 30, 4, true);
         RefResolver resolver = (repository, ref) -> {
             resolutions.incrementAndGet();
             return "main".equals(ref) ? Optional.of(head) : Optional.empty();
         };
+        return store(root, pin, resolver);
+    }
+
+    private LakeFsDataStore store(String root, boolean pin, RefResolver resolver) {
+        S3Settings settings = new S3Settings(gateway.endpoint(), "us-east-1", "path", null, true,
+                "AKIALAKEFS", "secret", null, 30, 4, true);
         return new LakeFsDataStore(LakeFsUri.parse(root), settings,
                 S3DataStore.createClient(settings), resolver, pin, 1000, clock::get, Thread::new,
                 "test");
@@ -113,6 +120,85 @@ class LakeFsDataStoreTest {
         try (LakeFsDataStore store = store("lakefs://lake/c2/wh", false)) {
             assertEquals(2, store.tableFiles("tpch", "nation").size());
             assertEquals(0, resolutions.get());
+        }
+    }
+
+    @Test
+    void readScopeKeepsOneCommitBeyondTheTtlAndDataVersionFollowsTheBranch() throws IOException {
+        try (LakeFsDataStore store = store("lakefs://lake/main/wh", true)) {
+            assertEquals("c1", store.dataVersion());
+            try (DataStore.ReadScope outer = store.readScope()) {
+                assertEquals(List.of("@c1/tpch/nation/part-0.parquet"),
+                        paths(store.tableFiles("tpch", "nation")));
+                head = "c2";
+                clock.addAndGet(5_000_000_000L);
+                try (DataStore.ReadScope inner = store.readScope()) {
+                    assertEquals(List.of("@c1/tpch/nation/part-0.parquet"),
+                            paths(store.tableFiles("tpch", "nation")));
+                }
+                // Still inside the outer scope: same commit, also for the version.
+                assertEquals("c1", store.dataVersion());
+                assertEquals(1, store.parquetFiles("tpch/nation").size());
+            }
+            assertEquals("c2", store.dataVersion());
+            assertEquals(2, store.tableFiles("tpch", "nation").size());
+        }
+    }
+
+    @Test
+    void scopesOfOtherThreadsResolveOnTheirOwn() throws Exception {
+        try (LakeFsDataStore store = store("lakefs://lake/main/wh", true);
+                DataStore.ReadScope scope = store.readScope()) {
+            assertEquals("c1", store.dataVersion());
+            head = "c2";
+            clock.addAndGet(5_000_000_000L);
+            AtomicReference<String> other = new AtomicReference<>();
+            Thread thread = new Thread(() -> {
+                try {
+                    other.set(store.dataVersion());
+                } catch (IOException e) {
+                    other.set(e.toString());
+                }
+            });
+            thread.start();
+            thread.join();
+            assertEquals("c2", other.get());
+            assertEquals("c1", store.dataVersion());
+        }
+    }
+
+    @Test
+    void tagsAndCommitsAreConfirmedOnceAndUnknownRefsFailClearly() throws IOException {
+        AtomicInteger confirmations = new AtomicInteger();
+        RefResolver resolver = new RefResolver() {
+            @Override
+            public Optional<String> branchHead(String repository, String ref) {
+                resolutions.incrementAndGet();
+                return Optional.empty();
+            }
+
+            @Override
+            public String refCommit(String repository, String ref) throws IOException {
+                confirmations.incrementAndGet();
+                if (!"v1".equals(ref)) {
+                    throw new IOException("lakeFS repository '" + repository
+                            + "' has no branch, tag or commit '" + ref + "'");
+                }
+                return "c1";
+            }
+        };
+        try (LakeFsDataStore store = store("lakefs://lake/v1/wh", true, resolver)) {
+            store.tableFiles("tpch", "nation");
+            clock.addAndGet(5_000_000_000L);
+            store.tableFiles("tpch", "nation");
+            assertEquals("v1", store.dataVersion());
+            assertEquals(1, resolutions.get());
+            assertEquals(1, confirmations.get());
+        }
+        try (LakeFsDataStore store = store("lakefs://lake/mian/wh", true, resolver)) {
+            IOException e = assertThrows(IOException.class,
+                    () -> store.tableFiles("tpch", "nation"));
+            assertTrue(e.getMessage().contains("no branch, tag or commit 'mian'"), e.getMessage());
         }
     }
 

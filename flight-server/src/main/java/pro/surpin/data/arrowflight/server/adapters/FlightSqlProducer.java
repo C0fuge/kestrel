@@ -353,6 +353,25 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         return false;
     }
 
+    /**
+     * Finds the outermost storage error with a message in a failure's causes.
+     *
+     * @param failure failure
+     * @return the I/O exception, or null when the failure has none
+     */
+    private static IOException storageFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IOException io && io.getMessage() != null
+                    && !io.getMessage().isBlank()) {
+                return io;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return null;
+    }
+
     private static String failureDescription(Throwable failure) {
         Throwable root = failure;
         while (root.getCause() != null && root.getCause() != root) {
@@ -624,6 +643,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             if (message.startsWith("Invalid SQL query")) {
                 throw CallStatus.INVALID_ARGUMENT
                         .withDescription(failureDescription(e))
+                        .withCause(e).toRuntimeException();
+            }
+            IOException storage = storageFailure(e);
+            if (storage != null) {
+                // Listing or footer reads failed (store or lakeFS unreachable, refused): say so.
+                String why = "Cannot read the table's files: " + storage.getMessage();
+                throw CallStatus.UNAVAILABLE
+                        .withDescription(why.length() <= 1024 ? why : why.substring(0, 1024))
                         .withCause(e).toRuntimeException();
             }
             throw CallStatus.INTERNAL

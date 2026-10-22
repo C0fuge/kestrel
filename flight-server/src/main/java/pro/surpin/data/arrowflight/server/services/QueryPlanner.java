@@ -39,6 +39,7 @@ import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.model.HandleState;
 import pro.surpin.data.arrowflight.server.model.QueryPlan;
+import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 
@@ -153,6 +154,15 @@ public final class QueryPlanner {
      *         nodes serve the table
      */
     public QueryPlan plan(String query, boolean plannerAsBackup) throws IOException {
+        DataStore store = parquetAdapter.dataStore();
+        // One read scope: every table of the plan comes from the same data version (lakeFS commit).
+        try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
+                : store.readScope()) {
+            return planInScope(query, plannerAsBackup);
+        }
+    }
+
+    private QueryPlan planInScope(String query, boolean plannerAsBackup) throws IOException {
         long t = LogUtil.mark();
         ParquetQueryParser parsed = ParquetQueryParser.parse(query);
         long tSv = LogUtil.mark();

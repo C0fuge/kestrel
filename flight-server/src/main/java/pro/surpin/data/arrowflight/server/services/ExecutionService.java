@@ -344,7 +344,7 @@ public final class ExecutionService {
             Connection conn = duckDbAdapter.connection();
             List<String> aliases = new ArrayList<>();
             try {
-                createJoinViews(conn, pq, aliases, true);
+                createJoinViews(conn, pq, aliases, true, null);
                 return duckDbAdapter.describeSql(allocator, pq.duckDbSql);
             } finally {
                 dropJoinViews(conn, aliases);
@@ -756,7 +756,7 @@ public final class ExecutionService {
         Connection conn = duckDbAdapter.connection();
         List<String> registeredAliases = new ArrayList<>();
         try {
-            createJoinViews(conn, pq, registeredAliases, false);
+            createJoinViews(conn, pq, registeredAliases, false, fileUris);
             duckDbAdapter.streamSql(allocator, pq.duckDbSql, listener, startListener);
         } finally {
             dropJoinViews(conn, registeredAliases);
@@ -774,17 +774,27 @@ public final class ExecutionService {
      * @throws Exception on file listing or DuckDB failure
      */
     private void createJoinViews(Connection conn, ParquetQueryParser pq,
-            List<String> registeredAliases, boolean empty) throws Exception {
+            List<String> registeredAliases, boolean empty, String[] ticketFiles)
+            throws Exception {
         Map<String, List<String>> tableFiles = new LinkedHashMap<>();
-        for (ParquetQueryParser.JoinTable jt : pq.joinTables) {
-            String key = (jt.schema() != null ? jt.schema() + "." : "") + jt.table();
-            tableFiles.computeIfAbsent(key, k -> {
-                try {
-                    return resolveTableFiles(k);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            });
+        DataStore store = parquetAdapter.dataStore();
+        // The ticket names every file of every joined table as planned (a join has one
+        // endpoint): read exactly those, so a table that changed after planning (a new lakeFS
+        // commit) is not mixed in. Tables the ticket does not cover are listed, in one read
+        // scope so that they come from one data version.
+        try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
+                : store.readScope()) {
+            for (ParquetQueryParser.JoinTable jt : pq.joinTables) {
+                String key = (jt.schema() != null ? jt.schema() + "." : "") + jt.table();
+                tableFiles.computeIfAbsent(key, k -> {
+                    try {
+                        List<String> planned = plannedTableFiles(store, k, ticketFiles);
+                        return planned.isEmpty() ? resolveTableFiles(k) : planned;
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
         }
 
         for (ParquetQueryParser.JoinTable jt : pq.joinTables) {
@@ -908,6 +918,29 @@ public final class ExecutionService {
      * @return DuckDB-compatible file paths
      * @throws IOException on storage read failure
      */
+    /**
+     * Picks the files of one joined table from the files of a ticket.
+     *
+     * @param store data store
+     * @param key {@code schema.table} or {@code table}
+     * @param ticketFiles relative paths of the ticket, null when there is no ticket
+     * @return DuckDB paths of the table's files in the ticket, empty when it names none
+     */
+    static List<String> plannedTableFiles(DataStore store, String key, String[] ticketFiles) {
+        if (store == null || ticketFiles == null) {
+            return List.of();
+        }
+        String directory = key.replace('.', '/') + "/";
+        List<String> uris = new ArrayList<>();
+        for (String file : ticketFiles) {
+            String plain = store.unversionedPath(file);
+            if (plain != null && plain.startsWith(directory)) {
+                uris.add(store.duckDbUri(file));
+            }
+        }
+        return uris;
+    }
+
     private List<String> resolveTableFiles(String key) throws IOException {
         long t = LogUtil.mark();
         int dot = key.indexOf('.');

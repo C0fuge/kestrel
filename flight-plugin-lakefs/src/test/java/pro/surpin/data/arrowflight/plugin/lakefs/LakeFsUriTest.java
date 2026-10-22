@@ -26,5 +26,11 @@ class LakeFsUriTest {
         assertThrows(IllegalArgumentException.class, () -> LakeFsUri.parse("lakefs://repo/main~1/x"));
         assertThrows(IllegalArgumentException.class, () -> LakeFsUri.parse("lakefs://repo/../x"));
         assertThrows(IllegalArgumentException.class, () -> LakeFsUri.parse("lakefs://repo/main//x"));
+        // Dot segments would leave the ref on the S3 gateway: refused before anything is asked.
+        assertThrows(IllegalArgumentException.class,
+                () -> LakeFsUri.parse("lakefs://repo/main/../tag/wh"));
+        assertThrows(IllegalArgumentException.class,
+                () -> LakeFsUri.parse("lakefs://repo/main/wh/./x"));
+        assertThrows(IllegalArgumentException.class, () -> LakeFsUri.parse("lakefs://repo/main/.."));
     }
 }

@@ -16,8 +16,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -69,6 +73,60 @@ class CatalogViewsTest {
             assertEquals("DROP VIEW IF EXISTS main.\"only\"", views.dropStatements().get(0));
             assertTrue(views.dropStatements().contains("DROP SCHEMA IF EXISTS \"b\" CASCADE"));
             assertTrue(views.dataStatements().stream().anyMatch(sql -> sql.contains("CAST(\"x\" AS SMALLINT)")));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies a new data version of the store (a lakeFS branch moved to another commit) rebuilds
+     * the views at once, not after the minute, and that each rebuild lists in one read scope.
+     */
+    @Test
+    void newDataVersionRefreshesTheViewsAtOnceInOneReadScope(@TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path one = dir.resolve("c1.parquet");
+        java.nio.file.Path two = dir.resolve("c2.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT 1 AS x) TO '" + one + "' (FORMAT parquet)");
+            s.execute("COPY (SELECT 2 AS x) TO '" + two + "' (FORMAT parquet)");
+        }
+        AtomicReference<String> version = new AtomicReference<>("c1");
+        AtomicInteger opened = new AtomicInteger();
+        AtomicInteger closed = new AtomicInteger();
+        DataStore store = mock(DataStore.class);
+        when(store.dataVersion()).thenAnswer(inv -> version.get());
+        when(store.readScope()).thenAnswer(inv -> {
+            opened.incrementAndGet();
+            return (DataStore.ReadScope) closed::incrementAndGet;
+        });
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> java.nio.file.Path.of(
+                java.net.URI.create(inv.<DataFile>getArgument(0).location())).toString());
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("a", "/a"));
+        when(parquet.getTables(eq("a"), any())).thenReturn(Map.of("t", "/a/t"));
+        when(parquet.tableFiles(any(), any())).thenAnswer(inv -> {
+            java.nio.file.Path file = "c1".equals(version.get()) ? one : two;
+            return List.of(new DataFile("@" + version.get() + "/a/t/f.parquet",
+                    file.toUri().toString(), java.nio.file.Files.size(file), 0, null));
+        });
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            CatalogViews views = new CatalogViews(parquet, duck, true);
+            CatalogViews.Snapshot first = views.current();
+            assertSame(first, views.current());
+            assertEquals(1, opened.get());
+            assertTrue(first.dataStatements().toString().contains(one.toString()));
+
+            version.set("c2");
+            CatalogViews.Snapshot second = views.current();
+            assertNotEquals(first.version(), second.version());
+            assertTrue(second.dataStatements().toString().contains(two.toString()),
+                    second.dataStatements().toString());
+            assertEquals(2, opened.get());
+            assertEquals(2, closed.get());
         } finally {
             ioPool.shutdownNow();
         }

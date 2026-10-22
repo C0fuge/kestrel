@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -43,6 +44,13 @@ class HttpRefResolverTest {
             } else if (path.equals("/api/v1/repositories/lake/branches/broken")) {
                 status = 200;
                 body = "{\"id\":\"broken\"}";
+            } else if (path.equals("/api/v1/repositories/lake/commits/v1")) {
+                status = 200;
+                body = "{\"committer\":\"admin\",\"meta_range_id\":\"m1\",\"id\":\"c0ffee43\","
+                        + "\"parents\":[\"c0ffee42\"]}";
+            } else if (path.equals("/api/v1/repositories/lake")) {
+                status = 200;
+                body = "{\"id\":\"lake\"}";
             } else if (path.startsWith("/api/v1/repositories/locked/")) {
                 status = 401;
                 body = "{\"message\":\"secret-in-body\"}";
@@ -90,5 +98,33 @@ class HttpRefResolverTest {
         assertFalse(e.getMessage().contains("secret"), e.getMessage());
         assertFalse(e.getMessage().contains("s3cr3t"), e.getMessage());
         assertThrows(IOException.class, () -> resolver().branchHead("lake", "broken"));
+        assertTrue(e.getMessage().contains("refused the credentials"), e.getMessage());
+    }
+
+    @Test
+    void tagOrCommitIsConfirmedAndUnknownRefsAreNamed() throws IOException {
+        assertEquals("c0ffee43", resolver().refCommit("lake", "v1"));
+        IOException ref = assertThrows(IOException.class,
+                () -> resolver().refCommit("lake", "mian"));
+        assertEquals("lakeFS repository 'lake' has no branch, tag or commit 'mian'",
+                ref.getMessage());
+        IOException repo = assertThrows(IOException.class,
+                () -> resolver().refCommit("nosuch", "main"));
+        assertTrue(repo.getMessage().startsWith("lakeFS repository 'nosuch' does not exist"),
+                repo.getMessage());
+    }
+
+    @Test
+    void unreachableLakeFsIsNamed() throws IOException {
+        int port;
+        try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            port = socket.getLocalPort();
+        }
+        HttpRefResolver closed = new HttpRefResolver(URI.create("http://127.0.0.1:" + port
+                + "/api/v1"), "AKIALAKEFS", "s3cr3t", null, Duration.ofSeconds(2));
+        IOException e = assertThrows(IOException.class, () -> closed.branchHead("lake", "main"));
+        assertTrue(e.getMessage().contains("lakeFS not reachable: ConnectException"),
+                e.getMessage());
+        assertFalse(e.getMessage().contains("s3cr3t"), e.getMessage());
     }
 }

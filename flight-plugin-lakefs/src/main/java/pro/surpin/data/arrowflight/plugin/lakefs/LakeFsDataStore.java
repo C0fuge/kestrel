@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
@@ -51,6 +52,7 @@ public final class LakeFsDataStore implements DataStore {
     private final String node;
     private final Map<String, S3DataStore> stores = new LinkedHashMap<>(8, 0.75f, true);
     private final Object resolution = new Object();
+    private final ThreadLocal<Scope> scopes = new ThreadLocal<>();
     private Resolved resolved;
 
     /**
@@ -58,9 +60,16 @@ public final class LakeFsDataStore implements DataStore {
      *
      * @param ref commit id, or the configured ref when it is not a pinned branch
      * @param pinned whether relative paths carry the ref
+     * @param fixed whether the ref is a tag or commit id that lakeFS confirmed (not asked again)
      * @param atNanos when it was resolved
      */
-    private record Resolved(String ref, boolean pinned, long atNanos) {
+    private record Resolved(String ref, boolean pinned, boolean fixed, long atNanos) {
+    }
+
+    /** Read scope of one thread: the first resolution inside it holds until it closes. */
+    private static final class Scope {
+        private Resolved resolved;
+        private int depth;
     }
 
     /**
@@ -183,6 +192,50 @@ public final class LakeFsDataStore implements DataStore {
         return Map.of();
     }
 
+    /**
+     * Names the commit the configured branch points to (from the shared resolution, at most
+     * one REST call per {@code pinTtlMillis}); the configured ref for tags, commit ids and
+     * unpinned branches.
+     */
+    @Override
+    public String dataVersion() throws IOException {
+        return resolve().ref();
+    }
+
+    /** Strips the {@code @<commit>/} of a pinned path. */
+    @Override
+    public String unversionedPath(String relativePath) {
+        if (relativePath != null && relativePath.startsWith(PIN)) {
+            int slash = relativePath.indexOf('/');
+            return slash < 0 ? "" : relativePath.substring(slash + 1);
+        }
+        return relativePath;
+    }
+
+    /**
+     * Holds the first branch resolution made on this thread until the scope closes, so that
+     * every table listed for one plan or one view refresh comes from the same commit, also
+     * when the listings take longer than {@code pinTtlMillis}.
+     */
+    @Override
+    public ReadScope readScope() {
+        if (!pinBranches) {
+            return ReadScope.NONE;
+        }
+        Scope scope = scopes.get();
+        if (scope == null) {
+            scope = new Scope();
+            scopes.set(scope);
+        }
+        scope.depth++;
+        Scope held = scope;
+        return () -> {
+            if (--held.depth <= 0) {
+                scopes.remove();
+            }
+        };
+    }
+
     @Override
     public void close() {
         synchronized (stores) {
@@ -248,16 +301,34 @@ public final class LakeFsDataStore implements DataStore {
      */
     private Resolved resolve() throws IOException {
         if (!pinBranches) {
-            return new Resolved(root.ref(), false, 0L);
+            return new Resolved(root.ref(), false, true, 0L);
         }
+        Scope scope = scopes.get();
+        if (scope != null && scope.resolved != null) {
+            return scope.resolved;
+        }
+        Resolved current = resolveShared();
+        if (scope != null) {
+            scope.resolved = current;
+        }
+        return current;
+    }
+
+    private Resolved resolveShared() throws IOException {
         synchronized (resolution) {
             long now = nanoClock.getAsLong();
-            if (resolved != null && now - resolved.atNanos() < pinTtlNanos) {
+            if (resolved != null && (resolved.fixed() || now - resolved.atNanos() < pinTtlNanos)) {
                 return resolved;
             }
-            Resolved next = resolver.branchHead(root.repository(), root.ref())
-                    .map(commit -> new Resolved(LakeFsUri.requireRef(commit), true, now))
-                    .orElseGet(() -> new Resolved(root.ref(), false, now));
+            Optional<String> head = resolver.branchHead(root.repository(), root.ref());
+            Resolved next;
+            if (head.isPresent()) {
+                next = new Resolved(LakeFsUri.requireRef(head.get()), true, false, now);
+            } else {
+                // A tag or commit id: lakeFS confirms it once (a clear error for a typo).
+                resolver.refCommit(root.repository(), root.ref());
+                next = new Resolved(root.ref(), false, true, now);
+            }
             if (resolved == null || !resolved.ref().equals(next.ref())) {
                 LOGGER.info("node={} lakefs=refResolved repository={} ref={} reads={} pinned={}",
                         node, root.repository(), root.ref(), next.ref(), next.pinned());
