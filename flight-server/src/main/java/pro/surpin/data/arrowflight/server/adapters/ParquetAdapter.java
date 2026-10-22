@@ -42,6 +42,8 @@ public class ParquetAdapter {
     private final String dataDirectory;
     private final String localhost;
     private final CatalogTables catalogTables;
+    /** Whether this node is loading the catalog now (guarded by this). */
+    private boolean refreshing;
 
     private volatile CatalogSnapshot catalog;
     private final Map<TableKey, CachedTableSchema> arrowSchemaCache =
@@ -499,13 +501,32 @@ public class ParquetAdapter {
         return result.toString();
     }
 
-    /** Refreshes the catalog inventory and its DDL definitions. */
+    /**
+     * Refreshes the catalog inventory and its DDL definitions. A refresh the loading itself
+     * asks for (the data directory's tables ask whether their schema belongs to a catalog) is
+     * skipped: it would recurse until the stack overflows.
+     */
     public synchronized void refreshCatalog() {
+        if (refreshing) {
+            return;
+        }
+        refreshing = true;
         try {
             catalog = loadCatalog();
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        } finally {
+            refreshing = false;
         }
+    }
+
+    /**
+     * Lets the catalog snapshot expire now, for tests of the refresh.
+     */
+    synchronized void expireCatalog() {
+        CatalogSnapshot c = catalog;
+        catalog = new CatalogSnapshot(c.schemas(), c.tables(), c.ddls(), c.catalogSchemas(),
+                System.nanoTime() - 1);
     }
 
     /** Initializes cached DDL definitions for all discovered tables. */
@@ -564,10 +585,12 @@ public class ParquetAdapter {
     }
 
     /**
-     * Lists the tables of a catalog schema; a catalog that cannot be read shows none.
+     * Lists the tables of a catalog schema; a catalog that cannot be read is an error, never an
+     * empty schema.
      *
      * @param schema catalog schema
      * @return table name to a location text
+     * @throws UncheckedIOException when the catalog cannot be read
      */
     private Map<String, String> catalogTableNames(String schema) {
         try {
@@ -576,10 +599,11 @@ public class ParquetAdapter {
                 result.put(table, "catalog:" + schema + "." + table);
             }
             return result;
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException e) {
             LOGGER.warn("node={} catalog=tablesFailed schema={} error='{}'", LogUtil.node(), schema,
                     e.getMessage());
-            return Map.of();
+            throw new UncheckedIOException("The catalog of schema " + schema + " cannot be read: "
+                    + e.getMessage(), e);
         }
     }
 

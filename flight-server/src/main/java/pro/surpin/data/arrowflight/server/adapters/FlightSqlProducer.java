@@ -972,6 +972,13 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             LOGGER.error("Failed to getStreamTables", e);
             listener.error(e);
             return;
+        } catch (java.io.UncheckedIOException e) {
+            // A catalog (Hive Metastore, Iceberg REST) cannot be read: say so, never list less.
+            LOGGER.warn("node={} getTables=catalogUnavailable error='{}'", LogUtil.node(),
+                    e.getMessage());
+            listener.error(CallStatus.UNAVAILABLE.withDescription(e.getMessage()).withCause(e)
+                    .toRuntimeException());
+            return;
         }
 
         boolean errored = false;

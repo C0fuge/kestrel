@@ -32,8 +32,11 @@ import pro.surpin.data.arrowflight.server.catalog.CatalogLocations;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.catalog.DefaultCatalogContext;
 import pro.surpin.data.arrowflight.server.catalog.SpiCatalog;
+import pro.surpin.data.arrowflight.server.catalog.SpiTableFormat;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogProvider;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormatProvider;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 import pro.surpin.data.arrowflight.spi.storage.DataStoreProvider;
 import pro.surpin.data.arrowflight.spi.storage.Located;
@@ -396,7 +399,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
         Map.Entry<PluginManager.LoadedPlugin, CatalogProvider> found = opening.plugins()
                 .catalogProvider(name).orElseThrow(() -> new IllegalArgumentException("catalog=" + name
                         + " needs a plugin that provides it (provides.catalog in its descriptor;"
-                        + " the iceberg plugin provides iceberg-hadoop and iceberg-rest), but "
+                        + " the iceberg plugin provides iceberg-hadoop and iceberg-rest, the hive"
+                        + " plugin hive), but "
                         + (opening.plugins().pluginsDir() == null
                                 ? "no plugins directory is configured (arrowflight.plugins.dir or"
                                         + " FLIGHT_PLUGINS_DIR)"
@@ -409,7 +413,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                     opening.source(), provider.configKeys());
             pluginConfig.requireNoSecretProperties();
             catalog = provider.open(new DefaultCatalogContext(pluginConfig, stores,
-                    opening.redactor(), opening.node(), loader));
+                    opening.redactor(), opening.node(), loader,
+                    format -> openFormat(format, stores, opening)));
         } catch (IOException e) {
             throw new UncheckedIOException("Catalog " + name + " cannot be opened: "
                     + opening.redactor().redact(String.valueOf(e.getMessage())), e);
@@ -430,6 +435,41 @@ public final class StoreRegistry implements Stores, AutoCloseable {
             throw new IllegalArgumentException("Catalog " + name + " names no readable roots");
         }
         return new CatalogTables.Entry(wrapped, roots, shared);
+    }
+
+    /**
+     * Opens a new instance of the table format a plugin provides, for a catalog of another plugin.
+     *
+     * @param name format name
+     * @param stores stores handed to the catalog (and to the format)
+     * @param opening what opening needs
+     * @return the format, its calls wrapped in its plugin's class loader; empty without a plugin
+     *         that provides it
+     * @throws IOException when the format cannot be opened
+     */
+    private static Optional<TableFormat> openFormat(String name, CatalogStores stores,
+            Opening opening) throws IOException {
+        Optional<Map.Entry<PluginManager.LoadedPlugin, TableFormatProvider>> found;
+        try {
+            found = opening.plugins().formatProvider(name);
+        } catch (IllegalStateException e) {
+            throw new IOException("Table format " + name + " cannot be loaded: " + e.getMessage(), e);
+        }
+        if (found.isEmpty()) {
+            return Optional.empty();
+        }
+        ClassLoader loader = found.get().getKey().loader();
+        TableFormatProvider provider = found.get().getValue();
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            PropertiesPluginConfig pluginConfig = new PropertiesPluginConfig(provider.name(),
+                    opening.source(), provider.configKeys());
+            pluginConfig.requireNoSecretProperties();
+            TableFormat format = provider.open(new DefaultCatalogContext(pluginConfig, stores,
+                    opening.redactor(), opening.node(), loader, null));
+            LOGGER.info("node={} catalog=formatOpen format={} plugin={}", opening.node(), name,
+                    found.get().getKey().descriptor().name());
+            return Optional.of(new SpiTableFormat(format, loader, provider.name()));
+        }
     }
 
     /**

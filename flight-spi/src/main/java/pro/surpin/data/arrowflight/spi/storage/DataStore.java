@@ -71,6 +71,47 @@ public interface DataStore extends AutoCloseable {
     List<DataFile> parquetFiles(String relativeDirectory) throws IOException;
 
     /**
+     * Lists the data files of a directory whatever their names (Hive and Trino write files
+     * without the ".parquet" extension), skipping hidden names that start with "_" or "." and
+     * everything below such directories; in path order. The default lists the Parquet files.
+     *
+     * @param relativeDirectory directory below the root
+     * @param recursive whether files of subdirectories count too
+     * @return files
+     * @throws IOException on storage access failure, including a missing directory
+     * @since SPI 1.1
+     */
+    default List<DataFile> files(String relativeDirectory, boolean recursive) throws IOException {
+        String prefix = relativeDirectory.isEmpty() || relativeDirectory.endsWith("/")
+                ? relativeDirectory : relativeDirectory + "/";
+        List<DataFile> result = new java.util.ArrayList<>();
+        for (DataFile file : parquetFiles(relativeDirectory)) {
+            String below = file.relativePath().startsWith(prefix)
+                    ? file.relativePath().substring(prefix.length()) : file.relativePath();
+            if (!hiddenPath(below) && (recursive || below.indexOf('/') < 0)) {
+                result.add(file);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Tells whether a relative path has a hidden segment (a name starting with "_" or ".").
+     *
+     * @param relativePath path below a listed directory
+     * @return true when a segment is hidden
+     * @since SPI 1.1
+     */
+    static boolean hiddenPath(String relativePath) {
+        for (String segment : relativePath.split("/")) {
+            if (segment.startsWith("_") || segment.startsWith(".")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Lists the Parquet files of a table, in path order.
      *
      * @param schema schema name

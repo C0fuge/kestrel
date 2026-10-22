@@ -9,7 +9,9 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
@@ -118,7 +120,20 @@ public final class CatalogViews {
             String createSchema = "CREATE SCHEMA IF NOT EXISTS " + DuckDbAdapter.quoteIdentifier(schema);
             boolean schemaAdded = false;
             boolean catalogSchema = parquetAdapter.isCatalogSchema(schema);
-            for (String table : parquetAdapter.getTables(schema, null).keySet().stream().sorted().toList()) {
+            List<String> tableNames;
+            try {
+                tableNames = parquetAdapter.getTables(schema, null).keySet().stream().sorted().toList();
+            } catch (RuntimeException e) {
+                if (!catalogSchema) {
+                    throw e;
+                }
+                // The catalog cannot be read now: keep the views made before (an outage of a
+                // metastore must not make its tables vanish from complete answers).
+                tableNames = keptTables(schema);
+                LOGGER.warn("node={} views=keepSchema schema={} tables={} reason=catalog error='{}'",
+                        LogUtil.node(), schema, tableNames.size(), e.getMessage());
+            }
+            for (String table : tableNames) {
                 String key = schema + "\u0000" + table;
                 TableViews views;
                 if (catalogSchema) {
@@ -242,21 +257,71 @@ public final class CatalogViews {
                 return null;
             }
             TableSnapshot snapshot = resolved.get().snapshot();
-            if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg)) {
-                LOGGER.warn("node={} views=skipTable table={}.{} reason=readSpec read={}",
-                        LogUtil.node(), schema, table, snapshot.read());
-                return null;
-            }
             String fingerprint = "catalog:" + snapshot.fingerprint();
             if (previous != null && previous.fingerprint().equals(fingerprint)) {
                 return previous;
             }
-            return describeSource(schema, table, icebergScan(iceberg.metadataLocation()), fingerprint);
-        } catch (IOException | SQLException | RuntimeException e) {
+            String source;
+            if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
+                source = icebergScan(iceberg.metadataLocation());
+            } else if (snapshot.columns().isEmpty()) {
+                LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns", LogUtil.node(),
+                        schema, table);
+                return null;
+            } else if (snapshot.files().isEmpty()) {
+                source = declaredColumnsSource(snapshot);
+            } else {
+                source = CatalogSources.filesSource(snapshot, snapshot.files());
+            }
+            return describeSource(schema, table, source, fingerprint);
+        } catch (IOException e) {
+            if (previous != null) {
+                LOGGER.warn("node={} views=keepTable table={}.{} reason=catalog error='{}'",
+                        LogUtil.node(), schema, table, e.getMessage());
+                return previous;
+            }
+            LOGGER.warn("node={} views=skipTable table={}.{} reason=catalog error='{}'",
+                    LogUtil.node(), schema, table, e.getMessage());
+            return null;
+        } catch (SQLException | RuntimeException e) {
             LOGGER.warn("node={} views=skipTable table={}.{} reason=catalog error='{}'",
                     LogUtil.node(), schema, table, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Lists the tables of a schema that have views from an earlier refresh.
+     *
+     * @param schema schema name
+     * @return table names, sorted
+     */
+    private List<String> keptTables(String schema) {
+        String prefix = schema + "\u0000";
+        List<String> result = new ArrayList<>();
+        for (String key : tables.keySet()) {
+            if (key.startsWith(prefix)) {
+                result.add(key.substring(prefix.length()));
+            }
+        }
+        result.sort(String::compareTo);
+        return result;
+    }
+
+    /**
+     * Names a source with a snapshot's declared columns and no rows, for a table without data
+     * files.
+     *
+     * @param snapshot snapshot with its columns
+     * @return FROM source
+     */
+    public static String declaredColumnsSource(TableSnapshot snapshot) {
+        List<String> typed = new ArrayList<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            typed.add("CAST(NULL AS " + column.duckDbType() + ") AS "
+                    + DuckDbAdapter.quoteIdentifier(column.name()));
+        }
+        return "(SELECT " + String.join(", ", typed) + " WHERE false)";
     }
 
     /**

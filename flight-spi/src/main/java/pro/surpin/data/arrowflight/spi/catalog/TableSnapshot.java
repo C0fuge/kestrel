@@ -11,7 +11,8 @@ import java.util.Objects;
  *                   files); another node reads the same snapshot through it
  * @param fingerprint changes whenever the readable content changes; views and caches key on it
  * @param columns declared columns; empty when the server should read the first file's footer
- * @param partitionColumns partition columns whose values are not stored in the files
+ * @param partitionColumns partition columns whose values are not stored in the files; each one is
+ *                         also declared in {@code columns}, with its type
  * @param files data files, in a stable order
  * @param read how the files are read
  */

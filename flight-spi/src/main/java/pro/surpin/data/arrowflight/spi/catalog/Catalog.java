@@ -50,6 +50,23 @@ public interface Catalog extends AutoCloseable {
     }
 
     /**
+     * Returns the columns of the snapshot the planning node used, for an executing node whose
+     * ticket names the snapshot's files with their partition values (snapshots read as
+     * {@link ReadSpec.ParquetFiles}): such a node never lists the files again, so the returned
+     * snapshot may come without files. The default returns {@link #pinned}.
+     *
+     * @param table table name
+     * @param snapshotId snapshot ID from the planning node
+     * @return a snapshot with the same columns, empty when the columns changed since
+     * @throws IOException when the catalog cannot be read
+     * @since SPI 1.1
+     */
+    default Optional<TableSnapshot> pinnedColumns(TableName table, String snapshotId)
+            throws IOException {
+        return pinned(table, snapshotId);
+    }
+
+    /**
      * Tells why the data files of a snapshot cannot each be read on their own with
      * {@code read_parquet} and the snapshot's columns (field IDs), so that the server answers
      * queries of the table completely instead of in parts: for example a nested column whose

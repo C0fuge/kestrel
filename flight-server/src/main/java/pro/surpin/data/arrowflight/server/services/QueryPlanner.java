@@ -31,6 +31,8 @@ import pro.surpin.data.arrowflight.server.adapters.HostUtils;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.catalog.CatalogFileKey;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.server.catalog.PartitionPruner;
+import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
@@ -291,11 +293,28 @@ public final class QueryPlanner {
             return planComplete(query, null);
         }
         TableSnapshot snapshot = resolved.snapshot();
+        // Parquet files of other catalogs (Hive) travel with their partition values, read once
+        // here: executing nodes never list partitions again. Partitions the WHERE clause rules
+        // out are left out (one file stays, so that every query has an endpoint).
+        boolean shipValues = snapshot.read() instanceof ReadSpec.ParquetFiles;
+        List<TableFile> planned = snapshot.files();
+        if (shipValues && !snapshot.partitionColumns().isEmpty()) {
+            planned = PartitionPruner.prune(snapshot, parsed.filter);
+            if (planned.isEmpty()) {
+                planned = snapshot.files().subList(0, 1);
+            }
+            if (planned.size() < snapshot.files().size()) {
+                LOGGER.debug("node={} planning=partitionsPruned table={} files={} of {}",
+                        LogUtil.node(), snapshot.name(), planned.size(), snapshot.files().size());
+            }
+        }
         Map<String, FileAssignment> files = new LinkedHashMap<>();
         long records = 0;
-        for (TableFile file : snapshot.files()) {
-            files.put(new CatalogFileKey(snapshot.snapshotId(), file.location()).encode(),
-                    new FileAssignment(file.size(), Set.of()));
+        for (TableFile file : planned) {
+            CatalogFileKey key = shipValues
+                    ? new CatalogFileKey(snapshot.snapshotId(), file.location(), file.partitionValues())
+                    : new CatalogFileKey(snapshot.snapshotId(), file.location());
+            files.put(key.encode(), new FileAssignment(file.size(), Set.of()));
             records = records < 0 || file.recordCount() < 0 ? -1 : records + file.recordCount();
         }
         Map<String, Long> loads = new HashMap<>(cluster.serverLoads());
@@ -516,6 +535,9 @@ public final class QueryPlanner {
         for (String schemaName : new java.util.TreeSet<>(parquetAdapter.getSchemas(null).keySet())) {
             if (schema != null && !schema.isEmpty() && !schemaName.equalsIgnoreCase(schema)) {
                 continue;
+            }
+            if (parquetAdapter.isCatalogSchema(schemaName)) {
+                continue;   // catalog tables have no listed files (and their catalog may be down)
             }
             for (String tableName : new java.util.TreeSet<>(
                     parquetAdapter.getTables(schemaName, null).keySet())) {

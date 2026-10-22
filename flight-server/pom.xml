@@ -193,6 +193,23 @@
             </exclusions>
         </dependency>
 
+        <!-- The hive plugin (flight-plugin-hive, plugins/hive): the catalog tests load it from its
+             target/plugin/hive and run its in-process metastore over its target/fixture-libs;
+             this test-jar dependency only orders the reactor. -->
+        <dependency>
+            <groupId>pro.surpin.arrowflight</groupId>
+            <artifactId>arrow-flight-plugin-hive</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- Embedded Apache Ranger policy evaluator. Hadoop comes from this deployment. -->
         <dependency>
             <groupId>org.apache.ranger</groupId>

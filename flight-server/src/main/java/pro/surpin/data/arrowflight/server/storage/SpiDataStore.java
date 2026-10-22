@@ -102,6 +102,13 @@ public final class SpiDataStore implements DataStore {
     }
 
     @Override
+    public List<DataFile> files(String relativeDirectory, boolean recursive) throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.files(relativeDirectory, recursive);
+        }
+    }
+
+    @Override
     public List<DataFile> tableFiles(String schema, String table) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.tableFiles(schema, table);

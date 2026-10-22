@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- With a table catalog configured (Iceberg, Hive) and a table in the data directory, the first
+  refresh of the table inventory after its 30 s TTL called itself until the stack overflowed;
+  every later call failed with "Application error processing RPC".
 - Wrong answers and crashes of large `GROUP BY` queries (TPC-H q04 at SF10: duplicate groups,
   SIGSEGV in `TupleDataCollection::Combine`, INTERNAL errors) with 2 DuckDB threads: DuckDB
   1.4.1-1.4.3 skipped repartitioning in the hash aggregate's combine (duckdb#20357, fixed in
@@ -88,6 +91,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   changes or no data files, and joins of catalog tables, get the complete answer instead.
   Needs the DuckDB `iceberg` and `avro` extensions (`duckDbIcebergExtension`,
   `duckDbAvroExtension` or `arrowflight.duckdb.extensionDir`).
+- Hive Metastore catalog (`catalog=hive`, plugin `hive`, Thrift client of Hive 3.1.3 without
+  Hadoop): databases are schemas, Parquet tables are tables (other formats, views and ACID tables
+  are skipped with a log line); partitions, their locations and their values come from the
+  metastore (never from directory names; `__HIVE_DEFAULT_PARTITION__` is NULL), columns are read
+  by name with the metastore's types, partition columns are typed constants. Every table and
+  partition location must lie under `arrowflight.hive.roots`, else the table is hidden. Partial
+  results ship each file's partition values in the ticket (partitions read once, at planning) and
+  leave out partitions that simple predicates on partition columns rule out. Iceberg tables
+  registered in the metastore are read through the iceberg plugin when it is installed.
+  Metadata is cached (`namesTtlSeconds`, `metadataTtlSeconds`); a metastore that cannot be
+  reached is an error (GetTables: UNAVAILABLE), never an empty schema.
+- Plugin SPI 1.1 (additive): `DataStore.files(dir, recursive)`, `Catalog.pinnedColumns`, table
+  formats other plugins' catalogs use (`TableFormat`, descriptor `provides.format`).
 - Apache-2.0 LICENSE
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`
 - Issue and PR templates

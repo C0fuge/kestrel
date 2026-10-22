@@ -13,6 +13,7 @@
         <module>flight-plugin-s3</module>
         <module>flight-plugin-lakefs</module>
         <module>flight-plugin-iceberg</module>
+        <module>flight-plugin-hive</module>
         <module>flight-server</module>
         <module>flight-client-core</module>
         <module>flight-spark</module>

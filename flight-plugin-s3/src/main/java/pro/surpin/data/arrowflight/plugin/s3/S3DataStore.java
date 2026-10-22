@@ -334,6 +334,26 @@ public final class S3DataStore implements DataStore {
     }
 
     @Override
+    public List<DataFile> files(String relativeDirectory, boolean recursive) throws IOException {
+        Snapshot current = snapshot();
+        String path = normalize(relativeDirectory);
+        if (!path.isEmpty() && !current.directories().contains(path)) {
+            throw new FileNotFoundException("No such directory: " + root.objectUri(root.key(path)));
+        }
+        String start = path.isEmpty() ? "" : path + "/";
+        NavigableMap<String, DataFile> below = start.isEmpty()
+                ? current.files() : current.files().subMap(start, true, upperBound(start), false);
+        List<DataFile> result = new ArrayList<>();
+        for (DataFile file : below.values()) {
+            String rest = file.relativePath().substring(start.length());
+            if ((recursive || rest.indexOf('/') < 0) && !DataStore.hiddenPath(rest)) {
+                result.add(file);
+            }
+        }
+        return result;
+    }
+
+    @Override
     public DataFile file(String relativePath) throws IOException {
         String key = root.key(relativePath);
         DataFile listed = snapshot().files().get(normalize(relativePath));

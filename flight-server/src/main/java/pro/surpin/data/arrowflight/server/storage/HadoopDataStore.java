@@ -120,6 +120,44 @@ public final class HadoopDataStore implements DataStore {
     }
 
     @Override
+    public List<DataFile> files(String relativeDirectory, boolean recursive) throws IOException {
+        List<LocatedFileStatus> statuses = new ArrayList<>();
+        collectFiles(resolve(relativeDirectory), recursive, statuses);
+        statuses.sort(Comparator.comparing(file -> file.getPath().toString()));
+        URI root = rootUri();
+        List<DataFile> result = new ArrayList<>(statuses.size());
+        for (LocatedFileStatus file : statuses) {
+            result.add(dataFile(root, file, fileLocality(file).keySet()));
+        }
+        return result;
+    }
+
+    /**
+     * Collects the visible files of a directory, skipping names that start with "_" or ".".
+     *
+     * @param directory directory
+     * @param recursive whether to descend into visible subdirectories
+     * @param into receives the files
+     * @throws IOException on storage access failure, including a missing directory
+     */
+    private void collectFiles(Path directory, boolean recursive, List<LocatedFileStatus> into)
+            throws IOException {
+        RemoteIterator<LocatedFileStatus> iterator = fileSystem.listLocatedStatus(directory);
+        while (iterator.hasNext()) {
+            LocatedFileStatus status = iterator.next();
+            String name = status.getPath().getName();
+            if (name.startsWith("_") || name.startsWith(".")) {
+                continue;
+            }
+            if (status.isFile()) {
+                into.add(status);
+            } else if (recursive && status.isDirectory()) {
+                collectFiles(status.getPath(), true, into);
+            }
+        }
+    }
+
+    @Override
     public DataFile file(String relativePath) throws IOException {
         Path path = resolve(relativePath);
         FileStatus status = fileSystem.getFileStatus(path);

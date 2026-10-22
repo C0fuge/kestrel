@@ -24,12 +24,14 @@ import java.util.zip.ZipFile;
  * @param spi SPI version it was built against, {@code major.minor}
  * @param storageSchemes URI schemes its storage providers open
  * @param catalogs names of its catalog providers
+ * @param formats names of its table formats ({@code provides.format})
  * @param shareHadoop whether it uses the server's Hadoop classes ({@code share=hadoop})
  * @param directory plugin directory
  * @param jars jars of the directory, in name order
  */
 public record PluginDescriptor(String name, String spi, Set<String> storageSchemes,
-        Set<String> catalogs, boolean shareHadoop, Path directory, List<Path> jars) {
+        Set<String> catalogs, Set<String> formats, boolean shareHadoop, Path directory,
+        List<Path> jars) {
 
     /** Where a plugin jar carries its descriptor. */
     public static final String DESCRIPTOR = "META-INF/arrowflight/plugin.properties";
@@ -41,6 +43,7 @@ public record PluginDescriptor(String name, String spi, Set<String> storageSchem
      * @param spi SPI version
      * @param storageSchemes storage schemes
      * @param catalogs catalog names
+     * @param formats table format names
      * @param shareHadoop whether Hadoop is shared
      * @param directory plugin directory
      * @param jars jars
@@ -48,6 +51,7 @@ public record PluginDescriptor(String name, String spi, Set<String> storageSchem
     public PluginDescriptor {
         storageSchemes = Set.copyOf(storageSchemes);
         catalogs = Set.copyOf(catalogs);
+        formats = Set.copyOf(formats);
         jars = List.copyOf(jars);
     }
 
@@ -99,7 +103,8 @@ public record PluginDescriptor(String name, String spi, Set<String> storageSchem
                     + share);
         }
         return new PluginDescriptor(name, spi, list(descriptor.getProperty("provides.storage")),
-                list(descriptor.getProperty("provides.catalog")), "hadoop".equals(share), directory,
+                list(descriptor.getProperty("provides.catalog")),
+                list(descriptor.getProperty("provides.format")), "hadoop".equals(share), directory,
                 jars);
     }
 

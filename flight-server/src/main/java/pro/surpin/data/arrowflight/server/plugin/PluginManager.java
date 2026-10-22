@@ -31,6 +31,7 @@ import java.util.zip.ZipFile;
 import pro.surpin.data.arrowflight.spi.Plugin;
 import pro.surpin.data.arrowflight.spi.SpiVersion;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogProvider;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormatProvider;
 import pro.surpin.data.arrowflight.spi.storage.DataStoreProvider;
 
 /**
@@ -70,9 +71,11 @@ public final class PluginManager implements AutoCloseable {
      * @param plugin its entry point
      * @param storage its storage providers
      * @param catalogs its catalog providers
+     * @param formats its table format providers
      */
     public record LoadedPlugin(PluginDescriptor descriptor, PluginClassLoader loader, Plugin plugin,
-            List<DataStoreProvider> storage, List<CatalogProvider> catalogs) {
+            List<DataStoreProvider> storage, List<CatalogProvider> catalogs,
+            List<TableFormatProvider> formats) {
     }
 
     /**
@@ -203,6 +206,39 @@ public final class PluginManager implements AutoCloseable {
     }
 
     /**
+     * Finds the plugin whose descriptor provides a table format and loads it.
+     *
+     * @param name format name, for example "iceberg"
+     * @return the loaded plugin and its provider, empty when no plugin claims the name
+     * @throws IllegalStateException when two plugins claim it, or the plugin cannot be loaded or
+     *         has no provider of that name
+     */
+    public synchronized Optional<Map.Entry<LoadedPlugin, TableFormatProvider>> formatProvider(
+            String name) {
+        PluginDescriptor claiming = null;
+        for (PluginDescriptor descriptor : present.values()) {
+            if (descriptor.formats().contains(name)) {
+                if (claiming != null) {
+                    throw new IllegalStateException("Plugins " + claiming.name() + " and "
+                            + descriptor.name() + " both provide the table format " + name);
+                }
+                claiming = descriptor;
+            }
+        }
+        if (claiming == null) {
+            return Optional.empty();
+        }
+        LoadedPlugin plugin = load(claiming);
+        for (TableFormatProvider provider : plugin.formats()) {
+            if (provider.name().equalsIgnoreCase(name)) {
+                return Optional.of(Map.entry(plugin, provider));
+            }
+        }
+        throw new IllegalStateException("Plugin " + claiming.name() + " names the table format "
+                + name + " in its descriptor but has no provider for it");
+    }
+
+    /**
      * Describes why a plugin directory could not be read, for error messages.
      *
      * @param name plugin directory name
@@ -272,6 +308,7 @@ public final class PluginManager implements AutoCloseable {
             Plugin plugin = plugins.get(0);
             List<DataStoreProvider> storage = List.copyOf(plugin.dataStoreProviders());
             List<CatalogProvider> catalogs = List.copyOf(plugin.catalogProviders());
+            List<TableFormatProvider> formats = List.copyOf(plugin.tableFormatProviders());
             for (DataStoreProvider provider : storage) {
                 for (String scheme : provider.schemes()) {
                     for (LoadedPlugin other : loaded.values()) {
@@ -283,13 +320,15 @@ public final class PluginManager implements AutoCloseable {
                     }
                 }
             }
-            LoadedPlugin result = new LoadedPlugin(descriptor, loader, plugin, storage, catalogs);
+            LoadedPlugin result = new LoadedPlugin(descriptor, loader, plugin, storage, catalogs,
+                    formats);
             loaded.put(name, result);
             LOGGER.info("node={} plugin=loaded name={} spi={} jars={} storage={} catalogs={}"
-                    + " shareHadoop={} dir={}", node, name, descriptor.spi(),
+                    + " formats={} shareHadoop={} dir={}", node, name, descriptor.spi(),
                     descriptor.jars().size(), storage.stream().map(DataStoreProvider::name).toList(),
-                    catalogs.stream().map(CatalogProvider::name).toList(), descriptor.shareHadoop(),
-                    descriptor.directory());
+                    catalogs.stream().map(CatalogProvider::name).toList(),
+                    formats.stream().map(TableFormatProvider::name).toList(),
+                    descriptor.shareHadoop(), descriptor.directory());
             return result;
         } catch (RuntimeException | ServiceConfigurationError | LinkageError e) {
             closeQuietly(loader);

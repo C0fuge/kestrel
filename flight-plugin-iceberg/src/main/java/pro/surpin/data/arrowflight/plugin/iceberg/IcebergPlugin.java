@@ -4,6 +4,7 @@ import java.util.List;
 
 import pro.surpin.data.arrowflight.spi.Plugin;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogProvider;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormatProvider;
 
 /**
  * The iceberg plugin: Iceberg tables as table catalogs of the server, from a warehouse directory
@@ -17,5 +18,10 @@ public final class IcebergPlugin implements Plugin {
     public List<CatalogProvider> catalogProviders() {
         return List.of(new IcebergCatalogProvider(IcebergSettings.Kind.HADOOP),
                 new IcebergCatalogProvider(IcebergSettings.Kind.REST));
+    }
+
+    @Override
+    public List<TableFormatProvider> tableFormatProviders() {
+        return List.of(new IcebergTableFormatProvider());
     }
 }

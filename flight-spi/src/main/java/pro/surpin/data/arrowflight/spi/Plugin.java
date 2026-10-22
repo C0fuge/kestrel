@@ -3,6 +3,7 @@ package pro.surpin.data.arrowflight.spi;
 import java.util.List;
 
 import pro.surpin.data.arrowflight.spi.catalog.CatalogProvider;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormatProvider;
 import pro.surpin.data.arrowflight.spi.storage.DataStoreProvider;
 
 /**
@@ -28,6 +29,17 @@ public interface Plugin {
      * @return catalog providers, empty by default
      */
     default List<CatalogProvider> catalogProviders() {
+        return List.of();
+    }
+
+    /**
+     * Lists the table formats of this plugin that catalogs of other plugins may use, each chosen
+     * by name ({@code provides.format} in the descriptor).
+     *
+     * @return table format providers, empty by default
+     * @since SPI 1.1
+     */
+    default List<TableFormatProvider> tableFormatProviders() {
         return List.of();
     }
 }

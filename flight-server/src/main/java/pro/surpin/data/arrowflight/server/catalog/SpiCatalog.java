@@ -72,6 +72,14 @@ public final class SpiCatalog implements Catalog {
     }
 
     @Override
+    public Optional<TableSnapshot> pinnedColumns(TableName table, String snapshotId)
+            throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.pinnedColumns(table, snapshotId);
+        }
+    }
+
+    @Override
     public Optional<String> partialReadProblem(TableSnapshot snapshot) {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.partialReadProblem(snapshot);

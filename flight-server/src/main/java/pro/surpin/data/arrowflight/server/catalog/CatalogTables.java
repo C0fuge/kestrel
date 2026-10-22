@@ -304,16 +304,63 @@ public final class CatalogTables implements AutoCloseable {
         if (snapshot.columns().isEmpty()) {
             return "the catalog declares no columns for " + snapshot.name();
         }
-        for (ColumnSpec column : snapshot.columns()) {
-            if (column.fieldId() == null) {
-                return "column " + column.name() + " of " + snapshot.name() + " has no field ID";
-            }
-        }
-        if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata)) {
-            return "the catalog's table " + snapshot.name() + " is read as a whole only";
+        String columnsProblem = columnsProblem(snapshot);
+        if (columnsProblem != null) {
+            return columnsProblem;
         }
         Optional<String> problem = resolved.entry().catalog().partialReadProblem(snapshot);
         return problem.orElse(null);
+    }
+
+    /**
+     * Tells why a snapshot's declared columns do not let its files be read one by one: Iceberg
+     * files are read by field ID (every column needs one); Parquet files by name, with every
+     * partition column declared.
+     *
+     * @param snapshot snapshot
+     * @return reason, or null
+     */
+    static String columnsProblem(TableSnapshot snapshot) {
+        if (snapshot.read() instanceof ReadSpec.IcebergMetadata) {
+            for (ColumnSpec column : snapshot.columns()) {
+                if (column.fieldId() == null) {
+                    return "column " + column.name() + " of " + snapshot.name() + " has no field ID";
+                }
+            }
+            return null;
+        }
+        Set<String> declared = new TreeSet<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            declared.add(column.name());
+        }
+        for (String partition : snapshot.partitionColumns()) {
+            if (!declared.contains(partition)) {
+                return "partition column " + partition + " of " + snapshot.name()
+                        + " has no declared type";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns the columns of the snapshot a planning node used, for an executing node whose
+     * ticket names the files with their partition values.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @param snapshotId snapshot ID from the ticket
+     * @return snapshot (maybe without files), empty when its columns changed or it is hidden
+     * @throws IOException when the catalog cannot be read
+     */
+    public Optional<Resolved> pinnedColumns(String schema, String table, String snapshotId)
+            throws IOException {
+        Optional<Entry> entry = owner(schema);
+        if (entry.isEmpty()) {
+            return Optional.empty();
+        }
+        TableName name = tableName(entry.get(), schema, table);
+        Optional<TableSnapshot> snapshot = entry.get().catalog().pinnedColumns(name, snapshotId);
+        return snapshot.filter(s -> checked(entry.get(), s)).map(s -> new Resolved(entry.get(), s));
     }
 
     @Override
