@@ -1468,4 +1468,36 @@ class DuckDbAdapterTest {
             ioPool.shutdownNow();
         }
     }
+
+    /**
+     * Verifies the startup check of the lockdown (LockdownCheck) passes with the real hadoopfs
+     * extension and an hdfs:// root on the bundled DuckDB, which shows that root as
+     * {@code hdfs:/...} in allowed_directories, and that HDFS paths outside it stay refused.
+     * Runs only with {@code -Dhadoopfs.it.extension=<hadoopfs.duckdb_extension of v1.4.5>}.
+     */
+    @Test
+    void hadoopfsUnderTheLockdownPassesTheStartupCheck(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        String extension = System.getProperty("hadoopfs.it.extension");
+        org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
+                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                extension, true, "ns", null,
+                null, null, null, false, 1048576, 67108864, 60000L, "hdfs://ns/data/parquet",
+                null, 32010, 5701, 60, 3, 1000, 30000, true, false, 64,
+                dir.resolve("spill").toString(), null, "complete", true, true);
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool,
+                List.of("hdfs://ns/data/parquet"));
+                Statement s = adapter.connection().createStatement()) {
+            java.sql.SQLException e = assertThrows(java.sql.SQLException.class,
+                    () -> s.executeQuery(
+                            "SELECT count(*) FROM read_parquet('hdfs://ns/other/x.parquet')"));
+            assertTrue(e.getMessage().contains("Permission Error"), e.getMessage());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
 }

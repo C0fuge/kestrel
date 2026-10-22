@@ -86,7 +86,7 @@ public final class DuckDbExtensions implements UnaryOperator<String> {
     /**
      * Reads the DuckDB version and platform from an in-memory database.
      *
-     * @return version ("v1.4.1") and platform ("linux_amd64")
+     * @return version ("v1.4.5") and platform ("linux_amd64")
      */
     private String[] versionAndPlatform() {
         String[] result = versionAndPlatform;

@@ -51,23 +51,25 @@ public final class LockdownCheck {
             expect(settings, "autoload_known_extensions", "false");
             expect(settings, "autoinstall_known_extensions", "false");
 
+            List<String> shown = new ArrayList<>();
             List<String> allowed = new ArrayList<>();
             try (ResultSet rs = s.executeQuery(
                     "SELECT unnest(current_setting('allowed_directories')::VARCHAR[])")) {
                 while (rs.next()) {
-                    allowed.add(rs.getString(1));
+                    shown.add(rs.getString(1));
+                    allowed.add(comparable(rs.getString(1)));
                 }
             }
             Set<String> expected = new LinkedHashSet<>();
             for (String root : roots) {
-                expected.add(root.endsWith("/") ? root : root + "/");
+                expected.add(comparable(root));
             }
             // DuckDB adds the connection's own temp_directory; it lies below the spill root.
-            String spill = tempRoot.toString() + "/";
+            String spill = comparable(tempRoot.toString());
             String ownTemp = null;
             try (ResultSet rs = s.executeQuery("SELECT current_setting('temp_directory')")) {
                 if (rs.next() && rs.getString(1) != null) {
-                    ownTemp = rs.getString(1).endsWith("/") ? rs.getString(1) : rs.getString(1) + "/";
+                    ownTemp = comparable(rs.getString(1));
                 }
             }
             Set<String> unexpected = new LinkedHashSet<>();
@@ -80,7 +82,7 @@ public final class LockdownCheck {
             if (!unexpected.isEmpty() || !new HashSet<>(allowed).containsAll(expected)
                     || !allowed.contains(spill)) {
                 throw new IllegalStateException("DuckDB allowed_directories after the lockdown are "
-                        + allowed + ", expected " + expected + ", the spill directory " + spill
+                        + shown + ", expected " + expected + ", the spill directory " + spill
                         + " and the connection's temp_directory");
             }
 
@@ -110,6 +112,20 @@ public final class LockdownCheck {
                 throw new IllegalStateException("DuckDB has secrets nobody declared: " + extra);
             }
         }
+    }
+
+    /**
+     * Returns a directory in the form DuckDB shows it from 1.4.4 on, ending in a slash: DuckDB
+     * 1.4.5 collapses repeated slashes when it stores allowed_directories ({@code s3://b/p/} reads
+     * back as {@code s3:/b/p/}, {@code hdfs://ns/d/} as {@code hdfs:/ns/d/}) and matches the
+     * paths of queries the same way; 1.4.1 kept them as set.
+     *
+     * @param directory directory as set or read back
+     * @return comparable form
+     */
+    static String comparable(String directory) {
+        String withSlash = directory.endsWith("/") ? directory : directory + "/";
+        return withSlash.replaceAll("/{2,}", "/");
     }
 
     /**

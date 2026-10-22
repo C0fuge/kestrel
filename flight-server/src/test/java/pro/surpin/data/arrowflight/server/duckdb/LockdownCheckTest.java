@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -47,6 +48,30 @@ class LockdownCheckTest {
         }
     }
 
+    /**
+     * DuckDB 1.4.5 shows {@code s3://b/p/} as {@code s3:/b/p/} in allowed_directories (1.4.1 as
+     * set): URI roots of S3, lakeFS and HDFS stores must still pass, and another root must not.
+     */
+    @Test
+    void acceptsUriRootsInTheFormDuckDbShowsThem(@TempDir Path dir) throws Exception {
+        Path temp = Files.createDirectories(dir.resolve("tmp"));
+        try (Connection conn = lockedDown("s3://lake/parquet/", "hdfs://ns/data/parquet/",
+                temp + "/")) {
+            LockdownCheck.verify(conn, List.of("s3://lake/parquet", "hdfs://ns/data/parquet/"),
+                    temp, List.of());
+            IllegalStateException other = assertThrows(IllegalStateException.class,
+                    () -> LockdownCheck.verify(conn, List.of("s3://lake/other/",
+                            "hdfs://ns/data/parquet/"), temp, List.of()));
+            assertTrue(other.getMessage().contains("allowed_directories"), other.getMessage());
+            IllegalStateException missing = assertThrows(IllegalStateException.class,
+                    () -> LockdownCheck.verify(conn, List.of("s3://lake/parquet/"), temp,
+                            List.of()));
+            assertTrue(missing.getMessage().contains("hdfs:"), missing.getMessage());
+        }
+        assertEquals("s3:/lake/p/", LockdownCheck.comparable("s3://lake/p"));
+        assertEquals("/tmp/a/b/", LockdownCheck.comparable("/tmp/a//b/"));
+    }
+
     @Test
     void adapterChecksItsLockdownAtStartup(@TempDir Path dir) throws Exception {
         Path data = Files.createDirectories(dir.resolve("data"));
@@ -71,7 +96,11 @@ class LockdownCheckTest {
     }
 
     private static Connection lockedDown(String... allowed) throws Exception {
-        Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+        // As the server opens its connections: with persistent secrets on, DuckDB 1.4.5 reads
+        // ~/.duckdb/stored_secrets for duckdb_secrets(), which the lockdown refuses.
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("allow_persistent_secrets", "false");
+        Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
         try (Statement s = conn.createStatement()) {
             StringBuilder list = new StringBuilder();
             for (String directory : allowed) {
