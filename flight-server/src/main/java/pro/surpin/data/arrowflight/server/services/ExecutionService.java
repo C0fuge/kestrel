@@ -33,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +45,13 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.catalog.CatalogFileKey;
+import pro.surpin.data.arrowflight.server.catalog.CatalogLocations;
+import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
+import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
+import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
@@ -321,6 +329,13 @@ public final class ExecutionService {
                 dropJoinViews(conn, aliases);
             }
         }
+        if (parquetAdapter.isCatalogSchema(pq.schema)) {
+            String from = "(SELECT * FROM " + catalogDescribeSource(pq) + " LIMIT 0)";
+            String duckSql = pq.hasAggregation
+                    ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
+                    : DuckDbAdapter.buildSelectSql(pq, from);
+            return duckDbAdapter.describeSql(allocator, duckSql);
+        }
         DataFile sample = parquetAdapter.sampleFile(pq.schema, pq.table)
                 .orElseThrow(() -> new IOException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
@@ -370,6 +385,11 @@ public final class ExecutionService {
         if (parsedQuery.isJoin) {
             pathTracker.select(ExecutionPath.DUCKDB_JOIN);
             executeJoin(allocator, parsedQuery, fileUris, listener, startListener);
+            return;
+        }
+
+        if (parquetAdapter.isCatalogSchema(parsedQuery.schema)) {
+            readCatalogFiles(allocator, parsedQuery, fileUris, listener, startListener, pathTracker);
             return;
         }
 
@@ -516,6 +536,143 @@ public final class ExecutionService {
         String duckSql = DuckDbAdapter.buildDuckSqlWithFilter(pq,
                 tableSource(pq.schema, pq.table, resolvedUris), false);
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
+    }
+
+    // ── catalog tables (Iceberg) in parts ────────────────────────────────
+
+    /**
+     * Reads data files of a catalog table named in a partial-result ticket, with the columns of
+     * the snapshot the planning node used. Every file must belong to that snapshot, and the
+     * snapshot must still be readable file by file (no delete files); otherwise the read is
+     * refused rather than answered wrongly.
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param pq            parsed query of one catalog table
+     * @param fileUris      ticket entries ({@link CatalogFileKey}), or null for the whole
+     *                      current snapshot
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @param pathTracker   runtime execution-path tracker
+     * @throws Exception on refusal, catalog, query or stream failure
+     */
+    private void readCatalogFiles(BufferAllocator allocator, ParquetQueryParser pq,
+            String[] fileUris, FlightProducer.ServerStreamListener listener,
+            boolean startListener, ExecutionPathTracker pathTracker) throws Exception {
+        long t = LogUtil.mark();
+        CatalogTables catalogs = parquetAdapter.catalogTables();
+        CatalogTables.Resolved resolved;
+        List<String> locations = new ArrayList<>();
+        if (fileUris == null) {
+            resolved = catalogs.current(pq.schema, pq.table).orElseThrow(() -> new IOException(
+                    "No table " + pq.schema + "." + pq.table + " in its catalog"));
+            for (TableFile file : resolved.snapshot().files()) {
+                locations.add(file.location());
+            }
+        } else {
+            String snapshotId = null;
+            for (String entry : fileUris) {
+                CatalogFileKey key = CatalogFileKey.decode(entry);
+                if (snapshotId != null && !snapshotId.equals(key.snapshotId())) {
+                    throw new IllegalArgumentException("A ticket names files of two snapshots of "
+                            + pq.schema + "." + pq.table);
+                }
+                snapshotId = key.snapshotId();
+                locations.add(key.location());
+            }
+            if (snapshotId == null) {
+                pathTracker.unknown("no-parquet-files");
+                return;
+            }
+            String pinnedId = snapshotId;
+            resolved = catalogs.pinned(pq.schema, pq.table, snapshotId).orElseThrow(
+                    () -> new IOException("Snapshot " + pinnedId + " of " + pq.schema + "."
+                            + pq.table + " is no longer available in its catalog; plan the query"
+                            + " again"));
+        }
+        String reason = CatalogTables.completeReason(resolved);
+        if (reason != null) {
+            throw new IllegalStateException("The files of " + pq.schema + "." + pq.table
+                    + " cannot be read one by one (" + reason + "); ask for the complete answer");
+        }
+        Set<String> snapshotFiles = new java.util.HashSet<>();
+        for (TableFile file : resolved.snapshot().files()) {
+            snapshotFiles.add(file.location());
+        }
+        for (String location : locations) {
+            if (!snapshotFiles.contains(location)) {
+                throw new IllegalArgumentException("File " + location + " is not a data file of"
+                        + " snapshot " + resolved.snapshot().snapshotId() + " of " + pq.schema
+                        + "." + pq.table);
+            }
+        }
+        if (locations.isEmpty()) {
+            pathTracker.unknown("no-parquet-files");
+            return;
+        }
+        String source = catalogFilesSource(resolved.snapshot(), locations);
+        String duckSql;
+        if (pq.hasAggregation) {
+            pathTracker.select(ExecutionPath.DUCKDB_AGGREGATION);
+            duckSql = DuckDbAdapter.buildDuckSqlWithFilter(pq, source, false);
+        } else {
+            pathTracker.select(ExecutionPath.DUCKDB_SCAN);
+            duckSql = DuckDbAdapter.buildSelectSql(pq, source);
+        }
+        LOGGER.debug("qid={} node={} execution=engine engine=DuckDB(catalog) table={} snapshot={}"
+                + " files={}", LogUtil.qid(), LogUtil.node(), resolved.snapshot().name(),
+                resolved.snapshot().snapshotId(), locations.size());
+        LogUtil.logTiming(t, "catalog.resolveFiles", FILES_TIMING_PREFIX + locations.size());
+        duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
+    }
+
+    /**
+     * Names the FROM source a partial query of a catalog table is described with: its first
+     * data file read like the executing nodes read it, or DuckDB's scan of the whole snapshot
+     * when its files cannot be read one by one.
+     *
+     * @param pq parsed query
+     * @return FROM source
+     * @throws IOException when the table does not exist or its catalog cannot be read
+     */
+    private String catalogDescribeSource(ParquetQueryParser pq) throws IOException {
+        CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
+                .current(pq.schema, pq.table).orElseThrow(() -> new IOException(
+                        "No Parquet files for table " + pq.schema + "." + pq.table));
+        TableSnapshot snapshot = resolved.snapshot();
+        if (CatalogTables.completeReason(resolved) == null) {
+            return catalogFilesSource(snapshot, List.of(snapshot.files().get(0).location()));
+        }
+        if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
+            return CatalogViews.icebergScan(iceberg.metadataLocation());
+        }
+        throw new IOException("Table " + pq.schema + "." + pq.table + " cannot be described");
+    }
+
+    /**
+     * Names data files of a catalog snapshot as a DuckDB FROM source with the snapshot's columns:
+     * {@code read_parquet([...], schema = MAP {fieldId: {name, type, default_value}})}, so that
+     * columns are found by Parquet field ID (renamed and added columns, widened types).
+     *
+     * @param snapshot snapshot with its columns
+     * @param locations data files of the snapshot
+     * @return FROM source
+     */
+    static String catalogFilesSource(TableSnapshot snapshot, List<String> locations) {
+        StringBuilder sql = new StringBuilder("read_parquet([");
+        for (int i = 0; i < locations.size(); i++) {
+            sql.append(i > 0 ? ", " : "")
+                    .append(DuckDbAdapter.sqlStringLiteral(CatalogLocations.normalize(locations.get(i))));
+        }
+        sql.append("], schema = MAP {");
+        List<ColumnSpec> columns = snapshot.columns();
+        for (int i = 0; i < columns.size(); i++) {
+            ColumnSpec column = columns.get(i);
+            sql.append(i > 0 ? ", " : "").append(column.fieldId().intValue())
+                    .append(": {name: ").append(DuckDbAdapter.sqlStringLiteral(column.name()))
+                    .append(", type: ").append(DuckDbAdapter.sqlStringLiteral(column.duckDbType()))
+                    .append(", default_value: NULL}");
+        }
+        return sql.append("})").toString();
     }
 
     // ── DuckDB join execution ────────────────────────────────────────────

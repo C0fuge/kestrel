@@ -539,19 +539,23 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     /**
      * Tells why a query asked for in parts gets its complete answer instead: each endpoint
      * answers for its own files only, and some queries cannot be computed that way (see
-     * {@code ParquetQueryParser.completeAnswerReason}).
+     * {@code ParquetQueryParser.completeAnswerReason}), and queries of catalog tables whose
+     * snapshot has delete files or other files that cannot be read one by one.
      *
      * @param query client SQL
      * @return reason, or null when endpoints answer for their own files (also for SQL the parser
      *         rejects: the partial path reports that error)
      */
-    private static String completeAnswerReason(String query) {
+    private String completeAnswerReason(String query) {
+        String reason;
         try {
-            return pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(query)
+            reason = pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(query)
                     .completeAnswerReason;
         } catch (RuntimeException e) {
             return null;
         }
+        // Catalog tables (Iceberg) whose files cannot be read one by one, and their joins.
+        return reason != null ? reason : queryPlanner.catalogCompleteReason(query);
     }
 
     /**

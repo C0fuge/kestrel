@@ -14,7 +14,8 @@ import java.util.Locale;
  * @param pluginConfigDir directory of {@code <ns>.properties} files
  *                        ({@code arrowflight.plugins.configDir}; default
  *                        {@code <pluginsDir>/../etc/plugins}), or null
- * @param catalog table catalog ({@code catalog=}, default "directory")
+ * @param catalog table catalogs ({@code catalog=}, default "directory"): a comma separated list
+ *                of catalog provider names; the directory catalog is always on
  * @param requireChecksums whether every loaded plugin needs a matching SHA256SUMS
  *                         ({@code arrowflight.plugins.requireChecksums})
  */
@@ -23,6 +24,22 @@ public record PluginSettings(Path pluginsDir, Path pluginConfigDir, String catal
 
     /** The catalog of schemas and tables as directories of the data directory. */
     public static final String DIRECTORY_CATALOG = "directory";
+
+    /**
+     * Lists the catalogs besides the directory catalog, in the order configured.
+     *
+     * @return catalog provider names, lower case, without "directory" and duplicates
+     */
+    public List<String> catalogs() {
+        java.util.Set<String> result = new java.util.LinkedHashSet<>();
+        for (String part : catalog == null ? new String[0] : catalog.split(",")) {
+            String name = part.strip().toLowerCase(Locale.ROOT);
+            if (!name.isEmpty() && !DIRECTORY_CATALOG.equals(name)) {
+                result.add(name);
+            }
+        }
+        return List.copyOf(result);
+    }
 
     /**
      * Reads the settings.

@@ -77,6 +77,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   through the lakeFS S3 gateway; a branch is pinned to its head commit per listing, so all
   endpoints of a query read the same commit. Settings `arrowflight.lakefs.*` /
   `FLIGHT_LAKEFS_*`.
+- Table catalogs besides the data directory (`catalog=directory,iceberg-hadoop,iceberg-rest`),
+  from plugins; their schemas appear next to the data directory's (a name the data directory
+  has wins). Plugin `iceberg`: Iceberg tables of a warehouse directory in the Hadoop layout
+  (`iceberg-hadoop`) or of an Iceberg REST catalog such as Gravitino or Polaris (`iceberg-rest`,
+  bearer token or OAuth2 client credential from `FLIGHT_ICEBERG_REST_*` only). Complete answers
+  read the snapshot with DuckDB's `iceberg` extension (position and equality deletes, renamed
+  columns); partial results spread the snapshot's data files over the nodes, read by Parquet
+  field ID, with the snapshot pinned in the tickets; tables with delete files, nested column
+  changes or no data files, and joins of catalog tables, get the complete answer instead.
+  Needs the DuckDB `iceberg` and `avro` extensions (`duckDbIcebergExtension`,
+  `duckDbAvroExtension` or `arrowflight.duckdb.extensionDir`).
 - Apache-2.0 LICENSE
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`
 - Issue and PR templates

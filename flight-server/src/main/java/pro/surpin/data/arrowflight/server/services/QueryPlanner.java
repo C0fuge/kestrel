@@ -29,6 +29,10 @@ import java.util.stream.Collectors;
 
 import pro.surpin.data.arrowflight.server.adapters.HostUtils;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.catalog.CatalogFileKey;
+import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
+import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.model.HandleState;
@@ -160,6 +164,9 @@ public final class QueryPlanner {
             throw new IllegalArgumentException(singleNodeFeature
                     + " is not supported when the table is served by several Flight nodes");
         }
+        if (!parsed.isJoin && parquetAdapter.isCatalogSchema(parsed.schema)) {
+            return planCatalogTable(query, parsed, cluster, plannerAsBackup);
+        }
         long tPaths = LogUtil.mark();
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
@@ -196,6 +203,119 @@ public final class QueryPlanner {
     }
 
     /**
+     * Tells why a query asked for in parts gets its complete answer because of the catalog
+     * tables it reads (Iceberg): a join of a catalog table, or a snapshot whose data files
+     * cannot be read one by one (delete files, nested column changes, no data files).
+     *
+     * @param query client SQL
+     * @return reason, or null when the query reads no catalog table or its files can be split
+     */
+    public String catalogCompleteReason(String query) {
+        CatalogTables catalogTables = parquetAdapter.catalogTables();
+        if (catalogTables == null || catalogTables.isEmpty()) {
+            return null;
+        }
+        ParquetQueryParser parsed;
+        try {
+            parsed = ParquetQueryParser.parse(query);
+        } catch (RuntimeException e) {
+            return null;   // the partial path reports the parser's error
+        }
+        if (parsed.isJoin) {
+            for (ParquetQueryParser.JoinTable table : parsed.joinTables) {
+                if (parquetAdapter.isCatalogSchema(table.schema())) {
+                    return "the join reads the catalog table " + table.schema() + "." + table.table();
+                }
+            }
+            return null;
+        }
+        if (!parquetAdapter.isCatalogSchema(parsed.schema) || parsed.table == null) {
+            return null;
+        }
+        try {
+            return parquetAdapter.catalogTables().current(parsed.schema, parsed.table)
+                    .map(CatalogTables::completeReason).orElse(null);
+        } catch (IOException e) {
+            return null;   // planning reports it
+        }
+    }
+
+    /**
+     * Tells whether every table a query reads belongs to a catalog besides the data directory:
+     * then a complete answer does not depend on the data directory's files on other nodes.
+     *
+     * @param query client SQL
+     * @return true when the query names only catalog tables; false when it cannot be parsed
+     */
+    private boolean readsOnlyCatalogTables(String query) {
+        CatalogTables catalogTables = parquetAdapter.catalogTables();
+        if (catalogTables == null || catalogTables.isEmpty()) {
+            return false;
+        }
+        try {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            if (parsed.isJoin) {
+                return parsed.joinTables.stream()
+                        .allMatch(t -> parquetAdapter.isCatalogSchema(t.schema()));
+            }
+            return parquetAdapter.isCatalogSchema(parsed.schema);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Plans a query of one catalog table in parts: the data files of its current snapshot go
+     * to the live nodes like Parquet files without locality, each named with the snapshot ID,
+     * so that every node reads the same snapshot. A snapshot whose files cannot be read one by
+     * one (it changed after the caller checked) is answered completely instead.
+     *
+     * @param query client SQL
+     * @param parsed parsed query
+     * @param cluster live nodes and their loads
+     * @param plannerAsBackup whether this node may be listed as a backup
+     * @return plan
+     * @throws IOException when the table does not exist or its catalog cannot be read
+     */
+    private QueryPlan planCatalogTable(String query, ParquetQueryParser parsed,
+            ClusterSnapshot cluster, boolean plannerAsBackup) throws IOException {
+        long t = LogUtil.mark();
+        CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
+                .current(parsed.schema, parsed.table)
+                .orElseThrow(() -> new IOException("No distributed Parquet files found for query: "
+                        + "no table " + parsed.schema + "." + parsed.table + " in its catalog"));
+        String reason = CatalogTables.completeReason(resolved);
+        if (reason != null) {
+            LOGGER.info("node={} query=answeredCompletely mode=partial reason='{}' query='{}'",
+                    LogUtil.node(), reason, query);
+            return planComplete(query, null);
+        }
+        TableSnapshot snapshot = resolved.snapshot();
+        Map<String, FileAssignment> files = new LinkedHashMap<>();
+        long records = 0;
+        for (TableFile file : snapshot.files()) {
+            files.put(new CatalogFileKey(snapshot.snapshotId(), file.location()).encode(),
+                    new FileAssignment(file.size(), Set.of()));
+            records = records < 0 || file.recordCount() < 0 ? -1 : records + file.recordCount();
+        }
+        Map<String, Long> loads = new HashMap<>(cluster.serverLoads());
+        if (!resolved.entry().shared() && loads.size() > 1) {
+            // Files on a local disk: only this node is known to read them.
+            String self = clusterService.serverUri();
+            loads = new HashMap<>(Map.of(self, cluster.serverLoads().getOrDefault(self, 0L)));
+        }
+        boolean loadTracked = loads.size() > 1;
+        Backups backups = new Backups(files, loads, resolved.entry().shared(),
+                plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
+        List<FlightEndpoint> endpoints = distributeEndpointsWithoutLocality(query, files, loads,
+                loadTracked, backups);
+        long totalBytes = files.values().stream().mapToLong(FileAssignment::size).sum();
+        LogUtil.logTiming(t, "planning.catalogTable", "table=" + snapshot.name() + " snapshot="
+                + snapshot.snapshotId() + " endpoints=" + endpoints.size() + " files=" + files.size());
+        return new QueryPlan(endpoints, totalBytes, records);
+    }
+
+    /**
      * Plans a query whose complete answer the receiving node computes over all files.
      *
      * @param query client SQL
@@ -217,7 +337,7 @@ public final class QueryPlanner {
      * @throws IllegalStateException when the nodes keep their files apart
      */
     public QueryPlan planComplete(String query, byte[] parameters) {
-        if (!parquetAdapter.sharedStorage()) {
+        if (!parquetAdapter.sharedStorage() && !readsOnlyCatalogTables(query)) {
             int live = clusterService.filterLiveServers(clusterService.allServerLoads().keySet()).size();
             if (live > 1) {
                 throw new IllegalStateException("A complete answer needs storage every node can read"

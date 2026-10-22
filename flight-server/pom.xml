@@ -66,6 +66,7 @@
              files are built for exactly DuckDB v1.4.5, other versions refuse to load them. Bump together.
              1.4.1-1.4.3 have the hash-aggregate bug behind the q04 wrong answer (fixed in 1.4.4). -->
         <duckdb.version>1.4.5.0</duckdb.version>
+        <iceberg.it.extensionDir></iceberg.it.extensionDir>
         <spark.version>3.5.9</spark.version>
         <grpc.version>1.84.2</grpc.version>
         <netty.version>4.2.9.Final</netty.version>
@@ -164,6 +165,23 @@
         <dependency>
             <groupId>pro.surpin.arrowflight</groupId>
             <artifactId>arrow-flight-plugin-s3</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- The iceberg plugin (flight-plugin-iceberg, plugins/iceberg): the catalog tests load it from
+             its target/plugin/iceberg and write their tables with its test classes over its
+             target/fixture-libs; this test-jar dependency only orders the reactor. -->
+        <dependency>
+            <groupId>pro.surpin.arrowflight</groupId>
+            <artifactId>arrow-flight-plugin-iceberg</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
             <scope>test</scope>
@@ -417,6 +435,9 @@
                     <systemPropertyVariables>
                         <!-- s3:// data directories in tests load the real s3 plugin, built before this module -->
                         <arrowflight.plugins.dir>${project.basedir}/../flight-plugin-s3/target/plugin</arrowflight.plugins.dir>
+                        <!-- Iceberg catalog tests: DuckDB's iceberg/avro extensions (v1.4.5/<platform>/
+                             below this directory); without it those tests are skipped. -->
+                        <iceberg.it.extensionDir>${iceberg.it.extensionDir}</iceberg.it.extensionDir>
                     </systemPropertyVariables>
                     <argLine>
                         @{argLine}

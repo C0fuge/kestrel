@@ -9,6 +9,9 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
@@ -22,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
@@ -113,16 +117,25 @@ public final class CatalogViews {
             }
             String createSchema = "CREATE SCHEMA IF NOT EXISTS " + DuckDbAdapter.quoteIdentifier(schema);
             boolean schemaAdded = false;
+            boolean catalogSchema = parquetAdapter.isCatalogSchema(schema);
             for (String table : parquetAdapter.getTables(schema, null).keySet().stream().sorted().toList()) {
-                List<DataFile> files = parquetAdapter.tableFiles(schema, table);
-                if (files.isEmpty()) {
-                    continue;
-                }
                 String key = schema + "\u0000" + table;
-                String fingerprint = ParquetAdapter.filesFingerprint(files);
-                TableViews views = tables.get(key);
-                if (views == null || !views.fingerprint().equals(fingerprint)) {
-                    views = describe(schema, table, files, fingerprint);
+                TableViews views;
+                if (catalogSchema) {
+                    views = catalogTableViews(schema, table, tables.get(key));
+                    if (views == null) {
+                        continue;
+                    }
+                } else {
+                    List<DataFile> files = parquetAdapter.tableFiles(schema, table);
+                    if (files.isEmpty()) {
+                        continue;
+                    }
+                    String fingerprint = ParquetAdapter.filesFingerprint(files);
+                    views = tables.get(key);
+                    if (views == null || !views.fingerprint().equals(fingerprint)) {
+                        views = describe(schema, table, files, fingerprint);
+                    }
                 }
                 seen.put(key, views);
                 if (!schemaAdded) {
@@ -205,6 +218,80 @@ public final class CatalogViews {
         String view = DuckDbAdapter.quoteIdentifier(schema) + "." + DuckDbAdapter.quoteIdentifier(table);
         String data = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
                 + (widened ? String.join(", ", select) : "*") + " FROM " + source;
+        String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
+                + String.join(", ", typed) + " WHERE false";
+        return new TableViews(fingerprint, data, empty);
+    }
+
+    /**
+     * Builds the views of a table of another catalog (Iceberg): DuckDB's iceberg extension reads
+     * the snapshot's metadata file, which pins the files, deletes and columns. A table that
+     * cannot be read is left out (logged), so that one broken catalog table does not stop the
+     * complete answers of all others.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @param previous views made before, or null
+     * @return views, or null when the table is left out
+     */
+    private TableViews catalogTableViews(String schema, String table, TableViews previous) {
+        try {
+            Optional<CatalogTables.Resolved> resolved = parquetAdapter.catalogTables()
+                    .current(schema, table);
+            if (resolved.isEmpty()) {
+                return null;
+            }
+            TableSnapshot snapshot = resolved.get().snapshot();
+            if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg)) {
+                LOGGER.warn("node={} views=skipTable table={}.{} reason=readSpec read={}",
+                        LogUtil.node(), schema, table, snapshot.read());
+                return null;
+            }
+            String fingerprint = "catalog:" + snapshot.fingerprint();
+            if (previous != null && previous.fingerprint().equals(fingerprint)) {
+                return previous;
+            }
+            return describeSource(schema, table, icebergScan(iceberg.metadataLocation()), fingerprint);
+        } catch (IOException | SQLException | RuntimeException e) {
+            LOGGER.warn("node={} views=skipTable table={}.{} reason=catalog error='{}'",
+                    LogUtil.node(), schema, table, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Names DuckDB's scan of an Iceberg table snapshot.
+     *
+     * @param metadataLocation metadata file of the snapshot
+     * @return {@code iceberg_scan('<metadata>')}
+     */
+    public static String icebergScan(String metadataLocation) {
+        return "iceberg_scan(" + DuckDbAdapter.sqlStringLiteral(metadataLocation) + ")";
+    }
+
+    /**
+     * Builds the view definitions of a table read from a FROM source.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @param source FROM source
+     * @param fingerprint what the definitions were made for
+     * @return view definitions
+     * @throws SQLException when DuckDB cannot describe the source
+     */
+    private TableViews describeSource(String schema, String table, String source,
+            String fingerprint) throws SQLException {
+        List<String> typed = new ArrayList<>();
+        Connection conn = duckDbAdapter.connection();
+        try (Statement s = conn.createStatement();
+                ResultSet columns = s.executeQuery("DESCRIBE SELECT * FROM " + source)) {
+            while (columns.next()) {
+                String name = DuckDbAdapter.quoteIdentifier(columns.getString("column_name"));
+                typed.add("CAST(NULL AS " + columns.getString("column_type") + ") AS " + name);
+            }
+        }
+        String view = DuckDbAdapter.quoteIdentifier(schema) + "." + DuckDbAdapter.quoteIdentifier(table);
+        String data = "CREATE OR REPLACE VIEW " + view + " AS SELECT * FROM " + source;
         String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
                 + String.join(", ", typed) + " WHERE false";
         return new TableViews(fingerprint, data, empty);

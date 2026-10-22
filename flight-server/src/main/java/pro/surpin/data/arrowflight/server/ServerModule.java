@@ -24,6 +24,7 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
@@ -197,12 +198,25 @@ public final class ServerModule {
      * Provide ParquetAdapter singleton
      * @param config application configuration
      * @param store store of the data directory
+     * @param catalogTables tables of the other catalogs
      * @return parquet adapter
      */
     @Provides
     @Singleton
-    ParquetAdapter parquetAdapter(AppConfig config, DataStore store) {
-        return new ParquetAdapter(config, store, localStorageHost);
+    ParquetAdapter parquetAdapter(AppConfig config, DataStore store, CatalogTables catalogTables) {
+        return new ParquetAdapter(config, store, localStorageHost, catalogTables);
+    }
+
+    /**
+     * Provides the tables of the catalogs besides the data directory ({@code catalog=}).
+     *
+     * @param registry store registry, which opened the catalogs
+     * @return catalog tables, empty without catalogs
+     */
+    @Provides
+    @Singleton
+    CatalogTables catalogTables(StoreRegistry registry) {
+        return registry.catalogTables();
     }
 
     /**

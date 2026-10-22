@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
@@ -40,6 +41,7 @@ public class ParquetAdapter {
     private final DataStore store;
     private final String dataDirectory;
     private final String localhost;
+    private final CatalogTables catalogTables;
 
     private volatile CatalogSnapshot catalog;
     private final Map<TableKey, CachedTableSchema> arrowSchemaCache =
@@ -62,11 +64,13 @@ public class ParquetAdapter {
      * @param schemas discovered schema directories
      * @param tables discovered table directories
      * @param ddls DDL for discovered tables
+     * @param catalogSchemas schemas of the other catalogs (Iceberg, ...), to a location text
      * @param expiresAtNanos monotonic refresh deadline
      */
     private record CatalogSnapshot(Map<String, String> schemas,
             Map<String, Map<String, String>> tables,
-            Map<String, Map<String, String>> ddls, long expiresAtNanos) {
+            Map<String, Map<String, String>> ddls, Map<String, String> catalogSchemas,
+            long expiresAtNanos) {
     }
 
     /**
@@ -111,11 +115,50 @@ public class ParquetAdapter {
      * @param localhost storage host colocated with this server, for the local file inventory
      */
     public ParquetAdapter(AppConfig appConfig, DataStore store, String localhost) {
+        this(appConfig, store, localhost, CatalogTables.none());
+    }
+
+    /**
+     * Creates a ParquetAdapter that also shows the tables of other catalogs.
+     *
+     * @param appConfig server configuration
+     * @param store     store of the data directory
+     * @param localhost storage host colocated with this server, for the local file inventory
+     * @param catalogTables tables of the catalogs besides the data directory
+     */
+    public ParquetAdapter(AppConfig appConfig, DataStore store, String localhost,
+            CatalogTables catalogTables) {
         this.store = Objects.requireNonNull(store, "store");
         this.dataDirectory = store.root();
         this.localhost = localhost;
+        this.catalogTables = Objects.requireNonNull(catalogTables, "catalogTables");
 
         refreshCatalog();
+    }
+
+    /**
+     * Returns the tables of the catalogs besides the data directory.
+     *
+     * @return catalog tables, empty without catalogs
+     */
+    public CatalogTables catalogTables() {
+        return catalogTables;
+    }
+
+    /**
+     * Tells whether a schema belongs to another catalog than the data directory.
+     *
+     * @param schema schema name, may be null
+     * @return true for a schema of a catalog (Iceberg, ...)
+     */
+    public boolean isCatalogSchema(String schema) {
+        if (schema == null || catalogTables.isEmpty()) {
+            return false;
+        }
+        if (catalog != null) {
+            currentCatalog();   // refreshes the catalog schemas after the TTL
+        }
+        return catalogTables.owns(schema);
     }
 
     /**
@@ -127,9 +170,16 @@ public class ParquetAdapter {
      */
     public Map<String, String> getSchemas(String filterExpression) throws IOException {
         java.util.function.Predicate<String> schemaPredicate = createLikePredicate(filterExpression);
-        return currentCatalog().schemas().entrySet().stream()
+        CatalogSnapshot current = currentCatalog();
+        Map<String, String> result = current.schemas().entrySet().stream()
                 .filter(entry -> filterExpression == null || schemaPredicate.test(entry.getKey()))
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        for (Map.Entry<String, String> entry : current.catalogSchemas().entrySet()) {
+            if (filterExpression == null || schemaPredicate.test(entry.getKey())) {
+                result.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
+        return result;
     }
 
     /**
@@ -140,8 +190,11 @@ public class ParquetAdapter {
      * @return map of table name to location
      */
     public Map<String, String> getTables(String schema, String filterExpression) {
-        Map<String, String> tables = currentCatalog().tables()
-                .getOrDefault(schema, Collections.emptyMap());
+        CatalogSnapshot current = currentCatalog();
+        Map<String, String> tables = current.tables().getOrDefault(schema, Collections.emptyMap());
+        if (tables.isEmpty() && current.catalogSchemas().containsKey(schema)) {
+            tables = catalogTableNames(schema);
+        }
         java.util.function.Predicate<String> tablePredicate = createLikePredicate(filterExpression);
         return tables.entrySet().stream()
                 .filter(entry -> filterExpression == null || tablePredicate.test(entry.getKey()))
@@ -171,6 +224,12 @@ public class ParquetAdapter {
         long t = LogUtil.mark();
         validateName(schema);
         validateName(table);
+        if (isCatalogSchema(schema)) {
+            // Catalog tables have no footer schema of their own; DuckDB describes them.
+            LOGGER.debug("node={} parquet=catalogTableWithoutFooterSchema table={}.{}",
+                    LogUtil.node(), schema, table);
+            return new Schema(Collections.emptyList(), null);
+        }
         TableKey key = new TableKey(schema, table);
         CachedTableSchema cached = arrowSchemaCache.compute(key,
                 (ignored, current) -> refreshTableSchema(key, current));
@@ -281,6 +340,9 @@ public class ParquetAdapter {
         validateName(schema);
         validateName(table);
         requireSchema(schema, table);
+        if (isCatalogSchema(schema)) {
+            return List.of();   // read through CatalogTables
+        }
         return store.tableFiles(schema, table);
     }
 
@@ -492,8 +554,33 @@ public class ParquetAdapter {
             ddls.put(schemaName, Map.copyOf(schemaDdls));
         });
         LOGGER.info("Parsed DDL: {}", ddlBuilder);
+        Map<String, String> catalogSchemas = catalogTables.isEmpty() ? Map.of()
+                : Map.copyOf(catalogTables.schemas(schemas.keySet()));
+        if (!catalogSchemas.isEmpty()) {
+            LOGGER.info("Catalog schemas: {}", catalogSchemas);
+        }
         return new CatalogSnapshot(schemas, Map.copyOf(tables),
-                Map.copyOf(ddls), System.nanoTime() + METADATA_TTL_NANOS);
+                Map.copyOf(ddls), catalogSchemas, System.nanoTime() + METADATA_TTL_NANOS);
+    }
+
+    /**
+     * Lists the tables of a catalog schema; a catalog that cannot be read shows none.
+     *
+     * @param schema catalog schema
+     * @return table name to a location text
+     */
+    private Map<String, String> catalogTableNames(String schema) {
+        try {
+            Map<String, String> result = new java.util.LinkedHashMap<>();
+            for (String table : catalogTables.tables(schema)) {
+                result.put(table, "catalog:" + schema + "." + table);
+            }
+            return result;
+        } catch (IOException | RuntimeException e) {
+            LOGGER.warn("node={} catalog=tablesFailed schema={} error='{}'", LogUtil.node(), schema,
+                    e.getMessage());
+            return Map.of();
+        }
     }
 
     /**

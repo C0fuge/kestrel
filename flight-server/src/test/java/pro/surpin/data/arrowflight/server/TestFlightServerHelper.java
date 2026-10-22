@@ -46,6 +46,8 @@ public class TestFlightServerHelper implements AutoCloseable {
     public final FlightClient flightClient;
     public final FlightSqlClient sqlClient;
     public final Location location;
+    /** Registry the server was opened with, or null for the plain local data directory. */
+    public final pro.surpin.data.arrowflight.server.storage.StoreRegistry registry;
 
     private final String[] savedProps;
 
@@ -69,14 +71,24 @@ public class TestFlightServerHelper implements AutoCloseable {
         System.setProperty("ioParallelism", "2");
         AppConfig appConfig = ConfigAdapter.getConfig();
 
-        // Local filesystem adapter
-        LocalFileSystem localFs = new LocalFileSystem();
-        localFs.initialize(URI.create("file:///"), new Configuration());
+        if (b.registry != null) {
+            // Stores, catalogs and the checked DuckDB setup as the server opens them.
+            registry = b.registry.apply(appConfig);
+            parquetAdapter = new ParquetAdapter(appConfig, registry.dataDirectory(), "localhost",
+                    registry.catalogTables());
+            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
+                    registry.duckDbSetup());
+        } else {
+            registry = null;
+            // Local filesystem adapter
+            LocalFileSystem localFs = new LocalFileSystem();
+            localFs.initialize(URI.create("file:///"), new Configuration());
 
-        // Adapters
-        parquetAdapter = new ParquetAdapter(appConfig,
-                new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
-        duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool());
+            // Adapters
+            parquetAdapter = new ParquetAdapter(appConfig,
+                    new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
+            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool());
+        }
 
         // Services
         metadataService = new MetadataService(parquetAdapter);
@@ -131,6 +143,10 @@ public class TestFlightServerHelper implements AutoCloseable {
         catch (Exception e) { if (first == null) first = e; }
         try { if (hazelcastAdapter != null) hazelcastAdapter.close(); }
         catch (Exception e) { if (first == null) first = e; }
+        try { if (duckDbAdapter != null && registry != null) duckDbAdapter.close(); }
+        catch (Exception e) { if (first == null) first = e; }
+        try { if (registry != null) registry.close(); }
+        catch (Exception e) { if (first == null) first = e; }
         try { if (allocator != null) allocator.close(); }
         catch (Exception e) { if (first == null) first = e; }
         restoreProps(savedProps);
@@ -153,7 +169,11 @@ public class TestFlightServerHelper implements AutoCloseable {
         private String resultMode = "partial";
         private int hazelcastPort;
         private int flightPort;
+        private java.util.function.Function<AppConfig,
+                pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
 
+        public Builder registry(java.util.function.Function<AppConfig,
+                pro.surpin.data.arrowflight.server.storage.StoreRegistry> r) { this.registry = r; return this; }
         public Builder allocator(BufferAllocator a) { this.allocator = a; return this; }
         public Builder dataDir(String d) { this.dataDir = d; return this; }
         public Builder resultMode(String m) { this.resultMode = m; return this; }

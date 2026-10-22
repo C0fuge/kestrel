@@ -170,6 +170,39 @@ public final class PluginManager implements AutoCloseable {
     }
 
     /**
+     * Finds the plugin whose descriptor provides a table catalog and loads it.
+     *
+     * @param name catalog provider name, for example "iceberg-hadoop"
+     * @return the loaded plugin and its provider, empty when no plugin claims the name
+     * @throws IllegalStateException when two plugins claim it, or the plugin cannot be loaded or
+     *         has no provider of that name
+     */
+    public synchronized Optional<Map.Entry<LoadedPlugin, CatalogProvider>> catalogProvider(
+            String name) {
+        PluginDescriptor claiming = null;
+        for (PluginDescriptor descriptor : present.values()) {
+            if (descriptor.catalogs().contains(name)) {
+                if (claiming != null) {
+                    throw new IllegalStateException("Plugins " + claiming.name() + " and "
+                            + descriptor.name() + " both provide the catalog " + name);
+                }
+                claiming = descriptor;
+            }
+        }
+        if (claiming == null) {
+            return Optional.empty();
+        }
+        LoadedPlugin plugin = load(claiming);
+        for (CatalogProvider provider : plugin.catalogs()) {
+            if (provider.name().equalsIgnoreCase(name)) {
+                return Optional.of(Map.entry(plugin, provider));
+            }
+        }
+        throw new IllegalStateException("Plugin " + claiming.name() + " names the catalog " + name
+                + " in its descriptor but has no provider for it");
+    }
+
+    /**
      * Describes why a plugin directory could not be read, for error messages.
      *
      * @param name plugin directory name
