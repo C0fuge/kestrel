@@ -460,6 +460,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             CallStatus status = message.startsWith("Catalog Error")
                     ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
             throw status.withDescription(message).withCause(e).toRuntimeException();
+        } catch (java.io.UncheckedIOException e) {
+            // A table catalog (Hive Metastore, Iceberg REST) cannot be read now.
+            LOGGER.warn("node={} query=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
+                    e.getCause().getMessage(), query);
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
         } catch (RuntimeException e) {
             LOGGER.error("Error describing query: {}", query, e);
             throw CallStatus.INTERNAL.withDescription(failureDescription(e))
@@ -526,6 +532,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             String message = String.valueOf(e.getMessage());
             LOGGER.warn("Unable to plan query '{}': {}", query, message);
             CallStatus status = message.contains("No live Flight")
+                    || message.contains("Metastore unavailable")
                     || message.contains("registry is empty")
                     || message.contains("have not published")
                     ? CallStatus.UNAVAILABLE

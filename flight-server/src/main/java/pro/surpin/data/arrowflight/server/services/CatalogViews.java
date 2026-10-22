@@ -74,6 +74,8 @@ public final class CatalogViews {
     private final DuckDbAdapter duckDbAdapter;
     private final boolean widenUnsigned;
     private final Map<String, TableViews> tables = new HashMap<>();
+    /** Catalog schemas without views because their catalog failed: schema to error. */
+    private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
     private Snapshot snapshot;
     private long refreshedAtNanos;
 
@@ -130,8 +132,14 @@ public final class CatalogViews {
                 // The catalog cannot be read now: keep the views made before (an outage of a
                 // metastore must not make its tables vanish from complete answers).
                 tableNames = keptTables(schema);
+                if (tableNames.isEmpty()) {
+                    unavailable.put(schema.toLowerCase(Locale.ROOT), String.valueOf(e.getMessage()));
+                }
                 LOGGER.warn("node={} views=keepSchema schema={} tables={} reason=catalog error='{}'",
                         LogUtil.node(), schema, tableNames.size(), e.getMessage());
+            }
+            if (catalogSchema && !tableNames.isEmpty()) {
+                unavailable.remove(schema.toLowerCase(Locale.ROOT));
             }
             for (String table : tableNames) {
                 String key = schema + "\u0000" + table;
@@ -288,6 +296,27 @@ public final class CatalogViews {
                     LogUtil.node(), schema, table, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Tells why a query that names a catalog schema has no views of it: the schema's catalog
+     * could not be read when the views were made, and no earlier views of it exist.
+     *
+     * @param query client SQL
+     * @return the catalog's error, or null when every schema the query names has its views
+     */
+    public String unavailableCatalog(String query) {
+        if (unavailable.isEmpty() || query == null) {
+            return null;
+        }
+        String lower = query.toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, String> entry : unavailable.entrySet()) {
+            if (java.util.regex.Pattern.compile("(?<![a-z0-9_])\"?" + java.util.regex.Pattern.quote(
+                    entry.getKey()) + "\"?\\s*\\.").matcher(lower).find()) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     /**

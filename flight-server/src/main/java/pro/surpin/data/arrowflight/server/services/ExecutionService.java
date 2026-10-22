@@ -179,6 +179,7 @@ public final class ExecutionService {
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
             if (message.contains("Error: ")) {
+                unavailableCatalog(query, message, e);
                 // DuckDB's own errors (parser, binder, catalog, conversion, not implemented)
                 // describe the client's SQL.
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
@@ -223,9 +224,29 @@ public final class ExecutionService {
         } catch (java.sql.SQLException e) {
             String message = String.valueOf(e.getMessage());
             if (isQueryError(message)) {
+                unavailableCatalog(query, message, e);
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Turns DuckDB's "table does not exist" for a schema whose catalog could not be read into
+     * that catalog's error, so that a metastore outage is not reported as a missing table.
+     *
+     * @param query client SQL
+     * @param message DuckDB error message
+     * @param cause DuckDB error
+     * @throws UncheckedIOException when a catalog the query names is unavailable
+     */
+    private void unavailableCatalog(String query, String message, Exception cause) {
+        if (!message.contains("Catalog Error")) {
+            return;
+        }
+        String unavailable = catalogViews.unavailableCatalog(query);
+        if (unavailable != null) {
+            throw new java.io.UncheckedIOException(new IOException(unavailable, cause));
         }
     }
 
