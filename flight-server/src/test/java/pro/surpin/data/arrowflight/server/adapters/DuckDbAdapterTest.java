@@ -1404,6 +1404,31 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies an HDFS extension DuckDB cannot load (another DuckDB version's build, a broken
+     * file) stops the adapter at construction instead of failing every query later.
+     */
+    @Test
+    void unloadableHdfsExtensionStopsTheAdapter(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path extension = java.nio.file.Files.writeString(
+                dir.resolve("hadoopfs.duckdb_extension"), "not an extension");
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                extension.toString(), true, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true,
+                true);
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> new DuckDbAdapter(config, ioPool));
+            assertTrue(e.getMessage().contains("DuckDB cannot be set up"), e.getMessage());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies the real hadoopfs extension (afc2 build for DuckDB 1.4.5) takes the timeouts the
      * server sets. Needs the extension file: {@code -Dhadoopfs.it.extension=<path>}; skipped
      * without it. No namenode is contacted.
