@@ -190,7 +190,12 @@ class ResultModeSchemaIntegrationTest {
             sameInBothModes("SELECT " + c + ", count(*) AS n FROM " + TABLE + " GROUP BY " + c
                     + " ORDER BY " + c + " LIMIT 5");
             if (NUMERIC.contains(column.getName())) {
-                sameInBothModes("SELECT sum(" + c + ") AS s FROM " + TABLE + " WHERE id < 90");
+                String sum = "SELECT sum(" + c + ") AS s FROM " + TABLE + " WHERE id < 90";
+                if (column.getType() instanceof ArrowType.FloatingPoint) {
+                    sameFloatingSumInBothModes(sum);
+                } else {
+                    sameInBothModes(sum);
+                }
             }
         }
     }
@@ -263,6 +268,25 @@ class ResultModeSchemaIntegrationTest {
         assertEquals(complete.schema(), partial.schema(), "schema of partial vs complete: " + sql);
         assertEquals(complete.rows(), partial.rows(), "rows of partial vs complete: " + sql);
         return partial;
+    }
+
+    /**
+     * Like {@link #sameInBothModes} for a sum of a FLOAT or DOUBLE column: DuckDB adds
+     * floating-point values in the order its threads finish, so the two modes (different SQL over
+     * the same files) may differ in the last bits (1335.0 vs 1334.9999999999998 with more cores).
+     *
+     * @param sql query with one floating-point sum
+     * @throws Exception on query failure
+     */
+    private static void sameFloatingSumInBothModes(String sql) throws Exception {
+        Answer partial = answer(sql, "partial");
+        Answer complete = answer(sql, "complete");
+        assertEquals(complete.schema(), partial.schema(), "schema of partial vs complete: " + sql);
+        assertEquals(1, complete.rows().size(), sql);
+        assertEquals(1, partial.rows().size(), sql);
+        double expected = Double.parseDouble(complete.rows().get(0));
+        assertEquals(expected, Double.parseDouble(partial.rows().get(0)),
+                Math.abs(expected) * 1e-9, "rows of partial vs complete: " + sql);
     }
 
     /**
