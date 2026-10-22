@@ -62,5 +62,11 @@ class HadoopArrowFlightServerTest {
                 + "<property><name>input.read.timeout</name><value>15000</value></property></configuration>");
         org.junit.jupiter.api.Assertions.assertTrue(
                 HadoopArrowFlightServer.longHdfsTimeouts(conf.toString()).isEmpty());
+        // Timeouts the server sets in DuckDB are not taken from the file.
+        org.junit.jupiter.api.Assertions.assertTrue(
+                HadoopArrowFlightServer.longHdfsTimeouts(null, false, false).isEmpty());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                java.util.List.of("libhdfs3 input.read.timeout is not set (library default: minutes)"),
+                HadoopArrowFlightServer.longHdfsTimeouts(null, false, true));
     }
 }

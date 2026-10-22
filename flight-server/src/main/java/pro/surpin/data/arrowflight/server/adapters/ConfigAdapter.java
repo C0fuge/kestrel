@@ -122,6 +122,15 @@ public class ConfigAdapter {
                 "arrowflight.metadataEndpointLocation", "FLIGHT_METADATA_ENDPOINT_LOCATION",
                 AppConfig.METADATA_LOCATION_NONE, props);
 
+        // DataNode timeouts of the hadoopfs extension; 0 = not set by the server (the extension
+        // takes LIBHDFS3_CONF's value, else its own default).
+        int duckDbHdfsConnectTimeoutMs = getIntWithEnv("duckDbHdfsConnectTimeoutMs",
+                "arrowflight.duckdb.hdfs.connectTimeoutMs", "HDFS_CONNECT_TIMEOUT_MS",
+                AppConfig.DEFAULT_HDFS_CONNECT_TIMEOUT_MS, props);
+        int duckDbHdfsReadTimeoutMs = getIntWithEnv("duckDbHdfsReadTimeoutMs",
+                "arrowflight.duckdb.hdfs.readTimeoutMs", "HDFS_READ_TIMEOUT_MS",
+                AppConfig.DEFAULT_HDFS_READ_TIMEOUT_MS, props);
+
         return new AppConfig(
                 numServers, batchSize, ioParallelism, ioFileBufferSize,
                 duckDbWarmConnections, duckDbGroups, duckDbThreads,
@@ -135,7 +144,8 @@ public class ConfigAdapter {
                 clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
-                s3, endpointBackupLocations, metadataEndpointLocation);
+                s3, endpointBackupLocations, metadataEndpointLocation,
+                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs);
     }
 
     /**

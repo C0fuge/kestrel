@@ -1346,4 +1346,93 @@ class DuckDbAdapterTest {
             ioPool.shutdownNow();
         }
     }
+
+    /** Verifies the bundled DuckDB is 1.4.5: 1.4.1-1.4.3 have the q04 hash-aggregate bug (fixed in 1.4.4). */
+    @Test
+    void bundledDuckDbHasTheHashAggregateFix() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement();
+                ResultSet rs = s.executeQuery("SELECT library_version FROM pragma_version()")) {
+            assertTrue(rs.next());
+            // The extension files (hadoopfs, httpfs) are built for exactly this version.
+            assertEquals("v1.4.5", rs.getString(1));
+        }
+    }
+
+    /** Verifies the HDFS DataNode timeouts are set when configured and left alone when 0. */
+    @Test
+    void hdfsTimeoutsAreSetUnlessZero() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            Statement statement = mock(Statement.class);
+            adapter.setHdfsTimeout(statement, "hdfs_connect_timeout_ms", 5000, true);
+            adapter.setHdfsTimeout(statement, "hdfs_read_timeout_ms", 15000, false);
+            verify(statement).execute("SET hdfs_connect_timeout_ms = 5000");
+            verify(statement).execute("SET hdfs_read_timeout_ms = 15000");
+
+            Statement untouched = mock(Statement.class);
+            adapter.setHdfsTimeout(untouched, "hdfs_read_timeout_ms", 0, true);
+            verifyNoInteractions(untouched);
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies an extension without the timeout settings (upstream's build) does not stop the
+     * server, while any other error of the SET does.
+     */
+    @Test
+    void hdfsTimeoutUnknownToTheExtensionIsSkipped() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            Statement unknown = mock(Statement.class);
+            when(unknown.execute(any(String.class))).thenThrow(new java.sql.SQLException(
+                    "Catalog Error: unrecognized configuration parameter \"hdfs_read_timeout_ms\""));
+            adapter.setHdfsTimeout(unknown, "hdfs_read_timeout_ms", 15000, true);
+            adapter.setHdfsTimeout(unknown, "hdfs_read_timeout_ms", 15000, false);
+            verify(unknown, org.mockito.Mockito.times(2)).execute("SET hdfs_read_timeout_ms = 15000");
+
+            Statement failing = mock(Statement.class);
+            when(failing.execute(any(String.class))).thenThrow(
+                    new java.sql.SQLException("Invalid Input Error: out of range"));
+            assertThrows(java.sql.SQLException.class, () -> adapter.setHdfsTimeout(failing,
+                    "hdfs_connect_timeout_ms", 5000, true));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies the real hadoopfs extension (afc2 build for DuckDB 1.4.5) takes the timeouts the
+     * server sets. Needs the extension file: {@code -Dhadoopfs.it.extension=<path>}; skipped
+     * without it. No namenode is contacted.
+     */
+    @Test
+    void hadoopfsExtensionTakesTheConfiguredTimeouts() throws Exception {
+        String extension = System.getProperty("hadoopfs.it.extension");
+        org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
+                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                extension, true, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true,
+                true).withHdfsTimeouts(3000, 7000);
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool);
+                Statement s = adapter.connection().createStatement();
+                ResultSet rs = s.executeQuery("SELECT current_setting('hdfs_connect_timeout_ms'),"
+                        + " current_setting('hdfs_read_timeout_ms'),"
+                        + " (SELECT extension_version FROM duckdb_extensions()"
+                        + " WHERE extension_name = 'hadoopfs')")) {
+            assertTrue(rs.next());
+            assertEquals(3000L, rs.getLong(1));
+            assertEquals(7000L, rs.getLong(2));
+            assertTrue(rs.getString(3).startsWith("51b7220-afc"), rs.getString(3));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
 }

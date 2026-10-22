@@ -142,9 +142,15 @@ public class HadoopArrowFlightServer {
         LOGGER.info("Storage: kind={} shared={} locality={}",
                 store.kind(), store.shared(), store.hasLocality());
         if ("hdfs".equals(store.kind())) {
-            for (String problem : longHdfsTimeouts(System.getenv("LIBHDFS3_CONF"))) {
+            LOGGER.info("HDFS DataNode timeouts set in DuckDB: connect={} read={} (0 = left to the"
+                    + " hadoopfs extension / LIBHDFS3_CONF)", config.duckDbHdfsConnectTimeoutMs(),
+                    config.duckDbHdfsReadTimeoutMs());
+            // Only a timeout the server leaves to the extension comes from LIBHDFS3_CONF.
+            for (String problem : longHdfsTimeouts(System.getenv("LIBHDFS3_CONF"),
+                    config.duckDbHdfsConnectTimeoutMs() <= 0, config.duckDbHdfsReadTimeoutMs() <= 0)) {
                 LOGGER.warn("{}: DuckDB reads from a DataNode that vanished wait that long, on every node."
-                        + " Set it to a few seconds in the LIBHDFS3_CONF file (e.g. 5000 / 15000).", problem);
+                        + " Set duckDbHdfsConnectTimeoutMs / duckDbHdfsReadTimeoutMs, or a few seconds"
+                        + " in the LIBHDFS3_CONF file (e.g. 5000 / 15000).", problem);
             }
         }
         String nameEncoding = System.getProperty("sun.jnu.encoding", "");
@@ -389,7 +395,23 @@ public class HadoopArrowFlightServer {
      * @return one line per timeout that is unset or longer than a minute
      */
     static java.util.List<String> longHdfsTimeouts(String confPath) {
+        return longHdfsTimeouts(confPath, true, true);
+    }
+
+    /**
+     * Finds libhdfs3 timeouts that let DuckDB's HDFS reads wait minutes, among those that come
+     * from the LIBHDFS3_CONF file: a timeout the server sets in DuckDB wins over the file.
+     *
+     * @param confPath the LIBHDFS3_CONF file, or null
+     * @param connect whether the connect timeout comes from the file
+     * @param read whether the read timeout comes from the file
+     * @return one line per checked timeout that is unset or longer than a minute
+     */
+    static java.util.List<String> longHdfsTimeouts(String confPath, boolean connect, boolean read) {
         java.util.List<String> problems = new java.util.ArrayList<>();
+        if (!connect && !read) {
+            return problems;
+        }
         java.util.Map<String, String> props = new java.util.HashMap<>();
         if (confPath != null && !confPath.isBlank()) {
             try {
@@ -411,7 +433,14 @@ public class HadoopArrowFlightServer {
                 LOGGER.warn("Cannot read LIBHDFS3_CONF {}: {}", confPath, e.getMessage());
             }
         }
-        for (String key : java.util.List.of("input.connect.timeout", "input.read.timeout")) {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        if (connect) {
+            keys.add("input.connect.timeout");
+        }
+        if (read) {
+            keys.add("input.read.timeout");
+        }
+        for (String key : keys) {
             String value = props.get(key);
             long millis;
             try {

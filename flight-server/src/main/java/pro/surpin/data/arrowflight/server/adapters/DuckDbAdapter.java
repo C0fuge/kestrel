@@ -96,6 +96,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private static final long DESCRIBE_TIMEOUT_SECONDS = 30;
     private final ThreadLocal<Session> threadSession;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
+    /** hadoopfs settings the loaded extension does not know, warned about once. */
+    private final Set<String> unknownHdfsSettings = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService sessionReaper;
     private final ExecutorService ioPool;
 
@@ -307,6 +309,10 @@ public final class DuckDbAdapter implements AutoCloseable {
                         appConfig.duckDbHdfsShortcircuit());
                 setOptionIfPresent(s, "hdfs_domain_socket_path",
                         appConfig.duckDbHdfsDomainSocketPath());
+                setHdfsTimeout(s, "hdfs_connect_timeout_ms",
+                        appConfig.duckDbHdfsConnectTimeoutMs(), logExtensions);
+                setHdfsTimeout(s, "hdfs_read_timeout_ms",
+                        appConfig.duckDbHdfsReadTimeoutMs(), logExtensions);
             }
             runStorageSetup(s);
             if (logExtensions) {
@@ -326,6 +332,48 @@ public final class DuckDbAdapter implements AutoCloseable {
                 s.execute("SET enable_external_access = false");
                 s.execute("SET lock_configuration = true");
             }
+        }
+    }
+
+    /**
+     * Sets a DataNode timeout of the hadoopfs extension. The setting is read when the extension
+     * first connects to a namenode, so it applies to the whole connection. An extension built
+     * without these settings (upstream's) keeps its own timeouts: that is logged once, not an
+     * error.
+     *
+     * @param s statement of the connection to set up
+     * @param name setting name
+     * @param valueMs timeout in ms; 0 leaves the setting to the extension (LIBHDFS3_CONF)
+     * @param log whether to log the value (first connection)
+     * @throws java.sql.SQLException when the setting exists and cannot be set
+     */
+    void setHdfsTimeout(Statement s, String name, int valueMs, boolean log)
+            throws java.sql.SQLException {
+        if (valueMs <= 0) {
+            if (log) {
+                LOGGER.info("node={} duckdb=hdfsTimeout setting={} value=extensionDefault",
+                        LogUtil.node(), name);
+            }
+            return;
+        }
+        try {
+            s.execute("SET " + name + " = " + valueMs);
+        } catch (java.sql.SQLException e) {
+            String message = e.getMessage();
+            if (message == null || !message.contains("unrecognized configuration parameter")) {
+                throw e;
+            }
+            if (unknownHdfsSettings.add(name)) {
+                LOGGER.warn("node={} duckdb=hdfsTimeoutUnsupported setting={} value={} reason="
+                        + "\"the hadoopfs extension has no such setting (built without the"
+                        + " timeout patch); its own or LIBHDFS3_CONF timeouts apply\"",
+                        LogUtil.node(), name, valueMs);
+            }
+            return;
+        }
+        if (log) {
+            LOGGER.info("node={} duckdb=hdfsTimeout setting={} valueMs={}", LogUtil.node(), name,
+                    valueMs);
         }
     }
 

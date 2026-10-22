@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- Wrong answers and crashes of large `GROUP BY` queries (TPC-H q04 at SF10: duplicate groups,
+  SIGSEGV in `TupleDataCollection::Combine`, INTERNAL errors) with 2 DuckDB threads: DuckDB
+  1.4.1-1.4.3 skipped repartitioning in the hash aggregate's combine (duckdb#20357, fixed in
+  1.4.4). DuckDB is now 1.4.5.
 - DuckDB connections of ended gRPC threads were never closed: memory grew with every new
   executor thread. They are now closed, results are streamed instead of buffered, the DuckDB
   external file cache is off by default and the prepared-statement cache is bounded.
@@ -76,8 +80,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   default: clients read them over their own connection (stock JDBC metadata 1.4-1.6x faster in
   plaintext, 3.2x with TLS). `metadataEndpointLocation=advertised`
   (`FLIGHT_METADATA_ENDPOINT_LOCATION`) restores the advertised server URI.
-- DuckDB is pinned to 1.4.1.0: the hadoopfs and httpfs extension files are built for v1.4.1.
-  The server needs JDK 21 (Netty 4.2 + Arrow fail on JDK 24+).
+- DuckDB is pinned to 1.4.5.0 (was 1.4.1.0): the hadoopfs and httpfs extension files must be
+  the v1.4.5 builds (`extensions/v1.4.5/linux_amd64/`). The server needs JDK 21 (Netty 4.2 + Arrow
+  fail on JDK 24+).
+- HDFS: the server sets the hadoopfs extension's DataNode timeouts, `duckDbHdfsConnectTimeoutMs`
+  (default 5000) and `duckDbHdfsReadTimeoutMs` (default 15000), as `hdfs_connect_timeout_ms` /
+  `hdfs_read_timeout_ms`; they win over `LIBHDFS3_CONF`, `0` leaves them to the extension. An
+  extension built without these settings keeps its own timeouts (one warning).
 - Calcite and with it Arrow Gandiva are gone from the server jar (318 MB -> 166 MB): the DDL
   logged at startup names its types itself, with the same names. `-Plinux-only` leaves out the
   DuckDB, zstd-jni and netty-tcnative native libraries of other platforms than Linux

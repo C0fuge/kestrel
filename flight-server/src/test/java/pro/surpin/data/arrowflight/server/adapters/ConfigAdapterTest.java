@@ -130,6 +130,27 @@ class ConfigAdapterTest {
         assertTrue(cfg.duckDbAllowUnsignedExtensions());
     }
 
+    /** Verifies the HDFS DataNode timeouts: 5 s / 15 s by default, 0 allowed, negative refused. */
+    @Test
+    void getConfigHdfsTimeouts() {
+        AppConfig defaults = ConfigAdapter.getConfig();
+        assertEquals(AppConfig.DEFAULT_HDFS_CONNECT_TIMEOUT_MS, defaults.duckDbHdfsConnectTimeoutMs());
+        assertEquals(AppConfig.DEFAULT_HDFS_READ_TIMEOUT_MS, defaults.duckDbHdfsReadTimeoutMs());
+        assertEquals(5000, defaults.duckDbHdfsConnectTimeoutMs());
+        assertEquals(15000, defaults.duckDbHdfsReadTimeoutMs());
+
+        setProp("duckDbHdfsConnectTimeoutMs", "3000");
+        setProp("arrowflight.duckdb.hdfs.readTimeoutMs", "0");
+        AppConfig cfg = ConfigAdapter.getConfig();
+        assertEquals(3000, cfg.duckDbHdfsConnectTimeoutMs());
+        assertEquals(0, cfg.duckDbHdfsReadTimeoutMs());
+
+        setProp("duckDbHdfsReadTimeoutMs", "-1");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                ConfigAdapter::getConfig);
+        assertTrue(e.getMessage().contains("duckDbHdfsReadTimeoutMs"), e.getMessage());
+    }
+
     @Test
     void getConfigHazelcastJoinTimeout() {
         setProp("hazelcastClusterJoinTimeoutSec", "30");

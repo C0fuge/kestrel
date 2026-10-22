@@ -93,6 +93,10 @@ class GoldenDuckDbSetupTest {
         hdfs.put("duckDbHdfsShortcircuit", "true");
         hdfs.put("duckDbHdfsDomainSocketPath", "/var/lib/hadoop-hdfs/dn_socket");
 
+        Map<String, String> hdfsTimeouts = new LinkedHashMap<>(hdfs);
+        hdfsTimeouts.put("duckDbHdfsConnectTimeoutMs", "3000");
+        hdfsTimeouts.put("duckDbHdfsReadTimeoutMs", "0");
+
         Map<String, String> localDir = new LinkedHashMap<>(common);
         localDir.put("dataDir", local.toString());
         localDir.put("duckDbStreamResults", "false");
@@ -133,6 +137,7 @@ class GoldenDuckDbSetupTest {
         StringBuilder out = new StringBuilder();
         Map<String, Map<String, String>> configs = new LinkedHashMap<>();
         configs.put("hdfs", hdfs);
+        configs.put("hdfs-timeouts", hdfsTimeouts);
         configs.put("local", localDir);
         configs.put("s3-path", s3Path);
         configs.put("s3-vhost-token", s3Vhost);

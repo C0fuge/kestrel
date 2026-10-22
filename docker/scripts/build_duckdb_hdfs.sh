@@ -1,7 +1,14 @@
 #!/bin/bash
 set -e
 
-DUCKDB_HDFS_VERSION=${DUCKDB_HDFS_VERSION:-1.4.1}
+# DuckDB core the extension is built against: must equal duckdb.version in flight-server/pom.xml
+# (DuckDB loads only extensions of its exact version).
+DUCKDB_HDFS_VERSION=${DUCKDB_HDFS_VERSION:-1.4.5}
+# Extension source tag (vincent-chang/duckdb-hdfs has no v1.4.5 tag; v1.4.1 builds against 1.4.5).
+# This upstream source has no hdfs_connect_timeout_ms / hdfs_read_timeout_ms settings and no
+# HDFS read error handling: the server then logs one warning and libhdfs3's timeouts apply. The
+# patched build (51b7220-afc2) is made from the same source plus patches outside this repository.
+DUCKDB_HDFS_SOURCE_TAG=${DUCKDB_HDFS_SOURCE_TAG:-v1.4.1}
 INSTALL_DIR="/opt/duckdb-extensions"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -35,7 +42,7 @@ rm -rf /tmp/libhdfs3
 
 # 2. Build DuckDB HDFS extension
 echo "==> Cloning duckdb-hdfs repository..."
-git clone --depth 1 --branch "v${DUCKDB_HDFS_VERSION}" https://github.com/vincent-chang/duckdb-hdfs.git /duckdb-hdfs
+git clone --depth 1 --branch "${DUCKDB_HDFS_SOURCE_TAG}" https://github.com/vincent-chang/duckdb-hdfs.git /duckdb-hdfs
 cd /duckdb-hdfs
 
 # CRITICAL: Initialize submodules and explicitly checkout the matching DuckDB version
@@ -44,7 +51,9 @@ echo "==> Syncing DuckDB core to version v${DUCKDB_HDFS_VERSION}..."
 git submodule update --init --depth 1 duckdb extension-ci-tools
 cd duckdb
 git fetch --depth 1 origin tag "v${DUCKDB_HDFS_VERSION}" 2>/dev/null || true
-git checkout "v${DUCKDB_HDFS_VERSION}" 2>/dev/null || true
+# No "|| true": the extension source tag differs from the core version, a silent mismatch
+# would only show when the server refuses the file.
+git checkout "v${DUCKDB_HDFS_VERSION}"
 cd /duckdb-hdfs
 
 echo "==> Running DuckDB build..."
