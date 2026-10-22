@@ -48,7 +48,8 @@ import static org.mockito.Mockito.when;
  * goes through {@link ConfigAdapter} from the same -D flags the bench uses, and the store and the
  * DuckDB adapter come from {@link ServerModule}, so a refactoring of any of them that changes a
  * single statement fails here. DuckDB itself is replaced by a JDBC driver that records the
- * statements, so no extension has to exist.
+ * statements, so no extension has to exist; it answers the startup read-back of the lockdown
+ * ({@code LockdownCheck}) from the statements the connection ran, as DuckDB would.
  */
 @Tag("unit")
 class GoldenDuckDbSetupTest {
@@ -256,16 +257,16 @@ class GoldenDuckDbSetupTest {
                 properties.put(name, info.getProperty(name));
             }
             log.add("-- connection " + (++connections) + " " + url + " " + properties);
-            InvocationHandler resultSet = (proxy, method, args) -> defaultValue(method.getReturnType());
+            ConnectionState state = new ConnectionState();
             InvocationHandler statement = (proxy, method, args) -> switch (method.getName()) {
                 case "execute" -> {
                     log.add((String) args[0]);
+                    state.run((String) args[0]);
                     yield false;
                 }
                 case "executeQuery" -> {
                     log.add("QUERY " + args[0]);
-                    yield Proxy.newProxyInstance(getClass().getClassLoader(),
-                            new Class<?>[] {ResultSet.class}, resultSet);
+                    yield resultSet(state.answer((String) args[0]));
                 }
                 default -> defaultValue(method.getReturnType());
             };
@@ -278,6 +279,24 @@ class GoldenDuckDbSetupTest {
             };
             return (Connection) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] {Connection.class}, connection);
+        }
+
+        /**
+         * Builds a result set over fixed rows of strings.
+         *
+         * @param rows rows, each an array of column values
+         * @return result set
+         */
+        private static ResultSet resultSet(List<String[]> rows) {
+            int[] row = {-1};
+            InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
+                case "next" -> ++row[0] < rows.size();
+                case "getString" -> rows.get(row[0])[(Integer) args[0] - 1];
+                case "wasNull" -> false;
+                default -> defaultValue(method.getReturnType());
+            };
+            return (ResultSet) Proxy.newProxyInstance(RecordingDriver.class.getClassLoader(),
+                    new Class<?>[] {ResultSet.class}, handler);
         }
 
         /**
@@ -297,6 +316,86 @@ class GoldenDuckDbSetupTest {
                 return 0L;
             }
             return null;
+        }
+
+        /**
+         * What one recorded connection was told to set: settings, allowed directories, temp
+         * directory and secrets, so that the lockdown read-back gets DuckDB's answers.
+         */
+        private static final class ConnectionState {
+
+            private static final Pattern SET = Pattern.compile("SET (\\w+) = (.*)");
+            private static final Pattern LITERAL = Pattern.compile("'((?:[^']|'')*)'");
+            private static final Pattern SECRET = Pattern.compile(
+                    "CREATE TEMPORARY SECRET (\\w+) \\(.*SCOPE '((?:[^']|'')*)'\\)");
+
+            private final Map<String, String> settings = new LinkedHashMap<>();
+            private final List<String> allowedDirectories = new ArrayList<>();
+            private final Map<String, String> secrets = new LinkedHashMap<>();
+
+            /**
+             * Applies a statement.
+             *
+             * @param sql statement run
+             */
+            void run(String sql) {
+                Matcher secret = SECRET.matcher(sql);
+                if (secret.matches()) {
+                    secrets.put(secret.group(1), secret.group(2).replace("''", "'"));
+                    return;
+                }
+                Matcher set = SET.matcher(sql);
+                if (!set.matches()) {
+                    return;
+                }
+                String name = set.group(1);
+                String value = set.group(2).trim();
+                if ("allowed_directories".equals(name)) {
+                    allowedDirectories.clear();
+                    Matcher literal = LITERAL.matcher(value);
+                    while (literal.find()) {
+                        allowedDirectories.add(literal.group(1).replace("''", "'"));
+                    }
+                    return;
+                }
+                Matcher literal = LITERAL.matcher(value);
+                settings.put(name, literal.matches() ? literal.group(1).replace("''", "'") : value);
+            }
+
+            /**
+             * Answers a query the way DuckDB would after the recorded statements.
+             *
+             * @param sql query
+             * @return rows; none for queries the setup does not read back
+             */
+            List<String[]> answer(String sql) {
+                List<String[]> rows = new ArrayList<>();
+                if (sql.contains("FROM duckdb_settings()")) {
+                    // DuckDB's defaults for what was not set.
+                    Map<String, String> defaults = new LinkedHashMap<>();
+                    defaults.put("enable_external_access", "true");
+                    defaults.put("lock_configuration", "false");
+                    defaults.put("autoload_known_extensions", "true");
+                    defaults.put("autoinstall_known_extensions", "true");
+                    for (Map.Entry<String, String> setting : defaults.entrySet()) {
+                        if (sql.contains("'" + setting.getKey() + "'")) {
+                            rows.add(new String[] {setting.getKey(),
+                                    settings.getOrDefault(setting.getKey(), setting.getValue())});
+                        }
+                    }
+                } else if (sql.contains("current_setting('allowed_directories')")) {
+                    for (String directory : allowedDirectories) {
+                        rows.add(new String[] {directory});
+                    }
+                } else if (sql.contains("current_setting('temp_directory')")) {
+                    rows.add(new String[] {settings.get("temp_directory")});
+                } else if (sql.contains("FROM duckdb_secrets()")) {
+                    for (Map.Entry<String, String> secret : secrets.entrySet()) {
+                        rows.add(new String[] {secret.getKey(), secret.getValue()});
+                    }
+                }
+                return rows;
+            }
         }
 
         @Override
