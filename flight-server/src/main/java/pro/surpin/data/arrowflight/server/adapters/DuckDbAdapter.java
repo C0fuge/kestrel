@@ -313,6 +313,12 @@ public final class DuckDbAdapter implements AutoCloseable {
             // into files with the same names, and an instance removes that directory when closed.
             s.execute("SET temp_directory = " + sqlStringLiteral(
                     tempRoot.resolve("c" + sessionIds.incrementAndGet()).toString()));
+            String maxTempSize = appConfig.duckDbMaxTempSize();
+            if (maxTempSize != null) {
+                // The cap holds per connection (each is an instance of its own), so the node may
+                // spill up to this size times the live connections.
+                s.execute("SET max_temp_directory_size = " + sqlStringLiteral(maxTempSize));
+            }
             if (!appConfig.duckDbExternalFileCache()) {
                 // The cache keeps file data read through an extension until memory_limit is
                 // reached, in every connection; the OS page cache already does that job.

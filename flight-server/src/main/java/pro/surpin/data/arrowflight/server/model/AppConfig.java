@@ -1,5 +1,7 @@
 package pro.surpin.data.arrowflight.server.model;
 
+import java.util.regex.Pattern;
+
 /**
  * Server configuration loaded at startup.
  * Values are resolved from arrowflight.properties, system properties, and environment variables.
@@ -43,7 +45,8 @@ public record AppConfig(
     int endpointBackupLocations,
     String metadataEndpointLocation,
     int duckDbHdfsConnectTimeoutMs,
-    int duckDbHdfsReadTimeoutMs
+    int duckDbHdfsReadTimeoutMs,
+    String duckDbMaxTempSize
 ) {
 
     /** Backup locations per partial-result endpoint unless configured otherwise. */
@@ -63,6 +66,8 @@ public record AppConfig(
      * {@code input.read.timeout}, else 15000 ms).
      */
     public static final int DEFAULT_HDFS_READ_TIMEOUT_MS = 15_000;
+    /** A DuckDB size setting: a number with an optional unit (KB, MiB, GB, ...). */
+    private static final Pattern SIZE = Pattern.compile("\\d+(\\.\\d+)?\\s*[A-Za-z]{0,3}");
 
     /**
      * Fills in defaults that cannot be null.
@@ -90,6 +95,48 @@ public record AppConfig(
             throw new IllegalArgumentException("duckDbHdfsReadTimeoutMs must not be negative: "
                     + duckDbHdfsReadTimeoutMs);
         }
+        if (duckDbMaxTempSize != null) {
+            duckDbMaxTempSize = duckDbMaxTempSize.trim();
+            if (duckDbMaxTempSize.isEmpty()) {
+                duckDbMaxTempSize = null;
+            } else if (!SIZE.matcher(duckDbMaxTempSize).matches()) {
+                throw new IllegalArgumentException("duckDbMaxTempSize must be a size such as"
+                        + " 20GiB or 500MB: " + duckDbMaxTempSize);
+            }
+        }
+    }
+
+    /**
+     * Configuration without a spill size cap (DuckDB's own: 90 % of the free disk space).
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    public AppConfig(int numServers, int batchSize, int ioParallelism, int ioFileBufferSize,
+            int duckDbWarmConnections, int duckDbGroups, int duckDbThreads,
+            String duckDbHdfsExtension, boolean duckDbAllowUnsignedExtensions,
+            String duckDbHdfsDefaultNamenode, String duckDbHdfsHaNamenodes,
+            String duckDbHdfsShortcircuit, String duckDbHdfsDomainSocketPath,
+            String duckDbMemoryLimit, boolean metricsEnabled, long arrowAllocatorLimitBytes,
+            int grpcMaxInboundMessageSize, int flightBackpressureThresholdBytes,
+            long flightListenerReadyTimeoutMillis, String dataDir, String localDataDir, int port,
+            int hazelcastPort, int hazelcastClusterJoinTimeoutSec, int clientMaxRetries,
+            int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
+            boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
+            String duckDbTempDirectory, String authToken, String resultMode,
+            boolean widenUnsignedTypes, boolean duckDbLockdown,
+            int endpointBackupLocations, String metadataEndpointLocation,
+            int duckDbHdfsConnectTimeoutMs, int duckDbHdfsReadTimeoutMs) {
+        this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
+                duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
+                duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes, duckDbHdfsShortcircuit,
+                duckDbHdfsDomainSocketPath, duckDbMemoryLimit, metricsEnabled,
+                arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
+                endpointBackupLocations, metadataEndpointLocation,
+                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, null);
     }
 
     /**
@@ -173,7 +220,7 @@ public record AppConfig(
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, location, duckDbHdfsConnectTimeoutMs,
-                duckDbHdfsReadTimeoutMs);
+                duckDbHdfsReadTimeoutMs, duckDbMaxTempSize);
     }
 
     /**
@@ -195,7 +242,28 @@ public record AppConfig(
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation, connectTimeoutMs,
-                readTimeoutMs);
+                readTimeoutMs, duckDbMaxTempSize);
+    }
+
+    /**
+     * Returns this configuration with another spill size cap per DuckDB connection.
+     *
+     * @param maxTempSize DuckDB size such as 20GiB, null or blank = DuckDB's own cap
+     * @return changed copy
+     */
+    public AppConfig withDuckDbMaxTempSize(String maxTempSize) {
+        return new AppConfig(numServers, batchSize, ioParallelism, ioFileBufferSize,
+                duckDbWarmConnections, duckDbGroups, duckDbThreads, duckDbHdfsExtension,
+                duckDbAllowUnsignedExtensions, duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes,
+                duckDbHdfsShortcircuit, duckDbHdfsDomainSocketPath, duckDbMemoryLimit,
+                metricsEnabled, arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
+                endpointBackupLocations, metadataEndpointLocation, duckDbHdfsConnectTimeoutMs,
+                duckDbHdfsReadTimeoutMs, maxTempSize);
     }
 
     /**

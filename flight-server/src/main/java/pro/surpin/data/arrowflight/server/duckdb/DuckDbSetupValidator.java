@@ -52,8 +52,8 @@ public final class DuckDbSetupValidator {
     private static final Set<String> REFUSED_SETTINGS = Set.of(
             "enable_external_access", "lock_configuration", "allowed_directories", "allowed_paths",
             "extension_directory", "custom_extension_repository", "secret_directory",
-            "temp_directory", "threads", "memory_limit", "enable_logging", "disable_logging",
-            "enable_profiling", "profiling_output");
+            "temp_directory", "max_temp_directory_size", "threads", "memory_limit",
+            "enable_logging", "disable_logging", "enable_profiling", "profiling_output");
     /** Prefixes of settings refused for the same reason. */
     private static final List<String> REFUSED_SETTING_PREFIXES = List.of(
             "allow_", "autoinstall", "autoload", "logging", "enable_logging");

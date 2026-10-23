@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- Setting `duckDbMaxTempSize` (`arrowflight.duckdb.maxTempSize`, env `DUCKDB_MAX_TEMP_SIZE`):
+  cap of the DuckDB spill directory, e.g. `20GiB`. It holds per DuckDB connection (each is an
+  instance of its own), so a node may spill up to the cap times its live connections. Unset =
+  DuckDB's own cap (90 % of the free disk space, per connection). Plugins may not set
+  `max_temp_directory_size` (idea from upstream 2e31e1f, whose cap is per server).
+
 ### Fixed
 - A server whose start failed before it began serving (storage that cannot be opened, a
   cluster join timeout) or with an `Error` stayed alive without ever becoming ready: Hazelcast

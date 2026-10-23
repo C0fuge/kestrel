@@ -151,6 +151,23 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbHdfsReadTimeoutMs"), e.getMessage());
     }
 
+    /** Verifies the spill size cap: unset by default, read from both keys, garbage refused. */
+    @Test
+    void getConfigDuckDbMaxTempSize() {
+        assertNull(ConfigAdapter.getConfig().duckDbMaxTempSize());
+
+        setProp("arrowflight.duckdb.maxTempSize", " 20GiB ");
+        assertEquals("20GiB", ConfigAdapter.getConfig().duckDbMaxTempSize());
+        setProp("duckDbMaxTempSize", "500 MB");
+        assertEquals("500 MB", ConfigAdapter.getConfig().duckDbMaxTempSize());
+        assertNull(ConfigAdapter.getConfig().withDuckDbMaxTempSize(" ").duckDbMaxTempSize());
+
+        setProp("duckDbMaxTempSize", "20GiB'; SET threads = 1; --");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                ConfigAdapter::getConfig);
+        assertTrue(e.getMessage().contains("duckDbMaxTempSize"), e.getMessage());
+    }
+
     @Test
     void getConfigHazelcastJoinTimeout() {
         setProp("hazelcastClusterJoinTimeoutSec", "30");

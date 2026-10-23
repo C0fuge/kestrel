@@ -98,6 +98,8 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.statementCacheSize", 64, props);
         String duckDbTempDirectory = getStringWithEnv("duckDbTempDirectory",
                 "arrowflight.duckdb.tempDirectory", "DUCKDB_TEMP_DIRECTORY", null, props);
+        String duckDbMaxTempSize = getStringWithEnv("duckDbMaxTempSize",
+                "arrowflight.duckdb.maxTempSize", "DUCKDB_MAX_TEMP_SIZE", null, props);
         String authToken = getStringWithEnv("authToken",
                 "arrowflight.auth.token", "FLIGHT_AUTH_TOKEN", null, props);
         String resultMode = getStringWithEnv("resultMode", "arrowflight.resultMode",
@@ -140,7 +142,7 @@ public class ConfigAdapter {
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation,
-                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs);
+                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize);
     }
 
     /**

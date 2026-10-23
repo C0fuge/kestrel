@@ -399,6 +399,50 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies the spill size cap reaches every connection and is left to DuckDB when unset. */
+    @Test
+    void connectionsTakeTheSpillSizeCap(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig uncapped = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, base.toString(), null, "complete", true, true);
+        try (DuckDbAdapter adapter = new DuckDbAdapter(uncapped, ioPool)) {
+            assertNotEquals("2.0 GiB", setting(adapter.connection(), "max_temp_directory_size"));
+        }
+        try (DuckDbAdapter adapter = new DuckDbAdapter(uncapped.withDuckDbMaxTempSize("2GiB"), ioPool)) {
+            AtomicReference<String> other = new AtomicReference<>();
+            Thread worker = new Thread(() -> other.set(
+                    setting(adapter.connection(), "max_temp_directory_size")));
+            worker.start();
+            worker.join();
+            assertEquals("2.0 GiB", setting(adapter.connection(), "max_temp_directory_size"));
+            assertEquals("2.0 GiB", other.get());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Reads a setting of a DuckDB connection.
+     *
+     * @param connection DuckDB connection
+     * @param name setting name
+     * @return its current value
+     */
+    private static String setting(Connection connection, String name) {
+        try (Statement statement = connection.createStatement();
+                ResultSet rs = statement.executeQuery(
+                        "SELECT current_setting('" + name + "')")) {
+            rs.next();
+            return rs.getString(1);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /**
      * Reads the spill directory of a DuckDB connection.
      *
