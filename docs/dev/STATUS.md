@@ -21,6 +21,22 @@
    services) + Checkstyle + SpotBugs, with the iceberg/avro/httpfs extensions from `ci-assets`
    (`duckdb-extensions-v1.4.5.tar.zst`); a second manual job "package": linux-only jar + plugins dir as a GitHub
    Release `server-<version>-<sha>` (assets: jar, plugins tar, START-NOTES, SHA256SUMS). Keep it under ~25 min.
+0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
+   public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
+   '+refs/heads/*:refs/remotes/upstream/*'`; never push there). Review per feature and port what beats ours (rule:
+   try ours and theirs, keep the more effective variant per feature, our features stay; record the decision per item
+   in docs/dev/UPSTREAM-SYNC.md with numbers where possible):
+   - `feat/starrocks-native-integration` (86 commits, 10-16..10-23): server — stream DuckDB results instead of
+     materializing (compare with ours), bounded DuckDB read-ahead + unordered scan output, apply client runtime
+     IN-filters and bloom filters to plain scans, table-statistics Flight action, optional parallel ZSTD batch
+     compression + wire-format matrix, narrow DECIMAL wire form (`decimalWire=narrow`), DuckDB spill to a temp dir,
+     S3 via s3a + httpfs (compare with our S3 plugin), join key reduction / parse cache limit, exit on failed start;
+     plus their StarRocks fork patches (runtime filters to the Flight server, aggregate predicate pushdown) — note
+     anything our StarRocks/Trino connectors should adopt in Open questions (the coordinator forwards it).
+   - `feat/trino-flight-connector` (11 commits, 10-16..10-22): their own Trino connector (`flight-trino`: Kerberos
+     auth, statistics, routing/partitioning, types) — compare with our plugin (separate repo); server-side bits only here.
+   - `perf/pushdown-statistics` (3 commits, August): check if anything is still useful.
+   - Dependabot PRs upstream: hazelcast 5.7.0, netty 4.2.19, grpc 1.85.0 — fold into 1b.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
