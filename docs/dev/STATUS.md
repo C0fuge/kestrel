@@ -39,6 +39,10 @@
      auth, statistics, routing/partitioning, types) — compare with our plugin (separate repo); server-side bits only here.
    - `perf/pushdown-statistics` (3 commits, August): check if anything is still useful.
    - Dependabot PRs upstream: hazelcast 5.7.0, netty 4.2.19, grpc 1.85.0 — fold into 1b.
+   - **Progress:** triage of every server-side feature is in `docs/dev/UPSTREAM-SYNC.md` (rows S1..S12, T1..T2).
+     S1 (exit on failed start) ported, S2 ours already, S5 (shared DuckDB database) rejected as-is (breaks our
+     per-connection catalog views). Next session: the first **open** row there (S3: spill size cap), then S4
+     (needs an order-dependence audit + stand measurement), S12 together with item 6.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -74,6 +78,15 @@
 - Upstream's `.github/workflows/ci.yml` now runs only on manual dispatch (it ran on every push and Dependabot PR,
   failed, and doubled the minutes; dev-ci.yml covers the same checks). Revert the `on:` block if you want it back.
 - Dependabot PRs (#4..#7 on this repo) no longer get CI. Close them or fold the bumps into item 1b?
+- `duckDbMemoryLimit` / `duckDbThreads` apply per DuckDB connection (one in-memory instance per worker thread), so a
+  node can use limit × live connections (upstream hit an OOM kill this way and switched to one shared database,
+  f5f11b3). We keep per-connection instances because catalog views are per connection; options: (a) document it and
+  size the limit as node budget / expected concurrent connections, (b) per-query view names so a shared database becomes safe (bigger
+  change). Which one?
+- Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
+  them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
+  StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
+  DECIMAL(38,0)) to the server.
 
 ## Log
 

@@ -386,7 +386,27 @@ public class HadoopArrowFlightServer {
      */
     public static void main(String... args) throws Exception {
         HadoopArrowFlightServer server = new HadoopArrowFlightServer();
-        server.start(args);
+        if (!startOrReport(() -> server.start(args))) {
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Runs the server start and logs a failure instead of throwing it. Hazelcast and gRPC threads
+     * are not daemons, so a start that fails before it serves (storage that cannot be opened, a
+     * cluster join timeout) would otherwise leave a process that never becomes ready.
+     *
+     * @param start server start
+     * @return true when the start returned normally, false when it failed
+     */
+    static boolean startOrReport(Runnable start) {
+        try {
+            start.run();
+            return true;
+        } catch (RuntimeException | Error e) {
+            LOGGER.error("The server failed to start", e);
+            return false;
+        }
     }
 
     /** Longest libhdfs3 connect / read timeout, in ms, that keeps a vanished DataNode from stalling reads. */

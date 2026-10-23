@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- A server whose start failed before it began serving (storage that cannot be opened, a
+  cluster join timeout) or with an `Error` stayed alive without ever becoming ready: Hazelcast
+  and gRPC threads are not daemons. `main` now logs the failure and exits with status 1, so a
+  supervisor restarts it (ported from upstream 7b277f7).
 - HDFS files whose path has escaped characters (Hive partitions such as `l_shipmode=REG AIR`,
   `tag=50%25`) failed with "Unable to get file info": DuckDB was handed the URI-escaped path,
   and the hadoopfs extension reads paths literally. Paths now reach DuckDB decoded.

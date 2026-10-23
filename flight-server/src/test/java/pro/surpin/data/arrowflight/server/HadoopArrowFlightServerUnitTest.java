@@ -52,6 +52,30 @@ class HadoopArrowFlightServerUnitTest {
         assertEquals("8080", invokeGetArgValue(args, "--port", "32010"));
     }
 
+    // ── startOrReport: a failed start must end the process ───────────────
+
+    /** Regression: a failed start before serving (cluster join timeout) must not leave a live process. */
+    @Test
+    void startOrReportReportsAFailedStart() {
+        assertFalse(HadoopArrowFlightServer.startOrReport(() -> {
+            throw new IllegalStateException("Cluster join timeout after 60s: only 1 of 3 nodes connected.");
+        }));
+    }
+
+    /** An Error during start (a missing class, a failed static initializer) also ends the process. */
+    @Test
+    void startOrReportReportsAnErrorDuringStart() {
+        assertFalse(HadoopArrowFlightServer.startOrReport(() -> {
+            throw new NoClassDefFoundError("org/example/Missing");
+        }));
+    }
+
+    /** A start that returns normally (the server stopped serving) is not a failure. */
+    @Test
+    void startOrReportAcceptsANormalReturn() {
+        assertTrue(HadoopArrowFlightServer.startOrReport(() -> { }));
+    }
+
     private static String invokeGetArgValue(String[] args, String key, String defaultValue)
             throws Exception {
         HadoopArrowFlightServer instance = new HadoopArrowFlightServer();
