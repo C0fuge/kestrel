@@ -21,6 +21,14 @@
    services) + Checkstyle + SpotBugs, with the iceberg/avro/httpfs extensions from `ci-assets`
    (`duckdb-extensions-v1.4.5.tar.zst`); a second manual job "package": linux-only jar + plugins dir as a GitHub
    Release `server-<version>-<sha>` (assets: jar, plugins tar, START-NOTES, SHA256SUMS). Keep it under ~25 min.
+1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
+   unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
+   document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
+   2.18.x/2.22.x aligned via `jackson-bom`; aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
+   Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
+   (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
+   replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
+   lz4-java 1.8.0). Full test suite green after each group of upgrades.
 2. **Iceberg equality deletes are correct but slow** (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
    iceberg extension refuses or mis-applies eq deletes when filters/projections are pushed). Make them fast and
    correct: e.g. read data files + equality delete files yourself (anti-join on the equality columns with sequence-
