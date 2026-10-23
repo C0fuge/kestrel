@@ -17,7 +17,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 
-/** Sources of Iceberg snapshots: equality deletes keep their columns read by every query. */
+/** Sources of Iceberg snapshots: equality deletes keep every column read by every query. */
 class CatalogViewsIcebergSourceTest {
 
     private static final String METADATA = "hdfs://ns/t/metadata/v2.metadata.json";
@@ -46,22 +46,22 @@ class CatalogViewsIcebergSourceTest {
                 "hdfs://ns/t/data/p.parquet", 1, DeleteFile.Kind.POSITION, List.of()))));
     }
 
-    /** Verifies that equality deletes keep exactly their columns read, below a LIMIT. */
+    /** Verifies that equality deletes keep all columns read, below a LIMIT. */
     @Test
-    void equalityDeletesKeepTheirColumns() {
-        assertEquals("(SELECT * FROM " + SCAN + " AS eq_keep WHERE hash(eq_keep.\"id\", eq_keep.\"status\")"
-                + " IS NOT NULL LIMIT " + Long.MAX_VALUE + ")",
+    void equalityDeletesKeepAllColumns() {
+        assertEquals("(SELECT * FROM " + SCAN + " AS eq_keep WHERE hash(eq_keep.\"id\", eq_keep.\"status\","
+                + " eq_keep.\"v\") IS NOT NULL LIMIT " + Long.MAX_VALUE + ")",
                 CatalogViews.icebergSource(METADATA, snapshot(equality(2), equality(1, 2))));
     }
 
     /**
      * Verifies the kept form is a FROM source DuckDB accepts with filters and joins, and that a
-     * filter on a column outside the equality columns is applied above it.
+     * filter on a column outside the equality columns is applied above it (nested columns too).
      */
     @Test
     void keptFormIsAValidSource() throws Exception {
         String source = CatalogViews.icebergSource(METADATA, snapshot(equality(1)))
-                .replace(SCAN, "(SELECT range AS id, range % 3 AS v FROM range(10))");
+                .replace(SCAN, "(SELECT range AS id, {'a': range} AS status, range % 3 AS v FROM range(10))");
         try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = c.createStatement()) {
             try (ResultSet rs = s.executeQuery("SELECT count(*) FROM " + source + " a JOIN " + source

@@ -321,7 +321,7 @@ public final class CatalogViews {
             if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
                 source = icebergSource(iceberg.metadataLocation(), snapshot);
                 if (!source.startsWith("iceberg_scan(")) {
-                    LOGGER.info("node={} views=icebergEqualityColumnsKept table={}.{}"
+                    LOGGER.info("node={} views=icebergAllColumnsRead table={}.{}"
                             + " reason=equalityDeletes", LogUtil.node(), schema, table);
                 }
             } else if (snapshot.columns().isEmpty()) {
@@ -401,34 +401,28 @@ public final class CatalogViews {
      * iceberg_scan applies equality deletes only when it reads their columns: a query that does
      * not select them fails ("Equality deletes need the relevant columns to be selected"), and one
      * that only filters on them can fail with an INTERNAL error that invalidates the database
-     * (Gravitino stand, Iceberg Java equality deletes; also a filter on any column the query does
-     * not select when the table has position deletes too). A filter DuckDB cannot push into the
-     * scan and that is never false keeps those columns read for every query on the view, and a
-     * LIMIT no table can reach keeps the query's own filters above the scan. Tables without
-     * equality deletes are read by the plain scan (position deletes have no such problem).
+     * (Gravitino stand, Iceberg Java equality deletes). With position deletes and renamed columns
+     * too, any projection that leaves out a column can fail the same way (an aggregate or filter
+     * on one column only), so a snapshot with equality deletes is read with all its columns: a
+     * filter DuckDB cannot push into the scan and that is never false references every column,
+     * and a LIMIT no table can reach keeps the query's own filters above the scan (a filter pushed
+     * into the scan, also through a MATERIALIZED CTE, applies the deletes wrongly). Tables
+     * without equality deletes are read by the plain scan.
      *
      * @param metadataLocation metadata file of the snapshot
-     * @param snapshot the snapshot (its delete files name the equality columns)
-     * @return {@code iceberg_scan(...)}, or a subquery over it that keeps the equality columns
+     * @param snapshot the snapshot (its delete files tell whether there are equality deletes)
+     * @return {@code iceberg_scan(...)}, or a subquery over it that reads every column
      */
     public static String icebergSource(String metadataLocation, TableSnapshot snapshot) {
-        Set<Integer> fieldIds = new java.util.TreeSet<>();
-        for (TableFile file : snapshot.files()) {
-            for (DeleteFile delete : file.deletes()) {
-                if (delete.kind() == DeleteFile.Kind.EQUALITY) {
-                    fieldIds.addAll(delete.equalityFieldIds());
-                }
-            }
+        String scan = icebergScan(metadataLocation);
+        boolean equalityDeletes = snapshot.files().stream().flatMap(file -> file.deletes().stream())
+                .anyMatch(delete -> delete.kind() == DeleteFile.Kind.EQUALITY);
+        if (!equalityDeletes || snapshot.columns().isEmpty()) {
+            return scan;
         }
         List<String> keep = new ArrayList<>();
         for (ColumnSpec column : snapshot.columns()) {
-            if (column.fieldId() != null && fieldIds.contains(column.fieldId())) {
-                keep.add("eq_keep." + DuckDbAdapter.quoteIdentifier(column.name()));
-            }
-        }
-        String scan = icebergScan(metadataLocation);
-        if (keep.isEmpty()) {
-            return scan;
+            keep.add("eq_keep." + DuckDbAdapter.quoteIdentifier(column.name()));
         }
         return "(SELECT * FROM " + scan + " AS eq_keep WHERE hash(" + String.join(", ", keep)
                 + ") IS NOT NULL LIMIT " + Long.MAX_VALUE + ")";
