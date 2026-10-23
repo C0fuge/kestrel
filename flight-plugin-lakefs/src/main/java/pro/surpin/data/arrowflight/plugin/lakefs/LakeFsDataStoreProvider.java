@@ -1,6 +1,8 @@
 package pro.surpin.data.arrowflight.plugin.lakefs;
 
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +70,17 @@ public final class LakeFsDataStoreProvider implements DataStoreProvider {
         if (settings.endpoint() == null) {
             throw new IllegalArgumentException("lakefs data directory " + uri.uri()
                     + " needs the lakeFS endpoint (arrowflight.lakefs.endpoint)");
+        }
+        if (!settings.hasCredentials()) {
+            // S3Settings names the s3 plugin's variables; name the lakefs ones.
+            throw new IllegalArgumentException("lakefs data directory " + uri.uri()
+                    + " without credentials: set FLIGHT_LAKEFS_ACCESS_KEY and"
+                    + " FLIGHT_LAKEFS_SECRET_KEY or arrowflight.lakefs.credentialsFile");
+        }
+        if (settings.caFile() != null && !Files.isReadable(
+                Path.of(settings.caFile()))) {
+            throw new IllegalArgumentException("arrowflight.lakefs.caFile is not a readable file: "
+                    + settings.caFile());
         }
         settings.requireUsable();
         context.redactor().add(settings.secretKey());

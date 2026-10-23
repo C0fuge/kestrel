@@ -352,4 +352,30 @@ class ExecutionServiceTest {
             assertEquals(new BigDecimal("7.00"), v.getObject(1));
         }
     }
+
+    /**
+     * A join reads the files its ticket names, table by table (pinned lakeFS paths included),
+     * so a table changed after planning is not mixed in; a table the ticket does not name is
+     * listed instead (empty result).
+     */
+    @Test
+    void joinTablesReadTheFilesOfTheTicket() {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                org.mockito.Mockito.mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        org.mockito.Mockito.when(store.unversionedPath(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(inv -> {
+                    String path = inv.getArgument(0);
+                    return path.startsWith("@") ? path.substring(path.indexOf('/') + 1) : path;
+                });
+        org.mockito.Mockito.when(store.duckDbUri(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(inv -> "s3://lake/" + inv.<String>getArgument(0).replace("@", ""));
+        String[] ticket = {"@c1/tpch/nation/data_1.parquet", "@c1/tpch/region/data_0.parquet",
+            "@c1/tpch/nation_x/data_0.parquet"};
+        assertEquals(List.of("s3://lake/c1/tpch/region/data_0.parquet"),
+                ExecutionService.plannedTableFiles(store, "tpch.region", ticket));
+        assertEquals(List.of("s3://lake/c1/tpch/nation/data_1.parquet"),
+                ExecutionService.plannedTableFiles(store, "tpch.nation", ticket));
+        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.orders", ticket).isEmpty());
+        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.region", null).isEmpty());
+    }
 }

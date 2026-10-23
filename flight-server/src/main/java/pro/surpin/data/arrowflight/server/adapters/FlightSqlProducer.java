@@ -353,10 +353,58 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         return false;
     }
 
-    private static String failureDescription(Throwable failure) {
-        Throwable root = failure;
-        while (root.getCause() != null && root.getCause() != root) {
-            root = root.getCause();
+    /**
+     * Finds the outermost storage error with a message in a failure's causes.
+     *
+     * @param failure failure
+     * @return the I/O exception, or null when the failure has none
+     */
+    private static IOException storageFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IOException io && io.getMessage() != null
+                    && !io.getMessage().isBlank()) {
+                return io;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return null;
+    }
+
+    static String failureDescription(Throwable failure) {
+        List<Throwable> chain = new java.util.ArrayList<>();
+        for (Throwable t = failure; t != null && chain.size() < 32;
+                t = t.getCause() == t ? null : t.getCause()) {
+            chain.add(t);
+        }
+        Throwable root = chain.get(chain.size() - 1);
+        String rootText = root.getMessage();
+        if (rootText == null || rootText.isBlank()) {
+            // e.g. ConnectException/UnresolvedAddressException without text under the store's
+            // "lakeFS API GET ... not reachable": name the deepest cause that explains it.
+            for (int i = chain.size() - 2; i >= 0; i--) {
+                String text = chain.get(i).getMessage();
+                if (text != null && !text.isBlank()) {
+                    root = chain.get(i);
+                    break;
+                }
+            }
+        } else {
+            // A storage IOException that repeats the root's text adds context ("lakeFS API GET
+            // <uri> failed, lakeFS not reachable: HttpConnectTimeoutException HTTP connect timed
+            // out"): prefer the deepest such wrapper over the bare root. Messages that are only
+            // the cause's toString() (new RuntimeException(cause)) add nothing.
+            for (int i = chain.size() - 2; i >= 0; i--) {
+                Throwable t = chain.get(i);
+                String text = t.getMessage();
+                if (t instanceof IOException && text != null
+                        && text.length() > rootText.length() && text.contains(rootText)
+                        && !text.equals(chain.get(i + 1).toString())) {
+                    root = chain.get(i);
+                    break;
+                }
+            }
         }
         String message = root.getMessage();
         String description = "Query execution failed: " + root.getClass().getSimpleName();
@@ -624,6 +672,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             if (message.startsWith("Invalid SQL query")) {
                 throw CallStatus.INVALID_ARGUMENT
                         .withDescription(failureDescription(e))
+                        .withCause(e).toRuntimeException();
+            }
+            IOException storage = storageFailure(e);
+            if (storage != null) {
+                // Listing or footer reads failed (store or lakeFS unreachable, refused): say so.
+                String why = "Cannot read the table's files: " + storage.getMessage();
+                throw CallStatus.UNAVAILABLE
+                        .withDescription(why.length() <= 1024 ? why : why.substring(0, 1024))
                         .withCause(e).toRuntimeException();
             }
             throw CallStatus.INTERNAL

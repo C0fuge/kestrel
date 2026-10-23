@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -78,6 +79,8 @@ public final class CatalogViews {
     private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
     private Snapshot snapshot;
     private long refreshedAtNanos;
+    /** Data version of the store the snapshot was built from (null when unknown). */
+    private String dataVersion;
 
     /**
      * Creates the catalog of views.
@@ -94,7 +97,10 @@ public final class CatalogViews {
     }
 
     /**
-     * Returns the current view definitions, refreshing them at most once a minute.
+     * Returns the current view definitions, refreshing them at most once a minute or at once when
+     * the store reports a new data version (for example a new commit on a lakeFS branch). All
+     * tables of one refresh are listed in one read scope of the store, so the views never mix
+     * versions.
      *
      * @return view definitions
      * @throws IOException when the table files cannot be listed
@@ -102,9 +108,21 @@ public final class CatalogViews {
      */
     public synchronized Snapshot current() throws IOException, SQLException {
         long now = System.nanoTime();
-        if (snapshot != null && now - refreshedAtNanos < REFRESH_NANOS) {
+        DataStore store = parquetAdapter.dataStore();
+        if (snapshot != null && now - refreshedAtNanos < REFRESH_NANOS
+                && Objects.equals(dataVersion, store == null ? null : store.dataVersion())) {
             return snapshot;
         }
+        try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
+                : store.readScope()) {
+            String version = store == null ? null : store.dataVersion();
+            refresh(now);
+            dataVersion = version;
+        }
+        return snapshot;
+    }
+
+    private void refresh(long now) throws IOException, SQLException {
         long t = LogUtil.mark();
         List<String> data = new ArrayList<>();
         List<String> empty = new ArrayList<>();
@@ -196,7 +214,6 @@ public final class CatalogViews {
         }
         refreshedAtNanos = now;
         LogUtil.logTiming(t, "views.refresh", "tables=" + seen.size());
-        return snapshot;
     }
 
     /**

@@ -27,6 +27,9 @@ public final class HttpRefResolver implements RefResolver {
     private static final Pattern COMMIT_ID =
             Pattern.compile("\"commit_id\"\\s*:\\s*\"([A-Za-z0-9_.-]{1,256})\"");
 
+    private static final Pattern ID =
+            Pattern.compile("\"id\"\\s*:\\s*\"([A-Za-z0-9_.-]{1,256})\"");
+
     private final URI api;
     private final String authorization;
     private final HttpClient client;
@@ -66,7 +69,36 @@ public final class HttpRefResolver implements RefResolver {
 
     @Override
     public Optional<String> branchHead(String repository, String ref) throws IOException {
-        URI uri = api.resolve("repositories/" + encode(repository) + "/branches/" + encode(ref));
+        HttpResponse<String> response = get("repositories/" + encode(repository) + "/branches/"
+                + encode(ref), repository, ref);
+        if (response.statusCode() == 404) {
+            return Optional.empty();
+        }
+        return Optional.of(commitId(response, COMMIT_ID));
+    }
+
+    @Override
+    public String refCommit(String repository, String ref) throws IOException {
+        HttpResponse<String> response = get("repositories/" + encode(repository) + "/commits/"
+                + encode(ref), repository, ref);
+        if (response.statusCode() == 404) {
+            HttpResponse<String> repo = get("repositories/" + encode(repository), repository,
+                    ref);
+            throw new IOException(repo.statusCode() == 404
+                    ? "lakeFS repository '" + repository + "' does not exist (" + api + ")"
+                    : "lakeFS repository '" + repository + "' has no branch, tag or commit '"
+                            + ref + "'");
+        }
+        return commitId(response, ID);
+    }
+
+    /**
+     * Sends one GET; 200 and 404 are returned, anything else is an error that names the call but
+     * neither the response body nor the credentials.
+     */
+    private HttpResponse<String> get(String path, String repository, String ref)
+            throws IOException {
+        URI uri = api.resolve(path);
         HttpRequest.Builder request = HttpRequest.newBuilder(uri).timeout(timeout)
                 .header("Accept", "application/json").GET();
         if (authorization != null) {
@@ -78,21 +110,46 @@ public final class HttpRefResolver implements RefResolver {
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while resolving lakeFS branch " + repository + "/"
+            throw new IOException("Interrupted while resolving lakeFS ref " + repository + "/"
                     + ref, e);
+        } catch (IOException e) {
+            throw new IOException("lakeFS API GET " + uri + " failed, lakeFS not reachable: "
+                    + reason(e, uri), e);
         }
         int status = response.statusCode();
-        if (status == 404) {
-            return Optional.empty();
+        if (status == 401 || status == 403) {
+            throw new IOException("lakeFS API GET " + uri + " returned HTTP " + status
+                    + ": lakeFS refused the credentials (FLIGHT_LAKEFS_ACCESS_KEY /"
+                    + " FLIGHT_LAKEFS_SECRET_KEY or lakefs.credentialsFile)");
         }
-        if (status != 200) {
+        if (status != 200 && status != 404) {
             throw new IOException("lakeFS API GET " + uri + " returned HTTP " + status);
         }
-        Matcher matcher = COMMIT_ID.matcher(response.body());
-        if (!matcher.find()) {
-            throw new IOException("lakeFS API GET " + uri + " returned no commit_id");
+        return response;
+    }
+
+    /**
+     * Why a request did not get an answer: ConnectException and HttpTimeoutException often carry
+     * no message of their own, and an unknown host shows only as a textless
+     * UnresolvedAddressException under a ConnectException.
+     */
+    static String reason(IOException e, URI uri) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.nio.channels.UnresolvedAddressException
+                    || t instanceof java.net.UnknownHostException) {
+                return "host " + uri.getHost() + " cannot be resolved";
+            }
         }
-        return Optional.of(matcher.group(1));
+        return e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage());
+    }
+
+    private static String commitId(HttpResponse<String> response, Pattern field)
+            throws IOException {
+        Matcher matcher = field.matcher(response.body());
+        if (!matcher.find()) {
+            throw new IOException("lakeFS API GET " + response.uri() + " returned no commit id");
+        }
+        return matcher.group(1);
     }
 
     private static String encode(String part) {

@@ -197,6 +197,56 @@ public interface DataStore extends AutoCloseable {
     Map<String, Long> localInventory(String host) throws IOException;
 
     /**
+     * Names the version of the data that a listing would read now, for example the commit a
+     * lakeFS branch points to. The server calls it before each complete answer and rebuilds its
+     * table views at once when it changed, instead of waiting for their periodic refresh, so the
+     * store should answer from a short cache.
+     *
+     * @return data version, or null when the store cannot tell (the default; views then follow
+     *         changes on their timer)
+     * @throws IOException when the store cannot be asked
+     */
+    default String dataVersion() throws IOException {
+        return null;
+    }
+
+    /**
+     * Opens a read scope on the calling thread: until it is closed, every listing of this store
+     * on that thread reads the same version of the data, whatever changes meanwhile. The server
+     * opens one around the listings of one query plan and one view refresh, so that the tables
+     * of a query never come from different versions. Scopes may nest; the outermost decides.
+     *
+     * @return scope to close on the same thread
+     * @throws IOException when the store cannot fix the version
+     */
+    default ReadScope readScope() throws IOException {
+        return ReadScope.NONE;
+    }
+
+    /**
+     * Removes the version marker a store may put in front of the relative paths it lists (the
+     * lakeFS plugin lists {@code @<commit>/<schema>/<table>/...}), so that the server can tell
+     * which table a file of a ticket belongs to.
+     *
+     * @param relativePath relative path as listed by this store
+     * @return the path below the data directory without a version marker; by default the path
+     */
+    default String unversionedPath(String relativePath) {
+        return relativePath;
+    }
+
+    /** A read scope of {@link #readScope()}; closing it ends the scope and throws nothing. */
+    @FunctionalInterface
+    interface ReadScope extends AutoCloseable {
+
+        /** Scope of a store whose listings always read the current data. */
+        ReadScope NONE = () -> { };
+
+        @Override
+        void close();
+    }
+
+    /**
      * Releases clients and threads of the store.
      *
      * @throws IOException when releasing fails

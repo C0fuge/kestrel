@@ -38,6 +38,12 @@ public record LakeFsUri(String repository, String ref, String prefix) {
         if (prefix.startsWith("/") || prefix.endsWith("/") || prefix.contains("//")) {
             throw new IllegalArgumentException("Invalid path in lakeFS data directory: " + prefix);
         }
+        for (String segment : prefix.split("/")) {
+            if (segment.equals(".") || segment.equals("..")) {
+                throw new IllegalArgumentException("A lakeFS data directory path has no '.' or"
+                        + " '..' segments (it would leave the ref): " + prefix);
+            }
+        }
     }
 
     /**

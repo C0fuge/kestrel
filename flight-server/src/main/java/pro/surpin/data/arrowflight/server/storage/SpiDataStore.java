@@ -172,6 +172,36 @@ public final class SpiDataStore implements DataStore {
     }
 
     @Override
+    public String dataVersion() throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.dataVersion();
+        }
+    }
+
+    @Override
+    public String unversionedPath(String relativePath) {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.unversionedPath(relativePath);
+        }
+    }
+
+    @Override
+    public ReadScope readScope() throws IOException {
+        ReadScope scope;
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            scope = delegate.readScope();
+        }
+        if (scope == null || scope == ReadScope.NONE) {
+            return ReadScope.NONE;
+        }
+        return () -> {
+            try (ThreadContext ignored = ThreadContext.of(loader)) {
+                scope.close();
+            }
+        };
+    }
+
+    @Override
     public void close() throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             delegate.close();
