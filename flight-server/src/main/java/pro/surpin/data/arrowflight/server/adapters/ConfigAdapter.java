@@ -100,6 +100,17 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.tempDirectory", "DUCKDB_TEMP_DIRECTORY", null, props);
         String duckDbMaxTempSize = getStringWithEnv("duckDbMaxTempSize",
                 "arrowflight.duckdb.maxTempSize", "DUCKDB_MAX_TEMP_SIZE", null, props);
+        String preserveOrder = getStringWithEnv("duckDbPreserveInsertionOrder",
+                "arrowflight.duckdb.preserveInsertionOrder", "DUCKDB_PRESERVE_INSERTION_ORDER",
+                "true", props);
+        // A typo must not silently turn the order guarantee off: only true or false.
+        if (!"true".equalsIgnoreCase(preserveOrder) && !"false".equalsIgnoreCase(preserveOrder)) {
+            throw new IllegalArgumentException(
+                    "duckDbPreserveInsertionOrder must be true or false: " + preserveOrder);
+        }
+        String duckDbStreamingBufferSize = getStringWithEnv("duckDbStreamingBufferSize",
+                "arrowflight.duckdb.streamingBufferSize", "DUCKDB_STREAMING_BUFFER_SIZE", null,
+                props);
         String authToken = getStringWithEnv("authToken",
                 "arrowflight.auth.token", "FLIGHT_AUTH_TOKEN", null, props);
         String resultMode = getStringWithEnv("resultMode", "arrowflight.resultMode",
@@ -142,7 +153,8 @@ public class ConfigAdapter {
                 duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation,
-                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize);
+                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
+                Boolean.parseBoolean(preserveOrder), duckDbStreamingBufferSize);
     }
 
     /**

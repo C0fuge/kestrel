@@ -425,6 +425,34 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies scan order and read-ahead stay DuckDB's own by default and reach every connection when set. */
+    @Test
+    void connectionsTakeTheScanOrderAndReadAhead(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig defaults = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, base.toString(), null, "complete", true, true);
+        try (DuckDbAdapter adapter = new DuckDbAdapter(defaults, ioPool)) {
+            assertEquals("true", setting(adapter.connection(), "preserve_insertion_order"));
+            assertNotEquals("64.0 MiB", setting(adapter.connection(), "streaming_buffer_size"));
+        }
+        try (DuckDbAdapter adapter = new DuckDbAdapter(defaults.withDuckDbScanOrder(false, "64MiB"), ioPool)) {
+            AtomicReference<String> other = new AtomicReference<>();
+            Thread worker = new Thread(() -> other.set(setting(adapter.connection(), "preserve_insertion_order")
+                    + "/" + setting(adapter.connection(), "streaming_buffer_size")));
+            worker.start();
+            worker.join();
+            assertEquals("false", setting(adapter.connection(), "preserve_insertion_order"));
+            assertEquals("64.0 MiB", setting(adapter.connection(), "streaming_buffer_size"));
+            assertEquals("false/64.0 MiB", other.get());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /**
      * Reads a setting of a DuckDB connection.
      *

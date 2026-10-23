@@ -168,6 +168,33 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbMaxTempSize"), e.getMessage());
     }
 
+    /** Verifies scan order and read-ahead: DuckDB's own by default, read from both keys, garbage refused. */
+    @Test
+    void getConfigDuckDbScanOrder() {
+        assertTrue(ConfigAdapter.getConfig().duckDbPreserveInsertionOrder());
+        assertNull(ConfigAdapter.getConfig().duckDbStreamingBufferSize());
+
+        setProp("arrowflight.duckdb.preserveInsertionOrder", "FALSE");
+        setProp("arrowflight.duckdb.streamingBufferSize", " 64MiB ");
+        assertFalse(ConfigAdapter.getConfig().duckDbPreserveInsertionOrder());
+        assertEquals("64MiB", ConfigAdapter.getConfig().duckDbStreamingBufferSize());
+        setProp("duckDbPreserveInsertionOrder", "true");
+        setProp("duckDbStreamingBufferSize", "8MB");
+        assertTrue(ConfigAdapter.getConfig().duckDbPreserveInsertionOrder());
+        assertEquals("8MB", ConfigAdapter.getConfig().duckDbStreamingBufferSize());
+        assertNull(ConfigAdapter.getConfig().withDuckDbScanOrder(true, " ")
+                .duckDbStreamingBufferSize());
+
+        setProp("duckDbPreserveInsertionOrder", "flase");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                ConfigAdapter::getConfig);
+        assertTrue(e.getMessage().contains("duckDbPreserveInsertionOrder"), e.getMessage());
+        setProp("duckDbPreserveInsertionOrder", "true");
+        setProp("duckDbStreamingBufferSize", "64MiB'; SET threads = 1; --");
+        e = assertThrows(IllegalArgumentException.class, ConfigAdapter::getConfig);
+        assertTrue(e.getMessage().contains("duckDbStreamingBufferSize"), e.getMessage());
+    }
+
     @Test
     void getConfigHazelcastJoinTimeout() {
         setProp("hazelcastClusterJoinTimeoutSec", "30");

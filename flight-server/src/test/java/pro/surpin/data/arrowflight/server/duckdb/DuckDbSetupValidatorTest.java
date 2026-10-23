@@ -131,7 +131,8 @@ class DuckDbSetupValidatorTest {
                 "allow_community_extensions", "allow_persistent_secrets", "allow_unredacted_secrets",
                 "autoinstall_known_extensions", "autoload_known_extensions", "extension_directory",
                 "custom_extension_repository", "secret_directory", "temp_directory",
-                "max_temp_directory_size", "threads",
+                "max_temp_directory_size", "threads", "preserve_insertion_order",
+                "streaming_buffer_size",
                 "memory_limit", "enable_logging", "logging_level", "some_unknown_setting",
                 "Bad Name", "x;DROP")) {
             refused(setup -> setup.set(setting, true));

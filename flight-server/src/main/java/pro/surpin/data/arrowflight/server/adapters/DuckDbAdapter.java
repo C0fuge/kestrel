@@ -319,6 +319,16 @@ public final class DuckDbAdapter implements AutoCloseable {
                 // spill up to this size times the live connections.
                 s.execute("SET max_temp_directory_size = " + sqlStringLiteral(maxTempSize));
             }
+            if (!appConfig.duckDbPreserveInsertionOrder()) {
+                // Rows of a query without ORDER BY may come in any order: parallel scan threads
+                // then do not wait for each other to keep the file order.
+                s.execute("SET preserve_insertion_order = false");
+            }
+            String streamingBuffer = appConfig.duckDbStreamingBufferSize();
+            if (streamingBuffer != null) {
+                // How far a streamed result may run ahead of the Flight consumer.
+                s.execute("SET streaming_buffer_size = " + sqlStringLiteral(streamingBuffer));
+            }
             if (!appConfig.duckDbExternalFileCache()) {
                 // The cache keeps file data read through an extension until memory_limit is
                 // reached, in every connection; the OS page cache already does that job.

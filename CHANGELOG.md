@@ -15,6 +15,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instance of its own), so a node may spill up to the cap times its live connections. Unset =
   DuckDB's own cap (90 % of the free disk space, per connection). Plugins may not set
   `max_temp_directory_size` (idea from upstream 2e31e1f, whose cap is per server).
+- Settings `duckDbPreserveInsertionOrder` (`arrowflight.duckdb.preserveInsertionOrder`, env
+  `DUCKDB_PRESERVE_INSERTION_ORDER`, default `true`; only `true`/`false` accepted) and
+  `duckDbStreamingBufferSize` (`arrowflight.duckdb.streamingBufferSize`, env
+  `DUCKDB_STREAMING_BUFFER_SIZE`, e.g. `64MiB`; unset = DuckDB's own): `false` lets DuckDB return
+  the rows of a query without ORDER BY in any order (parallel scan threads do not wait for each
+  other), the buffer lets a streamed result run ahead of a slow Flight consumer. Both are opt-in
+  until measured on the stand; plugins may not set them (upstream cb45f1c turns both on).
 
 ### Fixed
 - A server whose start failed before it began serving (storage that cannot be opened, a
