@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.storage;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 
 import java.io.IOException;
@@ -34,11 +35,47 @@ public final class HadoopDataStoreProvider {
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit.skip.checksum", false);
         hadoopConfig.setBoolean("fs.file.impl.disable.cache", true);
+        registerFileSystems(hadoopConfig);
         try {
             FileSystem fileSystem = new Path(dataDirectory).getFileSystem(hadoopConfig);
             return new HadoopDataStore(fileSystem, dataDirectory, storageHost);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Names the file system classes of {@code file:} and {@code hdfs:} unless the configuration
+     * names them already. Hadoop otherwise finds them only through the
+     * {@code META-INF/services/org.apache.hadoop.fs.FileSystem} files of its jars, which merged or
+     * repackaged Hadoop class paths lose ("No FileSystem for scheme "file"" at startup with a
+     * local data directory or warehouse). An explicit {@code fs.<scheme>.impl} (core-site.xml or
+     * -D) is kept.
+     *
+     * @param hadoopConfig configuration to complete
+     */
+    static void registerFileSystems(Configuration hadoopConfig) {
+        if (hadoopConfig.get("fs.file.impl") == null) {
+            hadoopConfig.set("fs.file.impl", LocalFileSystem.class.getName());
+        }
+        String hdfs = "org.apache.hadoop.hdfs.DistributedFileSystem";
+        if (hadoopConfig.get("fs.hdfs.impl") == null && present(hdfs)) {
+            hadoopConfig.set("fs.hdfs.impl", hdfs);
+        }
+    }
+
+    /**
+     * Tells whether a class is on the server's class path.
+     *
+     * @param name class name
+     * @return true when it can be loaded
+     */
+    private static boolean present(String name) {
+        try {
+            Class.forName(name, false, HadoopDataStoreProvider.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
         }
     }
 }

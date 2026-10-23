@@ -48,12 +48,55 @@ class DuckDbSetupValidatorTest {
         assertEquals(List.of(
                 "LOAD '/ext/httpfs.duckdb_extension'",
                 "SET s3_region = ''",
-                "CREATE TEMPORARY SECRET data_secret (TYPE s3, KEY_ID 'k', SCOPE 's3://z/data/')",
+                // An S3 catalog: tables written through S3A name objects s3a://, same secret.
+                "CREATE TEMPORARY SECRET data_secret (TYPE s3, KEY_ID 'k', SCOPE ['s3://z/data/',"
+                        + " 's3a://z/data/', 's3n://z/data/'])",
                 "SET http_retries = 3",
                 "LOAD '/ext/iceberg.duckdb_extension'"), plan.statements());
-        assertEquals(List.of("s3://z/data/", "hdfs://ns/a", "s3://b/", "s3://wh/"), plan.roots());
+        assertEquals(List.of("s3://z/data/", "hdfs://ns/a", "s3://b/", "s3://wh/", "s3a://wh/",
+                "s3n://wh/"), plan.roots());
+        assertEquals("s3://z/data/", plan.secrets().get(0).scope());
         assertEquals(Set.of("iceberg_snapshots"), plan.extraRefusedFunctions());
         assertEquals(List.of("httpfs", "iceberg"), plan.extensions());
+    }
+
+    /**
+     * Spark and Iceberg Java name local files {@code file:/...} in metadata and manifests; DuckDB
+     * checks those names literally, so local catalog roots also appear as {@code file:} URIs
+     * (Gravitino stand). The data directory's local root does not get a twin.
+     */
+    @Test
+    void localCatalogRootsAlsoReadableAsFileUris() {
+        DuckDbSetupPlan plan = validator.plan(
+                contribution("data", Set.of("file"), List.of("/data/"), setup -> {
+                }),
+                List.of(contribution("hadoop", Set.of("file", "hdfs"), List.of("/wh/extra"),
+                        setup -> {
+                        })),
+                List.of(contribution("catalog", Set.of("file", "hdfs"),
+                        List.of("/wh/warehouse", "hdfs://ns/wh"),
+                        setup -> setup.loadExtension("iceberg"))));
+
+        assertEquals(List.of("/data/", "/wh/extra", "/wh/warehouse", "hdfs://ns/wh",
+                "file:/wh/warehouse"), plan.roots());
+    }
+
+    /** Without an S3 catalog the S3 stores keep their single scope and roots (golden setup). */
+    @Test
+    void s3TwinsOnlyForS3Catalogs() {
+        DuckDbSetupPlan plan = validator.plan(
+                contribution("data", Set.of("s3"), List.of("s3://z/data/"), setup ->
+                        setup.createSecret("data_secret", "s3", "s3://z/data/", Map.of(
+                                "KEY_ID", SecretValue.plain("k")))),
+                List.of(),
+                List.of(contribution("catalog", Set.of("file"), List.of("/wh"),
+                        setup -> setup.loadExtension("iceberg"))));
+
+        assertEquals("CREATE TEMPORARY SECRET data_secret (TYPE s3, KEY_ID 'k',"
+                + " SCOPE 's3://z/data/')", plan.statements().get(0));
+        assertEquals(List.of("s3://z/data/", "/wh", "file:/wh"), plan.roots());
+        assertEquals(List.of("s3://b/x/", "s3n://b/x/"), DuckDbSetupValidator.s3Twins("s3a://b/x/"));
+        assertEquals(List.of(), DuckDbSetupValidator.s3Twins("hdfs://ns/x"));
     }
 
     @Test

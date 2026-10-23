@@ -14,6 +14,8 @@ import java.util.concurrent.ExecutorService;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.TableMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
@@ -29,7 +31,11 @@ import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
  */
 final class IcebergCatalog implements Catalog {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(IcebergCatalog.class);
+
     private final IcebergSettings settings;
+    /** Hidden tables already warned about (table@metadata). */
+    private final java.util.Set<String> hiddenWarned = ConcurrentHashMap.newKeySet();
     private final TableSource source;
     private final ExecutorService planPool;
     private volatile Names names;
@@ -199,7 +205,7 @@ final class IcebergCatalog implements Catalog {
         Cached<Optional<TableSource.Loaded>> cached = loaded.get(table);
         if (fresh || cached == null || cached.expiresAtMillis() <= now) {
             try {
-                cached = new Cached<>(source.load(namespace, table.table()),
+                cached = new Cached<>(insideRoots(table, source.load(namespace, table.table())),
                         now + settings.metadataTtlMillis());
             } catch (UncheckedIOException e) {
                 throw e.getCause();
@@ -209,5 +215,28 @@ final class IcebergCatalog implements Catalog {
             loaded.put(table, cached);
         }
         return cached.value();
+    }
+
+    /**
+     * Hides a table whose metadata file lies outside the roots (a REST catalog may name any
+     * location): its manifests could not be read through the stores anyway, and the table must
+     * look absent rather than broken (Gravitino stand: a Spark table created with LOCATION
+     * outside the warehouse). Data and delete files outside the roots are checked by the core.
+     *
+     * @param table table name
+     * @param loaded loaded table, may be empty
+     * @return the table, or empty when it is hidden
+     */
+    private Optional<TableSource.Loaded> insideRoots(TableName table,
+            Optional<TableSource.Loaded> loaded) {
+        if (loaded.isPresent() && !Locations.underAny(
+                Locations.normalize(loaded.get().metadataLocation()), settings.roots())) {
+            if (hiddenWarned.add(table + "@" + loaded.get().metadataLocation())) {
+                LOGGER.warn("iceberg=tableHidden table={} reason=metadataOutsideRoots roots={}"
+                        + " metadata={}", table, settings.roots(), loaded.get().metadataLocation());
+            }
+            return Optional.empty();
+        }
+        return loaded;
     }
 }

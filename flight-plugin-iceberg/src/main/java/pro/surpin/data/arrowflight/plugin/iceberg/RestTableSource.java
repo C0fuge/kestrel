@@ -170,7 +170,29 @@ final class RestTableSource implements TableSource {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while calling the REST catalog" + (retry ? " again" : ""), e);
+        } catch (IOException e) {
+            throw unreachable(settings.uri(), e);
         }
+    }
+
+    /**
+     * Wraps a transport failure so that its message names the service: the JDK client's own
+     * exceptions often have none (a refused connection is a ConnectException without a message,
+     * which reached clients as "... cannot be read: null").
+     *
+     * @param what service, for example {@code http://host:9001/iceberg}
+     * @param e transport failure
+     * @return exception to throw
+     */
+    static IOException unreachable(String what, IOException e) {
+        Throwable cause = e;
+        while (cause.getMessage() == null && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        String detail = cause.getClass().getSimpleName()
+                + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
+        return new IOException("Iceberg REST catalog unavailable: " + what + " cannot be reached ("
+                + detail + ")", e);
     }
 
     /**
@@ -220,6 +242,8 @@ final class RestTableSource implements TableSource {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while getting an OAuth2 token", e);
+        } catch (IOException e) {
+            throw unreachable("OAuth2 token endpoint " + endpoint, e);
         }
         if (response.statusCode() / 100 != 2) {
             throw new IOException("OAuth2 token endpoint " + endpoint + " answered "
