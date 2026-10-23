@@ -41,9 +41,10 @@
    - Dependabot PRs upstream: hazelcast 5.7.0, netty 4.2.19, grpc 1.85.0 — fold into 1b.
    - **Progress:** triage of every server-side feature is in `docs/dev/UPSTREAM-SYNC.md` (rows S1..S12, T1..T2).
      S1 (exit on failed start) ported, S2 ours already, S5 (shared DuckDB database) rejected as-is (breaks our
-     per-connection catalog views), S3 (spill size cap) ported as per-connection `duckDbMaxTempSize`. Next
-     session: the first **open** row there (S4: needs an order-dependence audit + stand measurement), S12
-     together with item 6.
+     per-connection catalog views), S3 (spill size cap) ported as per-connection `duckDbMaxTempSize`, S4
+     ported as opt-in `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` (order audit clean; stand
+     measurement pending, see Open questions). Next session: the first **open** row there (S6:
+     `endpointsPerServer` vs our `QueryPlanner`), S12 together with item 6.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -87,6 +88,10 @@
   f5f11b3). We keep per-connection instances because catalog views are per connection; options: (a) document it and
   size the limit as node budget / expected concurrent connections, (b) per-query view names so a shared database becomes safe (bigger
   change). Which one?
+- UPSTREAM-SYNC S4 on the stand: measure TPC-H SF10 (JDBC and Trino) with `DUCKDB_PRESERVE_INSERTION_ORDER=false`
+  and `DUCKDB_STREAMING_BUFFER_SIZE=64MiB` (each alone and both) against the defaults. If they win, should they
+  become the defaults? (The order audit found nothing relying on row order without ORDER BY; clients that read
+  a plain `SELECT` in file order would see a different order.)
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -113,3 +118,10 @@
   `DUCKDB_MAX_TEMP_SIZE` sets `max_temp_directory_size` on every DuckDB connection (validated as a size, refused as a
   plugin setting, default unset). Tests in `DuckDbAdapterTest`, `ConfigAdapterTest`, `DuckDbSetupValidatorTest`.
   CI run 40022303101 on 2dae6ce green (~8 min).
+- 2026-10-23 (cloud session): item 0, UPSTREAM-SYNC S4 ported as opt-in settings `duckDbPreserveInsertionOrder`
+  (default true, strict true/false) and `duckDbStreamingBufferSize` (default unset), per connection, refused as
+  plugin settings; tests in `ConfigAdapterTest`, `DuckDbAdapterTest`, `DuckDbSetupValidatorTest`. Order audit:
+  CI runs 40036505609 / 40037380505 on branch `claude/s4-order-audit` (both settings forced on, audit only, not
+  merged) failed only the 3 tests that assert the defaults / golden SET lines (server 649, client-core 149, spark
+  162, starrocks 7, plugins green); EXPLAIN on DuckDB 1.4.5 shows the equality-delete LIMIT barrier still keeps
+  filters above the scan. CI run 40037403277 on e984ff5 green.
