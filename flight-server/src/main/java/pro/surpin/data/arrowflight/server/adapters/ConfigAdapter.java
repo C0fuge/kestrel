@@ -102,14 +102,14 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.maxTempSize", "DUCKDB_MAX_TEMP_SIZE", null, props);
         String preserveOrder = getStringWithEnv("duckDbPreserveInsertionOrder",
                 "arrowflight.duckdb.preserveInsertionOrder", "DUCKDB_PRESERVE_INSERTION_ORDER",
-                "true", props);
+                "false", props);
         // A typo must not silently turn the order guarantee off: only true or false.
         if (!"true".equalsIgnoreCase(preserveOrder) && !"false".equalsIgnoreCase(preserveOrder)) {
             throw new IllegalArgumentException(
                     "duckDbPreserveInsertionOrder must be true or false: " + preserveOrder);
         }
         String duckDbStreamingBufferSize = getStringWithEnv("duckDbStreamingBufferSize",
-                "arrowflight.duckdb.streamingBufferSize", "DUCKDB_STREAMING_BUFFER_SIZE", null,
+                "arrowflight.duckdb.streamingBufferSize", "DUCKDB_STREAMING_BUFFER_SIZE", "64MiB",
                 props);
         String authToken = getStringWithEnv("authToken",
                 "arrowflight.auth.token", "FLIGHT_AUTH_TOKEN", null, props);
