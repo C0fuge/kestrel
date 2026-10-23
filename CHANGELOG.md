@@ -15,10 +15,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and the hadoopfs extension reads paths literally. Paths now reach DuckDB decoded.
 - Iceberg tables with equality deletes failed in DuckDB 1.4.5 ("Equality deletes need the
   relevant columns to be selected", or an INTERNAL error that invalidated the connection on most
-  other projections). Views of such snapshots now keep the equality columns read
-  (`hash(<eq columns>) IS NOT NULL`) below a `LIMIT` no table reaches, so the query's own filters
-  stay above the scan: a filter pushed into the scan (also through a `MATERIALIZED` CTE) applied
-  the deletes wrongly. Correct, but every query reads the whole snapshot.
+  other projections, also on queries of one non-key column when the table has position deletes
+  and renamed columns). Views of such snapshots now read every column
+  (`hash(<all columns>) IS NOT NULL`) below a `LIMIT` no table reaches, so the query's own
+  filters stay above the scan: a filter pushed into the scan (also through a `MATERIALIZED` CTE)
+  applied the deletes wrongly. Correct, but every query reads the whole snapshot.
 - Iceberg tables written by Spark / Iceberg HadoopFileIO name their files `file:/...` and
   `s3a://...`; DuckDB's lockdown refused them ("file system operations are disabled"). Catalog
   roots now also allow their other scheme forms (`file:` for plain paths, `s3`/`s3a`/`s3n`; S3
