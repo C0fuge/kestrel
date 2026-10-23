@@ -41,8 +41,9 @@
    - Dependabot PRs upstream: hazelcast 5.7.0, netty 4.2.19, grpc 1.85.0 — fold into 1b.
    - **Progress:** triage of every server-side feature is in `docs/dev/UPSTREAM-SYNC.md` (rows S1..S12, T1..T2).
      S1 (exit on failed start) ported, S2 ours already, S5 (shared DuckDB database) rejected as-is (breaks our
-     per-connection catalog views). Next session: the first **open** row there (S3: spill size cap), then S4
-     (needs an order-dependence audit + stand measurement), S12 together with item 6.
+     per-connection catalog views), S3 (spill size cap) ported as per-connection `duckDbMaxTempSize`. Next
+     session: the first **open** row there (S4: needs an order-dependence audit + stand measurement), S12
+     together with item 6.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -78,6 +79,9 @@
 - Upstream's `.github/workflows/ci.yml` now runs only on manual dispatch (it ran on every push and Dependabot PR,
   failed, and doubled the minutes; dev-ci.yml covers the same checks). Revert the `on:` block if you want it back.
 - Dependabot PRs (#4..#7 on this repo) no longer get CI. Close them or fold the bumps into item 1b?
+- `duckDbMaxTempSize` (new, UPSTREAM-SYNC S3) is unset by default = DuckDB's cap of 90 % of free disk for every
+  connection. Upstream defaults to 20GiB per server; ours is per connection. Set it on the stand (spill disk /
+  expected concurrent connections), or want a default?
 - `duckDbMemoryLimit` / `duckDbThreads` apply per DuckDB connection (one in-memory instance per worker thread), so a
   node can use limit × live connections (upstream hit an OOM kill this way and switched to one shared database,
   f5f11b3). We keep per-connection instances because catalog views are per connection; options: (a) document it and
@@ -105,3 +109,7 @@
   `docs/dev/UPSTREAM-SYNC.md` (S1..S12, T1..T2, decisions per row). Ported S1: `main` exits with status 1 when the
   start fails before serving or throws an `Error` (regression tests in `HadoopArrowFlightServerUnitTest`); CI run
   40005871418 on 379f72f green. S5 (shared DuckDB database) rejected as-is, question added to Open questions.
+- 2026-10-23 (cloud session): item 0, UPSTREAM-SYNC S3 ported: setting `duckDbMaxTempSize` /
+  `DUCKDB_MAX_TEMP_SIZE` sets `max_temp_directory_size` on every DuckDB connection (validated as a size, refused as a
+  plugin setting, default unset). Tests in `DuckDbAdapterTest`, `ConfigAdapterTest`, `DuckDbSetupValidatorTest`.
+  CI run 40022303101 on 2dae6ce green (~8 min).
