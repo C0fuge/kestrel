@@ -613,6 +613,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INVALID_ARGUMENT
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
+        } catch (ExecutionService.CatalogUnavailableException e) {
+            // A table catalog (Hive Metastore, Iceberg REST) cannot be read now.
+            LOGGER.warn("node={} schema=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
+                    e.getCause().getMessage(), query);
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
         } catch (Exception e) {
             LOGGER.error("Error getting Arrow schema for query: {}", query, e);
             if (isFileNotFound(e)) {

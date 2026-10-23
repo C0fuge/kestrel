@@ -24,6 +24,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the metastore once per schema and table, and every planning call waited for the timeouts again.
   A failing catalog is now asked once per view refresh, the metastore client fails at once for
   5 s after the metastore could not be reached and drops its idle connections after a broken one.
+  The schema of a query on a table whose catalog is down is UNAVAILABLE with the catalog's error,
+  not NOT_FOUND "Could not find Arrow schema for query".
 - With a table catalog configured (Iceberg, Hive) and a table in the data directory, the first
   refresh of the table inventory after its 30 s TTL called itself until the stack overflowed;
   every later call failed with "Application error processing RPC".
