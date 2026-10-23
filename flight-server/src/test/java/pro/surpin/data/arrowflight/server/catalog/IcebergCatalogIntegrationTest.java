@@ -258,6 +258,14 @@ class IcebergCatalogIntegrationTest {
                         + " WHERE id > 0", mode).rows(), mode + " " + table);
                 assertEquals(List.of("n3"), answer("SELECT label FROM " + table + " WHERE id = 3",
                         mode).rows(), mode + " " + table);
+                // Filters on other columns stay above the scan (a filter pushed into the scan
+                // of the equality-delete columns gave wrong counts on the HMS stand).
+                assertEquals(List.of("2|2"), answer("SELECT count(id), count(*) FROM " + table
+                        + " WHERE label IN ('n3', 'n4', 'n5')", mode).rows(), mode + " " + table);
+                assertEquals(List.of(), answer("SELECT id FROM " + table + " WHERE label = 'n4'",
+                        mode).rows(), mode + " " + table);
+                assertEquals(List.of("4"), answer("SELECT count(*) FROM " + table
+                        + " WHERE label <> 'n1'", mode).rows(), mode + " " + table);
             }
         }
     }

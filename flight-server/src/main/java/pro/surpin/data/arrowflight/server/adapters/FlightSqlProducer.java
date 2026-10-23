@@ -662,15 +662,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INVALID_ARGUMENT
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
-        } catch (java.io.UncheckedIOException e) {
-            if (e.getCause() instanceof java.io.FileNotFoundException) {
-                // A table that does not exist (or is hidden): same answer as any missing table,
-                // without the server-side path.
-                throw CallStatus.NOT_FOUND.withDescription(SCHEMA_NOT_FOUND_MESSAGE).withCause(e)
-                        .toRuntimeException();
-            }
-            // A table catalog (Iceberg REST, Hive Metastore) cannot be read now.
-            LOGGER.warn("node={} query=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
+        } catch (ExecutionService.CatalogUnavailableException e) {
+            // A table catalog (Hive Metastore, Iceberg REST) cannot be read now.
+            LOGGER.warn("node={} schema=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
                     e.getCause().getMessage(), query);
             throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
                     .toRuntimeException();

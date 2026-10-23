@@ -51,6 +51,16 @@ final class ThriftMetastore implements Metastore {
     private volatile int preferred;
     private volatile boolean requestCalls = true;
     private volatile boolean closed;
+    /** Until when calls fail at once after the metastore could not be reached (epoch ms). */
+    private volatile long unreachableUntil;
+    private volatile String unreachableError;
+
+    /**
+     * How long calls fail at once after the metastore could not be reached: one request makes
+     * many calls (schemas, tables, partitions), and a metastore that hangs would cost each of
+     * them the connect and socket timeouts.
+     */
+    static final long FAIL_FAST_MILLIS = 5_000;
 
     /** One open connection. */
     private static final class Connection {
@@ -227,7 +237,8 @@ final class ThriftMetastore implements Metastore {
     }
 
     /**
-     * Makes a call on a pooled connection, once more on a new connection when it breaks.
+     * Makes a call; for {@link #FAIL_FAST_MILLIS} after the metastore could not be reached,
+     * calls fail at once with that error.
      *
      * @param what call, for messages
      * @param call call
@@ -239,6 +250,42 @@ final class ThriftMetastore implements Metastore {
         if (closed) {
             throw new IOException("The Hive Metastore client is closed");
         }
+        if (System.currentTimeMillis() < unreachableUntil) {
+            throw new IOException("Hive Metastore unavailable (" + String.join(",", uris) + ") for "
+                    + what + ": " + unreachableError + " (not retried for " + FAIL_FAST_MILLIS
+                    + " ms after the failure)");
+        }
+        try {
+            T result = callPooled(what, call);
+            unreachableUntil = 0;
+            return result;
+        } catch (Unreachable e) {
+            unreachableError = e.getMessage();
+            unreachableUntil = System.currentTimeMillis() + FAIL_FAST_MILLIS;
+            throw new IOException(e.getMessage(), e.getCause());
+        }
+    }
+
+    /** The metastore could not be reached (no connection, or the connection broke twice). */
+    private static final class Unreachable extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        Unreachable(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
+     * Makes a call on a pooled connection, once more on a new connection when it breaks.
+     *
+     * @param what call, for messages
+     * @param call call
+     * @param <T> result type
+     * @return result
+     * @throws Unreachable when the metastore cannot be reached
+     * @throws IOException when the metastore fails the call
+     */
+    private <T> T callPooled(String what, Call<T> call) throws IOException {
         boolean acquired;
         try {
             acquired = permits.tryAcquire(connectTimeoutMillis + (long) socketTimeoutMillis,
@@ -253,7 +300,12 @@ final class ThriftMetastore implements Metastore {
         try {
             Exception last = null;
             for (int attempt = 0; attempt < 2; attempt++) {
-                Connection connection = borrow();
+                Connection connection;
+                try {
+                    connection = borrow();
+                } catch (IOException e) {
+                    throw new Unreachable(e.getMessage(), e);
+                }
                 try {
                     T result = call.apply(connection.client);
                     giveBack(connection);
@@ -263,6 +315,9 @@ final class ThriftMetastore implements Metastore {
                     throw new MissingObject(what + ": " + e.getMessage());
                 } catch (TTransportException | TProtocolException e) {
                     connection.close();
+                    // The idle connections are likely broken the same way (metastore restarted
+                    // or hanging): the retry opens a new one instead of waiting on each of them.
+                    closeIdle();
                     last = e;
                     LOGGER.debug("hive=metastoreConnectionBroken uri={} call={} error={}",
                             connection.uri, what, e.toString());
@@ -280,7 +335,7 @@ final class ThriftMetastore implements Metastore {
                             + ": " + e, e);
                 }
             }
-            throw new IOException("Hive Metastore unavailable (" + String.join(",", uris)
+            throw new Unreachable("Hive Metastore unavailable (" + String.join(",", uris)
                     + ") for " + what + ": " + last, last);
         } finally {
             permits.release();
@@ -315,6 +370,15 @@ final class ThriftMetastore implements Metastore {
             }
         }
         throw new IOException("Hive Metastore unavailable: " + String.join("; ", errors));
+    }
+
+    /** Closes every idle connection. */
+    private void closeIdle() {
+        synchronized (idle) {
+            for (Connection connection = idle.poll(); connection != null; connection = idle.poll()) {
+                connection.close();
+            }
+        }
     }
 
     /**

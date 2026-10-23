@@ -233,6 +233,17 @@ class HadoopDataStoreTest {
         assertEquals("/data/file.parquet", HadoopDataStore.duckDbPath("file:///data/file.parquet"));
     }
 
+    /** Verifies HDFS paths reach DuckDB decoded: hadoopfs reads the path literally (Hive partitions). */
+    @Test
+    void duckDbPathDecodesOtherSchemes() {
+        assertEquals("hdfs://ns/t/k=REG AIR/f", HadoopDataStore.duckDbPath("hdfs://ns/t/k=REG%20AIR/f"));
+        assertEquals("hdfs://ns/t/k=50%25/f", HadoopDataStore.duckDbPath("hdfs://ns/t/k=50%2525/f"));
+        assertEquals("hdfs://ns:8020/t/k=\u00fc/f", HadoopDataStore.duckDbPath("hdfs://ns:8020/t/k=%C3%BC/f"));
+        assertEquals("hdfs://ns/t/plain.parquet", HadoopDataStore.duckDbPath("hdfs://ns/t/plain.parquet"));
+        assertEquals("hdfs://ns/t/k=a b/f", HadoopDataStore.duckDbPath(
+                new org.apache.hadoop.fs.Path("hdfs://ns/t/k=a b/f").toUri().toString()));
+    }
+
     /** Verifies a local file whose name needs escaping reaches DuckDB as its real path. */
     @Test
     void duckDbUriOfEscapedLocalNameIsTheFilePath() throws Exception {

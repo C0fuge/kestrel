@@ -56,7 +56,8 @@ final class HiveCatalog implements Catalog {
     private volatile Cached<Map<String, String>> schemas;
     private final Map<String, Cached<Map<String, HiveTable>>> tables = new ConcurrentHashMap<>();
     private final Map<TableName, Cached<Optional<TableSnapshot>>> snapshots = new ConcurrentHashMap<>();
-    private final Map<String, Long> hiddenUntil = new ConcurrentHashMap<>();
+    /** Partitioned tables: true when a partition lies outside the roots (table hidden). */
+    private final Map<String, Cached<Boolean>> partitionsOutside = new ConcurrentHashMap<>();
     private final Map<TableName, Object> locks = new ConcurrentHashMap<>();
     private final Set<String> logged = ConcurrentHashMap.newKeySet();
 
@@ -105,12 +106,12 @@ final class HiveCatalog implements Catalog {
         if (database == null) {
             return List.of();
         }
-        long now = System.currentTimeMillis();
         List<String> result = new ArrayList<>();
-        for (String table : tablesOf(database, false).keySet()) {
-            Long hidden = hiddenUntil.get(database + "." + table);
-            if (hidden == null || hidden <= now) {
-                result.add(table);
+        for (Map.Entry<String, HiveTable> entry : tablesOf(database, false).entrySet()) {
+            HiveTable hive = entry.getValue();
+            if (hive.kind() == HiveTable.Kind.ICEBERG || hive.partitionColumns().isEmpty()
+                    || !partitionsOutsideRoots(hive)) {
+                result.add(entry.getKey());
             }
         }
         return result;
@@ -355,17 +356,10 @@ final class HiveCatalog implements Catalog {
                 }
                 locations.put(location, values(hive, partition));
             }
+            recordPartitionsOutside(hive, outside);
             if (!outside.isEmpty()) {
-                hiddenUntil.put(hive.qualified(), System.currentTimeMillis()
-                        + Math.max(settings.namesTtlMillis(), 60_000L));
-                if (logged.add("hidePartitions:" + hive.qualified() + ":" + outside)) {
-                    LOGGER.warn("node={} hive=tableHidden table={} reason=partitionOutsideRoots"
-                            + " roots={} locations={}", node, hive.qualified(), settings.roots(),
-                            outside.subList(0, Math.min(3, outside.size())));
-                }
                 return Optional.empty();
             }
-            hiddenUntil.remove(hive.qualified());
             files.addAll(listAll(locations));
         }
         StringBuilder content = new StringBuilder();
@@ -379,6 +373,50 @@ final class HiveCatalog implements Catalog {
                 files.size(), fingerprint);
         return Optional.of(new TableSnapshot(table, hive.schemaId(), fingerprint, hive.columns(),
                 hive.partitionColumns(), files, new ReadSpec.ParquetFiles(false)));
+    }
+
+    /**
+     * Tells whether a partition of a partitioned table lies outside the roots, which hides the
+     * whole table, also from the table list. Planning records the answer as well; it is kept
+     * for the table-list TTL.
+     *
+     * @param hive partitioned table
+     * @return true when the table is hidden
+     * @throws IOException when the metastore cannot be read
+     */
+    private boolean partitionsOutsideRoots(HiveTable hive) throws IOException {
+        Cached<Boolean> cached = partitionsOutside.get(hive.qualified());
+        if (cached != null && cached.fresh(System.currentTimeMillis())) {
+            return cached.value();
+        }
+        List<String> outside = new ArrayList<>();
+        for (Partition partition : partitions(hive)) {
+            String location = partition.getSd() == null || partition.getSd().getLocation() == null
+                    ? null : HiveLocations.normalize(partition.getSd().getLocation());
+            if (location == null || !HiveLocations.underAny(location, settings.roots())) {
+                outside.add(String.valueOf(location));
+            }
+        }
+        return recordPartitionsOutside(hive, outside);
+    }
+
+    /**
+     * Keeps whether a partitioned table has partitions outside the roots and logs (once) when it
+     * has.
+     *
+     * @param hive partitioned table
+     * @param outside partition locations outside the roots
+     * @return true when the table is hidden
+     */
+    private boolean recordPartitionsOutside(HiveTable hive, List<String> outside) {
+        partitionsOutside.put(hive.qualified(), new Cached<>(!outside.isEmpty(),
+                System.currentTimeMillis() + settings.namesTtlMillis()));
+        if (!outside.isEmpty() && logged.add("hidePartitions:" + hive.qualified() + ":" + outside)) {
+            LOGGER.warn("node={} hive=tableHidden table={} reason=partitionOutsideRoots"
+                    + " roots={} locations={}", node, hive.qualified(), settings.roots(),
+                    outside.subList(0, Math.min(3, outside.size())));
+        }
+        return !outside.isEmpty();
     }
 
     /**

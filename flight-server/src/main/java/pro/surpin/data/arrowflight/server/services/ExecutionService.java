@@ -288,6 +288,20 @@ public final class ExecutionService {
         }
     }
 
+    /** The catalog of a table a query names cannot be read now (metastore down or hanging). */
+    public static final class CatalogUnavailableException extends java.io.UncheckedIOException {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Wraps the catalog's error.
+         *
+         * @param cause catalog error
+         */
+        public CatalogUnavailableException(IOException cause) {
+            super(cause.getMessage(), cause);
+        }
+    }
+
     /**
      * Returns the schema of the batches a query streams, as DuckDB reports it for the same SQL.
      *
@@ -295,6 +309,7 @@ public final class ExecutionService {
      * @param query     SQL query
      * @return result schema
      * @throws IllegalArgumentException if DuckDB rejects the query
+     * @throws CatalogUnavailableException when the catalog of the queried table cannot be read
      */
     public Schema resultSchema(BufferAllocator allocator, String query) {
         long now = System.nanoTime();
@@ -313,10 +328,12 @@ public final class ExecutionService {
                     || message.startsWith("Conversion Error")) {
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
             }
-            if (e instanceof IOException io && parquetAdapter.isCatalogSchema(pq.schema)) {
-                // No footer schema to fall back on: name the catalog's error (for example an
-                // Iceberg REST catalog that cannot be reached) instead of "schema not found".
-                throw new java.io.UncheckedIOException(io);
+            if (e instanceof IOException io && !(io instanceof java.io.FileNotFoundException)
+                    && !message.startsWith("No Parquet files for table") && pq.schema != null
+                    && parquetAdapter.isCatalogSchema(pq.schema)) {
+                // The table's catalog cannot be read now: say so (the data directory's
+                // metadata below knows nothing of catalog tables: "schema not found").
+                throw new CatalogUnavailableException(io);
             }
             // Files may be unreadable from this node; the table metadata still describes them.
             LOGGER.debug("node={} schema=describeFallback error='{}'", LogUtil.node(), message);

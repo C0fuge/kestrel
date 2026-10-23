@@ -10,6 +10,43 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- HDFS files whose path has escaped characters (Hive partitions such as `l_shipmode=REG AIR`,
+  `tag=50%25`) failed with "Unable to get file info": DuckDB was handed the URI-escaped path,
+  and the hadoopfs extension reads paths literally. Paths now reach DuckDB decoded.
+- Iceberg tables with equality deletes failed in DuckDB 1.4.5 ("Equality deletes need the
+  relevant columns to be selected", or an INTERNAL error that invalidated the connection on most
+  other projections). Views of such snapshots now keep the equality columns read
+  (`hash(<eq columns>) IS NOT NULL`) below a `LIMIT` no table reaches, so the query's own filters
+  stay above the scan: a filter pushed into the scan (also through a `MATERIALIZED` CTE) applied
+  the deletes wrongly. Correct, but every query reads the whole snapshot.
+- Iceberg tables written by Spark / Iceberg HadoopFileIO name their files `file:/...` and
+  `s3a://...`; DuckDB's lockdown refused them ("file system operations are disabled"). Catalog
+  roots now also allow their other scheme forms (`file:` for plain paths, `s3`/`s3a`/`s3n`; S3
+  secrets are scoped to all three).
+- Iceberg REST transport failures were reported as "null"; they name the URI and the exception,
+  and a catalog outage during planning or describe is UNAVAILABLE. A REST table whose metadata
+  lies outside the roots is hidden (WARN once, NOT_FOUND). iceberg-hadoop lists only
+  directories in the Hadoop layout. `fs.file.impl` / `fs.hdfs.impl` are set unless configured
+  (merged Hadoop class paths lost the registrations: "No FileSystem for scheme file").
+- lakeFS: a partial-mode explicit JOIN re-listed the tables at execution and could mix two
+  commits in one answer; it now reads the ticket's files. All tables of a view refresh or plan
+  are listed in one read scope (one branch resolution), and complete-mode views refresh as soon
+  as the branch head moves (were up to 60 s stale).
+- lakeFS error texts: missing credentials, HTTP 401/403, unreachable or unknown hosts, unknown
+  branches/tags/commits and repositories are named; a partial plan with storage down is
+  UNAVAILABLE "Cannot read the table's files: ..."; complete-mode failures keep the store's
+  context instead of a bare root cause.
+- lakeFS tags and short commit ids are resolved once to the full commit id and read through it
+  (the S3 gateway served tags 2-3x slower).
+- A Hive table with a partition outside `arrowflight.hive.roots` was hidden from queries but
+  still listed by GetTables until a query had planned it; the table list now checks partition
+  locations too.
+- A Hive Metastore that hangs (no answer) blocked queries for minutes: every view refresh asked
+  the metastore once per schema and table, and every planning call waited for the timeouts again.
+  A failing catalog is now asked once per view refresh, the metastore client fails at once for
+  5 s after the metastore could not be reached and drops its idle connections after a broken one.
+  The schema of a query on a table whose catalog is down is UNAVAILABLE with the catalog's error,
+  not NOT_FOUND "Could not find Arrow schema for query".
 - With a table catalog configured (Iceberg, Hive) and a table in the data directory, the first
   refresh of the table inventory after its 30 s TTL called itself until the stack overflowed;
   every later call failed with "Application error processing RPC".

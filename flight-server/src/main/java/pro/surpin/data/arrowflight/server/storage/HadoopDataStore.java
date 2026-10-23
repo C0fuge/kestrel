@@ -201,11 +201,7 @@ public final class HadoopDataStore implements DataStore {
     @Override
     public List<String> duckDbRoots() {
         // The data directory as DuckDB sees file paths: qualified, local paths without "file:".
-        String root = fileSystem.makeQualified(new Path(dataDirectory)).toUri().toString();
-        if (root.startsWith("file:")) {
-            root = URI.create(root).getPath();
-        }
-        return List.of(root);
+        return List.of(duckDbPath(fileSystem.makeQualified(new Path(dataDirectory)).toUri().toString()));
     }
 
     @Override
@@ -281,18 +277,27 @@ public final class HadoopDataStore implements DataStore {
     }
 
     /**
-     * Converts a qualified URI to the path DuckDB reads: local files become plain paths, with
-     * escaped characters decoded ({@code file:/a/part%201.parquet} → {@code /a/part 1.parquet}).
+     * Converts a qualified URI to the path DuckDB reads, with escaped characters decoded: local
+     * files become plain paths ({@code file:/a/part%201.parquet} → {@code /a/part 1.parquet}),
+     * other schemes keep scheme and authority
+     * ({@code hdfs://ns/t/k=a%20b/f} → {@code hdfs://ns/t/k=a b/f}). DuckDB's hadoopfs extension
+     * takes the path literally, so an escaped form names a file that does not exist (Hive
+     * partition directories such as {@code k=REG AIR} or {@code k=50%25}).
      *
      * @param uri qualified URI
      * @return DuckDB path
      */
     static String duckDbPath(String uri) {
+        URI parsed = URI.create(uri);
         if (uri.startsWith("file:")) {
             // file:///path and file:/path both name /path.
-            return URI.create(uri).getPath();
+            return parsed.getPath();
         }
-        return uri;
+        if (parsed.getRawPath() == null || parsed.getRawPath().equals(parsed.getPath())) {
+            return uri;
+        }
+        return parsed.getScheme() + "://" + (parsed.getRawAuthority() == null ? "" : parsed.getRawAuthority())
+                + parsed.getPath();
     }
 
     /**

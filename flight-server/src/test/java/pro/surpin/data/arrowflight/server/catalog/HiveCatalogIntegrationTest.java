@@ -344,6 +344,13 @@ class HiveCatalogIntegrationTest {
         FlightRuntimeException partial = assertThrows(FlightRuntimeException.class,
                 () -> answer("SELECT count(*) FROM hv.nation", "partial"));
         assertTrue(partial.getMessage().contains("Hive Metastore"), partial.getMessage());
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(ResultModeMiddleware.HEADER, "partial");
+        FlightRuntimeException schema = assertThrows(FlightRuntimeException.class,
+                () -> helper.sqlClient().getExecuteSchema("SELECT n_name FROM hv.nation",
+                        new HeaderCallOption(headers)));
+        assertEquals(CallStatus.UNAVAILABLE.code(), schema.status().code(), schema.getMessage());
+        assertTrue(schema.getMessage().contains("Hive Metastore"), schema.getMessage());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
