@@ -82,8 +82,10 @@ class IcebergCatalogIntegrationTest {
         warehouse = dir.resolve("wh").toString();
         restWarehouse = dir.resolve("wh-rest").toString();
         metadata = IcebergTestTables.write(warehouse);
-        restMetadata = IcebergTestTables.write(restWarehouse);
-        rest = IcebergTestTables.rest(restWarehouse);
+        // The REST catalog's tables name their files file:/... in metadata and manifests, as
+        // Spark and Gravitino write local tables; the roots stay plain paths.
+        restMetadata = IcebergTestTables.write("file:" + restWarehouse);
+        rest = IcebergTestTables.rest("file:" + restWarehouse);
         Path data = Files.createDirectories(dir.resolve("data/dirs/t"));
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = conn.createStatement()) {
@@ -99,6 +101,7 @@ class IcebergCatalogIntegrationTest {
         sys.put("arrowflight.iceberg-rest.uri", IcebergTestTables.uri(rest));
         sys.put("arrowflight.iceberg-rest.roots", restWarehouse);
         sys.put("arrowflight.iceberg-rest.schemaPrefix", "rest_");
+        sys.put("arrowflight.iceberg-rest.metadataTtlMillis", "0");
         Map<String, String> env = Map.of("FLIGHT_ICEBERG_REST_CREDENTIAL", "client-1:secret-1");
         ConfigSource source = new ConfigSource(sys::get, new Properties(), env, null);
         PluginSettings settings = new PluginSettings(plugins, null,
@@ -238,6 +241,27 @@ class IcebergCatalogIntegrationTest {
         assertTrue(e2.getMessage().contains("is not a data file of snapshot"), e2.getMessage());
     }
 
+    /**
+     * DuckDB 1.4.5's iceberg_scan applies equality deletes only when their columns are read:
+     * without them "Equality deletes need the relevant columns to be selected", with them only
+     * in a filter an INTERNAL error (Gravitino stand). The views keep those columns read.
+     */
+    @Test
+    @Order(50)
+    void equalityDeletesWithoutTheirColumnsSelected() throws Exception {
+        for (String mode : List.of("complete", "partial")) {
+            for (String schema : List.of("ice", "rest_ice")) {
+                String table = schema + ".deletes";
+                assertEquals(List.of("5"), answer("SELECT count(*) FROM " + table, mode).rows(),
+                        mode + " " + table);
+                assertEquals(List.of("5|5"), answer("SELECT count(label), count(*) FROM " + table
+                        + " WHERE id > 0", mode).rows(), mode + " " + table);
+                assertEquals(List.of("n3"), answer("SELECT label FROM " + table + " WHERE id = 3",
+                        mode).rows(), mode + " " + table);
+            }
+        }
+    }
+
     @Test
     @Order(100)
     void plannedSnapshotStaysPinnedAfterACommit() throws Exception {
@@ -251,6 +275,27 @@ class IcebergCatalogIntegrationTest {
         List<String> rows = read(after);
         assertEquals(9, rows.size());
         assertTrue(rows.contains("100|l100"), rows.toString());
+    }
+
+    /**
+     * The REST catalog goes away: complete answers keep the views made before; a partial query
+     * (it asks the catalog for the current snapshot) is refused UNAVAILABLE naming the catalog,
+     * not "Could not find Arrow schema" / "null" (Gravitino stand). Runs last: it stops the REST
+     * catalog.
+     */
+    @Test
+    @Order(1000)
+    void restCatalogOutageIsUnavailableWithItsCause() throws Exception {
+        assertEquals(List.of("5"), answer("SELECT count(*) FROM rest_ice.deletes", "complete").rows());
+        rest.close();
+        rest = null;
+        assertEquals(List.of("5"), answer("SELECT count(*) FROM rest_ice.deletes", "complete").rows());
+        for (String sql : List.of("SELECT id FROM rest_ice.evolved", "SELECT count(*) FROM rest_ice.evolved")) {
+            FlightRuntimeException e = assertThrows(FlightRuntimeException.class, () -> info(sql, "partial"));
+            assertEquals(org.apache.arrow.flight.FlightStatusCode.UNAVAILABLE, e.status().code(), sql + ": " + e);
+            assertTrue(e.getMessage().contains("Iceberg REST catalog unavailable: http://"), e.getMessage());
+            assertFalse(e.getMessage().contains("secret-1"), e.getMessage());
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

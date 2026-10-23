@@ -74,6 +74,46 @@ class HadoopDataStoreTest {
         return new HadoopDataStore(fileSystem, root.toString(), storageHost);
     }
 
+    /**
+     * Opens a local data directory although Hadoop's service registrations of its file systems
+     * are lost (merged Hadoop class paths: "No FileSystem for scheme "file"" at startup, Trino
+     * CI on int6); an explicit fs.file.impl is kept.
+     *
+     * @throws Exception when Hadoop's registry cannot be reached
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void opensLocalDirectoryWithoutHadoopServiceRegistrations() throws Exception {
+        java.lang.reflect.Field loaded = org.apache.hadoop.fs.FileSystem.class
+                .getDeclaredField("FILE_SYSTEMS_LOADED");
+        java.lang.reflect.Field services = org.apache.hadoop.fs.FileSystem.class
+                .getDeclaredField("SERVICE_FILE_SYSTEMS");
+        loaded.setAccessible(true);
+        services.setAccessible(true);
+        org.apache.hadoop.fs.FileSystem.getFileSystemClass("file", new Configuration());
+        Map<String, Class<?>> registry = (Map<String, Class<?>>) services.get(null);
+        Class<?> local = registry.remove("file");
+        try {
+            Configuration bare = new Configuration();
+            // A file system cached by an earlier test would hide the lost registration.
+            bare.setBoolean("fs.file.impl.disable.cache", true);
+            assertThrows(IOException.class, () -> new org.apache.hadoop.fs.Path(root.toString())
+                    .getFileSystem(bare), "reproduces the lost registration");
+
+            HadoopDataStore store = HadoopDataStoreProvider.open(root.toString(),
+                    new Configuration(), 65536, "localhost");
+            assertEquals("file", store.kind());
+
+            Configuration own = new Configuration();
+            own.set("fs.file.impl", org.apache.hadoop.fs.RawLocalFileSystem.class.getName());
+            HadoopDataStoreProvider.registerFileSystems(own);
+            assertEquals(org.apache.hadoop.fs.RawLocalFileSystem.class.getName(),
+                    own.get("fs.file.impl"));
+        } finally {
+            registry.put("file", local);
+        }
+    }
+
     /** Verifies a local directory is neither shared nor without locality. */
     @Test
     void describesLocalStorage() {

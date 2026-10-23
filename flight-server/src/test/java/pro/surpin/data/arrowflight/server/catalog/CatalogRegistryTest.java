@@ -71,7 +71,9 @@ class CatalogRegistryTest {
     @Test
     void catalogRootsAndExtensionsGoIntoTheDuckDbSetup() throws Exception {
         try (StoreRegistry registry = open(plugins, "iceberg-hadoop", Map.of())) {
-            assertEquals(List.of(data.toString(), warehouse.toString()), registry.readableRoots());
+            // the local catalog root also as a file: URI (Iceberg writers name local files so)
+            assertEquals(List.of(data.toString(), warehouse.toString(), "file:" + warehouse),
+                    registry.readableRoots());
             List<String> loads = registry.duckDbSetup().statements().stream()
                     .filter(s -> s.startsWith("LOAD")).toList();
             assertEquals(2, loads.size(), loads.toString());
@@ -94,7 +96,8 @@ class CatalogRegistryTest {
         Path inside = Files.createDirectories(data.resolve("iceberg-wh"));
         sys.put("arrowflight.iceberg-hadoop.warehouse", "file:" + inside);
         try (StoreRegistry registry = open(plugins, "iceberg-hadoop", Map.of())) {
-            assertEquals(List.of(data.toString(), inside.toString()), registry.readableRoots());
+            assertEquals(List.of(data.toString(), inside.toString(), "file:" + inside),
+                    registry.readableRoots());
         }
     }
 

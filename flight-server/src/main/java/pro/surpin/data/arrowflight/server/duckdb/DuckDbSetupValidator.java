@@ -34,6 +34,8 @@ public final class DuckDbSetupValidator {
 
     /** Secret types a plugin may create. */
     private static final Set<String> SECRET_TYPES = Set.of("s3", "gcs", "r2", "azure");
+    /** The schemes DuckDB's S3 file system reads, which name the same objects; in order. */
+    private static final List<String> S3_SCHEMES = List.of("s3", "s3a", "s3n");
     /** Options of the object-store secret types; true marks a boolean option. */
     private static final Map<String, Boolean> OBJECT_STORE_OPTIONS = Map.ofEntries(
             Map.entry("KEY_ID", false), Map.entry("SECRET", false),
@@ -183,6 +185,9 @@ public final class DuckDbSetupValidator {
         ordered.addAll(others);
         ordered.addAll(catalogs);
 
+        // Catalog tables written by other engines may name S3 objects as s3a:// or s3n://.
+        boolean s3Catalog = catalogs.stream().flatMap(c -> c.roots().stream())
+                .anyMatch(r -> S3_SCHEMES.contains(Recorder.schemeOf(r)));
         Writer writer = new Writer();
         for (Contribution contribution : ordered) {
             List<String> roots = new ArrayList<>();
@@ -190,13 +195,63 @@ public final class DuckDbSetupValidator {
                 roots.add(checkRoot(root, contribution.schemes(), contribution.contributor()));
             }
             writer.roots.addAll(roots);
-            Recorder recorder = new Recorder(contribution.contributor(), roots);
+            if (catalogs.contains(contribution)) {
+                writer.roots.addAll(schemeTwins(roots));
+            }
+            Recorder recorder = new Recorder(contribution.contributor(), roots, s3Catalog);
             contribution.body().accept(recorder);
             writer.write(recorder);
         }
         return new DuckDbSetupPlan(writer.statements, new ArrayList<>(writer.roots),
                 writer.refused, redactor, new ArrayList<>(writer.extensions.keySet()),
                 writer.secrets);
+    }
+
+    /**
+     * Names catalog roots a second time in the other forms of their scheme. Table formats
+     * written by other engines name files that way: Spark and Iceberg's HadoopFileIO write
+     * {@code file:/wh/t/metadata/snap-1.avro} for a local warehouse and {@code s3a://b/wh/...}
+     * for one written through S3A. DuckDB's readers open those names as written and its
+     * allowed_directories check compares them literally (after collapsing repeated slashes), so
+     * a plain {@code /wh/} or {@code s3://b/wh/} root refuses them. A twin names the same
+     * directory; nothing else becomes readable. Only catalog roots get them: the server names
+     * the data directory's files itself, as plain paths and {@code s3://} URIs.
+     *
+     * @param roots checked roots of one catalog
+     * @return {@code file:} twins of the plain absolute paths and the other S3 scheme forms of
+     *         the S3 roots
+     */
+    static List<String> schemeTwins(List<String> roots) {
+        List<String> twins = new ArrayList<>();
+        for (String root : roots) {
+            if (root.startsWith("/")) {
+                twins.add("file:" + root);
+            } else {
+                twins.addAll(s3Twins(root));
+            }
+        }
+        return twins;
+    }
+
+    /**
+     * Returns the other S3 scheme forms ({@code s3}, {@code s3a}, {@code s3n}) of an S3 URI.
+     *
+     * @param uri URI
+     * @return the same location under the other two schemes; empty for a non-S3 URI
+     */
+    static List<String> s3Twins(String uri) {
+        String scheme = Recorder.schemeOf(uri);
+        if (!S3_SCHEMES.contains(scheme)) {
+            return List.of();
+        }
+        String rest = uri.substring(scheme.length());
+        List<String> twins = new ArrayList<>();
+        for (String other : S3_SCHEMES) {
+            if (!other.equals(scheme)) {
+                twins.add(other + rest);
+            }
+        }
+        return twins;
     }
 
     /**
@@ -317,6 +372,8 @@ public final class DuckDbSetupValidator {
         private final List<String[]> secrets = new ArrayList<>();
         private final List<String> sensitive = new ArrayList<>();
         private final Set<String> refused = new LinkedHashSet<>();
+        /** Whether S3 secrets are also scoped to the s3a:// and s3n:// forms of their scope. */
+        private final boolean s3Twins;
 
         /**
          * Creates a recorder.
@@ -324,9 +381,10 @@ public final class DuckDbSetupValidator {
          * @param contributor contributor, for errors
          * @param roots contributor's checked roots
          */
-        Recorder(String contributor, List<String> roots) {
+        Recorder(String contributor, List<String> roots, boolean s3Twins) {
             this.contributor = contributor;
             this.roots = roots;
+            this.s3Twins = s3Twins;
         }
 
         @Override
@@ -416,7 +474,17 @@ public final class DuckDbSetupValidator {
                     sensitive.add(value.value());
                 }
             }
-            sql.append(", SCOPE ").append(literal(scope)).append(')');
+            List<String> twins = s3Twins && "s3".equals(kind) ? s3Twins(scope) : List.of();
+            if (twins.isEmpty()) {
+                sql.append(", SCOPE ").append(literal(scope)).append(')');
+            } else {
+                // A catalog may name these objects as s3a:// or s3n://: the same credentials.
+                sql.append(", SCOPE [").append(literal(scope));
+                for (String twin : twins) {
+                    sql.append(", ").append(literal(twin));
+                }
+                sql.append("])");
+            }
             secrets.add(new String[] {name, scope, sql.toString()});
         }
 

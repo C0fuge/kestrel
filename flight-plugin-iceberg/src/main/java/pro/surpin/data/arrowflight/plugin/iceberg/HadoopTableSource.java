@@ -22,6 +22,9 @@ import pro.surpin.data.arrowflight.spi.storage.Stores;
  */
 final class HadoopTableSource implements TableSource {
 
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger(HadoopTableSource.class);
+
     private static final String METADATA = "metadata";
     private static final String VERSION_HINT = "version-hint.text";
     /** Highest version probed when a table has no version hint. */
@@ -31,6 +34,8 @@ final class HadoopTableSource implements TableSource {
     private final String base;
     private final String warehouse;
     private final StoresFileIO io;
+    /** Tables already warned about (namespace.table). */
+    private final java.util.Set<String> skippedWarned = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * Opens the warehouse.
@@ -64,8 +69,21 @@ final class HadoopTableSource implements TableSource {
         }
         List<String> result = new ArrayList<>();
         for (String table : store.directories(dir).keySet()) {
-            if (store.exists(path(namespace, table, METADATA))) {
+            String metadata = path(namespace, table, METADATA);
+            if (!store.exists(metadata)) {
+                continue;
+            }
+            if (store.exists(metadata + "/" + VERSION_HINT)
+                    || store.exists(metadata + "/v1.metadata.json")
+                    || store.exists(metadata + "/v1.gz.metadata.json")) {
                 result.add(table);
+            } else if (skippedWarned.add(namespace + "." + table)) {
+                // Tables of JDBC/REST/Hive catalogs name their metadata 00001-<uuid>.metadata.json
+                // and keep the current one in the catalog: listed here, they could not be read.
+                LOGGER.warn("iceberg=tableSkipped table={}.{} reason=notHadoopLayout dir={}/{}/{}/metadata"
+                        + " (no version-hint.text or v1.metadata.json; a table of another catalog is"
+                        + " read through that catalog, e.g. iceberg-rest)", namespace, table, warehouse,
+                        namespace, table);
             }
         }
         return result;

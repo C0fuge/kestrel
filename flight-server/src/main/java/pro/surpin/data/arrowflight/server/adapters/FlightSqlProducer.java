@@ -581,6 +581,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             LOGGER.warn("Unable to plan query '{}': {}", query, message);
             CallStatus status = message.contains("No live Flight")
                     || message.contains("Metastore unavailable")
+                    || message.contains("catalog unavailable")
                     || message.contains("registry is empty")
                     || message.contains("have not published")
                     ? CallStatus.UNAVAILABLE
@@ -661,6 +662,18 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INVALID_ARGUMENT
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
+        } catch (java.io.UncheckedIOException e) {
+            if (e.getCause() instanceof java.io.FileNotFoundException) {
+                // A table that does not exist (or is hidden): same answer as any missing table,
+                // without the server-side path.
+                throw CallStatus.NOT_FOUND.withDescription(SCHEMA_NOT_FOUND_MESSAGE).withCause(e)
+                        .toRuntimeException();
+            }
+            // A table catalog (Iceberg REST, Hive Metastore) cannot be read now.
+            LOGGER.warn("node={} query=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
+                    e.getCause().getMessage(), query);
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
         } catch (Exception e) {
             LOGGER.error("Error getting Arrow schema for query: {}", query, e);
             if (isFileNotFound(e)) {

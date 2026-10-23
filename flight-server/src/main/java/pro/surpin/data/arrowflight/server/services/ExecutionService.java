@@ -313,6 +313,11 @@ public final class ExecutionService {
                     || message.startsWith("Conversion Error")) {
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
             }
+            if (e instanceof IOException io && parquetAdapter.isCatalogSchema(pq.schema)) {
+                // No footer schema to fall back on: name the catalog's error (for example an
+                // Iceberg REST catalog that cannot be reached) instead of "schema not found".
+                throw new java.io.UncheckedIOException(io);
+            }
             // Files may be unreadable from this node; the table metadata still describes them.
             LOGGER.debug("node={} schema=describeFallback error='{}'", LogUtil.node(), message);
             schema = metadataService.getQuerySchema(query);
@@ -725,14 +730,14 @@ public final class ExecutionService {
      */
     private String catalogDescribeSource(ParquetQueryParser pq) throws IOException {
         CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
-                .current(pq.schema, pq.table).orElseThrow(() -> new IOException(
+                .current(pq.schema, pq.table).orElseThrow(() -> new java.io.FileNotFoundException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
         TableSnapshot snapshot = resolved.snapshot();
         if (CatalogTables.completeReason(resolved) == null) {
             return CatalogSources.filesSource(snapshot, snapshot.files().subList(0, 1));
         }
         if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
-            return CatalogViews.icebergScan(iceberg.metadataLocation());
+            return CatalogViews.icebergSource(iceberg.metadataLocation(), snapshot);
         }
         return CatalogViews.declaredColumnsSource(snapshot);
     }

@@ -278,4 +278,78 @@ class IcebergCatalogTest {
             assertFalse(refused.getMessage().contains("wrong"), refused.getMessage());
         }
     }
+
+    /**
+     * A REST catalog that goes away after the start: the error names the catalog and the
+     * transport failure (the JDK client's ConnectException has no message; clients saw
+     * "cannot be read: null" on the Gravitino stand).
+     */
+    @Test
+    void restCatalogGoneIsAClearError() throws IOException {
+        FakeRestCatalog rest = new FakeRestCatalog(warehouse);
+        String uri = rest.uri();
+        Map<String, String> values = Map.of("uri", uri, "roots", warehouse,
+                "credential", FakeRestCatalog.CREDENTIAL, "namesTtlSeconds", "0",
+                "metadataTtlMillis", "0");
+        try (Catalog catalog = new IcebergCatalogProvider(IcebergSettings.Kind.REST).open(
+                new TestSupport.Context(new TestSupport.MapConfig("iceberg-rest", values),
+                        new TestSupport.LocalStores(), new SecretRedactor()))) {
+            assertEquals(List.of("ice"), catalog.schemas());
+            rest.close();
+            rest = null;
+            IOException gone = assertThrows(IOException.class, () -> catalog.tables("ice"));
+            assertTrue(gone.getMessage().startsWith("Iceberg REST catalog unavailable: " + uri
+                    + " cannot be reached ("),
+                    gone.getMessage());
+            assertTrue(gone.getMessage().contains("Exception"), gone.getMessage());
+            assertFalse(gone.getMessage().contains("secret-1"), gone.getMessage());
+        } finally {
+            if (rest != null) {
+                rest.close();
+            }
+        }
+    }
+
+    /**
+     * A REST catalog may name metadata anywhere: a table whose metadata file lies outside the
+     * roots is absent (Gravitino stand: Spark's CREATE TABLE ... LOCATION outside the warehouse
+     * failed later with "No open store holds ...").
+     */
+    @Test
+    void restTableWithMetadataOutsideTheRootsIsHidden() throws IOException {
+        try (FakeRestCatalog rest = new FakeRestCatalog(warehouse)) {
+            Map<String, String> values = Map.of("uri", rest.uri(), "roots",
+                    warehouse + "/ice/evolved", "credential", FakeRestCatalog.CREDENTIAL);
+            try (Catalog catalog = new IcebergCatalogProvider(IcebergSettings.Kind.REST).open(
+                    new TestSupport.Context(new TestSupport.MapConfig("iceberg-rest", values),
+                            new TestSupport.LocalStores(), new SecretRedactor()))) {
+                assertTrue(catalog.current(new TableName("ice", "evolved")).isPresent());
+                assertEquals(Optional.empty(), catalog.current(new TableName("ice", "types")));
+                assertEquals(Optional.empty(), catalog.pinned(new TableName("ice", "types"), "1.0"));
+            }
+        }
+    }
+
+    /**
+     * A warehouse written by another catalog (Gravitino's JDBC backend, any REST or Hive catalog)
+     * names its metadata 00001-<uuid>.metadata.json without a version hint: iceberg-hadoop does
+     * not list such tables (it listed them, and every query said "does not exist").
+     */
+    @Test
+    void hadoopCatalogListsOnlyTablesInTheHadoopLayout() throws IOException {
+        Path other = dir.resolve("wh-other");
+        Path foreign = java.nio.file.Files.createDirectories(other.resolve("x/foreign/metadata"));
+        Path hadoopTable = java.nio.file.Files.createDirectories(other.resolve("x/hadoop/metadata"));
+        Path source = Path.of(metadata.get("evolved"));
+        java.nio.file.Files.copy(source, foreign.resolve("00001-0a1b2c3d.metadata.json"));
+        java.nio.file.Files.copy(source, hadoopTable.resolve("v1.metadata.json"));
+        java.nio.file.Files.writeString(hadoopTable.resolve("version-hint.text"), "1");
+        Map<String, String> values = Map.of("warehouse", other.toString());
+        try (Catalog catalog = new IcebergCatalogProvider(IcebergSettings.Kind.HADOOP).open(
+                new TestSupport.Context(new TestSupport.MapConfig("iceberg-hadoop", values),
+                        new TestSupport.LocalStores(), new SecretRedactor()))) {
+            assertEquals(List.of("hadoop"), catalog.tables("x"));
+            assertEquals(Optional.empty(), catalog.current(new TableName("x", "foreign")));
+        }
+    }
 }

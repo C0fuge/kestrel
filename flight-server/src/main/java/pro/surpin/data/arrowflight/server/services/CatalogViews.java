@@ -12,7 +12,9 @@ import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
+import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -288,7 +290,7 @@ public final class CatalogViews {
             }
             String source;
             if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
-                source = icebergScan(iceberg.metadataLocation());
+                source = icebergSource(iceberg.metadataLocation(), snapshot);
             } else if (snapshot.columns().isEmpty()) {
                 LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns", LogUtil.node(),
                         schema, table);
@@ -368,6 +370,44 @@ public final class CatalogViews {
                     + DuckDbAdapter.quoteIdentifier(column.name()));
         }
         return "(SELECT " + String.join(", ", typed) + " WHERE false)";
+    }
+
+    /**
+     * Names the FROM source of a catalog table's complete-answer view. DuckDB 1.4.5's
+     * iceberg_scan applies equality deletes only when it reads their columns: a query that does
+     * not select them fails ("Equality deletes need the relevant columns to be selected"), and one
+     * that only filters on them can fail with an INTERNAL error that invalidates the database
+     * (Gravitino stand, Iceberg Java equality deletes; also a filter on any column the query does
+     * not select when the table has position deletes too). A filter DuckDB cannot push into the
+     * scan and that is never false keeps those columns read for every query on the view, and a
+     * LIMIT no table can reach keeps the query's own filters above the scan. Tables without
+     * equality deletes are read by the plain scan (position deletes have no such problem).
+     *
+     * @param metadataLocation metadata file of the snapshot
+     * @param snapshot the snapshot (its delete files name the equality columns)
+     * @return {@code iceberg_scan(...)}, or a subquery over it that keeps the equality columns
+     */
+    public static String icebergSource(String metadataLocation, TableSnapshot snapshot) {
+        Set<Integer> fieldIds = new java.util.TreeSet<>();
+        for (TableFile file : snapshot.files()) {
+            for (DeleteFile delete : file.deletes()) {
+                if (delete.kind() == DeleteFile.Kind.EQUALITY) {
+                    fieldIds.addAll(delete.equalityFieldIds());
+                }
+            }
+        }
+        List<String> keep = new ArrayList<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            if (column.fieldId() != null && fieldIds.contains(column.fieldId())) {
+                keep.add("eq_keep." + DuckDbAdapter.quoteIdentifier(column.name()));
+            }
+        }
+        String scan = icebergScan(metadataLocation);
+        if (keep.isEmpty()) {
+            return scan;
+        }
+        return "(SELECT * FROM " + scan + " AS eq_keep WHERE hash(" + String.join(", ", keep)
+                + ") IS NOT NULL LIMIT " + Long.MAX_VALUE + ")";
     }
 
     /**
