@@ -1,0 +1,148 @@
+# Development CI of this fork: one full build per change set (all tests except perf and
+# real-services, Checkstyle, SpotBugs) and, on demand, a linux-only server jar + plugins dir
+# published as a pre-release of this repository. Test inputs come from the private
+# `ci-assets` release (never copied elsewhere).
+name: Dev CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "pages/**"
+      - "benchmarks/**"
+      - "observability/**"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Also publish a linux-only jar + plugins dir as a release server-<version>-<sha>"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  # Hive tests use partition paths with non-ASCII characters: the JVM needs a UTF-8 file encoding.
+  LC_ALL: C.UTF-8
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: DuckDB extensions from ci-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/duckdb-ext"
+          mkdir -p "$ext"
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern duckdb-extensions-v1.4.5.tar.zst --dir "$RUNNER_TEMP"
+          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-v1.4.5.tar.zst" -C "$ext"
+          find "$ext" -name '*.duckdb_extension' | sort
+          # The tests want the directory that holds v1.4.5/linux_amd64/<name>.duckdb_extension.
+          iceberg=$(find "$ext" -path '*v1.4.5/linux_amd64/iceberg.duckdb_extension' | head -n 1)
+          httpfs=$(find "$ext" -path '*v1.4.5/linux_amd64/httpfs.duckdb_extension' | head -n 1)
+          test -n "$iceberg" || { echo "no v1.4.5/linux_amd64/iceberg.duckdb_extension in the asset"; exit 1; }
+          test -n "$httpfs" || { echo "no v1.4.5/linux_amd64/httpfs.duckdb_extension in the asset"; exit 1; }
+          echo "ICEBERG_EXT_DIR=$(dirname "$(dirname "$(dirname "$iceberg")")")" >> "$GITHUB_ENV"
+          echo "DUCKDB_HTTPFS_EXTENSION=$httpfs" >> "$GITHUB_ENV"
+
+      - name: Build, all tests (no perf / real-services), Checkstyle, SpotBugs
+        run: >
+          ./mvnw clean verify checkstyle:check spotbugs:check
+          -DexcludedGroups=perf,real-services
+          -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
+          -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"
+
+      - name: Test summary
+        if: always()
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows, total = {}, [0, 0, 0, 0]
+          for f in glob.glob("*/target/surefire-reports/TEST-*.xml"):
+              s = ET.parse(f).getroot()
+              mod = f.split("/")[0]
+              r = rows.setdefault(mod, [0, 0, 0, 0])
+              for i, k in enumerate(("tests", "failures", "errors", "skipped")):
+                  r[i] += int(s.get(k, 0))
+                  total[i] += int(s.get(k, 0))
+          print("| module | tests | failures | errors | skipped |\n|---|---|---|---|---|")
+          for mod, r in sorted(rows.items()):
+              print(f"| {mod} | " + " | ".join(map(str, r)) + " |")
+          print("| **total** | " + " | ".join(map(str, total)) + " |")
+          EOF
+
+      - name: Surefire reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: surefire-reports
+          path: "*/target/surefire-reports/"
+          retention-days: 7
+          if-no-files-found: ignore
+
+  package:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Linux-only jar and plugins (tests ran in the build job)
+        run: ./mvnw clean package -Plinux-only -DskipTests
+
+      - name: Assemble release assets
+        run: |
+          set -euo pipefail
+          version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)
+          sha=$(git rev-parse --short=12 HEAD)
+          tag="server-${version}-${sha}"
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          cp "flight-server/target/arrow-flight-server-${version}-shaded.jar" \
+            "$out/arrow-flight-server-${version}-${sha}-linux.jar"
+          tools/make-plugin-dir.sh "$RUNNER_TEMP/pd" s3 lakefs iceberg hive
+          tar -C "$RUNNER_TEMP/pd" -cf - plugins | zstd -19 -T0 > "$out/flight-plugins-${version}-${sha}.tar.zst"
+          sed -e "s/@VERSION@/${version}/g" -e "s/@SHA@/${sha}/g" -e "s/@COMMIT@/$(git rev-parse HEAD)/g" \
+            docs/dev/START-NOTES.md > "$out/START-NOTES.md"
+          (cd "$out" && sha256sum -- * > SHA256SUMS)
+          ls -l "$out"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$OUT"/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$OUT"/* --repo "$GITHUB_REPOSITORY" --prerelease \
+              --target "$GITHUB_SHA" --title "$TAG" --notes-file "$OUT/START-NOTES.md"
+          fi

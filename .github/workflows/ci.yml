@@ -1,10 +1,8 @@
 name: CI
 
+# Fork: upstream's PR/push CI is manual-only here; dev-ci.yml is this fork's build (Actions minutes are limited).
 on:
-  pull_request:
-    branches: [ "main" ]
-  push:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: write

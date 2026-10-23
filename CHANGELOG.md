@@ -85,6 +85,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the registry (where, without heartbeats, it counted as a node that had just started).
 
 ### Added
+- Development CI `dev-ci.yml`: on pushes to `main` and on demand, one full build with every test
+  except `perf`/`real-services` (Iceberg and fake-S3 integration tests use the DuckDB 1.4.5
+  extensions of the private `ci-assets` release), Checkstyle and SpotBugs; a manual `package` job
+  publishes a linux-only jar, the plugins dir, START-NOTES and SHA256SUMS as a pre-release
+  `server-<version>-<sha>`. Upstream's `ci.yml` is manual-only in this fork.
+- `SparkJoinIntegrationTest` moved from `flight-server` (where the `flight` Spark source is not on
+  the classpath, so it always failed) to `flight-spark`, reading the server's `test_db`.
 - Endpoint failover for partial results: every endpoint lists up to `endpointBackupLocations`
   (default 2, 0 = off) other live nodes after its planned node, those that can read all its
   files (HDFS/S3: any node; local disks: replica holders), best first (local bytes, load,

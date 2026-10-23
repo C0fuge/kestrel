@@ -32,7 +32,10 @@ class SparkJoinIntegrationTest {
     static void startServerAndSpark() throws Exception {
         injectSparkUser(System.getProperty("user.name", "root"));
 
-        helper = TestFlightServerHelper.builder().start();
+        helper = TestFlightServerHelper.builder()
+                .dataDir(java.nio.file.Paths.get("../flight-server/src/test/resources/test_db")
+                        .toAbsolutePath().normalize().toString())
+                .start();
 
         host = "localhost";
         port = helper.location.getUri().getPort();
