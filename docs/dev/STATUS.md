@@ -101,3 +101,7 @@
   `close()` ran stayed open), fixed in HmsFixture (96b878a); root cause not confirmed: if that test fails again,
   root-cause it before other work. Package dispatch run 39993691816 on 96b878a green (build 5 min + package 3 min):
   pre-release `server-1.0.0-96b878a93be8` (linux jar 133 MB, plugins tar 40 MB, START-NOTES.md, SHA256SUMS).
+- 2026-10-23 (cloud session): item 0 started. Triage of upstream's server-side work written to
+  `docs/dev/UPSTREAM-SYNC.md` (S1..S12, T1..T2, decisions per row). Ported S1: `main` exits with status 1 when the
+  start fails before serving or throws an `Error` (regression tests in `HadoopArrowFlightServerUnitTest`); CI run
+  40005871418 on 379f72f green. S5 (shared DuckDB database) rejected as-is, question added to Open questions.
