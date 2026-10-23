@@ -127,4 +127,14 @@ class HttpRefResolverTest {
                 e.getMessage());
         assertFalse(e.getMessage().contains("s3cr3t"), e.getMessage());
     }
+
+    @Test
+    void unknownHostIsNamed() {
+        java.net.ConnectException connect = new java.net.ConnectException();
+        connect.initCause(new java.nio.channels.UnresolvedAddressException());
+        assertEquals("host lakefs.example cannot be resolved", HttpRefResolver.reason(connect,
+                URI.create("http://lakefs.example:8000/api/v1/")));
+        assertEquals("ConnectException", HttpRefResolver.reason(new java.net.ConnectException(),
+                URI.create("http://lakefs:8000/api/v1/")));
+    }
 }

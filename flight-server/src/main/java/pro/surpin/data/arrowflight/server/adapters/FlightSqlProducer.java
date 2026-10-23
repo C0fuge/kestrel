@@ -373,18 +373,38 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     static String failureDescription(Throwable failure) {
-        Throwable root = failure;
-        Throwable described = null;   // deepest cause that says something
-        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
-            root = t;
-            if (t.getMessage() != null && !t.getMessage().isBlank()) {
-                described = t;
-            }
+        List<Throwable> chain = new java.util.ArrayList<>();
+        for (Throwable t = failure; t != null && chain.size() < 32;
+                t = t.getCause() == t ? null : t.getCause()) {
+            chain.add(t);
         }
-        if ((root.getMessage() == null || root.getMessage().isBlank()) && described != null) {
+        Throwable root = chain.get(chain.size() - 1);
+        String rootText = root.getMessage();
+        if (rootText == null || rootText.isBlank()) {
             // e.g. ConnectException/UnresolvedAddressException without text under the store's
-            // "lakeFS API GET ... not reachable": name the cause that explains it.
-            root = described;
+            // "lakeFS API GET ... not reachable": name the deepest cause that explains it.
+            for (int i = chain.size() - 2; i >= 0; i--) {
+                String text = chain.get(i).getMessage();
+                if (text != null && !text.isBlank()) {
+                    root = chain.get(i);
+                    break;
+                }
+            }
+        } else {
+            // A storage IOException that repeats the root's text adds context ("lakeFS API GET
+            // <uri> failed, lakeFS not reachable: HttpConnectTimeoutException HTTP connect timed
+            // out"): prefer the deepest such wrapper over the bare root. Messages that are only
+            // the cause's toString() (new RuntimeException(cause)) add nothing.
+            for (int i = chain.size() - 2; i >= 0; i--) {
+                Throwable t = chain.get(i);
+                String text = t.getMessage();
+                if (t instanceof IOException && text != null
+                        && text.length() > rootText.length() && text.contains(rootText)
+                        && !text.equals(chain.get(i + 1).toString())) {
+                    root = chain.get(i);
+                    break;
+                }
+            }
         }
         String message = root.getMessage();
         String description = "Query execution failed: " + root.getClass().getSimpleName();

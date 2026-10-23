@@ -113,10 +113,8 @@ public final class HttpRefResolver implements RefResolver {
             throw new IOException("Interrupted while resolving lakeFS ref " + repository + "/"
                     + ref, e);
         } catch (IOException e) {
-            // ConnectException and HttpTimeoutException often carry no message of their own.
             throw new IOException("lakeFS API GET " + uri + " failed, lakeFS not reachable: "
-                    + e.getClass().getSimpleName()
-                    + (e.getMessage() == null ? "" : " " + e.getMessage()), e);
+                    + reason(e, uri), e);
         }
         int status = response.statusCode();
         if (status == 401 || status == 403) {
@@ -128,6 +126,21 @@ public final class HttpRefResolver implements RefResolver {
             throw new IOException("lakeFS API GET " + uri + " returned HTTP " + status);
         }
         return response;
+    }
+
+    /**
+     * Why a request did not get an answer: ConnectException and HttpTimeoutException often carry
+     * no message of their own, and an unknown host shows only as a textless
+     * UnresolvedAddressException under a ConnectException.
+     */
+    static String reason(IOException e, URI uri) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.nio.channels.UnresolvedAddressException
+                    || t instanceof java.net.UnknownHostException) {
+                return "host " + uri.getHost() + " cannot be resolved";
+            }
+        }
+        return e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage());
     }
 
     private static String commitId(HttpResponse<String> response, Pattern field)

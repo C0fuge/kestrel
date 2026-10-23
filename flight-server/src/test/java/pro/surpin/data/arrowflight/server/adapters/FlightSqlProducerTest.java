@@ -557,5 +557,19 @@ class FlightSqlProducerTest {
                         new java.sql.SQLException("IO Error: x"))));
         assertEquals("Query execution failed: ConnectException",
                 FlightSqlProducer.failureDescription(new java.net.ConnectException()));
+        // root with text under a store IOException that repeats it: the store's context wins
+        java.io.IOException timedOut = new java.io.IOException(
+                "lakeFS API GET http://lakefs:8000/api/v1/x failed, lakeFS not reachable:"
+                        + " HttpConnectTimeoutException HTTP connect timed out",
+                new java.net.http.HttpConnectTimeoutException("HTTP connect timed out"));
+        timedOut.getCause().initCause(new java.net.ConnectException("HTTP connect timed out"));
+        assertEquals("Query execution failed: IOException: lakeFS API GET http://lakefs:8000/api/v1/x"
+                + " failed, lakeFS not reachable: HttpConnectTimeoutException HTTP connect timed out",
+                FlightSqlProducer.failureDescription(new IllegalStateException(
+                        "Unable to describe query: " + timedOut.getMessage(), timedOut)));
+        // a wrapper that is only its cause's toString() does not replace the root
+        assertEquals("Query execution failed: FileNotFoundException: x",
+                FlightSqlProducer.failureDescription(new java.io.IOException(
+                        new java.io.FileNotFoundException("x"))));
     }
 }
