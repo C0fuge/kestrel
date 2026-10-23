@@ -23,11 +23,6 @@
 
 ## Next steps (one per session)
 
-1. **Verify the package job** (first, short): dispatch `dev-ci.yml` with `package=true` once, check the release
-   `server-1.0.0-<sha>` assets (jar starts with the plugins dir per START-NOTES), and watch for the
-   `HiveCatalogTest.anOutageIsAnErrorNotAnEmptyAnswer` flake (see Log 2026-10-23 cloud): if it fails again, root-cause
-   it (the call after `proxy.close()` succeeded, so a metastore connection survived the proxy close).
-
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
    public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
    '+refs/heads/*:refs/remotes/upstream/*'`; never push there). Review per feature and port what beats ours (rule:
@@ -90,4 +85,6 @@
   to flight-spark; Hive tests need a UTF-8 JVM locale (set in the workflow). Package dispatch run 39991672183 did
   not reach the package job: `HiveCatalogTest.anOutageIsAnErrorNotAnEmptyAnswer` failed once (`schemas()` after the
   metastore proxy closed did not throw); 10 local runs pass. The test proxy had a race (a connection accepted while
-  `close()` ran stayed open), fixed in HmsFixture; root cause not confirmed. Package job not yet verified (Next 1).
+  `close()` ran stayed open), fixed in HmsFixture (96b878a); root cause not confirmed: if that test fails again,
+  root-cause it before other work. Package dispatch run 39993691816 on 96b878a green (build 5 min + package 3 min):
+  pre-release `server-1.0.0-96b878a93be8` (linux jar 133 MB, plugins tar 40 MB, START-NOTES.md, SHA256SUMS).
