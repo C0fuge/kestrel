@@ -10,6 +10,12 @@
   JDBC and the Trino plugin (checksums 9e2af63e8711 / 05bc0dc2713a), 3-node cluster kill tests, lakeFS 22/22 per
   branch/commit/tag, Hive 76/89 reference queries (rest explained), Gravitino 15 tables = DuckDB; clients: Trino plugin,
   StarRocks native connector, ADBC (separate repos).
+- CI: `.github/workflows/dev-ci.yml` (push to main on code paths + manual; ~6 min): `clean verify checkstyle:check
+  spotbugs:check -DexcludedGroups=perf,real-services` with the DuckDB 1.4.5 extensions from `ci-assets` (Iceberg and
+  fake-S3 integration tests run; hadoopfs IT skipped). Manual dispatch with input `package=true` adds the release
+  job (linux-only jar + plugins tar + START-NOTES + SHA256SUMS as pre-release `server-<version>-<sha>`); dispatch via
+  the GitHub MCP `actions_run_trigger` (`gh` is not authenticated in cloud sessions). Upstream `ci.yml` is
+  manual-only. Locally the JVM needs a UTF-8 locale (`LC_ALL=C.UTF-8`) or the Hive tests fail on non-ASCII paths.
 - Build: `./mvnw -B clean package` (JDK 21); linux-only jar: `-Plinux-only`; plugins dir: `tools/make-plugin-dir.sh`.
   Integration tests that need real DuckDB extensions take `-Diceberg.it.extensionDir=<dir with v1.4.5/linux_amd64>`
   and `-Dhadoopfs.it.extension=<file>` (hadoopfs needs libkrb5 etc. — run that one in an AlmaLinux 8 container or
@@ -17,10 +23,11 @@
 
 ## Next steps (one per session)
 
-1. **CI** `dev-ci.yml`: on push to main (code paths) and manual: full build + all tests (excluding perf / real
-   services) + Checkstyle + SpotBugs, with the iceberg/avro/httpfs extensions from `ci-assets`
-   (`duckdb-extensions-v1.4.5.tar.zst`); a second manual job "package": linux-only jar + plugins dir as a GitHub
-   Release `server-<version>-<sha>` (assets: jar, plugins tar, START-NOTES, SHA256SUMS). Keep it under ~25 min.
+1. **Verify the package job** (first, short): dispatch `dev-ci.yml` with `package=true` once, check the release
+   `server-1.0.0-<sha>` assets (jar starts with the plugins dir per START-NOTES), and watch for the
+   `HiveCatalogTest.anOutageIsAnErrorNotAnEmptyAnswer` flake (see Log 2026-10-23 cloud): if it fails again, root-cause
+   it (the call after `proxy.close()` succeeded, so a metastore connection survived the proxy close).
+
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
    public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
    '+refs/heads/*:refs/remotes/upstream/*'`; never push there). Review per feature and port what beats ours (rule:
@@ -69,9 +76,18 @@
 
 ## Open questions
 
-(none yet)
+- Upstream's `.github/workflows/ci.yml` now runs only on manual dispatch (it ran on every push and Dependabot PR,
+  failed, and doubled the minutes; dev-ci.yml covers the same checks). Revert the `on:` block if you want it back.
+- Dependabot PRs (#4..#7 on this repo) no longer get CI. Close them or fold the bumps into item 1b?
 
 ## Log
 
 - 2026-10-23 (maintainer's local coordinator): repo created from local integration-3 (e9ef57b); heavy upstream
   workflows disabled; CI assets uploaded.
+- 2026-10-23 (cloud session): item 1 CI done. `dev-ci.yml` added; first run green on c4ca0bf (run 39990624546: build
+  5 min, server 642 tests / 2 skipped, client-core 149, spark 162, starrocks 7). Fixes needed for green:
+  `SparkJoinIntegrationTest` moved from flight-server (no `flight` data source on its classpath, it always failed)
+  to flight-spark; Hive tests need a UTF-8 JVM locale (set in the workflow). Package dispatch run 39991672183 did
+  not reach the package job: `HiveCatalogTest.anOutageIsAnErrorNotAnEmptyAnswer` failed once (`schemas()` after the
+  metastore proxy closed did not throw); 10 local runs pass. The test proxy had a race (a connection accepted while
+  `close()` ran stayed open), fixed in HmsFixture; root cause not confirmed. Package job not yet verified (Next 1).

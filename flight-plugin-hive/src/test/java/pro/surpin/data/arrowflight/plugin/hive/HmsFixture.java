@@ -226,6 +226,7 @@ public final class HmsFixture {
     public static final class Proxy implements AutoCloseable {
         private final ServerSocket server;
         private final List<Socket> sockets = new CopyOnWriteArrayList<>();
+        private final Object lock = new Object();
         private final int target;
 
         Proxy(int target) throws IOException {
@@ -250,8 +251,16 @@ public final class HmsFixture {
                 try {
                     Socket in = server.accept();
                     Socket out = new Socket(InetAddress.getLoopbackAddress(), target);
-                    sockets.add(in);
-                    sockets.add(out);
+                    synchronized (lock) {
+                        sockets.add(in);
+                        sockets.add(out);
+                        if (server.isClosed()) {
+                            // close() ran while this connection was being accepted: cut it too.
+                            in.close();
+                            out.close();
+                            return;
+                        }
+                    }
                     pump(in, out);
                     pump(out, in);
                 } catch (IOException e) {
@@ -285,9 +294,11 @@ public final class HmsFixture {
 
         @Override
         public void close() throws IOException {
-            server.close();
-            for (Socket socket : sockets) {
-                socket.close();
+            synchronized (lock) {
+                server.close();
+                for (Socket socket : sockets) {
+                    socket.close();
+                }
             }
         }
     }
