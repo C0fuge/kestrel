@@ -12,6 +12,7 @@ import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
+import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
@@ -113,6 +114,10 @@ public final class CatalogViews {
         // Table name in lower case (DuckDB ignores case) -> schemas that have it.
         Map<String, List<String>> owners = new TreeMap<>();
         Map<String, String> spelling = new HashMap<>();
+        // Catalogs that failed during this refresh: their other schemas and tables keep the views
+        // made before without asking the catalog again (a metastore that hangs would otherwise
+        // cost its timeouts once per table, while every request waits for this refresh).
+        Map<CatalogTables.Entry, String> failed = new HashMap<>();
         for (String schema : parquetAdapter.getSchemas(null).keySet().stream().sorted().toList()) {
             if (RESERVED_SCHEMAS.contains(schema.toLowerCase(Locale.ROOT))) {
                 LOGGER.warn("node={} views=skipSchema schema={} reason=reservedName",
@@ -122,8 +127,13 @@ public final class CatalogViews {
             String createSchema = "CREATE SCHEMA IF NOT EXISTS " + DuckDbAdapter.quoteIdentifier(schema);
             boolean schemaAdded = false;
             boolean catalogSchema = parquetAdapter.isCatalogSchema(schema);
+            CatalogTables catalogs = catalogSchema ? parquetAdapter.catalogTables() : null;
+            CatalogTables.Entry owner = catalogs == null ? null : catalogs.owner(schema).orElse(null);
             List<String> tableNames;
             try {
+                if (owner != null && failed.containsKey(owner)) {
+                    throw new IllegalStateException(failed.get(owner));
+                }
                 tableNames = parquetAdapter.getTables(schema, null).keySet().stream().sorted().toList();
             } catch (RuntimeException e) {
                 if (!catalogSchema) {
@@ -131,6 +141,9 @@ public final class CatalogViews {
                 }
                 // The catalog cannot be read now: keep the views made before (an outage of a
                 // metastore must not make its tables vanish from complete answers).
+                if (owner != null) {
+                    failed.putIfAbsent(owner, String.valueOf(e.getMessage()));
+                }
                 tableNames = keptTables(schema);
                 if (tableNames.isEmpty()) {
                     unavailable.put(schema.toLowerCase(Locale.ROOT), String.valueOf(e.getMessage()));
@@ -145,7 +158,22 @@ public final class CatalogViews {
                 String key = schema + "\u0000" + table;
                 TableViews views;
                 if (catalogSchema) {
-                    views = catalogTableViews(schema, table, tables.get(key));
+                    TableViews previous = tables.get(key);
+                    if (owner != null && failed.containsKey(owner)) {
+                        views = previous;
+                    } else {
+                        try {
+                            views = catalogTableViews(schema, table, previous);
+                        } catch (IOException e) {
+                            if (owner != null) {
+                                failed.putIfAbsent(owner, String.valueOf(e.getMessage()));
+                            }
+                            LOGGER.warn("node={} views={} table={}.{} reason=catalog error='{}'",
+                                    LogUtil.node(), previous != null ? "keepTable" : "skipTable",
+                                    schema, table, e.getMessage());
+                            views = previous;
+                        }
+                    }
                     if (views == null) {
                         continue;
                     }
@@ -256,8 +284,10 @@ public final class CatalogViews {
      * @param table table name
      * @param previous views made before, or null
      * @return views, or null when the table is left out
+     * @throws IOException when the catalog cannot be read
      */
-    private TableViews catalogTableViews(String schema, String table, TableViews previous) {
+    private TableViews catalogTableViews(String schema, String table, TableViews previous)
+            throws IOException {
         try {
             Optional<CatalogTables.Resolved> resolved = parquetAdapter.catalogTables()
                     .current(schema, table);
@@ -271,7 +301,11 @@ public final class CatalogViews {
             }
             String source;
             if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
-                source = icebergScan(iceberg.metadataLocation());
+                source = icebergSource(snapshot, iceberg.metadataLocation());
+                if (!source.startsWith("iceberg_scan(")) {
+                    LOGGER.info("node={} views=icebergFullScan table={}.{} reason=equalityDeletes",
+                            LogUtil.node(), schema, table);
+                }
             } else if (snapshot.columns().isEmpty()) {
                 LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns", LogUtil.node(),
                         schema, table);
@@ -282,15 +316,6 @@ public final class CatalogViews {
                 source = CatalogSources.filesSource(snapshot, snapshot.files());
             }
             return describeSource(schema, table, source, fingerprint);
-        } catch (IOException e) {
-            if (previous != null) {
-                LOGGER.warn("node={} views=keepTable table={}.{} reason=catalog error='{}'",
-                        LogUtil.node(), schema, table, e.getMessage());
-                return previous;
-            }
-            LOGGER.warn("node={} views=skipTable table={}.{} reason=catalog error='{}'",
-                    LogUtil.node(), schema, table, e.getMessage());
-            return null;
         } catch (SQLException | RuntimeException e) {
             LOGGER.warn("node={} views=skipTable table={}.{} reason=catalog error='{}'",
                     LogUtil.node(), schema, table, e.getMessage());
@@ -361,6 +386,24 @@ public final class CatalogViews {
      */
     public static String icebergScan(String metadataLocation) {
         return "iceberg_scan(" + DuckDbAdapter.sqlStringLiteral(metadataLocation) + ")";
+    }
+
+    /**
+     * Names the source of an Iceberg table snapshot. With equality deletes the scan is
+     * materialized with every column: DuckDB's iceberg extension (1.4.5) refuses a projection
+     * without the equality columns ("Equality deletes need the relevant columns to be selected")
+     * and fails with an INTERNAL error, which invalidates the connection, on most other
+     * projections that leave columns out. Correct, but the whole snapshot is read per query.
+     *
+     * @param snapshot snapshot with its files and their deletes
+     * @param metadataLocation metadata file of the snapshot
+     * @return FROM source
+     */
+    public static String icebergSource(TableSnapshot snapshot, String metadataLocation) {
+        String scan = icebergScan(metadataLocation);
+        boolean equality = snapshot.files().stream().flatMap(file -> file.deletes().stream())
+                .anyMatch(delete -> delete.kind() == DeleteFile.Kind.EQUALITY);
+        return equality ? "(WITH t AS MATERIALIZED (SELECT * FROM " + scan + ") SELECT * FROM t)" : scan;
     }
 
     /**

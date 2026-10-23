@@ -108,8 +108,8 @@ class HiveCatalogTest {
         try (Catalog catalog = open(Map.of("schemaPrefix", "h_"))) {
             assertTrue(catalog.schemas().contains("h_hvt"), catalog.schemas().toString());
             List<String> tables = catalog.tables("h_hvt");
-            assertTrue(tables.containsAll(List.of("half", "parted", "types")), tables.toString());
-            for (String skipped : List.of("csv", "orc", "acid", "uni", "v", "secret")) {
+            assertTrue(tables.containsAll(List.of("parted", "types")), tables.toString());
+            for (String skipped : List.of("csv", "orc", "acid", "uni", "v", "secret", "half")) {
                 assertFalse(tables.contains(skipped), skipped + " in " + tables);
             }
             TableSnapshot types = catalog.current(new TableName("h_hvt", "types")).orElseThrow();
@@ -160,9 +160,14 @@ class HiveCatalogTest {
     @Test
     void aPartitionOutsideTheRootsHidesTheWholeTable() throws Exception {
         try (Catalog catalog = open(Map.of())) {
-            assertTrue(catalog.tables("hvt").contains("half"));
+            assertFalse(catalog.tables("hvt").contains("half"), "hidden before any query");
             assertEquals(Optional.empty(), catalog.current(new TableName("hvt", "half")));
             assertFalse(catalog.tables("hvt").contains("half"));
+        }
+        try (Catalog catalog = open(Map.of("namesTtlSeconds", "0"))) {
+            assertEquals(Optional.empty(), catalog.current(new TableName("hvt", "half")));
+            assertFalse(catalog.tables("hvt").contains("half"), "still hidden once the mark expired");
+            assertTrue(catalog.tables("hvt").contains("types"));
         }
     }
 
@@ -202,7 +207,9 @@ class HiveCatalogTest {
             IOException schemas = assertThrows(IOException.class, catalog::schemas);
             assertTrue(schemas.getMessage().contains("Hive Metastore unavailable"), schemas.getMessage());
             assertThrows(IOException.class, () -> catalog.tables("hvt"));
-            assertThrows(IOException.class, () -> catalog.current(new TableName("hvt", "types")));
+            IOException fast = assertThrows(IOException.class,
+                    () -> catalog.current(new TableName("hvt", "types")));
+            assertTrue(fast.getMessage().contains("not retried"), "fails at once: " + fast.getMessage());
         } finally {
             catalog.close();
         }

@@ -10,6 +10,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- HDFS files whose path has escaped characters (Hive partitions such as `l_shipmode=REG AIR`,
+  `tag=50%25`) failed with "Unable to get file info": DuckDB was handed the URI-escaped path,
+  and the hadoopfs extension reads paths literally. Paths now reach DuckDB decoded.
+- Iceberg tables with equality deletes failed in DuckDB 1.4.5 ("Equality deletes need the
+  relevant columns to be selected", or an INTERNAL error that invalidated the connection on most
+  other projections); they are now read through a materialized scan of all columns (correct,
+  but the whole snapshot is read per query).
+- A Hive table with a partition outside `arrowflight.hive.roots` was hidden from queries but
+  still listed by GetTables until a query had planned it; the table list now checks partition
+  locations too.
+- A Hive Metastore that hangs (no answer) blocked queries for minutes: every view refresh asked
+  the metastore once per schema and table, and every planning call waited for the timeouts again.
+  A failing catalog is now asked once per view refresh, the metastore client fails at once for
+  5 s after the metastore could not be reached and drops its idle connections after a broken one.
 - With a table catalog configured (Iceberg, Hive) and a table in the data directory, the first
   refresh of the table inventory after its 30 s TTL called itself until the stack overflowed;
   every later call failed with "Application error processing RPC".

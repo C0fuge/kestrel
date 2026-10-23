@@ -732,7 +732,7 @@ public final class ExecutionService {
             return CatalogSources.filesSource(snapshot, snapshot.files().subList(0, 1));
         }
         if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
-            return CatalogViews.icebergScan(iceberg.metadataLocation());
+            return CatalogViews.icebergSource(snapshot, iceberg.metadataLocation());
         }
         return CatalogViews.declaredColumnsSource(snapshot);
     }
