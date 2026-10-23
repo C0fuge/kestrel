@@ -14,7 +14,6 @@ import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
-import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
