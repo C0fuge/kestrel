@@ -69,10 +69,10 @@
         <iceberg.it.extensionDir></iceberg.it.extensionDir>
         <spark.version>3.5.9</spark.version>
         <grpc.version>1.84.2</grpc.version>
-        <netty.version>4.2.9.Final</netty.version>
+        <netty.version>4.2.19.Final</netty.version>
         <junit.version>5.14.4</junit.version>
         <jackson.version>2.15.3</jackson.version>
-        <hazelcast.version>5.6.0</hazelcast.version>
+        <hazelcast.version>5.7.0</hazelcast.version>
         <checkstyle.failOnViolation>true</checkstyle.failOnViolation>
         <!-- SonarCloud -->
         <sonar.projectKey>VadimSurpin_arrow-flight-server</sonar.projectKey>
@@ -87,6 +87,14 @@
                 <groupId>io.grpc</groupId>
                 <artifactId>grpc-bom</artifactId>
                 <version>${grpc.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- One Netty version for every module (Arrow, gRPC, Hadoop bring older ones). -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -149,6 +157,13 @@
             <artifactId>hadoop-client</artifactId>
             <version>${hadoop.version}</version>
             <scope>provided</scope>
+            <!-- The MapReduce client's netty-all: see hadoop-hdfs below. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Hadoop HDFS -->
@@ -157,6 +172,13 @@
             <artifactId>hadoop-hdfs</artifactId>
             <version>${hadoop.version}</version>
             <scope>provided</scope>
+            <!-- Its netty-all would put every Netty codec back on the test classpath. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- S3 is the s3 plugin (flight-plugin-s3, plugins/s3): no AWS SDK in this jar. Its test
@@ -282,10 +304,31 @@
             <artifactId>grpc-core</artifactId>
             <version>${grpc.version}</version>
         </dependency>
+        <!-- Only the Netty modules the gRPC server uses (netty-all carried every codec, with their
+             advisories): HTTP/2, proxy support and the Linux epoll transport. -->
         <dependency>
             <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>${netty.version}</version>
+            <artifactId>netty-codec-http2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler-proxy</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <classifier>linux-x86_64</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <classifier>linux-aarch_64</classifier>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
@@ -365,6 +408,18 @@
             <artifactId>spark-core_2.12</artifactId>
             <version>${spark.version}</version>
             <scope>test</scope>
+            <!-- netty-bom manages native modules to runtime scope, which would ship Spark's macOS
+                 kqueue transport in the server jar. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-transport-native-kqueue</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- For Spark SQL and DataFrames -->
@@ -373,6 +428,12 @@
             <artifactId>spark-sql_2.12</artifactId>
             <version>${spark.version}</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Dagger 2 compile-time DI -->
@@ -601,14 +662,6 @@
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-x86_64</exclude>
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:osx-aarch_64</exclude>
                                             <exclude>io.netty:netty-tcnative-boringssl-static:jar:windows-x86_64</exclude>
-                                            <!-- Netty 4.2 (upstream U-00): HTTP/3 quiche, kqueue and macOS DNS natives -->
-                                            <exclude>io.netty:netty-codec-native-quic:jar:osx-x86_64</exclude>
-                                            <exclude>io.netty:netty-codec-native-quic:jar:osx-aarch_64</exclude>
-                                            <exclude>io.netty:netty-codec-native-quic:jar:windows-x86_64</exclude>
-                                            <exclude>io.netty:netty-transport-native-kqueue:jar:osx-x86_64</exclude>
-                                            <exclude>io.netty:netty-transport-native-kqueue:jar:osx-aarch_64</exclude>
-                                            <exclude>io.netty:netty-resolver-dns-native-macos:jar:osx-x86_64</exclude>
-                                            <exclude>io.netty:netty-resolver-dns-native-macos:jar:osx-aarch_64</exclude>
                                         </excludes>
                                     </artifactSet>
                                     <filters combine.children="append">

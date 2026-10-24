@@ -50,13 +50,14 @@
      T2 ported (client pool identity covers every setting; routing headers on every call), perf
      branch: P1 (Q6/Q17) ours already, P3 ported (Spark post-pushdown statistics, filter part
      opt-in), P4 cost gate deferred to the stand, S11 (batch compression) deferred (Open
-     questions), S12 ported to all three query-text caches together with item 6. Next session:
-     **first check Dev CI runs again** (still could not start 2026-10-24 08:41, see Log); then
-     the remaining item 0 work is only S7/S8 (wait on Open questions) and the stand measurements,
-     so move on to 1b.
+     questions), S12 ported to all three query-text caches together with item 6. The remaining
+     item 0 work is only S7/S8 (wait on Open questions) and the stand measurements: 1b is next.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
-   unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
-   document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
+   unverified). **Done 2026-10-24 (server module):** Hazelcast 5.7.0, Netty 4.2.19 under `netty-bom`, `netty-all`
+   replaced (README notes the private Hazelcast port; `DependencyFloorTest`); `flight-spark` imports the same
+   `netty-bom`. **Next session, first check Dev CI runs again** (could not start through 2026-10-24 10:41, see Log),
+   then still open: Netty in `flight-client-core` / `flight-starrocks` (4.2.9 from Arrow plus 4.1.130 from
+   grpc-netty 1.79: align on the BOM as in flight-spark); Jackson 2.15.3 →
    2.18.x/2.22.x aligned via `jackson-bom`; aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
    Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
    (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
@@ -107,7 +108,8 @@
   billing for the account; 930e6db is verified only by a full local build. Still the same on
   2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
   (run 40063344609, 5 s, no runner), at 06:41 UTC (run 40071167062, 5 s) at 08:41 UTC (run
-  40079012105, 4 s) and on the push of d8237a1 (run 40080400054, 4 s). Sessions verify locally; 89c9b95 and later have never run in CI.
+  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) and at 10:41 UTC (run 40086887735, 3 s).
+  Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
@@ -205,3 +207,15 @@
   -DexcludedGroups=perf,real-services` green (server 665 / 9 skipped, client-core 154, spark 173,
   starrocks 7, plugins green). Note: `spotbugs-exclude.xml` still matches the old package
   `net.surpin` (stale, harmless).
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40086887735 on fb6e840: 3 s, no
+  runner). Item 1b, first group (server): Hazelcast 5.6.0 → 5.7.0, Netty 4.2.9 → 4.2.19 under
+  `netty-bom`, `netty-all` replaced by codec-http2 + handler-proxy + epoll (x86-64/ARM64); netty-all
+  excluded from the provided Hadoop and test Spark deps, Spark's kqueue natives kept out of the jar
+  (the BOM manages native modules to runtime scope). Shaded jar checked: no Redis/HAProxy/SMTP/STOMP/
+  MQTT/XML/HTTP3/OCSP/DNS/kqueue/io_uring classes. `flight-spark` needed the same BOM (its tests failed
+  with `NoSuchMethodError` in the epoll transport on mixed 4.1/4.2 modules). README: Hazelcast port
+  must stay private. Test `DependencyFloorTest` (one Netty version >= 4.2.17, unused codecs absent,
+  Hazelcast >= 5.7.0). Full local `clean verify checkstyle:check spotbugs:check
+  -DexcludedGroups=perf,real-services` green (server 669 / 9 skipped, client-core 154, spark 173,
+  starrocks 7, plugins green). Stand: run the 3-node kill tests once with this jar and
+  restart all nodes together (no rolling upgrade 5.6 → 5.7 in Hazelcast open source).

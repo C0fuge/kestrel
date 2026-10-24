@@ -43,6 +43,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   answer extended by `rowsExact`, `bytes`, `files`; unlike upstream it refuses a multi-node cluster
   on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
+### Security
+- Server: Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port) and Netty 4.2.9 → 4.2.19
+  (HTTP/2 and handler advisories) under one `netty-bom`. `netty-all` is replaced by the modules the gRPC server
+  uses (HTTP/2, proxy, epoll for Linux x86-64/ARM64), which drops about 25 advisories in unused codecs (Redis,
+  HAProxy, SMTP, XML, HTTP/3, OCSP, DNS …); macOS builds now use Netty's NIO transport (no kqueue). README: keep
+  the Hazelcast port private. Upgrade every node of a cluster together (Hazelcast open source has no rolling
+  upgrade between minor versions). `DependencyFloorTest` guards both floors. The Spark connector imports the same
+  `netty-bom` (its shaded jar's Netty 4.2.9 → 4.2.19; its tests mixed 4.1 and 4.2 modules).
+
 ### Fixed
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can
   be megabytes, and each one differs) are no longer kept in the parse cache, the result-schema

@@ -142,6 +142,11 @@ Grafana port does not need to be exposed publicly when the SSH tunnel is used.
 
 The server waits up to `hazelcastClusterJoinTimeoutSec` (default 60 s) for all `--hosts` nodes to join, then fails with an error. Single-node mode (`--hosts` with one host) skips the wait.
 
+The Hazelcast port has no authentication or TLS of its own (Hazelcast open source): any process that reaches it can
+join or act as a member and read the cluster state, including the ticket secret. Keep it on a private network and
+firewall it to the `--hosts` nodes; never expose it beyond them. The server runs Hazelcast 5.7.0 or later (5.6.0 had
+advisories on the member port).
+
 ### Spark Connector
 
 Register as the `flight` format:
