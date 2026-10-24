@@ -44,10 +44,12 @@
      per-connection catalog views), S3 (spill size cap) ported as per-connection `duckDbMaxTempSize`, S4
      ported as opt-in `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` (order audit clean; stand
      measurement pending, see Open questions), S6 ported as opt-in `endpointsPerServer` (fixed upstream's
-     split of single-node queries; stand measurement pending). Next session: **first check Dev CI runs
-     again** (2026-10-24 it could not start, see Log); then the first **open** row there (S7/S8 are wire
-     changes waiting on Open questions, so S9: table-statistics action together with T1), S12 together
-     with item 6.
+     split of single-node queries; stand measurement pending), S9 ported as action
+     `arrowflight.table_statistics` (no NDV yet), T1 rejected in favour of S9. Next session: **first
+     check Dev CI runs again** (still could not start 2026-10-24, see Log); then the first **open** row
+     there (S7/S8 are wire changes waiting on Open questions, so S10: S3 via s3a+httpfs vs our S3
+     plugin, a comparison on MinIO — if a stand is needed, record it and take S11/T2/perf branch), S12
+     together with item 6.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -97,11 +99,17 @@
   a plain `SELECT` in file order would see a different order.)
 - **Dev CI cannot start (2026-10-24)**: run 40046662476 (both attempts) failed within 2 s with no runner
   assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
-  billing for the account; 930e6db is verified only by a full local build.
+  billing for the account; 930e6db is verified only by a full local build. Still the same on
+  2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; sessions verify locally.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
   a win is expected only where one client stream is the bottleneck. Keep default 1 unless it wins?
+- For the coordinator (client repos): the server now answers `arrowflight.table_statistics`
+  (README "Table statistics action"; upstream's StarRocks fork patch and `TableStats` parse it
+  unchanged). Our Trino plugin / StarRocks connector could feed row counts and column bounds to their
+  optimizers from it; `ndv` is always null so far. Want the background NDV estimate (upstream runs
+  `approx_count_distinct` per column once per file set; costs a full column scan per table)?
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -144,3 +152,11 @@
   full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services`
   green instead (server 649 / 9 skipped — Iceberg ITs need the ci-assets extensions — client-core 149,
   spark 162, starrocks 7, plugins green).
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40055199702 on 7d4cebe: failed
+  in 2 s, no runner). Item 0, UPSTREAM-SYNC S9 ported as Flight action `arrowflight.table_statistics`
+  (`TableStatisticsService`: footer row count, bounds, nulls, sizes for data-directory tables through
+  the DataStore; catalog snapshot rows/size, upper bound with delete files; refused on a multi-node
+  local-disk cluster; no NDV yet); T1 rejected in favour of it. Tests `TableStatisticsServiceTest`
+  (vs DuckDB over the same files), `FlightSqlProducerTest.tableStatistics*`. Commit 89c9b95. Full local
+  `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server
+  660 / 9 skipped, client-core 149, spark 162, starrocks 7, plugins green).
