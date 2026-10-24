@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Guards the security floors of the server's network libraries (docs/dev/DEPENDENCY-AUDIT.md).
+ * Guards the security floors of the server's network and JSON libraries (docs/dev/DEPENDENCY-AUDIT.md).
  */
 @Tag("unit")
 class DependencyFloorTest {
@@ -43,6 +43,21 @@ class DependencyFloorTest {
         for (String unused : UNUSED_NETTY) {
             assertFalse(modules.contains(unused), unused + " is back on the classpath");
         }
+    }
+
+    @Test
+    void jacksonModulesShareOneVersionAtTheFloor() {
+        List<com.fasterxml.jackson.core.Version> modules = List.of(
+                com.fasterxml.jackson.core.json.PackageVersion.VERSION,
+                com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION,
+                com.fasterxml.jackson.dataformat.yaml.PackageVersion.VERSION,
+                com.fasterxml.jackson.datatype.jsr310.PackageVersion.VERSION,
+                com.fasterxml.jackson.module.scala.DefaultScalaModule$.MODULE$.version());
+        Set<String> versions = new TreeSet<>();
+        modules.forEach(v -> versions.add(v.toString()));
+        assertEquals(1, versions.size(), "one Jackson version for every module: " + versions);
+        String version = versions.iterator().next();
+        assertTrue(atLeast(version, 2, 21, 7), "Jackson " + version + " is below 2.21.7");
     }
 
     @Test

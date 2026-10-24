@@ -14,6 +14,7 @@
     <description>Engine-neutral Arrow Flight client: connection, query planning, pushdown SQL and Arrow streaming.</description>
     <properties>
         <netty.version>4.2.19.Final</netty.version>
+        <jackson.version>2.21.8</jackson.version>
     </properties>
     <!-- One Netty version for Arrow and gRPC (Arrow brings 4.2.x, grpc-netty 4.1.x; the epoll
          transport fails on a mix of 4.1 and 4.2 modules); as in flight-server. -->
@@ -23,6 +24,15 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
                 <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- One Jackson version for the connectors, on the 2.21 line Arrow 19 brings
+                 as in flight-server. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -72,17 +82,14 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.15.3</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-core</artifactId>
-            <version>2.15.3</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>2.15.3</version>
         </dependency>
         <dependency>
             <groupId>org.apache.hadoop</groupId>

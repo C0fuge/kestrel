@@ -23,6 +23,9 @@
 
     <properties>
         <iceberg.version>1.12.0</iceberg.version>
+        <!-- Iceberg 1.12.0 brings 2.22.2 (databind DoS advisories, fixed in 2.22.3). The plugin has its
+             own class loader, so it need not match the server's Jackson. -->
+        <jackson.version>2.22.3</jackson.version>
         <!-- Same as flight-server. -->
         <hadoop.version>3.5.0</hadoop.version>
         <duckdb.version>1.4.5.0</duckdb.version>
@@ -30,6 +33,17 @@
              DuckDB's iceberg extension are skipped without it. -->
         <iceberg.it.extensionDir></iceberg.it.extensionDir>
     </properties>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>

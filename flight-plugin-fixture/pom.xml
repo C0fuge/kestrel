@@ -30,7 +30,7 @@
             <version>2.0.17</version>
             <scope>provided</scope>
         </dependency>
-        <!-- Deliberately not the server's versions (Jackson 2.15.3, Guava 32/33). -->
+        <!-- Deliberately not the server's versions (Jackson 2.21.x, Guava 32/33). -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

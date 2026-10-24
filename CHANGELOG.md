@@ -55,6 +55,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   grpc-netty's 4.1.130 (HTTP/2 codec, http, socks, handler-proxy, unix-common were 4.1.130), tcnative
   2.0.74 → 2.0.84. The provided Hadoop dependencies no longer bring `netty-all`, so no codec or native
   transport leaks into the connectors' runtime classpath. `NettyFloorTest` in both modules.
+- Jackson 2.15.3 (databind/core, mixed with Arrow's 2.21.0 jsr310 and Ranger's 2.17.2 JAX-RS) → one 2.21.8 under
+  `jackson-bom` in the server, client core, Spark and StarRocks connectors (databind DoS and
+  PolymorphicTypeValidator advisories). The Spark connector's shaded jar relocates Jackson to
+  `pro.surpin.data.arrowflight.shaded.jackson`: Spark 3.5 keeps its own 2.15, the connector runs on 2.21.8 (before,
+  Spark's 2.15 shadowed the bundled copy). `DependencyFloorTest` / `JacksonFloorTest` guard one version >= 2.21.7.
+  The Iceberg plugin (own class loader) bundles Jackson 2.22.3 instead of Iceberg 1.12's 2.22.2.
 
 ### Fixed
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can

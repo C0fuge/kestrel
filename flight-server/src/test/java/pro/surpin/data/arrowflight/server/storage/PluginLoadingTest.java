@@ -74,7 +74,7 @@ class PluginLoadingTest {
             Map<String, String> report = store.directories("");
 
             assertEquals("2.22.2", report.get("jackson"));
-            assertEquals("2.15.3",
+            assertEquals("2.21.8",
                     com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION.toString());
             assertEquals("{\"a\":1}", report.get("jacksonWorks"));
             assertTrue(report.get("guava").endsWith("guava-19.0.jar"), report.get("guava"));

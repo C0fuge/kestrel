@@ -12,6 +12,7 @@
     <name>Arrow Flight StarRocks Connector</name>
     <properties>
         <netty.version>4.2.19.Final</netty.version>
+        <jackson.version>2.21.8</jackson.version>
     </properties>
     <!-- One Netty version for Arrow and gRPC (Arrow brings 4.2.x, grpc-netty 4.1.x; the epoll
          transport fails on a mix of 4.1 and 4.2 modules); as in flight-server. -->
@@ -21,6 +22,14 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
                 <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Arrow 19 brings Jackson 2.21.0: lift it to the patched 2.21 release. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

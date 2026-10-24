@@ -71,7 +71,7 @@
         <grpc.version>1.84.2</grpc.version>
         <netty.version>4.2.19.Final</netty.version>
         <junit.version>5.14.4</junit.version>
-        <jackson.version>2.15.3</jackson.version>
+        <jackson.version>2.21.8</jackson.version>
         <hazelcast.version>5.7.0</hazelcast.version>
         <checkstyle.failOnViolation>true</checkstyle.failOnViolation>
         <!-- SonarCloud -->
@@ -95,6 +95,15 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
                 <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- One Jackson version (databind, core, YAML, jsr310 and the Scala module of the Spark
+                 test dependencies), on the line Arrow 19 brings (2.21). -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -338,22 +347,18 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-core</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
 
         <!-- Parquet -->
