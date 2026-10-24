@@ -1,7 +1,7 @@
 # Development CI of this fork: one full build per change set (all tests except perf and
 # real-services, Checkstyle, SpotBugs) and, on demand, a linux-only server jar + plugins dir
-# published as a pre-release of this repository. Test inputs come from the private
-# `ci-assets` release (never copied elsewhere).
+# published as a pre-release of this repository. Test inputs come from the
+# `ci-assets` release.
 name: Dev CI
 
 on:

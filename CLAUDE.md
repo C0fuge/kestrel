@@ -1,6 +1,6 @@
 # Working in this repository (instructions for Claude cloud sessions)
 
-This is the maintainer's PRIVATE development fork of the Arrow Flight SQL server (upstream:
+This is the maintainer's development fork of the Arrow Flight SQL server (upstream:
 github.com/VadimSurpin/arrow-flight-server; our changes on top: own engine, cluster/failover, S3/lakeFS/Iceberg/Hive
 plugins, DuckDB 1.4.5, hadoopfs timeouts, many fixes). Read first: `AGENTS.md` (code conventions — Javadoc,
 Checkstyle, SpotBugs, tests with every change), `README.md`, `CHANGELOG.md`, and `docs/dev/STATUS.md` (state,
@@ -22,10 +22,15 @@ backlog, decisions, history pointers). The change record of earlier local work i
 
 ## Rules
 
-- Private repo; never make it public. Release `ci-assets` holds test inputs (DuckDB extensions incl. our hadoopfs build,
-  runtime libs, test data) — use them in CI, never copy them elsewhere. Upstream's heavy workflows (Benchmark Pages,
+- The repo is **public** (since 2026-10-24, maintainer's decision: free Actions minutes). Everything pushed —
+  code, docs, releases, CI logs — is visible to anyone: never commit secrets, credentials or personal data (names,
+  e-mail addresses, home paths, host names of the maintainer's machines or of production systems). Local commits use
+  `C0fuge <189659128+C0fuge@users.noreply.github.com>`. Keep the repo low-profile: no description, topics or website,
+  no links to it from other projects.
+- Release `ci-assets` holds test inputs (DuckDB extensions incl. our hadoopfs build,
+  runtime libs, test data) — use them in CI. Upstream's heavy workflows (Benchmark Pages,
   Load Test, Release) are disabled — keep them disabled.
-- Actions minutes are limited (~2000/month shared with 3 other private repos): cache Maven, run the full build once
+- Actions minutes are free (public repo), but runners are shared: cache Maven, run the full build once
   per change set, skip `perf` tests in CI unless asked.
 - Correctness first: never return wrong or partial results silently; every bug fix gets a regression test.
 - Don't change the wire behaviour clients depend on (Flight SQL commands, result modes `partial`/`complete`,
