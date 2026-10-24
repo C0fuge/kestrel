@@ -49,9 +49,11 @@
      (upstream drops the file lockdown for S3; speed comparison moved to the stand, Open questions),
      T2 ported (client pool identity covers every setting; routing headers on every call), perf
      branch: P1 (Q6/Q17) ours already, P3 ported (Spark post-pushdown statistics, filter part
-     opt-in), P4 cost gate deferred to the stand. Next session: **first check Dev CI runs again**
-     (still could not start 2026-10-24 06:41, see Log); then S11 (compression, low), S12 together
-     with item 6. S7/S8 wait on Open questions.
+     opt-in), P4 cost gate deferred to the stand, S11 (batch compression) deferred (Open
+     questions), S12 ported to all three query-text caches together with item 6. Next session:
+     **first check Dev CI runs again** (still could not start 2026-10-24 08:41, see Log); then
+     the remaining item 0 work is only S7/S8 (wait on Open questions) and the stand measurements,
+     so move on to 1b.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -72,8 +74,9 @@
 5. **Config precedence bug (upstream)**: env vars such as `FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
    `DUCKDB_*` are shadowed by values in the bundled `arrowflight.properties`; documented precedence is env > file.
    Fix with tests (and keep `-D` highest).
-6. **Prepared-statement cache bound**: is `DuckDbAdapter.stmtCache` bounded? Dynamic filters in Trino produce a new SQL
-   text per query. Bound it (LRU, size setting, metrics) if not.
+6. ~~**Prepared-statement cache bound**~~ — done 2026-10-24 with UPSTREAM-SYNC S12: the statement cache already was
+   an LRU of `duckDbStatementCacheSize` (default 64) per worker thread; now texts over 256 Ki chars stay out of it
+   (and out of the parse and schema caches), evictions and skips are Prometheus counters.
 7. **Kerberos for the HMS client** (SASL/GSSAPI in `flight-plugin-hive` `ThriftMetastore.open`) and check HDFS
    Kerberos with the hadoopfs extension: CI with a KDC container (e.g. MIT krb5 in a container) + a kerberized HMS if
    feasible; otherwise unit-level with a fake SASL server; docs.
@@ -103,7 +106,8 @@
   assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
   billing for the account; 930e6db is verified only by a full local build. Still the same on
   2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
-  (run 40063344609, 5 s, no runner), and at 06:41 UTC (run 40071167062, 5 s). Sessions verify locally; 89c9b95 and later have never run in CI.
+  (run 40063344609, 5 s, no runner), at 06:41 UTC (run 40071167062, 5 s) at 08:41 UTC (run
+  40079012105, 4 s) and on the push of d8237a1 (run 40080400054, 4 s). Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
@@ -120,6 +124,9 @@
   with the read option `statistics.filterSelectivity=true` vs default and check the plans switch to
   broadcast joins without driver/executor memory trouble. If it wins, make it the default? (It is a
   heuristic, no column statistics; P4 cost gate decided after this.)
+- UPSTREAM-SYNC S11 (Flight batch compression, LZ4/ZSTD IPC buffers) deferred: upstream's own benchmark was
+  negative (LZ4) or mixed (ZSTD), it helps only on slow links, and every client must then decode compressed buffers.
+  Is there a slow link (WAN client, cross-site StarRocks) that wants it? If so it becomes an opt-in setting.
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -187,3 +194,14 @@
   Tests `ScanSelectivityTest`, `TableTest.estimates*`. Full local `clean verify checkstyle:check
   spotbugs:check -DexcludedGroups=perf,real-services` green on d264273 (server
   660 / 9 skipped, client-core 154, spark 173, starrocks 7, plugins green).
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40079012105 on ce71eec and push
+  run 40080400054 on d8237a1: 4 s each, no runner). Item 0: S11 (batch compression) deferred (Open
+  questions); S12 ported and widened, closing Next step 6: query texts over 256 Ki chars stay out of
+  the parse cache, the result-schema cache and the per-thread statement cache (which was already an
+  LRU of `duckDbStatementCacheSize`); one uncached statement slot per thread; counters
+  `arrowflight_query_cache_oversize_total` / `arrowflight_query_cache_evictions_total{cache}`. Tests
+  in `ParquetQueryParserUnitTest`, `DuckDbAdapterTest`, `ExecutionServiceTest`, `MetricsServiceTest`.
+  Commit d8237a1. Full local `clean verify checkstyle:check spotbugs:check
+  -DexcludedGroups=perf,real-services` green (server 665 / 9 skipped, client-core 154, spark 173,
+  starrocks 7, plugins green). Note: `spotbugs-exclude.xml` still matches the old package
+  `net.surpin` (stale, harmless).
