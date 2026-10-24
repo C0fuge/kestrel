@@ -40,6 +40,7 @@ import java.util.concurrent.TimeUnit;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
@@ -343,14 +344,30 @@ public final class ExecutionService {
             }
         }
         if (schema != null) {
+            cacheSchema(query, schema, now);
+        }
+        return schema;
+    }
+
+    /**
+     * Remembers a query's result schema unless the query text is too long to be cached.
+     *
+     * @param query    SQL query
+     * @param schema   result schema
+     * @param nowNanos monotonic time of the lookup
+     */
+    private void cacheSchema(String query, Schema schema, long nowNanos) {
+        if (!QueryCacheLimits.cacheable(query)) {
+            CacheMetrics.oversize(CacheMetrics.Cache.SCHEMA);
+        } else {
             synchronized (schemaCache) {
-                schemaCache.put(query, new CachedSchema(schema, now + SCHEMA_TTL_NANOS));
+                schemaCache.put(query, new CachedSchema(schema, nowNanos + SCHEMA_TTL_NANOS));
                 if (schemaCache.size() > SCHEMA_CACHE_CAPACITY) {
                     schemaCache.remove(schemaCache.keySet().iterator().next());
+                    CacheMetrics.eviction(CacheMetrics.Cache.SCHEMA);
                 }
             }
         }
-        return schema;
     }
 
     /**

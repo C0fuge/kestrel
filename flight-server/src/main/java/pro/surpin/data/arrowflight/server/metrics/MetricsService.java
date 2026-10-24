@@ -144,6 +144,7 @@ public final class MetricsService implements AutoCloseable {
         metric(metrics, "arrowflight_parquet_queries_active", METRIC_TYPE_GAUGE,
                 "Currently executing Parquet queries", ACTIVE_QUERIES.get());
         appendQueryMetrics(metrics);
+        appendCacheMetrics(metrics);
 
         return metrics.toString();
     }
@@ -219,6 +220,26 @@ public final class MetricsService implements AutoCloseable {
             sample(metrics, "arrowflight_parquet_query_duration_seconds_count" + labels,
                     values.count.get());
         });
+    }
+
+    /**
+     * Appends the query-text cache counters.
+     *
+     * @param metrics destination payload
+     */
+    private static void appendCacheMetrics(StringBuilder metrics) {
+        helpType(metrics, "arrowflight_query_cache_oversize_total", METRIC_TYPE_COUNTER,
+                "Query texts not cached because they are longer than 256 Ki characters");
+        for (CacheMetrics.Cache cache : CacheMetrics.Cache.values()) {
+            sample(metrics, "arrowflight_query_cache_oversize_total{cache=\""
+                    + CacheMetrics.label(cache) + "\"}", CacheMetrics.oversizeCount(cache));
+        }
+        helpType(metrics, "arrowflight_query_cache_evictions_total", METRIC_TYPE_COUNTER,
+                "Entries dropped from a full query-text cache");
+        for (CacheMetrics.Cache cache : CacheMetrics.Cache.values()) {
+            sample(metrics, "arrowflight_query_cache_evictions_total{cache=\""
+                    + CacheMetrics.label(cache) + "\"}", CacheMetrics.evictionCount(cache));
+        }
     }
 
     /**

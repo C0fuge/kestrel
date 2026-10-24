@@ -13,13 +13,23 @@ import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.Test;
+import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class ExecutionServiceTest {
 
@@ -377,5 +387,31 @@ class ExecutionServiceTest {
                 ExecutionService.plannedTableFiles(store, "tpch.nation", ticket));
         assertTrue(ExecutionService.plannedTableFiles(store, "tpch.orders", ticket).isEmpty());
         assertTrue(ExecutionService.plannedTableFiles(store, "tpch.region", null).isEmpty());
+    }
+
+    /** Verifies a result schema is cached for a short query and looked up again for a long one. */
+    @Test
+    void resultSchemaCachesOnlyQueriesWithinTheLimit() throws Exception {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        MetadataService metadata = mock(MetadataService.class);
+        when(parquet.sampleFile(anyString(), anyString())).thenReturn(Optional.empty());
+        Schema schema = new Schema(List.of(
+                Field.nullable("a", new ArrowType.Int(64, true))));
+        when(metadata.getQuerySchema(anyString())).thenReturn(schema);
+        ExecutionService service = new ExecutionService(parquet, mock(DuckDbAdapter.class),
+                metadata, null, null);
+        String small = "SELECT a FROM s.t WHERE a IN (1, 2)";
+        String huge = ParquetQueryParserUnitTest.longInListQuery();
+        long skipped = CacheMetrics.oversizeCount(CacheMetrics.Cache.SCHEMA);
+
+        try (RootAllocator allocator = new RootAllocator()) {
+            assertEquals(schema, service.resultSchema(allocator, small));
+            assertEquals(schema, service.resultSchema(allocator, small));
+            assertEquals(schema, service.resultSchema(allocator, huge));
+            assertEquals(schema, service.resultSchema(allocator, huge));
+        }
+        verify(metadata, times(1)).getQuerySchema(small);
+        verify(metadata, times(2)).getQuerySchema(huge);
+        assertEquals(skipped + 2, CacheMetrics.oversizeCount(CacheMetrics.Cache.SCHEMA));
     }
 }

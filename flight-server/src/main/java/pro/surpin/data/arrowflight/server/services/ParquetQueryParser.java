@@ -7,6 +7,7 @@ import org.jooq.conf.Settings;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -365,6 +366,16 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Tells whether the parse of a query is cached.
+     *
+     * @param query SQL text as passed to {@link #parse(String)}
+     * @return true when cached
+     */
+    static boolean isCached(String query) {
+        return PARSE_CACHE.containsKey(flattenSubqueryWrapper(query));
+    }
+
+    /**
      * Parses a query that has no terminator and no parameter markers.
      *
      * @param query SQL SELECT query string
@@ -393,10 +404,15 @@ public class ParquetQueryParser {
             if (parsedQuery instanceof Select<?> select) {
                 LOGGER.debug("Parsing SQL query: {}", query);
                 ParquetQueryParser parser = parseSelect(select, query);
-                synchronized (PARSE_CACHE) {
-                    PARSE_CACHE.put(query, parser);
-                    if (PARSE_CACHE.size() > PARSE_CACHE_CAPACITY) {
-                        PARSE_CACHE.remove(PARSE_CACHE.keySet().iterator().next());
+                if (!QueryCacheLimits.cacheable(query)) {
+                    CacheMetrics.oversize(CacheMetrics.Cache.PARSE);
+                } else {
+                    synchronized (PARSE_CACHE) {
+                        PARSE_CACHE.put(query, parser);
+                        if (PARSE_CACHE.size() > PARSE_CACHE_CAPACITY) {
+                            PARSE_CACHE.remove(PARSE_CACHE.keySet().iterator().next());
+                            CacheMetrics.eviction(CacheMetrics.Cache.PARSE);
+                        }
                     }
                 }
                 LOGGER.debug("Parsed query: {}", parser);

@@ -41,6 +41,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
+import pro.surpin.data.arrowflight.server.services.QueryCacheLimits;
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -113,9 +115,30 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final int duckDbGroups;
     private final AppConfig appConfig;
 
-    /** Keeps prepared statements bounded to one worker thread and closes evicted entries. */
+    /**
+     * Prepares a statement for a SQL text.
+     */
+    @FunctionalInterface
+    interface StatementPreparer {
+        /**
+         * Prepares a statement.
+         *
+         * @param sql DuckDB SQL
+         * @return prepared statement
+         * @throws SQLException if DuckDB cannot prepare it
+         */
+        PreparedStatement prepare(String sql) throws SQLException;
+    }
+
+    /**
+     * Keeps prepared statements bounded to one worker thread and closes evicted entries. A SQL
+     * text longer than {@link QueryCacheLimits#MAX_CACHED_QUERY_CHARS} is not cached: it is
+     * held in a single slot of its own until the next long text replaces it.
+     */
     static final class StatementCache extends LinkedHashMap<String, PreparedStatement> {
         private final int limit;
+        private String oversizeSql;
+        private PreparedStatement oversizeStatement;
 
         /**
          * Creates a cache with a finite entry limit.
@@ -135,12 +158,75 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (size() <= limit) {
                 return false;
             }
+            CacheMetrics.eviction(CacheMetrics.Cache.STATEMENT);
+            closeEvicted(eldest.getValue());
+            return true;
+        }
+
+        /**
+         * Returns the open prepared statement for a SQL text, preparing it when there is none.
+         *
+         * @param sql     DuckDB SQL
+         * @param preparer prepares a statement that is not cached
+         * @return prepared statement, owned by this cache
+         * @throws SQLException if the statement cannot be prepared
+         */
+        PreparedStatement statement(String sql, StatementPreparer preparer) throws SQLException {
+            if (!QueryCacheLimits.cacheable(sql)) {
+                if (sql.equals(oversizeSql) && !oversizeStatement.isClosed()) {
+                    return oversizeStatement;
+                }
+                PreparedStatement ps = preparer.prepare(sql);
+                CacheMetrics.oversize(CacheMetrics.Cache.STATEMENT);
+                closeOversize();
+                oversizeSql = sql;
+                oversizeStatement = ps;
+                return ps;
+            }
+            PreparedStatement ps = get(sql);
+            if (ps != null && ps.isClosed()) {
+                // DuckDB closes a prepared statement whose execution failed or was interrupted.
+                remove(sql);
+                ps = null;
+            }
+            if (ps == null) {
+                ps = preparer.prepare(sql);
+                put(sql, ps);
+            }
+            return ps;
+        }
+
+        /**
+         * Closes and forgets every statement, the long-text slot included.
+         */
+        void closeAll() {
+            values().forEach(StatementCache::closeEvicted);
+            clear();
+            closeOversize();
+        }
+
+        /**
+         * Closes and forgets the statement of the long-text slot.
+         */
+        private void closeOversize() {
+            if (oversizeStatement != null) {
+                closeEvicted(oversizeStatement);
+            }
+            oversizeSql = null;
+            oversizeStatement = null;
+        }
+
+        /**
+         * Closes a statement the cache no longer holds, logging a failure.
+         *
+         * @param ps prepared statement
+         */
+        private static void closeEvicted(PreparedStatement ps) {
             try {
-                eldest.getValue().close();
+                ps.close();
             } catch (SQLException e) {
                 LOGGER.warn("Failed to close evicted DuckDB statement", e);
             }
-            return true;
         }
     }
 
@@ -1618,7 +1704,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         private Connection describeConn;
         private long describeVersion = Long.MIN_VALUE;
         private List<String> describeDrops = List.of();
-        private final Map<String, PreparedStatement> statements;
+        private final StatementCache statements;
 
         /**
          * Binds a connection to the thread that uses it.
@@ -1643,25 +1729,14 @@ public final class DuckDbAdapter implements AutoCloseable {
          * @throws java.sql.SQLException if the statement cannot be prepared
          */
         private PreparedStatement statement(String sql) throws java.sql.SQLException {
-            PreparedStatement ps = statements.get(sql);
-            if (ps != null && ps.isClosed()) {
-                // DuckDB closes a prepared statement whose execution failed or was interrupted.
-                statements.remove(sql);
-                ps = null;
-            }
-            if (ps == null) {
-                ps = conn.prepareStatement(sql);
-                statements.put(sql, ps);
-            }
-            return ps;
+            return statements.statement(sql, conn::prepareStatement);
         }
 
         /**
          * Closes the statements and the connection.
          */
         private void close() {
-            statements.values().forEach(Session::closeQuietly);
-            statements.clear();
+            statements.closeAll();
             closeQuietly(conn);
             if (describeConn != null) {
                 closeQuietly(describeConn);

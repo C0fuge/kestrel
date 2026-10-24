@@ -44,6 +44,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
 ### Fixed
+- Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can
+  be megabytes, and each one differs) are no longer kept in the parse cache, the result-schema
+  cache or the per-thread prepared-statement cache: each cache could pin up to its entry limit
+  of them (1024 parses, 1024 schemas, `duckDbStatementCacheSize` statements per worker thread) and
+  evicted the short, repeating queries. A long text keeps one uncached statement slot per
+  thread. New Prometheus counters `arrowflight_query_cache_oversize_total{cache}` and
+  `arrowflight_query_cache_evictions_total{cache}` (`parse`, `schema`, `statement`). Idea from
+  upstream f998bf7 (parse cache only).
 - `flight-client-core`: pooled clients were keyed only by host, port, user and secret, so a
   configuration that asks for certificate verification could get a client built without it (or
   with another trust store, schema/routing headers, retries, timeouts or allocation limit). The pool

@@ -1,6 +1,8 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.services.QueryCacheLimits;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightRuntimeException;
@@ -58,6 +60,87 @@ class DuckDbAdapterTest {
         verify(second).close();
         verify(first, never()).close();
         verify(third, never()).close();
+    }
+
+    /** Verifies a SQL text longer than the cache limit keeps one slot and evicts no short entry. */
+    @Test
+    void statementCacheKeepsLongTextsOutOfTheLru() throws Exception {
+        DuckDbAdapter.StatementCache cache = new DuckDbAdapter.StatementCache(2);
+        java.util.Map<String, PreparedStatement> prepared = new java.util.HashMap<>();
+        AtomicInteger prepares = new AtomicInteger();
+        DuckDbAdapter.StatementPreparer preparer = sql -> {
+            prepares.incrementAndGet();
+            PreparedStatement ps = mock(PreparedStatement.class);
+            prepared.put(sql, ps);
+            return ps;
+        };
+        String longA = "SELECT 1 WHERE x IN (" + "1,".repeat(
+                QueryCacheLimits.MAX_CACHED_QUERY_CHARS / 2) + "1)";
+        String longB = longA.replace("SELECT 1", "SELECT 2");
+        long skipped = CacheMetrics.oversizeCount(CacheMetrics.Cache.STATEMENT);
+
+        PreparedStatement shortOne = cache.statement("SELECT 1", preparer);
+        cache.statement("SELECT 2", preparer);
+        PreparedStatement a = cache.statement(longA, preparer);
+        assertSame(a, cache.statement(longA, preparer), "a repeated long text reuses its slot");
+        assertEquals(3, prepares.get());
+        assertEquals(2, cache.size(), "the long text is not an LRU entry");
+        assertFalse(cache.containsKey(longA));
+        assertSame(shortOne, cache.statement("SELECT 1", preparer));
+        verify(shortOne, never()).close();
+
+        PreparedStatement b = cache.statement(longB, preparer);
+        verify(a).close();
+        assertNotSame(a, b);
+        when(b.isClosed()).thenReturn(true);
+        PreparedStatement again = cache.statement(longB, preparer);
+        assertNotSame(b, again, "a statement DuckDB closed is prepared again");
+        assertEquals(skipped + 3, CacheMetrics.oversizeCount(CacheMetrics.Cache.STATEMENT));
+
+        cache.closeAll();
+        verify(again).close();
+        verify(shortOne).close();
+        assertTrue(cache.isEmpty());
+    }
+
+    /** Verifies a long query streams its rows twice through the uncached slot. */
+    @Test
+    void streamSqlRunsQueriesLongerThanTheCacheLimit() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "complete", true, true);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
+        AtomicInteger rows = new AtomicInteger();
+        doAnswer(invocation -> {
+            rootRef.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            rows.addAndGet(rootRef.get().getRowCount());
+            return null;
+        }).when(listener).putNext();
+        StringBuilder in = new StringBuilder("0");
+        for (int i = 1; in.length() <= QueryCacheLimits.MAX_CACHED_QUERY_CHARS; i++) {
+            in.append(", ").append(i * 2);
+        }
+        String sql = "SELECT range AS id FROM range(0, 10) WHERE range IN (" + in + ")";
+
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            adapter.streamSql(allocator, sql, listener, true);
+            adapter.streamSql(allocator, sql, listener, true);
+            adapter.streamSql(allocator, "SELECT 1 AS id", listener, true);
+        } finally {
+            ioPool.shutdownNow();
+        }
+        // 0, 2, 4, 6, 8 twice, then one row.
+        assertEquals(11, rows.get());
     }
 
     @Test

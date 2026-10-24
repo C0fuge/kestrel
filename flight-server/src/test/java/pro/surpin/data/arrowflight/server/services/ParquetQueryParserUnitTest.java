@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import org.junit.jupiter.api.Test;
+import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -215,5 +216,36 @@ class ParquetQueryParserUnitTest {
                         + " count, sum, min or max",
                 ParquetQueryParser.parse("SELECT CAST(sum(x) AS DECIMAL(38,2)) AS a FROM s.t")
                         .completeAnswerReason);
+    }
+
+    /** A join key list can be megabytes of SQL; remembering every distinct one would pin that memory. */
+    @Test
+    void doesNotCacheVeryLongQueries() {
+        String small = "SELECT a FROM s.t WHERE a IN (1, 2, 3)";
+        ParquetQueryParser.parse(small);
+        assertTrue(ParquetQueryParser.isCached(small));
+
+        String huge = longInListQuery();
+        assertTrue(huge.length() > QueryCacheLimits.MAX_CACHED_QUERY_CHARS);
+        long skipped = CacheMetrics.oversizeCount(CacheMetrics.Cache.PARSE);
+        ParquetQueryParser parsed = ParquetQueryParser.parse(huge);
+        assertNotNull(parsed.filter);
+        assertFalse(ParquetQueryParser.isCached(huge));
+        assertEquals(skipped + 1, CacheMetrics.oversizeCount(CacheMetrics.Cache.PARSE));
+        // Parsed again, with the same answer.
+        assertEquals(parsed.filter.toString(), ParquetQueryParser.parse(huge).filter.toString());
+    }
+
+    /**
+     * Builds a query whose IN list makes it longer than the cache limit.
+     *
+     * @return SQL text
+     */
+    static String longInListQuery() {
+        StringBuilder huge = new StringBuilder("SELECT a FROM s.t WHERE a IN (0");
+        for (int i = 1; i < 30_000; i++) {
+            huge.append(", ").append(1_000_003L * i);
+        }
+        return huge.append(')').toString();
     }
 }

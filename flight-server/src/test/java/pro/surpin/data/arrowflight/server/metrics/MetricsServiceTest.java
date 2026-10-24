@@ -48,6 +48,30 @@ class MetricsServiceTest {
     }
 
     /**
+     * Verifies the query-text cache counters are exposed per cache.
+     *
+     * @throws Exception if the local metrics endpoint cannot be queried
+     */
+    @Test
+    void exposesQueryCacheMetrics() throws Exception {
+        CacheMetrics.oversize(CacheMetrics.Cache.STATEMENT);
+        CacheMetrics.eviction(CacheMetrics.Cache.PARSE);
+        try (MetricsService service = new MetricsService(0)) {
+            service.start();
+            String body = get(service.port(), "/metrics").body();
+
+            for (String cache : new String[] {"parse", "schema", "statement"}) {
+                assertTrue(body.contains(
+                        "arrowflight_query_cache_oversize_total{cache=\"" + cache + "\"}"), cache);
+                assertTrue(body.contains(
+                        "arrowflight_query_cache_evictions_total{cache=\"" + cache + "\"}"), cache);
+            }
+            assertTrue(CacheMetrics.oversizeCount(CacheMetrics.Cache.STATEMENT) >= 1);
+            assertTrue(CacheMetrics.evictionCount(CacheMetrics.Cache.PARSE) >= 1);
+        }
+    }
+
+    /**
      * Verifies the health endpoint reports readiness.
      *
      * @throws Exception if the local metrics endpoint cannot be queried
