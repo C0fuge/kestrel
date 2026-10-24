@@ -45,11 +45,12 @@
      ported as opt-in `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` (order audit clean; stand
      measurement pending, see Open questions), S6 ported as opt-in `endpointsPerServer` (fixed upstream's
      split of single-node queries; stand measurement pending), S9 ported as action
-     `arrowflight.table_statistics` (no NDV yet), T1 rejected in favour of S9. Next session: **first
-     check Dev CI runs again** (still could not start 2026-10-24, see Log); then the first **open** row
-     there (S7/S8 are wire changes waiting on Open questions, so S10: S3 via s3a+httpfs vs our S3
-     plugin, a comparison on MinIO — if a stand is needed, record it and take S11/T2/perf branch), S12
-     together with item 6.
+     `arrowflight.table_statistics` (no NDV yet), T1 rejected in favour of S9, S10 rejected as-is
+     (upstream drops the file lockdown for S3; speed comparison moved to the stand, Open questions),
+     T2 ported (client pool identity covers every setting; routing headers on every call). Next
+     session: **first check Dev CI runs again** (still could not start 2026-10-24 04:41, see Log);
+     then the perf branch row (Q6/Q17 aggregate-pushdown fixes vs `flight-spark`), then S11
+     (compression, low), S12 together with item 6. S7/S8 wait on Open questions.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -100,7 +101,8 @@
 - **Dev CI cannot start (2026-10-24)**: run 40046662476 (both attempts) failed within 2 s with no runner
   assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
   billing for the account; 930e6db is verified only by a full local build. Still the same on
-  2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; sessions verify locally.
+  2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
+  (run 40063344609, 5 s, no runner). Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
@@ -110,6 +112,9 @@
   unchanged). Our Trino plugin / StarRocks connector could feed row counts and column bounds to their
   optimizers from it; `ndv` is always null so far. Want the background NDV estimate (upstream runs
   `approx_count_distinct` per column once per file set; costs a full column scan per table)?
+- UPSTREAM-SYNC S10 on the stand (MinIO): compare listing + footer time of a 1000+ object data
+  directory and SF10 lineitem through our S3 plugin vs upstream's s3a reader (9f66812) to find any
+  win worth porting into our plugin (page size, footer read size). Cloud sessions have no MinIO.
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -160,3 +165,12 @@
   (vs DuckDB over the same files), `FlightSqlProducerTest.tableStatistics*`. Commit 89c9b95. Full local
   `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server
   660 / 9 skipped, client-core 149, spark 162, starrocks 7, plugins green).
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40063344609 on 6bbc09b: 5 s,
+  no runner). Item 0: UPSTREAM-SYNC S10 rejected as-is (upstream turns the file lockdown off for S3
+  data dirs; speed comparison needs MinIO, moved to the stand), T2 ported: `flight-client-core` pool
+  identity now hashes every client setting (a `crtVerify=false` client was reused for a verifying
+  configuration, likewise trust store / routing / retries / timeout / allocation limit), schema and
+  routing headers go with every call and the Kerberos refresh. Tests `ClientHeadersTest` (in-process
+  Flight server), `ClientRetryTest.connectionIdentity*` (fail on the old code). Full local `clean
+  verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 660 / 9
+  skipped, client-core 154, spark 162, starrocks 7, plugins green).

@@ -37,6 +37,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
 ### Fixed
+- `flight-client-core`: pooled clients were keyed only by host, port, user and secret, so a
+  configuration that asks for certificate verification could get a client built without it (or
+  with another trust store, schema/routing headers, retries, timeouts or allocation limit). The pool
+  key now covers every setting (hashed). Schema and routing headers (`SCHEMA`, `ROUTING_TAG`,
+  `ROUTING_QUEUE`) went only with the handshake; they now go with every call and with the Kerberos
+  session refresh (from upstream `feat/trino-flight-connector`, UPSTREAM-SYNC T2).
 - A server whose start failed before it began serving (storage that cannot be opened, a
   cluster join timeout) or with an `Error` stayed alive without ever becoming ready: Hazelcast
   and gRPC threads are not daemons. `main` now logs the failure and exits with status 1, so a

@@ -14,6 +14,7 @@ import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
+import java.util.Base64;
 import java.util.Enumeration;
 
 /**
@@ -218,18 +219,34 @@ public final class Configuration implements Serializable {
 
     /**
      * Retrieve an opaque connection identity for client pooling.
-     * Does not contain raw secrets — the credential is replaced with a SHA-256 hash.
+     * Every setting a pooled client is built with is part of it, so configurations that differ in TLS
+     * verification, trust material, request headers, retries, timeouts or allocation limit never share
+     * a client. Does not contain raw secrets — credentials and settings are replaced with SHA-256 hashes.
      * @return - the connection identity string
      */
     public String getConnectionString() {
         String secret = kerberosServicePrincipal != null ? kerberosServicePrincipal
                 : (this.password != null && !this.password.isEmpty()) ? this.password : this.bearerToken;
-        return String.format("%s://%s:%s@%s:%d",
+        Object[] settings = {crtVerify, user, password, bearerToken, kerberosServicePrincipal, trustStoreJks,
+            trustStorePass, certBytes == null ? null : Base64.getEncoder().encodeToString(certBytes),
+            defaultSchema, routingTag, routingQueue, maxRetries, retryBackoffMs, connectTimeoutMs, allocationLimit};
+        StringBuilder encoded = new StringBuilder();
+        for (Object value : settings) {
+            // Length-prefixed so that no two different setting lists encode to the same text.
+            if (value == null) {
+                encoded.append("-1:");
+            } else {
+                String text = value.toString();
+                encoded.append(text.length()).append(':').append(text);
+            }
+        }
+        return String.format("%s://%s:%s@%s:%d|options=%s",
                 this.tlsEnabled.booleanValue() ? "https:" : "http",
                 this.user,
                 hash(secret),
                 this.fsHost,
-                this.fsPort);
+                this.fsPort,
+                hash(encoded.toString()));
     }
 
     /**
