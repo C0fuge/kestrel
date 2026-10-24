@@ -23,12 +23,7 @@
 
 ## Next steps (one per session)
 
-0a. **Maintainer decision 2026-10-25 — shorter hadoopfs timeout defaults:** change the server defaults
-    `duckDbHdfsConnectTimeoutMs` 5000 → **3000** and `duckDbHdfsReadTimeoutMs` 15000 → **10000** (env
-    `HDFS_CONNECT_TIMEOUT_MS` / `HDFS_READ_TIMEOUT_MS` unchanged; `-D`/env still override; 0 = leave to the extension).
-    Update `arrowflight.properties`, docs (README / build guides / START-NOTES template), CHANGELOG, and the golden
-    setup-SQL test + timeout tests. Reason: with the dead-DataNode list in hadoopfs afc3 only the first read that hits a
-    lost DataNode waits a timeout; 3 s / 10 s cut that wait from ~15–22 s to ~4–11 s on the stand.
+0a. ~~**hadoopfs timeout defaults 3 s / 10 s**~~ — done 2026-10-24 (732e238, CI run 40140133221 green).
 
 > **Stand, 3-node S3 cluster on int7 (2026-10-25):** all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
 
@@ -69,8 +64,7 @@
    **Done 2026-10-24 (Jackson):** one Jackson 2.21.8 (`jackson-bom`) in server, client-core, spark and
    starrocks; the Spark connector's shaded jar relocates Jackson (Spark 3.5 keeps its 2.15); Iceberg plugin
    2.22.3; floor tests in every module. Stand: run one Spark read with the new shaded connector jar.
-   **Next session, first check Dev CI runs again** (could not start through 2026-10-24 16:41, see Log),
-   then still open: aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
+   Dev CI runs again (2026-10-24 22:49, repo public). Still open: aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
    Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
    (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
    replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
@@ -115,13 +109,9 @@
   and `DUCKDB_STREAMING_BUFFER_SIZE=64MiB` (each alone and both) against the defaults. If they win, should they
   become the defaults? (The order audit found nothing relying on row order without ORDER BY; clients that read
   a plain `SELECT` in file order would see a different order.)
-- **Dev CI cannot start (2026-10-24)**: run 40046662476 (both attempts) failed within 2 s with no runner
-  assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
-  billing for the account; 930e6db is verified only by a full local build. Still the same on
-  2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
-  (run 40063344609, 5 s, no runner), at 06:41 UTC (run 40071167062, 5 s) at 08:41 UTC (run
-  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) at 10:41 UTC (run 40086887735, 3 s), on the push of 69d50f8 (run 40088691573, 3 s), at 12:41 UTC (run 40094973520, 3 s) on the push of d59b974 (run 40095535435, 3 s) and at 16:41 UTC (run 40112719429, 3 s).
-  Sessions verify locally; 89c9b95 and later have never run in CI.
+- GitHub Pages: the Actions list shows a `pages build and deployment` run on branch `gh-pages`
+  (2026-10-24 18:50 UTC, success); no `gh-pages` branch exists now. CLAUDE.md wants no website: please
+  check Settings → Pages is off (sessions cannot change repo settings).
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
@@ -252,3 +242,12 @@
   `PluginLoadingTest` now expects the server's 2.21.8. Full local `clean verify checkstyle:check
   spotbugs:check -DexcludedGroups=perf,real-services` green (server 670 / 9 skipped, client-core 158,
   spark 175, starrocks 11, plugins green).
+- 2026-10-24 (cloud session): Dev CI runs again (the Actions history restarted with the public repo;
+  the earlier "cannot start" question is closed). Dispatch run 40139808951 on f354d38 was cancelled by
+  the newer push run. Item 0a: hadoopfs DataNode timeout defaults 5000 / 15000 → 3000 / 10000
+  (`AppConfig`, `arrowflight.properties`, startup warning hint, CHANGELOG; golden setup SQL and
+  `ConfigAdapterTest` updated, their override cases moved to 4000 so they still differ from the default).
+  Commit 732e238: push run 40140133221 green (build 6 min) — first CI run covering 89c9b95..fbb2aca too.
+  Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green
+  (server 670 / 9 skipped, client-core 158, spark 175, starrocks 11, plugins green). Note: `./mvnw` got
+  HTTP 429 from Maven Central for the Maven 3.10.0 download; `/opt/maven` 3.9.11 works.
