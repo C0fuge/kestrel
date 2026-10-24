@@ -43,8 +43,11 @@
      S1 (exit on failed start) ported, S2 ours already, S5 (shared DuckDB database) rejected as-is (breaks our
      per-connection catalog views), S3 (spill size cap) ported as per-connection `duckDbMaxTempSize`, S4
      ported as opt-in `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` (order audit clean; stand
-     measurement pending, see Open questions). Next session: the first **open** row there (S6:
-     `endpointsPerServer` vs our `QueryPlanner`), S12 together with item 6.
+     measurement pending, see Open questions), S6 ported as opt-in `endpointsPerServer` (fixed upstream's
+     split of single-node queries; stand measurement pending). Next session: **first check Dev CI runs
+     again** (2026-10-24 it could not start, see Log); then the first **open** row there (S7/S8 are wire
+     changes waiting on Open questions, so S9: table-statistics action together with T1), S12 together
+     with item 6.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -92,6 +95,13 @@
   and `DUCKDB_STREAMING_BUFFER_SIZE=64MiB` (each alone and both) against the defaults. If they win, should they
   become the defaults? (The order audit found nothing relying on row order without ORDER BY; clients that read
   a plain `SELECT` in file order would see a different order.)
+- **Dev CI cannot start (2026-10-24)**: run 40046662476 (both attempts) failed within 2 s with no runner
+  assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
+  billing for the account; 930e6db is verified only by a full local build.
+- UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
+  `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
+  endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
+  a win is expected only where one client stream is the bottleneck. Keep default 1 unless it wins?
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -125,3 +135,12 @@
   merged) failed only the 3 tests that assert the defaults / golden SET lines (server 649, client-core 149, spark
   162, starrocks 7, plugins green); EXPLAIN on DuckDB 1.4.5 shows the equality-delete LIMIT barrier still keeps
   filters above the scan. CI run 40037403277 on e984ff5 green.
+- 2026-10-24 (cloud session): item 0, UPSTREAM-SYNC S6 ported as opt-in `endpointsPerServer` /
+  `FLIGHT_ENDPOINTS_PER_SERVER` (default 1; below 1 refused): partial results split each node's files
+  into up to N endpoints of similar size, each with its own backups and load accounting; queries
+  with a single-node feature (OFFSET, HAVING, DISTINCT aggregates) and joins never split (upstream
+  split them on a one-node cluster: wrong answers). Tests in `QueryPlannerTest`, `ConfigAdapterTest`.
+  Commit 930e6db. Dev CI run 40046662476 could not start (2 attempts, no runner, see Open questions);
+  full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services`
+  green instead (server 649 / 9 skipped — Iceberg ITs need the ci-assets extensions — client-core 149,
+  spark 162, starrocks 7, plugins green).
