@@ -47,10 +47,11 @@
      split of single-node queries; stand measurement pending), S9 ported as action
      `arrowflight.table_statistics` (no NDV yet), T1 rejected in favour of S9, S10 rejected as-is
      (upstream drops the file lockdown for S3; speed comparison moved to the stand, Open questions),
-     T2 ported (client pool identity covers every setting; routing headers on every call). Next
-     session: **first check Dev CI runs again** (still could not start 2026-10-24 04:41, see Log);
-     then the perf branch row (Q6/Q17 aggregate-pushdown fixes vs `flight-spark`), then S11
-     (compression, low), S12 together with item 6. S7/S8 wait on Open questions.
+     T2 ported (client pool identity covers every setting; routing headers on every call), perf
+     branch: P1 (Q6/Q17) ours already, P3 ported (Spark post-pushdown statistics, filter part
+     opt-in), P4 cost gate deferred to the stand. Next session: **first check Dev CI runs again**
+     (still could not start 2026-10-24 06:41, see Log); then S11 (compression, low), S12 together
+     with item 6. S7/S8 wait on Open questions.
 1b. **Dependency security upgrades** (audit 2026-10-23: `docs/dev/DEPENDENCY-AUDIT.md`; native/C++ items there are
    unverified): Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port; also keep the port private and
    document it); Netty → 4.2.17+ under one `netty-bom`, replace `netty-all` by the modules in use; Jackson 2.15.3 →
@@ -102,7 +103,7 @@
   assigned and no log, typical of exhausted Actions minutes or a spending limit. Please check Actions
   billing for the account; 930e6db is verified only by a full local build. Still the same on
   2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
-  (run 40063344609, 5 s, no runner). Sessions verify locally; 89c9b95 and later have never run in CI.
+  (run 40063344609, 5 s, no runner), and at 06:41 UTC (run 40071167062, 5 s). Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
   endpoint, and each extra endpoint takes another DuckDB connection (memory limit per connection), so
@@ -115,6 +116,10 @@
 - UPSTREAM-SYNC S10 on the stand (MinIO): compare listing + footer time of a 1000+ object data
   directory and SF10 lineitem through our S3 plugin vs upstream's s3a reader (9f66812) to find any
   win worth porting into our plugin (page size, footer read size). Cloud sessions have no MinIO.
+- UPSTREAM-SYNC P3 on the stand (Spark, TPC-H SF10 with `FlightSessionCatalog`): run Q2/Q3/Q5/Q7
+  with the read option `statistics.filterSelectivity=true` vs default and check the plans switch to
+  broadcast joins without driver/executor memory trouble. If it wins, make it the default? (It is a
+  heuristic, no column statistics; P4 cost gate decided after this.)
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -174,3 +179,11 @@
   Flight server), `ClientRetryTest.connectionIdentity*` (fail on the old code). Full local `clean
   verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 660 / 9
   skipped, client-core 154, spark 162, starrocks 7, plugins green).
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40071167062 on fd6fb30: 5 s, no
+  runner). Item 0, perf branch rows P1..P4 in UPSTREAM-SYNC: Q6/Q17 aggregate fixes (88c0a16) ours
+  already, 49a5a5c benchmark-only, 482d24b ported to `flight-spark` (pushed global aggregate reports
+  1 row; filter selectivity scaling behind read option `statistics.filterSelectivity`, default off;
+  NOT of an unknown predicate keeps every row, upstream estimated 0), 7cf1544 deferred to the stand.
+  Tests `ScanSelectivityTest`, `TableTest.estimates*`. Full local `clean verify checkstyle:check
+  spotbugs:check -DexcludedGroups=perf,real-services` green on d264273 (server
+  660 / 9 skipped, client-core 154, spark 173, starrocks 7, plugins green).
