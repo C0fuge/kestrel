@@ -23,6 +23,13 @@
 
 ## Next steps (one per session)
 
+0a. **Maintainer decision 2026-10-25 — shorter hadoopfs timeout defaults:** change the server defaults
+    `duckDbHdfsConnectTimeoutMs` 5000 → **3000** and `duckDbHdfsReadTimeoutMs` 15000 → **10000** (env
+    `HDFS_CONNECT_TIMEOUT_MS` / `HDFS_READ_TIMEOUT_MS` unchanged; `-D`/env still override; 0 = leave to the extension).
+    Update `arrowflight.properties`, docs (README / build guides / START-NOTES template), CHANGELOG, and the golden
+    setup-SQL test + timeout tests. Reason: with the dead-DataNode list in hadoopfs afc3 only the first read that hits a
+    lost DataNode waits a timeout; 3 s / 10 s cut that wait from ~15–22 s to ~4–11 s on the stand.
+
 > **Stand, 3-node S3 cluster on int7 (2026-10-25):** all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
 
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
