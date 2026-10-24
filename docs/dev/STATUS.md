@@ -108,7 +108,7 @@
   billing for the account; 930e6db is verified only by a full local build. Still the same on
   2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
   (run 40063344609, 5 s, no runner), at 06:41 UTC (run 40071167062, 5 s) at 08:41 UTC (run
-  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) and at 10:41 UTC (run 40086887735, 3 s).
+  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) at 10:41 UTC (run 40086887735, 3 s) and on the push of 69d50f8 (run 40088691573, 3 s).
   Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
@@ -217,5 +217,6 @@
   must stay private. Test `DependencyFloorTest` (one Netty version >= 4.2.17, unused codecs absent,
   Hazelcast >= 5.7.0). Full local `clean verify checkstyle:check spotbugs:check
   -DexcludedGroups=perf,real-services` green (server 669 / 9 skipped, client-core 154, spark 173,
-  starrocks 7, plugins green). Stand: run the 3-node kill tests once with this jar and
+  starrocks 7, plugins green). Commit 69d50f8; its push run 40088691573 also failed in 3 s, no runner.
+  Stand: run the 3-node kill tests once with this jar and
   restart all nodes together (no rolling upgrade 5.6 → 5.7 in Hazelcast open source).
