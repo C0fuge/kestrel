@@ -51,6 +51,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the Hazelcast port private. Upgrade every node of a cluster together (Hazelcast open source has no rolling
   upgrade between minor versions). `DependencyFloorTest` guards both floors. The Spark connector imports the same
   `netty-bom` (its shaded jar's Netty 4.2.9 → 4.2.19; its tests mixed 4.1 and 4.2 modules).
+- Client core and StarRocks connector: one Netty 4.2.19 under `netty-bom` instead of Arrow's 4.2.9 mixed with
+  grpc-netty's 4.1.130 (HTTP/2 codec, http, socks, handler-proxy, unix-common were 4.1.130), tcnative
+  2.0.74 → 2.0.84. The provided Hadoop dependencies no longer bring `netty-all`, so no codec or native
+  transport leaks into the connectors' runtime classpath. `NettyFloorTest` in both modules.
 
 ### Fixed
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can

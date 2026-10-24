@@ -12,6 +12,22 @@
     <packaging>jar</packaging>
     <name>Arrow Flight Client Core</name>
     <description>Engine-neutral Arrow Flight client: connection, query planning, pushdown SQL and Arrow streaming.</description>
+    <properties>
+        <netty.version>4.2.19.Final</netty.version>
+    </properties>
+    <!-- One Netty version for Arrow and gRPC (Arrow brings 4.2.x, grpc-netty 4.1.x; the epoll
+         transport fails on a mix of 4.1 and 4.2 modules); as in flight-server. -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>org.apache.arrow</groupId>
@@ -73,12 +89,28 @@
             <artifactId>hadoop-client</artifactId>
             <version>3.5.0</version>
             <scope>provided</scope>
+            <!-- Under netty-bom its netty-all would put every codec and native transport on the
+                 runtime classpath of the connectors (as in flight-server). -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-hdfs</artifactId>
             <version>3.5.0</version>
             <scope>provided</scope>
+            <!-- Under netty-bom its netty-all would put every codec and native transport on the
+                 runtime classpath of the connectors (as in flight-server). -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
