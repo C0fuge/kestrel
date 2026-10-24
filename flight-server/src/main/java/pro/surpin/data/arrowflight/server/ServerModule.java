@@ -282,7 +282,8 @@ public final class ServerModule {
     @Singleton
     QueryPlanner queryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
             AppConfig config) {
-        return new QueryPlanner(parquetAdapter, clusterService, config.endpointBackupLocations());
+        return new QueryPlanner(parquetAdapter, clusterService, config.endpointBackupLocations(),
+                config.endpointsPerServer());
     }
 
     /**

@@ -22,6 +22,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the rows of a query without ORDER BY in any order (parallel scan threads do not wait for each
   other), the buffer lets a streamed result run ahead of a slow Flight consumer. Both are opt-in
   until measured on the stand; plugins may not set them (upstream cb45f1c turns both on).
+- Setting `endpointsPerServer` (`arrowflight.cluster.endpointsPerServer`, env
+  `FLIGHT_ENDPOINTS_PER_SERVER`, default 1): partial results split one node's files into up to that
+  many endpoints of similar size (each with its own backup locations and load accounting), so a
+  client can read a node over several parallel streams. Queries that need every row in one place
+  (OFFSET, HAVING, DISTINCT aggregates) and joins are never split; values below 1 are refused
+  (idea from upstream 1d3f331, which also split those single-node queries on a one-node cluster).
 
 ### Fixed
 - A server whose start failed before it began serving (storage that cannot be opened, a

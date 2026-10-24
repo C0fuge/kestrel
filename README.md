@@ -279,6 +279,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
+| Cluster | `endpointBackupLocations`, `endpointsPerServer` |
 
 ### Complete and partial answers
 
@@ -289,7 +290,10 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
   JDBC/ODBC/ADBC drivers and BI tools need on a cluster. It needs storage every node can read
   (HDFS, S3); a cluster on local disks refuses it.
 - **partial**: one endpoint per node with the part computed from that node's files; the client
-  merges. The Trino and Spark connectors ask for it with the header
+  merges. `endpointsPerServer` (`FLIGHT_ENDPOINTS_PER_SERVER`, default 1) splits a node's files
+  into up to that many endpoints of similar size, each with its own backup locations, so a client
+  can read one node over several streams; queries that need every row in one place (OFFSET,
+  HAVING, DISTINCT aggregates) and joins keep one endpoint. The Trino and Spark connectors ask for it with the header
   `x-flight-result-mode: partial`. A query whose select list has anything but columns and plain
   `count`/`sum`/`min`/`max` (`CAST(sum(x) AS ...)`, `avg(x)`, `x + 1`, an aggregate with `FILTER`
   or `OVER`), or that groups by an expression, gets the complete answer as one endpoint instead,

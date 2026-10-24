@@ -126,6 +126,9 @@ public class ConfigAdapter {
             throw new IllegalArgumentException(
                     "endpointBackupLocations must not be negative: " + endpointBackupLocations);
         }
+        int endpointsPerServer = getIntWithEnv("endpointsPerServer",
+                "arrowflight.cluster.endpointsPerServer", "FLIGHT_ENDPOINTS_PER_SERVER",
+                AppConfig.DEFAULT_ENDPOINTS_PER_SERVER, props);
         String metadataEndpointLocation = getStringWithEnv("metadataEndpointLocation",
                 "arrowflight.metadataEndpointLocation", "FLIGHT_METADATA_ENDPOINT_LOCATION",
                 AppConfig.METADATA_LOCATION_NONE, props);
@@ -154,7 +157,8 @@ public class ConfigAdapter {
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation,
                 duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
-                Boolean.parseBoolean(preserveOrder), duckDbStreamingBufferSize);
+                Boolean.parseBoolean(preserveOrder), duckDbStreamingBufferSize,
+                endpointsPerServer);
     }
 
     /**

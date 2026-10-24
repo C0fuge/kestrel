@@ -151,6 +151,24 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbHdfsReadTimeoutMs"), e.getMessage());
     }
 
+    /** Verifies endpoints per node: 1 by default, read from both keys, below 1 refused. */
+    @Test
+    void getConfigEndpointsPerServer() {
+        assertEquals(1, ConfigAdapter.getConfig().endpointsPerServer());
+
+        setProp("arrowflight.cluster.endpointsPerServer", "4");
+        assertEquals(4, ConfigAdapter.getConfig().endpointsPerServer());
+        setProp("endpointsPerServer", "2");
+        assertEquals(2, ConfigAdapter.getConfig().endpointsPerServer());
+        assertEquals(3, ConfigAdapter.getConfig().withEndpointsPerServer(3).endpointsPerServer());
+        assertEquals(2, ConfigAdapter.getConfig().withDuckDbMaxTempSize("1GB").endpointsPerServer());
+
+        setProp("endpointsPerServer", "0");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                ConfigAdapter::getConfig);
+        assertTrue(e.getMessage().contains("endpointsPerServer"), e.getMessage());
+    }
+
     /** Verifies the spill size cap: unset by default, read from both keys, garbage refused. */
     @Test
     void getConfigDuckDbMaxTempSize() {

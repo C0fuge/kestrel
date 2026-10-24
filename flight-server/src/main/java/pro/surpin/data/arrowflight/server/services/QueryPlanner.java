@@ -58,6 +58,7 @@ public final class QueryPlanner {
     private final ParquetAdapter parquetAdapter;
     private final ClusterService clusterService;
     private final int backupLocations;
+    private final int endpointsPerServer;
     private final Map<String, CachedFilePlan> filePlanCache = new ConcurrentHashMap<>();
 
     /**
@@ -101,12 +102,32 @@ public final class QueryPlanner {
      */
     public QueryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
             int backupLocations) {
+        this(parquetAdapter, clusterService, backupLocations, 1);
+    }
+
+    /**
+     * Creates QueryPlanner that may split one node's files of a partial-result query into
+     * several endpoints, which a client reads in parallel.
+     *
+     * @param parquetAdapter Parquet metadata adapter
+     * @param clusterService cluster coordination service
+     * @param backupLocations other nodes listed after the planned node of a partial-result
+     *        endpoint; 0 lists the planned node only
+     * @param endpointsPerServer maximum endpoints per node and query, at least 1
+     */
+    public QueryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
+            int backupLocations, int endpointsPerServer) {
         if (backupLocations < 0) {
             throw new IllegalArgumentException("backupLocations must not be negative: " + backupLocations);
+        }
+        if (endpointsPerServer < 1) {
+            throw new IllegalArgumentException(
+                    "endpointsPerServer must be at least 1: " + endpointsPerServer);
         }
         this.parquetAdapter = parquetAdapter;
         this.clusterService = clusterService;
         this.backupLocations = backupLocations;
+        this.endpointsPerServer = endpointsPerServer;
         try {
             this.clusterService.registerLocalFiles(this.parquetAdapter.localFileInventory());
             this.parquetAdapter.initCatalogReader();
@@ -179,6 +200,7 @@ public final class QueryPlanner {
         if (!parsed.isJoin && parquetAdapter.isCatalogSchema(parsed.schema)) {
             return planCatalogTable(query, parsed, cluster, plannerAsBackup);
         }
+        int parts = endpointsPerNode(parsed);
         long tPaths = LogUtil.mark();
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
@@ -195,7 +217,7 @@ public final class QueryPlanner {
                         pathLocations, loads, loadTracked, backups);
             } else {
                 endpoints = distributeEndpointsWithoutLocality(query, pathLocations,
-                        loads, loadTracked, backups);
+                        loads, loadTracked, backups, parts);
             }
         } else {
             boolean loadTracked = hasReplicatedFiles(pathLocations, allServerUris);
@@ -204,7 +226,7 @@ public final class QueryPlanner {
                         query, pathLocations, allServerUris, loadTracked, backups);
             } else {
                 endpoints = distributeEndpoints(query, pathLocations,
-                        loads, loadTracked, backups);
+                        loads, loadTracked, backups, parts);
             }
         }
         long totalBytes = pathLocations.values().stream()
@@ -337,7 +359,7 @@ public final class QueryPlanner {
         Backups backups = new Backups(files, loads, resolved.entry().shared(),
                 plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
         List<FlightEndpoint> endpoints = distributeEndpointsWithoutLocality(query, files, loads,
-                loadTracked, backups);
+                loadTracked, backups, endpointsPerNode(parsed));
         long totalBytes = files.values().stream().mapToLong(FileAssignment::size).sum();
         LogUtil.logTiming(t, "planning.catalogTable", "table=" + snapshot.name() + " snapshot="
                 + snapshot.snapshotId() + " endpoints=" + endpoints.size() + " files=" + files.size());
@@ -620,30 +642,30 @@ public final class QueryPlanner {
         return List.of(ep);
     }
 
+    /**
+     * Tells how many endpoints one node's files of a query may be split into: one when the
+     * query needs every row in one place (OFFSET, HAVING, DISTINCT aggregates), since
+     * per-endpoint answers of such a query cannot be combined.
+     *
+     * @param parsed parsed query
+     * @return endpoints per node, at least 1
+     */
+    private int endpointsPerNode(ParquetQueryParser parsed) {
+        return parsed.singleNodeFeature() == null ? endpointsPerServer : 1;
+    }
+
     private List<FlightEndpoint> distributeEndpoints(String query,
             Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad,
-            boolean loadTracked, Backups backups) {
+            boolean loadTracked, Backups backups, int parts) {
         Map<String, List<String>> serverToFiles = new LinkedHashMap<>();
-        Map<String, Long> serverAdditions = new HashMap<>();
         for (Map.Entry<String, FileAssignment> entry : pathLocations.entrySet()) {
             FileAssignment fa = entry.getValue();
             String bestServer = pickServer(fa.hosts(), serverLoad);
             serverToFiles.computeIfAbsent(bestServer, k -> new ArrayList<>()).add(entry.getKey());
             serverLoad.merge(bestServer, fa.size(), Long::sum);
-            serverAdditions.merge(bestServer, fa.size(), Long::sum);
         }
 
-        List<FlightEndpoint> endpoints = new ArrayList<>();
-        for (Map.Entry<String, List<String>> entry : serverToFiles.entrySet()) {
-            long addedBytes = serverAdditions.getOrDefault(entry.getKey(), 0L);
-            endpoints.add(createEndpoint(entry.getKey(), entry.getValue(),
-                    query, addedBytes, loadTracked,
-                    backups.forEndpoint(entry.getKey(), entry.getValue())));
-            if (loadTracked) {
-                clusterService.addLoad(entry.getKey(), addedBytes);
-            }
-        }
-        return endpoints;
+        return splitEndpoints(query, serverToFiles, pathLocations, loadTracked, backups, parts);
     }
 
     /**
@@ -676,21 +698,82 @@ public final class QueryPlanner {
 
     private List<FlightEndpoint> distributeEndpointsWithoutLocality(String query,
             Map<String, FileAssignment> pathLocations, Map<String, Long> serverLoad,
-            boolean loadTracked, Backups backups) {
+            boolean loadTracked, Backups backups, int parts) {
         Map<String, List<String>> serverToFiles =
                 assignWithoutLocality(pathLocations, serverLoad);
+        return splitEndpoints(query, serverToFiles, pathLocations, loadTracked, backups, parts);
+    }
+
+    /**
+     * Creates the endpoints of the nodes' files, splitting each node's files into at most
+     * {@code parts} endpoints of similar size, each with its own backup nodes.
+     *
+     * @param query SQL query
+     * @param serverToFiles files by planned node
+     * @param pathLocations sizes and holders of the files
+     * @param loadTracked whether the endpoints' bytes count toward the nodes' load
+     * @param backups chooses the backup nodes of an endpoint
+     * @param parts maximum endpoints per node
+     * @return endpoints
+     */
+    private List<FlightEndpoint> splitEndpoints(String query,
+            Map<String, List<String>> serverToFiles, Map<String, FileAssignment> pathLocations,
+            boolean loadTracked, Backups backups, int parts) {
         List<FlightEndpoint> endpoints = new ArrayList<>();
         for (Map.Entry<String, List<String>> entry : serverToFiles.entrySet()) {
-            long addedBytes = entry.getValue().stream()
-                    .mapToLong(file -> pathLocations.get(file).size()).sum();
-            endpoints.add(createEndpoint(entry.getKey(), entry.getValue(),
-                    query, addedBytes, loadTracked,
-                    backups.forEndpoint(entry.getKey(), entry.getValue())));
-            if (loadTracked) {
-                clusterService.addLoad(entry.getKey(), addedBytes);
+            String server = entry.getKey();
+            for (List<String> part : splitBySize(entry.getValue(), pathLocations, parts)) {
+                long addedBytes = part.stream()
+                        .mapToLong(file -> pathLocations.get(file).size()).sum();
+                endpoints.add(createEndpoint(server, part, query, addedBytes, loadTracked,
+                        backups.forEndpoint(server, part)));
+                if (loadTracked) {
+                    clusterService.addLoad(server, addedBytes);
+                }
             }
         }
         return endpoints;
+    }
+
+    /**
+     * Splits files into at most {@code parts} groups of similar total size: largest file first,
+     * always into the lightest group (ties: by path, so plans are deterministic). Every file is
+     * in exactly one group; no group is empty; each group keeps the files' given order.
+     *
+     * @param files file keys
+     * @param pathLocations sizes of the files
+     * @param parts maximum number of groups, at least 1
+     * @return non-empty groups
+     */
+    static List<List<String>> splitBySize(List<String> files,
+            Map<String, FileAssignment> pathLocations, int parts) {
+        int count = Math.min(parts, files.size());
+        if (count <= 1) {
+            return List.of(files);
+        }
+        List<String> bySize = new ArrayList<>(files);
+        bySize.sort(Comparator.comparingLong((String file) -> pathLocations.get(file).size())
+                .reversed().thenComparing(Comparator.naturalOrder()));
+        long[] totals = new long[count];
+        Map<String, Integer> groupOf = new HashMap<>();
+        for (String file : bySize) {
+            int lightest = 0;
+            for (int i = 1; i < count; i++) {
+                if (totals[i] < totals[lightest]) {
+                    lightest = i;
+                }
+            }
+            groupOf.put(file, lightest);
+            totals[lightest] += pathLocations.get(file).size();
+        }
+        List<List<String>> groups = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            groups.add(new ArrayList<>());
+        }
+        for (String file : files) {
+            groups.get(groupOf.get(file)).add(file);
+        }
+        return groups;
     }
 
     /**

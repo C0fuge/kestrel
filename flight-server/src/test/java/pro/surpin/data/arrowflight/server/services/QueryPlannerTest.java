@@ -3,6 +3,7 @@ package pro.surpin.data.arrowflight.server.services;
 import pro.surpin.data.arrowflight.server.adapters.HostUtils;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
+import pro.surpin.data.arrowflight.server.model.HandleState;
 import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.junit.jupiter.api.Test;
@@ -857,6 +858,171 @@ class QueryPlannerTest {
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
 
         assertThrows(IOException.class, () -> planner.plan("SELECT * FROM tpch.orders"));
+    }
+
+    // ── endpointsPerServer ──────────────────────────────────────────────────
+
+    private static Map<String, FileAssignment> sized(long... sizes) {
+        Map<String, FileAssignment> files = new LinkedHashMap<>();
+        for (int i = 0; i < sizes.length; i++) {
+            files.put("s/t/f" + i + ".parquet", new FileAssignment(sizes[i], Set.of(H1)));
+        }
+        return files;
+    }
+
+    /** Verifies files split into groups of equal size, each in the given order, each file once. */
+    @Test
+    void splitBySizeBalancesAndKeepsEveryFileOnce() {
+        Map<String, FileAssignment> files = sized(40, 100, 50, 90);
+        List<String> paths = new ArrayList<>(files.keySet());
+
+        List<List<String>> parts = QueryPlanner.splitBySize(paths, files, 2);
+
+        assertEquals(2, parts.size());
+        List<String> all = new ArrayList<>();
+        for (List<String> part : parts) {
+            assertEquals(140L, part.stream().mapToLong(f -> files.get(f).size()).sum());
+            List<String> inGivenOrder = new ArrayList<>(part);
+            inGivenOrder.sort(Comparator.comparingInt(paths::indexOf));
+            assertEquals(inGivenOrder, part);
+            all.addAll(part);
+        }
+        assertEquals(Set.copyOf(paths), Set.copyOf(all));
+        assertEquals(paths.size(), all.size());
+    }
+
+    /** Verifies there are never more groups than files, never an empty one, and one group for 1. */
+    @Test
+    void splitBySizeNeverMakesEmptyGroups() {
+        Map<String, FileAssignment> files = sized(1, 1);
+        List<String> paths = new ArrayList<>(files.keySet());
+
+        List<List<String>> parts = QueryPlanner.splitBySize(paths, files, 8);
+        assertEquals(2, parts.size());
+        assertTrue(parts.stream().noneMatch(List::isEmpty));
+
+        assertEquals(List.of(paths), QueryPlanner.splitBySize(paths, files, 1));
+        assertEquals(List.of(List.of()), QueryPlanner.splitBySize(List.of(), files, 4));
+    }
+
+    /** Verifies equal sizes give the same plan every time (ties broken by path). */
+    @Test
+    void splitBySizeIsDeterministic() {
+        Map<String, FileAssignment> files = sized(5, 5, 5, 5, 5);
+        List<String> paths = new ArrayList<>(files.keySet());
+
+        assertEquals(QueryPlanner.splitBySize(paths, files, 3),
+                QueryPlanner.splitBySize(new ArrayList<>(paths), files, 3));
+    }
+
+    /** Verifies zero endpoints per node is refused. */
+    @Test
+    void zeroEndpointsPerServerIsRefused() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new QueryPlanner(parquetAdapter, clusterService, 2, 0));
+    }
+
+    private List<HandleState> plannedStates(QueryPlanner planner, String query) throws Exception {
+        org.mockito.ArgumentCaptor<HandleState> states =
+                org.mockito.ArgumentCaptor.forClass(HandleState.class);
+        planner.plan(query, true);
+        verify(clusterService, atLeastOnce()).createEndpointHandle(states.capture());
+        return states.getAllValues();
+    }
+
+    /** Verifies one node's files become several endpoints that together read every file once. */
+    @Test
+    void planSplitsOneNodesFilesIntoSeveralEndpoints() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        Map<String, FileAssignment> files = new LinkedHashMap<>();
+        for (int i = 0; i < 5; i++) {
+            files.put("s/t/f" + i + ".parquet", new FileAssignment(100L, Set.of(S1)));
+        }
+        when(clusterService.fileLocations()).thenReturn(files);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 2);
+
+        List<HandleState> states = plannedStates(planner, "SELECT * FROM s.t");
+
+        assertEquals(2, states.size());
+        List<String> read = new ArrayList<>();
+        for (HandleState state : states) {
+            assertEquals(S1, state.serverUri());
+            assertEquals(state.filePaths().length * 100L, state.bytes());
+            read.addAll(List.of(state.filePaths()));
+        }
+        assertEquals(files.size(), read.size());
+        assertEquals(files.keySet(), Set.copyOf(read));
+    }
+
+    /** Verifies every split endpoint keeps its backup locations and its own load accounting. */
+    @Test
+    void splitEndpointsKeepTheirBackupLocations() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations()).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2, P3)),
+                "s/t/b.parquet", new FileAssignment(100L, Set.of(P2, P3)),
+                "s/t/c.parquet", new FileAssignment(100L, Set.of(P2, P3)),
+                "s/t/d.parquet", new FileAssignment(100L, Set.of(P2, P3))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 2);
+
+        List<FlightEndpoint> endpoints = planner.plan("SELECT * FROM s.t", true).endpoints();
+
+        assertEquals(4, endpoints.size());
+        for (FlightEndpoint endpoint : endpoints) {
+            assertEquals(Set.of(P1, P2, P3), Set.copyOf(locations(endpoint)));
+        }
+        // Replicated files: every part counts toward its node's load on its own.
+        verify(clusterService, times(4)).addLoad(anyString(), eq(100L));
+    }
+
+    /**
+     * Regression: a query whose answer needs every row in one place (OFFSET, HAVING, DISTINCT
+     * aggregates) is never split, even on one node: per-endpoint answers would be wrong.
+     */
+    @Test
+    void singleNodeQueriesAreNeverSplit() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        Map<String, FileAssignment> files = new LinkedHashMap<>();
+        for (int i = 0; i < 4; i++) {
+            files.put("s/t/f" + i + ".parquet", new FileAssignment(100L, Set.of(S1)));
+        }
+        when(clusterService.fileLocations()).thenReturn(files);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 4);
+
+        for (String query : List.of("SELECT * FROM s.t ORDER BY id LIMIT 5 OFFSET 2",
+                "SELECT COUNT(DISTINCT id) FROM s.t",
+                "SELECT id, COUNT(*) FROM s.t GROUP BY id HAVING COUNT(*) > 1")) {
+            assertEquals(1, planner.plan(query).endpoints().size(), query);
+        }
+        assertEquals(4, planner.plan("SELECT id FROM s.t WHERE id > 1").endpoints().size());
+    }
+
+    /** Verifies the split applies to stores without locality (S3, HDFS listing) too. */
+    @Test
+    void withoutLocalitySplitsOneNodesFiles() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 3);
+
+        assertEquals(2, planner.plan("SELECT * FROM tpch.lineitem").endpoints().size());
+        assertEquals(1, planner.plan(
+                "SELECT l.a FROM tpch.lineitem l JOIN tpch.nation n ON l.a = n.a")
+                .endpoints().size());
     }
 
     private void stubListing() throws IOException {

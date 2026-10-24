@@ -48,11 +48,14 @@ public record AppConfig(
     int duckDbHdfsReadTimeoutMs,
     String duckDbMaxTempSize,
     boolean duckDbPreserveInsertionOrder,
-    String duckDbStreamingBufferSize
+    String duckDbStreamingBufferSize,
+    int endpointsPerServer
 ) {
 
     /** Backup locations per partial-result endpoint unless configured otherwise. */
     public static final int DEFAULT_ENDPOINT_BACKUP_LOCATIONS = 2;
+    /** Partial-result endpoints per node and query unless configured otherwise. */
+    public static final int DEFAULT_ENDPOINTS_PER_SERVER = 1;
     /** Metadata endpoints carry no location: clients read them over their own connection. */
     public static final String METADATA_LOCATION_NONE = "none";
     /** Metadata endpoints carry this server's advertised URI (upstream's behaviour). */
@@ -78,6 +81,10 @@ public record AppConfig(
         if (endpointBackupLocations < 0) {
             throw new IllegalArgumentException(
                     "endpointBackupLocations must not be negative: " + endpointBackupLocations);
+        }
+        if (endpointsPerServer < 1) {
+            throw new IllegalArgumentException(
+                    "endpointsPerServer must be at least 1: " + endpointsPerServer);
         }
         if (metadataEndpointLocation == null || metadataEndpointLocation.isBlank()) {
             metadataEndpointLocation = METADATA_LOCATION_NONE;
@@ -115,6 +122,42 @@ public record AppConfig(
                         + " 64MiB or 1MB: " + duckDbStreamingBufferSize);
             }
         }
+    }
+
+    /**
+     * Configuration with one partial-result endpoint per node and query.
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    public AppConfig(int numServers, int batchSize, int ioParallelism, int ioFileBufferSize,
+            int duckDbWarmConnections, int duckDbGroups, int duckDbThreads,
+            String duckDbHdfsExtension, boolean duckDbAllowUnsignedExtensions,
+            String duckDbHdfsDefaultNamenode, String duckDbHdfsHaNamenodes,
+            String duckDbHdfsShortcircuit, String duckDbHdfsDomainSocketPath,
+            String duckDbMemoryLimit, boolean metricsEnabled, long arrowAllocatorLimitBytes,
+            int grpcMaxInboundMessageSize, int flightBackpressureThresholdBytes,
+            long flightListenerReadyTimeoutMillis, String dataDir, String localDataDir, int port,
+            int hazelcastPort, int hazelcastClusterJoinTimeoutSec, int clientMaxRetries,
+            int clientRetryBackoffMs, int clientConnectTimeoutMs, boolean duckDbStreamResults,
+            boolean duckDbExternalFileCache, int duckDbStatementCacheSize,
+            String duckDbTempDirectory, String authToken, String resultMode,
+            boolean widenUnsignedTypes, boolean duckDbLockdown,
+            int endpointBackupLocations, String metadataEndpointLocation,
+            int duckDbHdfsConnectTimeoutMs, int duckDbHdfsReadTimeoutMs, String duckDbMaxTempSize,
+            boolean duckDbPreserveInsertionOrder, String duckDbStreamingBufferSize) {
+        this(numServers, batchSize, ioParallelism, ioFileBufferSize, duckDbWarmConnections,
+                duckDbGroups, duckDbThreads, duckDbHdfsExtension, duckDbAllowUnsignedExtensions,
+                duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes, duckDbHdfsShortcircuit,
+                duckDbHdfsDomainSocketPath, duckDbMemoryLimit, metricsEnabled,
+                arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
+                endpointBackupLocations, metadataEndpointLocation,
+                duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
+                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize,
+                DEFAULT_ENDPOINTS_PER_SERVER);
     }
 
     /**
@@ -266,7 +309,7 @@ public record AppConfig(
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, location, duckDbHdfsConnectTimeoutMs,
                 duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
-                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize);
+                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize, endpointsPerServer);
     }
 
     /**
@@ -289,7 +332,7 @@ public record AppConfig(
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation, connectTimeoutMs,
                 readTimeoutMs, duckDbMaxTempSize,
-                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize);
+                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize, endpointsPerServer);
     }
 
     /**
@@ -311,7 +354,7 @@ public record AppConfig(
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation, duckDbHdfsConnectTimeoutMs,
                 duckDbHdfsReadTimeoutMs, maxTempSize,
-                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize);
+                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize, endpointsPerServer);
     }
 
     /**
@@ -336,7 +379,29 @@ public record AppConfig(
                 duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
                 endpointBackupLocations, metadataEndpointLocation, duckDbHdfsConnectTimeoutMs,
                 duckDbHdfsReadTimeoutMs, duckDbMaxTempSize, preserveInsertionOrder,
-                streamingBufferSize);
+                streamingBufferSize, endpointsPerServer);
+    }
+
+    /**
+     * Returns this configuration with another number of partial-result endpoints per node.
+     *
+     * @param endpoints endpoints per node and query, at least 1
+     * @return changed copy
+     */
+    public AppConfig withEndpointsPerServer(int endpoints) {
+        return new AppConfig(numServers, batchSize, ioParallelism, ioFileBufferSize,
+                duckDbWarmConnections, duckDbGroups, duckDbThreads, duckDbHdfsExtension,
+                duckDbAllowUnsignedExtensions, duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes,
+                duckDbHdfsShortcircuit, duckDbHdfsDomainSocketPath, duckDbMemoryLimit,
+                metricsEnabled, arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
+                endpointBackupLocations, metadataEndpointLocation, duckDbHdfsConnectTimeoutMs,
+                duckDbHdfsReadTimeoutMs, duckDbMaxTempSize, duckDbPreserveInsertionOrder,
+                duckDbStreamingBufferSize, endpoints);
     }
 
     /**
