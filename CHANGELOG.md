@@ -237,9 +237,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the v1.4.5 builds (`extensions/v1.4.5/linux_amd64/`). The server needs JDK 21 (Netty 4.2 + Arrow
   fail on JDK 24+).
 - HDFS: the server sets the hadoopfs extension's DataNode timeouts, `duckDbHdfsConnectTimeoutMs`
-  (default 5000) and `duckDbHdfsReadTimeoutMs` (default 15000), as `hdfs_connect_timeout_ms` /
+  (default 3000) and `duckDbHdfsReadTimeoutMs` (default 10000), as `hdfs_connect_timeout_ms` /
   `hdfs_read_timeout_ms`; they win over `LIBHDFS3_CONF`, `0` leaves them to the extension. An
-  extension built without these settings keeps its own timeouts (one warning).
+  extension built without these settings keeps its own timeouts (one warning). The defaults were
+  5000 / 15000 in earlier builds of this line: with the hadoopfs dead-DataNode list only the first
+  read that hits a lost DataNode waits, and 3 s / 10 s cut that wait from ~15-22 s to ~4-11 s.
 - S3 moved into the plugin `s3` (`plugins/s3`, built by `tools/make-plugin-dir.sh`): the AWS
   SDK is no longer in the server jar, and an `s3://` data directory without the plugin is a
   startup error naming it. All S3 settings keep their names (also `arrowflight.s3.*`,

@@ -130,19 +130,19 @@ class ConfigAdapterTest {
         assertTrue(cfg.duckDbAllowUnsignedExtensions());
     }
 
-    /** Verifies the HDFS DataNode timeouts: 5 s / 15 s by default, 0 allowed, negative refused. */
+    /** Verifies the HDFS DataNode timeouts: 3 s / 10 s by default, 0 allowed, negative refused. */
     @Test
     void getConfigHdfsTimeouts() {
         AppConfig defaults = ConfigAdapter.getConfig();
         assertEquals(AppConfig.DEFAULT_HDFS_CONNECT_TIMEOUT_MS, defaults.duckDbHdfsConnectTimeoutMs());
         assertEquals(AppConfig.DEFAULT_HDFS_READ_TIMEOUT_MS, defaults.duckDbHdfsReadTimeoutMs());
-        assertEquals(5000, defaults.duckDbHdfsConnectTimeoutMs());
-        assertEquals(15000, defaults.duckDbHdfsReadTimeoutMs());
+        assertEquals(3000, defaults.duckDbHdfsConnectTimeoutMs());
+        assertEquals(10000, defaults.duckDbHdfsReadTimeoutMs());
 
-        setProp("duckDbHdfsConnectTimeoutMs", "3000");
+        setProp("duckDbHdfsConnectTimeoutMs", "4000");
         setProp("arrowflight.duckdb.hdfs.readTimeoutMs", "0");
         AppConfig cfg = ConfigAdapter.getConfig();
-        assertEquals(3000, cfg.duckDbHdfsConnectTimeoutMs());
+        assertEquals(4000, cfg.duckDbHdfsConnectTimeoutMs());
         assertEquals(0, cfg.duckDbHdfsReadTimeoutMs());
 
         setProp("duckDbHdfsReadTimeoutMs", "-1");

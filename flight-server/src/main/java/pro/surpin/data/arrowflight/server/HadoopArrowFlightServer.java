@@ -150,7 +150,7 @@ public class HadoopArrowFlightServer {
                     config.duckDbHdfsConnectTimeoutMs() <= 0, config.duckDbHdfsReadTimeoutMs() <= 0)) {
                 LOGGER.warn("{}: DuckDB reads from a DataNode that vanished wait that long, on every node."
                         + " Set duckDbHdfsConnectTimeoutMs / duckDbHdfsReadTimeoutMs, or a few seconds"
-                        + " in the LIBHDFS3_CONF file (e.g. 5000 / 15000).", problem);
+                        + " in the LIBHDFS3_CONF file (e.g. 3000 / 10000).", problem);
             }
         }
         String nameEncoding = System.getProperty("sun.jnu.encoding", "");

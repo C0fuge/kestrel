@@ -64,13 +64,13 @@ public record AppConfig(
      * DataNode connect timeout the hadoopfs extension gets unless configured otherwise. 0 leaves
      * it to the extension (LIBHDFS3_CONF's {@code input.connect.timeout}, else 5000 ms).
      */
-    public static final int DEFAULT_HDFS_CONNECT_TIMEOUT_MS = 5_000;
+    public static final int DEFAULT_HDFS_CONNECT_TIMEOUT_MS = 3_000;
     /**
      * DataNode read timeout the hadoopfs extension gets unless configured otherwise: after it the
      * block is read from the next replica. 0 leaves it to the extension (LIBHDFS3_CONF's
      * {@code input.read.timeout}, else 15000 ms).
      */
-    public static final int DEFAULT_HDFS_READ_TIMEOUT_MS = 15_000;
+    public static final int DEFAULT_HDFS_READ_TIMEOUT_MS = 10_000;
     /** A DuckDB size setting: a number with an optional unit (KB, MiB, GB, ...). */
     private static final Pattern SIZE = Pattern.compile("\\d+(\\.\\d+)?\\s*[A-Za-z]{0,3}");
 

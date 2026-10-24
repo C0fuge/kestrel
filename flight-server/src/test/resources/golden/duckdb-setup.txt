@@ -24,8 +24,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
-SET hdfs_connect_timeout_ms = 5000
-SET hdfs_read_timeout_ms = 15000
+SET hdfs_connect_timeout_ms = 3000
+SET hdfs_read_timeout_ms = 10000
 QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
 SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
 SET autoinstall_known_extensions = false
@@ -48,8 +48,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
-SET hdfs_connect_timeout_ms = 5000
-SET hdfs_read_timeout_ms = 15000
+SET hdfs_connect_timeout_ms = 3000
+SET hdfs_read_timeout_ms = 10000
 SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
 SET autoinstall_known_extensions = false
 SET autoload_known_extensions = false
@@ -71,7 +71,7 @@ SET lock_configuration = true
 # -DduckDbHdfsHaNamenodes=nn1=nn:8020,nn2=nn2:8020
 # -DduckDbHdfsShortcircuit=true
 # -DduckDbHdfsDomainSocketPath=/var/lib/hadoop-hdfs/dn_socket
-# -DduckDbHdfsConnectTimeoutMs=3000
+# -DduckDbHdfsConnectTimeoutMs=4000
 # -DduckDbHdfsReadTimeoutMs=0
 store kind=hdfs roots=[hdfs://hdfs-ns1/data/parquet]
 -- connection 1 jdbc:duckdb: {allow_persistent_secrets=false, allow_unsigned_extensions=true, jdbc_stream_results=true}
@@ -85,7 +85,7 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
-SET hdfs_connect_timeout_ms = 3000
+SET hdfs_connect_timeout_ms = 4000
 QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
 SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
 SET autoinstall_known_extensions = false
@@ -108,7 +108,7 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
-SET hdfs_connect_timeout_ms = 3000
+SET hdfs_connect_timeout_ms = 4000
 SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
 SET autoinstall_known_extensions = false
 SET autoload_known_extensions = false

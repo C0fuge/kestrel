@@ -95,7 +95,7 @@ class GoldenDuckDbSetupTest {
         hdfs.put("duckDbHdfsDomainSocketPath", "/var/lib/hadoop-hdfs/dn_socket");
 
         Map<String, String> hdfsTimeouts = new LinkedHashMap<>(hdfs);
-        hdfsTimeouts.put("duckDbHdfsConnectTimeoutMs", "3000");
+        hdfsTimeouts.put("duckDbHdfsConnectTimeoutMs", "4000");
         hdfsTimeouts.put("duckDbHdfsReadTimeoutMs", "0");
 
         Map<String, String> localDir = new LinkedHashMap<>(common);
