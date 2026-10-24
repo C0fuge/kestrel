@@ -28,6 +28,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   client can read a node over several parallel streams. Queries that need every row in one place
   (OFFSET, HAVING, DISTINCT aggregates) and joins are never split; values below 1 are refused
   (idea from upstream 1d3f331, which also split those single-node queries on a one-node cluster).
+- Flight action `arrowflight.table_statistics` (JSON `{schema, table, columns}`): row count,
+  per-column bounds, null counts and sizes from the Parquet footers of a data-directory table
+  (cached per file set), or the row count and size of a catalog table's current snapshot (an upper
+  bound, `rowsExact: false`, with delete files); no ticket, no node load; access checked like
+  `SELECT * FROM` the table; listed by `ListActions`. Same name and request as upstream da6a357,
+  answer extended by `rowsExact`, `bytes`, `files`; unlike upstream it refuses a multi-node cluster
+  on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
 ### Fixed
 - A server whose start failed before it began serving (storage that cannot be opened, a

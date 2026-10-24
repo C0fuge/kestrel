@@ -60,6 +60,7 @@ public final class QueryPlanner {
     private final int backupLocations;
     private final int endpointsPerServer;
     private final Map<String, CachedFilePlan> filePlanCache = new ConcurrentHashMap<>();
+    private final TableStatisticsService tableStatistics;
 
     /**
      * Stores immutable table file assignments until the inventory refresh deadline.
@@ -128,12 +129,29 @@ public final class QueryPlanner {
         this.clusterService = clusterService;
         this.backupLocations = backupLocations;
         this.endpointsPerServer = endpointsPerServer;
+        this.tableStatistics = new TableStatisticsService(parquetAdapter, clusterService);
         try {
             this.clusterService.registerLocalFiles(this.parquetAdapter.localFileInventory());
             this.parquetAdapter.initCatalogReader();
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to publish local Parquet inventory", e);
         }
+    }
+
+    /**
+     * Statistics of a table for a client's optimizer, without planning a query: no ticket, no
+     * node load.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @param columns columns to report; null or empty reports every column
+     * @return statistics
+     * @throws IOException when the table cannot be read; FileNotFoundException when it does not
+     *         exist
+     */
+    public TableStatisticsService.TableStatistics tableStatistics(String schema, String table,
+            List<String> columns) throws IOException {
+        return tableStatistics.statistics(schema, table, columns);
     }
 
     /**

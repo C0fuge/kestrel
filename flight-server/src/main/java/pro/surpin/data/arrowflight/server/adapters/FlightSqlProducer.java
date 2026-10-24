@@ -4,6 +4,8 @@ import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
 import com.google.protobuf.ProtocolStringList;
+import org.apache.arrow.flight.Action;
+import org.apache.arrow.flight.ActionType;
 import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightEndpoint;
@@ -43,6 +45,7 @@ import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
+import pro.surpin.data.arrowflight.server.services.TableStatisticsService;
 
 import static com.google.protobuf.ByteString.copyFrom;
 import static java.util.UUID.randomUUID;
@@ -224,6 +227,83 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         });
         builder.send(List.of(), recorder);
         return java.util.Set.copyOf(ids);
+    }
+
+    /**
+     * Answers the table statistics action (JSON {schema, table, columns}) and passes every other
+     * action to the Flight SQL handling.
+     *
+     * @param context authenticated call context
+     * @param action requested action
+     * @param listener result listener
+     */
+    @Override
+    public void doAction(FlightProducer.CallContext context, Action action,
+            FlightProducer.StreamListener<Result> listener) {
+        if (!TableStatisticsService.ACTION.equals(action.getType())) {
+            super.doAction(context, action, listener);
+            return;
+        }
+        try {
+            TableStatisticsService.Request request =
+                    TableStatisticsService.parseRequest(action.getBody());
+            if (request.schema() == null || request.schema().isEmpty()
+                    || request.table() == null || request.table().isEmpty()) {
+                throw new IllegalArgumentException("Name the schema and the table");
+            }
+            ParquetAdapter.validateName(request.schema());
+            ParquetAdapter.validateName(request.table());
+            authorization.requireQuery(context == null ? null : context.peerIdentity(),
+                    "SELECT * FROM " + request.schema() + "." + request.table());
+            TableStatisticsService.TableStatistics statistics = queryPlanner.tableStatistics(
+                    request.schema(), request.table(), request.columns());
+            listener.onNext(new Result(TableStatisticsService.toJson(statistics)
+                    .getBytes(StandardCharsets.UTF_8)));
+            listener.onCompleted();
+        } catch (FlightRuntimeException e) {
+            listener.onError(e);
+        } catch (java.io.FileNotFoundException e) {
+            listener.onError(CallStatus.NOT_FOUND.withDescription(e.getMessage()).toRuntimeException());
+        } catch (IllegalArgumentException e) {
+            listener.onError(CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage())
+                    .toRuntimeException());
+        } catch (IllegalStateException e) {
+            listener.onError(CallStatus.UNIMPLEMENTED.withDescription(e.getMessage())
+                    .toRuntimeException());
+        } catch (IOException | RuntimeException e) {
+            LOGGER.warn("node={} statistics=failed error='{}'", LogUtil.node(), e.toString());
+            listener.onError(CallStatus.INTERNAL.withDescription("Table statistics failed: "
+                    + e.getMessage()).withCause(e).toRuntimeException());
+        }
+    }
+
+    /**
+     * Lists the Flight SQL actions and the table statistics action.
+     *
+     * @param context call context
+     * @param listener action type listener
+     */
+    @Override
+    public void listActions(FlightProducer.CallContext context,
+            FlightProducer.StreamListener<ActionType> listener) {
+        super.listActions(context, new FlightProducer.StreamListener<>() {
+            @Override
+            public void onNext(ActionType value) {
+                listener.onNext(value);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                listener.onError(t);
+            }
+
+            @Override
+            public void onCompleted() {
+                listener.onNext(new ActionType(TableStatisticsService.ACTION,
+                        "Table statistics for an optimizer: JSON {schema, table, columns}"));
+                listener.onCompleted();
+            }
+        });
     }
 
     @Override

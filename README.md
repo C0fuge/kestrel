@@ -308,6 +308,22 @@ anything runs: `SELECT`, `WITH`, `VALUES`, `FROM`, `TABLE`, `DESCRIBE`, `SHOW`, 
 installs and loads no extensions by itself, and its settings cannot be changed. A client cancel
 interrupts the query in DuckDB.
 
+### Table statistics action
+
+A client's optimizer can ask for a table's statistics without planning a query (no ticket, no
+node load) with the Flight action `arrowflight.table_statistics`, body JSON
+`{"schema": "tpch", "table": "lineitem", "columns": ["l_orderkey"]}` (`columns` empty or missing =
+all). The answer is one JSON result:
+`{"rows": 6001215, "rowsExact": true, "bytes": 234567, "files": 4, "columns": {"l_orderkey":
+{"min": 1.0, "max": 6000000.0, "nulls": 0, "bytes": 48000000, "ndv": null}}}`. Bounds are numbers
+(decimals by value, dates as epoch days, timestamps as epoch seconds; strings and other types:
+`null`); `nulls` is -1 when a footer lacks it; `ndv` is not estimated yet (always `null`). Tables
+of the data directory are read from their Parquet footers (cached per file set); catalog tables
+report only the row count and size of their current snapshot, and with delete files `rows` is an
+upper bound (`rowsExact: false`). Access is checked like `SELECT * FROM schema.table`. A cluster
+that keeps its files on local disks refuses it (`UNIMPLEMENTED`) when several nodes are live;
+an unknown table is `NOT_FOUND`. Same action name and request as upstream da6a357.
+
 ---
 
 ## Features

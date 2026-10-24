@@ -9,6 +9,7 @@ import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
+import pro.surpin.data.arrowflight.server.services.TableStatisticsService;
 import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightInfo;
@@ -571,5 +572,113 @@ class FlightSqlProducerTest {
         assertEquals("Query execution failed: FileNotFoundException: x",
                 FlightSqlProducer.failureDescription(new java.io.IOException(
                         new java.io.FileNotFoundException("x"))));
+    }
+
+    /** Answers the table statistics action with JSON from the planner, without planning. */
+    @Test
+    void tableStatisticsActionAnswersJson() throws Exception {
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        when(queryPlanner.tableStatistics("tpch", "lineitem", List.of("l_orderkey"))).thenReturn(
+                new TableStatisticsService.TableStatistics(125L, true, 4096L, 2, Map.of("l_orderkey",
+                        new TableStatisticsService.ColumnStatistics(1.0, 600.0, 0L, 512L, null))));
+        FlightSqlProducer producer = statisticsProducer(queryPlanner, mock(FlightAuthorization.class));
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+
+        producer.doAction(mock(FlightProducer.CallContext.class), statisticsAction(
+                "{\"schema\":\"tpch\",\"table\":\"lineitem\",\"columns\":[\"l_orderkey\"]}"),
+                listener);
+
+        ArgumentCaptor<org.apache.arrow.flight.Result> result =
+                ArgumentCaptor.forClass(org.apache.arrow.flight.Result.class);
+        verify(listener).onNext(result.capture());
+        verify(listener).onCompleted();
+        com.fasterxml.jackson.databind.JsonNode json = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(result.getValue().getBody());
+        assertEquals(125L, json.get("rows").asLong());
+        assertEquals(true, json.get("rowsExact").asBoolean());
+        assertEquals(600.0, json.get("columns").get("l_orderkey").get("max").asDouble());
+        assertEquals(true, json.get("columns").get("l_orderkey").get("ndv").isNull());
+        verify(queryPlanner, never()).plan(anyString());
+    }
+
+    /** Maps refusals of the statistics action to Flight status codes. */
+    @Test
+    void tableStatisticsActionErrors() throws Exception {
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        FlightAuthorization authorization = mock(FlightAuthorization.class);
+        doThrow(CallStatus.UNAUTHORIZED.toRuntimeException()).when(authorization)
+                .requireQuery(any(), eq("SELECT * FROM sales.secret"));
+        when(queryPlanner.tableStatistics(eq("sales"), eq("gone"), any()))
+                .thenThrow(new java.io.FileNotFoundException("no table"));
+        when(queryPlanner.tableStatistics(eq("sales"), eq("local"), any()))
+                .thenThrow(new IllegalStateException("local disks"));
+        FlightSqlProducer producer = statisticsProducer(queryPlanner, authorization);
+
+        assertEquals(FlightStatusCode.UNAUTHORIZED, statisticsError(producer,
+                "{\"schema\":\"sales\",\"table\":\"secret\"}"));
+        assertEquals(FlightStatusCode.NOT_FOUND, statisticsError(producer,
+                "{\"schema\":\"sales\",\"table\":\"gone\"}"));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, statisticsError(producer,
+                "{\"schema\":\"sales\",\"table\":\"x; DROP\"}"));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, statisticsError(producer, "{\"table\":\"t\"}"));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, statisticsError(producer, "not json"));
+        assertEquals(FlightStatusCode.UNIMPLEMENTED, statisticsError(producer,
+                "{\"schema\":\"sales\",\"table\":\"local\"}"));
+        verify(queryPlanner, never()).tableStatistics(eq("sales"), eq("secret"), any());
+    }
+
+    /** Lists the statistics action after the Flight SQL actions. */
+    @Test
+    void listActionsIncludesTableStatistics() {
+        FlightSqlProducer producer = statisticsProducer(mock(QueryPlanner.class),
+                mock(FlightAuthorization.class));
+        List<String> types = new java.util.ArrayList<>();
+        boolean[] completed = {false};
+        producer.listActions(mock(FlightProducer.CallContext.class),
+                new FlightProducer.StreamListener<>() {
+                    @Override
+                    public void onNext(org.apache.arrow.flight.ActionType value) {
+                        types.add(value.getType());
+                    }
+
+                    @Override
+                    public void onError(Throwable t) {
+                        throw new AssertionError(t);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        completed[0] = true;
+                    }
+                });
+
+        assertEquals(TableStatisticsService.ACTION, types.get(types.size() - 1));
+        assertEquals(true, types.size() > 1);
+        assertEquals(true, completed[0]);
+    }
+
+    private static FlightSqlProducer statisticsProducer(QueryPlanner queryPlanner,
+            FlightAuthorization authorization) {
+        return new FlightSqlProducer(Location.forGrpcInsecure("localhost", 32010),
+                mock(BufferAllocator.class), mock(MetadataService.class), queryPlanner,
+                mock(ExecutionService.class), mock(ClusterService.class), authorization);
+    }
+
+    private static org.apache.arrow.flight.Action statisticsAction(String json) {
+        return new org.apache.arrow.flight.Action(TableStatisticsService.ACTION,
+                json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private static FlightStatusCode statisticsError(FlightSqlProducer producer, String json) {
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+        producer.doAction(mock(FlightProducer.CallContext.class), statisticsAction(json), listener);
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).onError(error.capture());
+        verify(listener, never()).onCompleted();
+        return assertInstanceOf(FlightRuntimeException.class, error.getValue()).status().code();
     }
 }
