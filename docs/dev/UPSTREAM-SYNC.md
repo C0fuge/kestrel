@@ -41,9 +41,14 @@ our side; comparison goes to the coordinator, not here.
 
 ## perf/pushdown-statistics (August)
 
-No merge base with upstream `main` (rewritten history); Spark-side aggregate pushdown cost gate and Q6/Q17 fixes on
-the old layout. **open, low** — check whether the Q6/Q17 aggregate-pushdown fixes (88c0a16, 49a5a5c) apply to
-`flight-spark`.
+No merge base with upstream `main` (rewritten history); Spark-side changes on the old single-module layout.
+
+| # | Upstream commit | Feature | Decision |
+|---|---|---|---|
+| P1 | 88c0a16 | Q6: decline an empty aggregation (rendered `select  from`); Q17: advertise and cast pushed decimal SUM as `Decimal(min(38, p + 10), s)` | **ours already** (checked 2026-10-24): `SparkPushdown.translate` declines empty aggregations, `DuckDbAdapter.renderSum` / `MetadataService` use p + 10, with the same regression tests (`FlightScanBuilderTest`, `MetadataUtilsTest`, `DuckDbAdapterTest`). |
+| P2 | 49a5a5c | Q17 benchmark query casts `AVG(l_quantity)` (Spark ANSI overflow in Spark's own arithmetic) | **not applicable**: benchmark script only, no connector or server code. |
+| P3 | 482d24b | Spark scan reports post-pushdown statistics: pushed filter selectivity (textbook defaults) and global aggregation scale the server's raw rows/bytes so Spark can broadcast filtered dimensions (their Q2/Q3/Q5/Q7 lost to direct reads as sort-merge joins) | **ported** 2026-10-24 (`flight-spark`): a pushed global aggregation always reports 1 row (exact); the filter selectivity is opt-in, read option `statistics.filterSelectivity=true`, because a heuristic underestimate can make Spark broadcast a large table (no NDV/histograms behind it). Fixed upstream's NOT of an unknown predicate (1 - 1.0 = an empty scan → broadcast of the whole table): it now keeps every row. Tests `ScanSelectivityTest`, `TableTest.estimates*`. Stand measurement pending (Open questions). |
+| P4 | 7cf1544 | Cost gate: decline aggregate pushdown when estimated post-filter rows < `aggregate.pushdown.minRows` (500k), raw row count cached per table name | **deferred to the stand**: it rests on the same heuristic selectivity as P3 and a per-name row cache; their only win was Q6 (1.02× before). Decide after the P3 measurement. |
 
 ## Dependabot upstream
 

@@ -157,7 +157,7 @@ val df = spark.read
   .load()
 ```
 
-Additional options: `tls.*` for TLS, `default.schema`, `routing.tag`/`routing.queue` for workload management, `partition.*` for parallel reads.
+Additional options: `tls.*` for TLS, `default.schema`, `routing.tag`/`routing.queue` for workload management, `partition.*` for parallel reads, `statistics.filterSelectivity=true` to report scan sizes scaled by the estimated selectivity of the pushed filters (heuristic, default off; a pushed global aggregate always reports one row).
 
 ### Java Client API
 
@@ -229,7 +229,7 @@ All 22 TPC-H queries compared across two read paths:
 **Partial-aggregate + filter pushdown makes Flight the faster path on the majority of TPC-H.** Each Flight server runs the pushed filter and partial aggregate in DuckDB over its own HDFS shard and returns only the reduced result; Spark merges across the 3 servers. Flight wins 13 of 22 queries.
 
 - **Dramatic wins from aggregation/selective filters:** Q12 (7.88×, `l_shipmode IN (…)` + date range collapses to two rows), Q9 (3.06×), Q22 (2.44×), Q8 (2.37×), Q19 (1.97×), Q1 (1.69×) — DuckDB returns far fewer bytes than the raw Parquet blocks Spark would otherwise pull.
-- **Direct still wins on some joins:** Q3, Q7, Q13, and correlated-subquery-heavy Q11/Q17 — multi-table joins where Spark's distributed execution across 3 workers, reading raw Parquet, beats routing every table scan through Flight. Because the Flight scan reports raw (pre-pushdown) table sizes, Spark plans these as shuffle-heavy sort-merge joins; reporting post-pushdown sizes so Spark can broadcast the filtered dimensions is in progress on the `perf/pushdown-statistics` branch.
+- **Direct still wins on some joins:** Q3, Q7, Q13, and correlated-subquery-heavy Q11/Q17 — multi-table joins where Spark's distributed execution across 3 workers, reading raw Parquet, beats routing every table scan through Flight. Because the Flight scan reports raw (pre-pushdown) table sizes, Spark plans these as shuffle-heavy sort-merge joins; the read option `statistics.filterSelectivity=true` reports post-pushdown sizes (heuristic selectivity of the pushed filters) so Spark can broadcast the filtered dimensions; not yet measured here.
 - **Q6 is a wash (1.02×):** its filter is already highly selective, so pushing the aggregate on top adds DuckDB compute without saving meaningful transfer — a case for gating aggregate pushdown on estimated post-filter size.
 - **Sub-second queries** (Q6, Q14–Q16, Q19, Q20) carry high relative variance on the constrained runner; treat their ratios as indicative.
 

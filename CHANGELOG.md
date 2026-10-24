@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Spark connector: a scan with a pushed global aggregation (no GROUP BY) reports one row to
+  Spark's optimizer instead of the raw table size. Read option `statistics.filterSelectivity`
+  (default `false`): `true` scales the reported rows and bytes by the estimated selectivity of the
+  pushed filters (equality 0.1, range 1/3, IN 0.1 per value up to 0.5, AND/OR/NOT combined), so
+  Spark can broadcast selectively filtered tables in joins. Heuristic: an underestimate can make
+  Spark broadcast a large table (idea from upstream 482d24b; negating an unknown predicate keeps
+  every row here instead of none).
 - Setting `duckDbMaxTempSize` (`arrowflight.duckdb.maxTempSize`, env `DUCKDB_MAX_TEMP_SIZE`):
   cap of the DuckDB spill directory, e.g. `20GiB`. It holds per DuckDB connection (each is an
   instance of its own), so a node may spill up to the cap times its live connections. Unset =
