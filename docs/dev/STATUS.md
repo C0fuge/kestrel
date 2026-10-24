@@ -57,10 +57,11 @@
    replaced (README notes the private Hazelcast port; `DependencyFloorTest`); `flight-spark` imports the same
    `netty-bom`. **Done 2026-10-24 (client group):** `flight-client-core` / `flight-starrocks` on the same BOM
    (Netty 4.2.19, tcnative 2.0.84, no `netty-all` from the provided Hadoop deps; `NettyFloorTest`).
-   **Next session, first check Dev CI runs again** (could not start through 2026-10-24 12:49, see Log),
-   then still open: Jackson 2.15.3 → 2.18.x/2.22.x aligned via `jackson-bom` (careful in `flight-spark`: Spark
-   3.5's `jackson-module-scala` 2.15 refuses a newer `jackson-databind` on the same classpath unless the
-   connector relocates Jackson in its shaded jar — check the shade config first and test with Spark); aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
+   **Done 2026-10-24 (Jackson):** one Jackson 2.21.8 (`jackson-bom`) in server, client-core, spark and
+   starrocks; the Spark connector's shaded jar relocates Jackson (Spark 3.5 keeps its 2.15); Iceberg plugin
+   2.22.3; floor tests in every module. Stand: run one Spark read with the new shaded connector jar.
+   **Next session, first check Dev CI runs again** (could not start through 2026-10-24 16:41, see Log),
+   then still open: aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
    Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
    (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
    replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
@@ -110,7 +111,7 @@
   billing for the account; 930e6db is verified only by a full local build. Still the same on
   2026-10-24 02:41 UTC: dispatch run 40055199702 failed in 2 s, no runner; and at 04:41 UTC
   (run 40063344609, 5 s, no runner), at 06:41 UTC (run 40071167062, 5 s) at 08:41 UTC (run
-  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) at 10:41 UTC (run 40086887735, 3 s), on the push of 69d50f8 (run 40088691573, 3 s), at 12:41 UTC (run 40094973520, 3 s) and on the push of d59b974 (run 40095535435, 3 s).
+  40079012105, 4 s), on the push of d8237a1 (run 40080400054, 4 s) at 10:41 UTC (run 40086887735, 3 s), on the push of 69d50f8 (run 40088691573, 3 s), at 12:41 UTC (run 40094973520, 3 s) on the push of d59b974 (run 40095535435, 3 s) and at 16:41 UTC (run 40112719429, 3 s).
   Sessions verify locally; 89c9b95 and later have never run in CI.
 - UPSTREAM-SYNC S6 on the stand: measure TPC-H SF10 partial mode (Trino, StarRocks) with
   `FLIGHT_ENDPOINTS_PER_SERVER=2` and `4` against 1. DuckDB already uses `duckDbThreads` per
@@ -231,3 +232,14 @@
   `NettyFloorTest` in both modules (fails on the old poms). Full local `clean verify checkstyle:check
   spotbugs:check -DexcludedGroups=perf,real-services` green (server 669 / 9 skipped, client-core 156,
   spark 173, starrocks 9, plugins green). Commit d59b974; push run 40095535435 failed in 3 s, no runner.
+- 2026-10-24 (cloud session): Dev CI still cannot start (dispatch run 40112719429 on e6ff83b: 3 s, no
+  runner). Item 1b, Jackson group (commit fbb2aca): 2.15.3 (mixed with Arrow's 2.21.0 jsr310, Ranger's 2.17.2 JAX-RS)
+  → one 2.21.8 under `jackson-bom` in flight-server, client-core, spark, starrocks (2.21 = Arrow 19's line;
+  the BOM also lifts the Scala module of the test Spark, so the Spark tests run on it). The Spark connector's
+  shaded jar relocates `com.fasterxml.jackson` to `pro.surpin.data.arrowflight.shaded.jackson` (checked: no
+  class in the jar references the unrelocated package; service files relocated). Iceberg plugin bundles
+  2.22.3 (Iceberg 1.12 brought 2.22.2). Floor tests `DependencyFloorTest.jackson*` and `JacksonFloorTest`
+  (client-core, spark, starrocks, iceberg; the StarRocks and Iceberg ones fail on the old poms).
+  `PluginLoadingTest` now expects the server's 2.21.8. Full local `clean verify checkstyle:check
+  spotbugs:check -DexcludedGroups=perf,real-services` green (server 670 / 9 skipped, client-core 158,
+  spark 175, starrocks 11, plugins green).
