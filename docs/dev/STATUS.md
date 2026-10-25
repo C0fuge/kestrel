@@ -23,9 +23,9 @@
 
 ## Next steps (one per session)
 
-0b. **Bug (perf screening 2026-10-25): `duckDbStatementCacheSize=0` breaks parameterized prepared statements** — every
-    parameterized query fails "Invalid Input Error: Parameter count mismatch" (JDBC and ADBC). With cache size 0 the
-    statement must be prepared and bound per call, not skipped. Fix + regression test (cache sizes 0 and 1).
+0b. ~~**Bug: `duckDbStatementCacheSize=0` breaks parameterized prepared statements**~~ — done 2026-10-25 (see Log):
+    `streamComplete` streams its bound statement directly; the parse check in `streamSql` used to evict and close it
+    from a one-statement cache (0 is clamped to 1). Stand: rerun the perf screening's cache-size-0 case (JDBC + ADBC).
 
 > **Maintainer, 2026-10-25:** the production Hadoop cluster has HA NameNode with ZooKeeper (automatic failover),
 > Kerberos and Ranger. Versions (2026-10-25): Hadoop 3.1.3 (vendor build) on the cluster side; HA with 2 NameNodes,
@@ -523,3 +523,12 @@
   download is refused from the cloud sandbox). Local verify: server 699 tests, the last failure fixed and the
   touched tests rerun; push run 40214412156 green. Next: item 7 (Kerberos for the HMS client), or 10 / 12;
   item 3 follow-ups (a)-(c) are optional.
+- 2026-10-25 (cloud): **item 0b done** (cd389ff). Root cause: `streamComplete` bound the parameter values to the
+  cached statement, then called `streamSql`, whose parse check took `PARSE_CHECK_SQL` from the per-thread LRU; with
+  `duckDbStatementCacheSize` 0 or 1 (clamped to 1) that closed the bound statement and the query text was prepared
+  again without values → "Parameter count mismatch". Now `streamSql` = parse check + `streamPrepared`, and
+  `streamComplete` calls `streamPrepared` with its bound statement (also saves a second parse check per
+  complete query). Regression test `DuckDbAdapterTest.streamCompleteBindsParametersWithAnyStatementCacheSize`
+  (sizes 0, 1, 2, 64; parameterized, plain, parameterized again, wrong value count) failed before the fix with the
+  reported error. Local: DuckDbAdapterTest 87/87, checkstyle + spotbugs clean; push run 40222858195 green.
+  Next: item 7 (Kerberos for the HMS client), or 10 / 12.
