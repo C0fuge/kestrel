@@ -502,3 +502,20 @@
 - 2026-10-25 (maintainer's local agent, stand): secure HA HDFS stand (KDC, ZooKeeper 3.9.2 SASL, Hadoop 3.1.3 HA + ZKFC,
   Ranger 2.4.0 HDFS plugin) and first smoke of 4eaab052deaf on it — see the note "Stand, secure HA HDFS" under Next steps
   (hadoopfs: no SASL data transfer, needs a ticket cache; forced short-circuit; libhdfs3 RPC timeouts for NameNode host loss).
+- 2026-10-25 (cloud session): item 3 done (commit f652985), as approved: Iceberg time travel with `FOR VERSION AS
+  OF <snapshot id | 'tag/branch'>` and `FOR TIMESTAMP AS OF TIMESTAMP '<time> <zone>'` (zone required; latest
+  snapshot-log entry at or before). `TimeTravelClause` finds the clause (skips literals, quoted identifiers,
+  comments, dollar quotes) and `CatalogViews.timeTravel` replaces each reference in complete mode with a read of
+  that snapshot's own files, deletes and columns (never `iceberg_scan`, which reads the metadata file's current
+  snapshot; snapshots not readable file by file are refused); the table name stays the alias unless the client
+  gave one. Partial mode answers such queries completely (no ticket or header change). Errors: unknown/expired
+  snapshot, unknown ref, time before the first commit, missing zone → INVALID_ARGUMENT; missing table →
+  NOT_FOUND; data-directory and Hive tables refuse. Access checks, `readsOnlyCatalogTables` see the SQL with the
+  clauses removed. SPI 1.2: `AsOf` + `Catalog.asOf` (default refused), iceberg plugin `spi=1.2` (needs a server
+  of this build). Tests: `TimeTravelClauseTest`, `FlightAuthorizationTimeTravelTest`, plugin
+  `IcebergTimeTravelTest` (id, tag, branch, instants, schema of the old snapshot, metadata cached before a
+  commit), `IcebergCatalogIntegrationTest.timeTravelReadsTheFirstSnapshotWithItsColumns` (hadoop + REST,
+  complete and partial, joins old vs current, deletes snapshot, refusals; runs in CI only: the ci-assets
+  download is refused from the cloud sandbox). Local verify: server 699 tests, the last failure fixed and the
+  touched tests rerun; push run 40214412156 green. Next: item 7 (Kerberos for the HMS client), or 10 / 12;
+  item 3 follow-ups (a)-(c) are optional.
