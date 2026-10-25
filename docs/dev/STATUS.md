@@ -344,5 +344,5 @@
   partial endpoint, a ticket per data file returns exactly that file's surviving rows, eq delete older than the
   second file leaves it alone; the iceberg_scan-workaround queries now also run partially). Local server verify:
   692 tests, only `LakeFsPluginTest` erred for the unbuilt lakeFS plugin in a single-module run (green after building
-  it); Checkstyle/SpotBugs clean. CI run: see next Log line. Next: item 2 (ii)/(iii) are stand work; next code item
+  it); Checkstyle/SpotBugs clean. CI: dispatch run 40178274322 green (the push had a [skip ci] head). Next: item 2 (ii)/(iii) are stand work; next code item
   is 3 (time travel; propose the form in Open questions first).
