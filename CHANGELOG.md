@@ -92,6 +92,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- `duckDbStatementCacheSize=0` (or 1) broke every parameterized prepared statement with "Invalid
+  Input Error: Parameter count mismatch" (JDBC, ADBC): the parse check before streaming took a
+  statement from the per-thread cache and closed the one the parameter values were bound to. The
+  bound statement now streams directly; 0 or 1 keep only the statement in use.
 - Runtime libs set: ZooKeeper (3.8.6 with zookeeper-jute) and lz4-java (`at.yawk.lz4` 1.10.4, Hadoop's
   coordinates) were missing, because Spark's test dependencies (ZooKeeper 3.6.3, `org.lz4` 1.8.0) took them
   out of the `provided` scope; HA NameNode failover with ZooKeeper, the ZooKeeper delegation-token and

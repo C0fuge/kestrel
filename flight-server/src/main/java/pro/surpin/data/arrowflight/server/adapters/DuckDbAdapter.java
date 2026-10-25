@@ -824,6 +824,26 @@ public final class DuckDbAdapter implements AutoCloseable {
     private void streamSql(Session session, BufferAllocator allocator, String duckSql,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
+        // Filters of the other mode reach DuckDB as the client wrote them.
+        requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
+        streamPrepared(allocator, duckSql, session.statement(duckSql), listener, startListener);
+    }
+
+    /**
+     * Streams the results of a statement that is already prepared (and bound) to a Flight
+     * listener. The caller must not take another statement from the session's cache before this
+     * returns: a small cache would close the statement.
+     *
+     * @param allocator    Arrow buffer allocator
+     * @param duckSql      DuckDB SQL of the statement, for logs
+     * @param ps           prepared statement with its parameter values set
+     * @param listener     Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on query or stream failure
+     */
+    private void streamPrepared(BufferAllocator allocator, String duckSql, PreparedStatement ps,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            boolean startListener) throws Exception {
         String qid = LogUtil.qid();
         long t = LogUtil.mark();
         long streamStartNanos = System.nanoTime();
@@ -831,9 +851,6 @@ public final class DuckDbAdapter implements AutoCloseable {
                 qid, LogUtil.node(), Thread.currentThread().getName(), batchSize, duckSql);
         long firstBatchNanos = -1;
         long backpressureNanos = 0;
-        // Filters of the other mode reach DuckDB as the client wrote them.
-        requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
-        PreparedStatement ps = session.statement(duckSql);
         // A client that goes away interrupts DuckDB at once; otherwise the query would run to its
         // first batch (all of it, for an aggregation) before anybody noticed.
         ListenerReadiness listenerReadiness = new ListenerReadiness(
@@ -1364,7 +1381,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         for (int i = 0; i < parameters.size(); i++) {
             ps.setObject(i + 1, parameters.get(i));
         }
-        streamSql(session, allocator, sql, listener, startListener);
+        // Not streamSql: its parse check would take a statement from the cache, and a cache of
+        // one statement would close this bound one ("Parameter count mismatch").
+        streamPrepared(allocator, sql, ps, listener, startListener);
     }
 
     /**
@@ -1711,7 +1730,7 @@ public final class DuckDbAdapter implements AutoCloseable {
          *
          * @param owner         thread the connection belongs to
          * @param conn          DuckDB connection
-         * @param maxStatements prepared statements to keep
+         * @param maxStatements prepared statements to keep; 0 or less keeps only the one in use
          */
         private Session(Thread owner, Connection conn, int maxStatements) {
             this.owner = owner;

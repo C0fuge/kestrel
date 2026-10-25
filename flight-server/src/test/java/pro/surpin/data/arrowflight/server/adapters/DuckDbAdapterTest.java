@@ -1223,6 +1223,65 @@ class DuckDbAdapterTest {
         assertTrue(values.get().contains("2\t25.0"), values.get());
     }
 
+    /**
+     * Verifies parameterized queries run with every statement cache size: with 0 or 1 cached
+     * statements the parse check used to close the bound statement, and every query failed with
+     * "Parameter count mismatch" (bug 0b).
+     */
+    @Test
+    void streamCompleteBindsParametersWithAnyStatementCacheSize() throws Exception {
+        for (int cacheSize : new int[] {0, 1, 2, 64}) {
+            assertParameterizedQueriesRun(cacheSize);
+        }
+    }
+
+    /**
+     * Runs parameterized and plain complete queries in one session and checks their answers.
+     *
+     * @param cacheSize prepared statements kept per connection
+     * @throws Exception on failure
+     */
+    private static void assertParameterizedQueriesRun(int cacheSize) throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
+        StringBuilder values = new StringBuilder();
+        doAnswer(invocation -> {
+            rootRef.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            values.append(rootRef.get().contentToTSVString());
+            return null;
+        }).when(listener).putNext();
+        String sql = "SELECT count(*) AS n, sum(price) AS p FROM s.t WHERE id >= ? AND price < ?";
+
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(cacheSize), ioPool)) {
+            // Same thread (single-thread pool) for every call, so the session and its cache are shared.
+            ioPool.submit(() -> {
+                adapter.streamComplete(allocator, sql, List.of(2, 100.0), views(), listener, true);
+                adapter.streamComplete(allocator, sql, List.of(1, 25.0), views(), listener, true);
+                adapter.streamComplete(allocator, "SELECT 7 AS x", views(), listener, true);
+                adapter.streamComplete(allocator, sql, List.of(3, 100.0), views(), listener, true);
+                IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                        () -> adapter.streamComplete(allocator, sql, List.of(1), views(),
+                                listener, true));
+                assertTrue(e.getMessage().contains("2 parameter(s), 1 value(s)"),
+                        "cache size " + cacheSize + ": " + e.getMessage());
+                return null;
+            }).get(60, TimeUnit.SECONDS);
+        } finally {
+            ioPool.shutdownNow();
+        }
+
+        String out = values.toString();
+        assertEquals("n\tp\n2\t50.0\nn\tp\n2\t30.0\nx\n7\nn\tp\n1\t30.0\n", out,
+                "cache size " + cacheSize);
+    }
+
     /** Verifies a locked-down connection reads its data directory and nothing else. */
     @Test
     void lockdownAllowsOnlyTheDataDirectory(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
@@ -1363,11 +1422,22 @@ class DuckDbAdapterTest {
      * @return server configuration
      */
     private static AppConfig completeConfig() {
+        return completeConfig(64);
+    }
+
+    /**
+     * Builds a complete-mode configuration with another prepared-statement cache size.
+     *
+     * @param statementCacheSize prepared statements kept per connection
+     * @return configuration
+     */
+    private static AppConfig completeConfig(int statementCacheSize) {
         return new AppConfig(
                 3, 100, 1, 131072, 0, 1, 1,
                 null, false, null, null,
                 null, null, null, false, 1048576, 67108864, 60000L, null, null,
-                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+                32010, 5701, 60, 3, 1000, 30000, true, false, statementCacheSize, null, null,
+                "complete", true, true);
     }
 
     /**
