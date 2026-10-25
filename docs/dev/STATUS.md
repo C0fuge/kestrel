@@ -23,6 +23,10 @@
 
 ## Next steps (one per session)
 
+0b. **Bug (perf screening 2026-10-25): `duckDbStatementCacheSize=0` breaks parameterized prepared statements** — every
+    parameterized query fails "Invalid Input Error: Parameter count mismatch" (JDBC and ADBC). With cache size 0 the
+    statement must be prepared and bound per call, not skipped. Fix + regression test (cache sizes 0 and 1).
+
 > **Maintainer, 2026-10-25:** the production Hadoop cluster has HA NameNode with ZooKeeper (automatic failover),
 > Kerberos and Ranger. Versions (2026-10-25): Hadoop 3.1.3 (vendor build) on the cluster side; HA with 2 NameNodes,
 > automatic failover, ConfiguredFailoverProxyProvider, RPC 8020; ZooKeeper 3.9.2 ensemble, SASL/Kerberos; Ranger 2.4.0
