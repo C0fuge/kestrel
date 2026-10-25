@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Several S3 stores per server: `arrowflight.s3.stores=<name>,...` with `arrowflight.s3.<name>.root`
+  and that store's own endpoint, region, URL style and credentials (`FLIGHT_S3_<NAME>_ACCESS_KEY`,
+  `..._SECRET_KEY`, `..._SESSION_TOKEN` or `arrowflight.s3.<name>.credentialsFile`) let catalogs read
+  roots outside the S3 data directory (another bucket, endpoint or account). Each store gets its own
+  DuckDB secret (`flight_s3_<name>`) scoped to its root. A root that needs a second store of the
+  main S3 configuration is refused as before; a named store never borrows the main credentials. SPI: `DataStore`
+  gains `configName()` (default empty).
 - Runtime libs set: the build copies the Hadoop client libraries the shaded server jar leaves to the
   deployment (Hadoop is `provided`) to `flight-server/target/libs`, mediated against the jar's own
   libraries (58 jars, Hadoop 3.5.0; none of the stale stand set's ZooKeeper 3.6, Netty 3, Jetty

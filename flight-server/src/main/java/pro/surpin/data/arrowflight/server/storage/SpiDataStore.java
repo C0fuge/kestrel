@@ -165,6 +165,13 @@ public final class SpiDataStore implements DataStore {
     }
 
     @Override
+    public String configName() {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.configName();
+        }
+    }
+
+    @Override
     public Map<String, Long> localInventory(String host) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.localInventory(host);

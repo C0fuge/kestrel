@@ -63,9 +63,20 @@ final class S3PluginSupport {
      * @return registry
      */
     StoreRegistry open(AppConfig config) {
+        return open(config, "directory");
+    }
+
+    /**
+     * Opens a data directory with catalogs.
+     *
+     * @param config server configuration with the data directory
+     * @param catalogs comma separated catalog providers
+     * @return registry
+     */
+    StoreRegistry open(AppConfig config, String catalogs) {
         Map<String, String> sys = Map.copyOf(properties);
         ConfigSource source = new ConfigSource(sys::get, new Properties(), environment, null);
         return StoreRegistry.open(config, new Configuration(), "localhost",
-                new PluginSettings(plugins, null, "directory", false), source, List.of());
+                new PluginSettings(plugins, null, catalogs, false), source, List.of());
     }
 }

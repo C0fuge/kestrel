@@ -293,7 +293,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     /**
      * The stores handed to catalogs while they open: the data directory's store, and a new
      * store for every root a catalog locates outside the open ones (until frozen). One store per
-     * storage plugin: a second root of the same plugin (two S3 secrets with one name) is refused.
+     * storage plugin configuration: a second root of the same plugin and configuration name (two
+     * S3 secrets with one name) is refused.
      */
     private static final class CatalogStores implements Stores {
         private final Opened dataDirectory;
@@ -331,14 +332,17 @@ public final class StoreRegistry implements Stores, AutoCloseable {
             }
             Opened opened = opening.open(location, StoreUse.CATALOG_ROOT);
             boolean secondOfPlugin = !"hadoop".equals(opened.provider())
-                    && (opened.provider().equals(dataDirectory.provider())
-                    || extras.stream().anyMatch(e -> e.provider().equals(opened.provider())));
+                    && (sameConfiguration(opened, dataDirectory)
+                    || extras.stream().anyMatch(e -> sameConfiguration(opened, e)));
             if (secondOfPlugin) {
                 closeQuietly(opened.store());
+                String name = opened.store().configName();
                 throw new IllegalArgumentException("Catalog root " + absoluteUri + " needs a second "
-                        + opened.provider() + " store; this server opens one store per storage"
-                        + " plugin: put the catalog's tables below the data directory "
-                        + dataDirectory.store().root());
+                        + opened.provider() + " store" + (name.isEmpty() ? "" : " " + name)
+                        + "; this server opens one store per storage plugin configuration: put the"
+                        + " catalog's tables below the data directory " + dataDirectory.store().root()
+                        + ("s3".equals(opened.provider()) ? " or name a further S3 store for them"
+                                + " (arrowflight.s3.stores, arrowflight.s3.<name>.root)" : ""));
             }
             extras.add(opened);
             Located result = holder(location);
@@ -347,6 +351,18 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                         + " (roots " + opened.store().duckDbRoots() + ")");
             }
             return result;
+        }
+
+        /**
+         * Tells whether two stores come from the same provider configuration.
+         *
+         * @param a one store
+         * @param b another store
+         * @return true for the same provider and configuration name
+         */
+        private static boolean sameConfiguration(Opened a, Opened b) {
+            return a.provider().equals(b.provider())
+                    && a.store().configName().equals(b.store().configName());
         }
 
         /**

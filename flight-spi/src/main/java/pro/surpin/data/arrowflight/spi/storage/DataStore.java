@@ -187,6 +187,17 @@ public interface DataStore extends AutoCloseable {
     }
 
     /**
+     * Names the provider configuration this store was opened with, for providers that open
+     * one store per named configuration (several S3 stores); the server opens at most one store
+     * per provider and configuration name.
+     *
+     * @return configuration name, empty for the provider's main configuration (the default)
+     */
+    default String configName() {
+        return "";
+    }
+
+    /**
      * Lists the Parquet files with at least one block on a storage host.
      *
      * @param host storage host colocated with this server

@@ -100,6 +100,7 @@ public final class S3DataStore implements DataStore {
     private final Object initialListing = new Object();
     private volatile Snapshot snapshot;
     private final boolean ownsClient;
+    private final String configName;
 
     /**
      * One complete listing of the data directory.
@@ -164,7 +165,27 @@ public final class S3DataStore implements DataStore {
      */
     public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
             LongSupplier nanoClock, ThreadFactory threads, String node, boolean ownsClient) {
+        this(dataDirectory, settings, client, nanoClock, threads, node, ownsClient, "");
+    }
+
+    /**
+     * Creates a store of a named S3 configuration ({@code arrowflight.s3.stores}); its DuckDB
+     * secret carries the name.
+     *
+     * @param dataDirectory data directory, {@code s3://bucket/prefix}
+     * @param settings S3 settings
+     * @param client S3 client
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param threads creates the thread of background listings
+     * @param node name of this server node, for logs
+     * @param ownsClient whether {@link #close()} closes the client
+     * @param configName store name, empty for the main configuration
+     */
+    public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
+            LongSupplier nanoClock, ThreadFactory threads, String node, boolean ownsClient,
+            String configName) {
         this.ownsClient = ownsClient;
+        this.configName = Objects.requireNonNull(configName, "configName");
         this.root = S3Uri.parse(dataDirectory);
         this.settings = Objects.requireNonNull(settings, "settings");
         this.client = Objects.requireNonNull(client, "client");
@@ -407,7 +428,22 @@ public final class S3DataStore implements DataStore {
 
     @Override
     public void contributeDuckDb(DuckDbSetup setup) {
-        contribute(setup, settings, root);
+        contribute(setup, settings, root, secretName(configName));
+    }
+
+    @Override
+    public String configName() {
+        return configName;
+    }
+
+    /**
+     * Names the DuckDB secret of a configuration.
+     *
+     * @param configName store name, empty for the main configuration
+     * @return {@code flight_s3}, or {@code flight_s3_<name>} for a named store
+     */
+    static String secretName(String configName) {
+        return configName.isEmpty() ? DUCKDB_SECRET_NAME : DUCKDB_SECRET_NAME + "_" + configName;
     }
 
     @Override
@@ -436,6 +472,19 @@ public final class S3DataStore implements DataStore {
      * @param root data directory
      */
     public static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root) {
+        contribute(setup, settings, root, DUCKDB_SECRET_NAME);
+    }
+
+    /**
+     * Describes the DuckDB setup of one S3 store, its secret under the given name; see
+     * {@link #contribute(DuckDbSetup, S3Settings, S3Uri)}.
+     *
+     * @param setup receives the extension, settings and secret, in this order
+     * @param settings S3 settings with credentials
+     * @param root data directory
+     * @param secretName name of the DuckDB secret
+     */
+    static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root, String secretName) {
         setup.loadExtension("httpfs");
         for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
                 "s3_session_token", "s3_endpoint", "s3_region")) {
@@ -466,7 +515,7 @@ public final class S3DataStore implements DataStore {
         options.put("URL_STYLE", SecretValue.plain(settings.urlStyle()));
         options.put("USE_SSL", SecretValue.of(settings.useSsl()));
         options.put("URL_COMPATIBILITY_MODE", SecretValue.of(true));
-        setup.createSecret(DUCKDB_SECRET_NAME, "s3", root.root(), options);
+        setup.createSecret(secretName, "s3", root.root(), options);
     }
 
     /**
