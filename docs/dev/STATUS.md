@@ -24,7 +24,10 @@
 ## Next steps (one per session)
 
 > **Maintainer, 2026-10-25:** the production Hadoop cluster has HA NameNode with ZooKeeper (automatic failover),
-> Kerberos and Ranger; exact versions will follow. Consequences: item 11 (ZooKeeper and lz4-java missing from the new
+> Kerberos and Ranger. Versions (2026-10-25): Hadoop 3.1.3 (vendor build) on the cluster side; HA with 2 NameNodes,
+> automatic failover, ConfiguredFailoverProxyProvider, RPC 8020; ZooKeeper 3.9.2 ensemble, SASL/Kerberos; Ranger 2.4.0
+> (HDFS authorizer on the NameNodes; plugins also for Hive). Our client libs must work against a Hadoop 3.1 cluster
+> (RPC/SASL compatibility of the newer hadoop-client), and Ranger checks must target the 2.4 REST API. Consequences: item 11 (ZooKeeper and lz4-java missing from the new
 > runtime libs set) is now required — put the ZooKeeper client (and its Curator/Jute deps as Hadoop needs them) and
 > lz4-java back into the libs set, with a startup/link check that the HA/ZK and Kerberos code paths load. Keep items
 > 7 (Kerberos for HMS and HDFS), 8 (Ranger subquery bypass) and 9 (per-user identity) — they are needed for production.
