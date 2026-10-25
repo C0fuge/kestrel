@@ -87,6 +87,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Configuration precedence: environment variables (`FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
+  `FLIGHT_METRICS_ENABLED`, `DUCKDB_*`, `HDFS_*`, `FLIGHT_S3_*`, ...) were ignored whenever the bundled
+  `arrowflight.properties` set the same setting, and a `-Darrowflight.*` alias lost to the file's short key
+  (`metricsEnabled=true` beat `-Darrowflight.metrics.enabled=false`). The order is now the documented one,
+  for server and plugin settings alike: every `-D` name > environment > `etc/plugins/<ns>.properties` >
+  `arrowflight.properties` > default. Upgrade note: an environment variable that was silently shadowed
+  before now takes effect (for example a leftover `FLIGHT_RESULT_MODE=partial`), and a plugin environment
+  variable now beats the same key in `etc/plugins/<ns>.properties`.
 - Iceberg equality deletes are applied by the server with read_parquet (complete answers):
   snapshots with equality deletes were read through DuckDB's iceberg_scan with all their columns
   and every filter kept above the scan (~25–90 s per query on the stand), because DuckDB 1.4.5's

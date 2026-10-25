@@ -1,18 +1,17 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Properties;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 
 /**
- * Loads configuration from arrowflight.properties, system properties, and environment variables.
- * Produces an immutable AppConfig record.
+ * Loads configuration from system properties, environment variables and arrowflight.properties,
+ * in that order of precedence (see {@link ConfigSource}). Produces an immutable AppConfig record.
  */
 public class ConfigAdapter {
-
-    private static final String CONFIG_RESOURCE = "arrowflight.properties";
 
     /**
      * Utility class, no instantiation.
@@ -26,7 +25,16 @@ public class ConfigAdapter {
      * @return resolved AppConfig
      */
     public static AppConfig getConfig() {
-        Properties props = loadProperties();
+        return getConfig(ConfigSource.system());
+    }
+
+    /**
+     * Resolves the server configuration from a source.
+     *
+     * @param props configuration source
+     * @return resolved AppConfig
+     */
+    public static AppConfig getConfig(ConfigSource props) {
         int ioParallelism = computeIoParallelism(props);
         int numServers = getInt("numServers", "arrowflight.cluster.numServers", 3, props);
         int batchSize = getInt("batchSize", "arrowflight.duckdb.batchSize", 65536, props);
@@ -164,10 +172,10 @@ public class ConfigAdapter {
     /**
      * Computes I/O thread pool parallelism from config, cores, and constraints.
      *
-     * @param props loaded properties
+     * @param props configuration source
      * @return thread count (clamped to 64)
      */
-    private static int computeIoParallelism(Properties props) {
+    private static int computeIoParallelism(ConfigSource props) {
         Integer explicit = getOptionalInt("ioParallelism", "arrowflight.io.parallelism", props);
         if (explicit != null && explicit > 0) {
             return Math.min(explicit, 64);
@@ -181,69 +189,61 @@ public class ConfigAdapter {
     }
 
     /**
-     * Reads a string config from system property or properties file.
+     * Reads a string config: the key and its alias as system properties, then the key and its
+     * alias in the properties file.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key, or null
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
-    private static String getString(String key, String sysAlias, String fallback, Properties props) {
-        String value = System.getProperty(key);
-        if (value == null || value.isBlank()) {
-            value = props.getProperty(key);
-        }
-        if ((value == null || value.isBlank()) && sysAlias != null) {
-            value = System.getProperty(sysAlias);
-        }
-        if ((value == null || value.isBlank()) && sysAlias != null) {
-            value = props.getProperty(sysAlias);
-        }
-        return value == null || value.isBlank() ? fallback : value.trim();
+    private static String getString(String key, String sysAlias, String fallback, ConfigSource props) {
+        return props.lookup(names(key, sysAlias), List.of()).orElse(fallback);
     }
 
     /**
-     * Reads a string config with environment variable fallback.
+     * Reads a string config: the key and its alias as system properties, then the environment
+     * variable, then the key and its alias in the properties file.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key
      * @param envName  environment variable name
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
     private static String getStringWithEnv(String key, String sysAlias, String envName,
-            String fallback, Properties props) {
-        String value = System.getProperty(key);
-        if (value == null || value.isBlank()) {
-            value = props.getProperty(key);
+            String fallback, ConfigSource props) {
+        return props.lookup(names(key, sysAlias), List.of(envName)).orElse(fallback);
+    }
+
+    /**
+     * Lists a key and its alias.
+     *
+     * @param key      primary config key
+     * @param sysAlias secondary property key, or null
+     * @return names in lookup order
+     */
+    private static List<String> names(String key, String sysAlias) {
+        List<String> names = new ArrayList<>(2);
+        names.add(key);
+        if (sysAlias != null) {
+            names.add(sysAlias);
         }
-        if (value == null || value.isBlank()) {
-            value = System.getProperty(sysAlias);
-        }
-        if (value == null || value.isBlank()) {
-            value = props.getProperty(sysAlias);
-        }
-        if (value == null || value.isBlank()) {
-            String env = System.getenv(envName);
-            if (env != null && !env.isBlank()) {
-                value = env;
-            }
-        }
-        return value == null || value.isBlank() ? fallback : value.trim();
+        return names;
     }
 
     /**
      * Reads an integer config with fallback.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
-    private static int getInt(String key, String sysAlias, int fallback, Properties props) {
+    private static int getInt(String key, String sysAlias, int fallback, ConfigSource props) {
         String raw = getString(key, sysAlias, String.valueOf(fallback), props);
         try {
             return Integer.parseInt(raw);
@@ -253,17 +253,17 @@ public class ConfigAdapter {
     }
 
     /**
-     * Reads an integer config with environment variable fallback.
+     * Reads an integer config with environment variable.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key
      * @param envName  environment variable name
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
     private static int getIntWithEnv(String key, String sysAlias, String envName,
-            int fallback, Properties props) {
+            int fallback, ConfigSource props) {
         String raw = getStringWithEnv(key, sysAlias, envName, null, props);
         if (raw == null) {
             return fallback;
@@ -279,43 +279,34 @@ public class ConfigAdapter {
      * Reads an optional integer config, returns null if not set.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
-     * @param props    loaded properties
+     * @param sysAlias secondary property key
+     * @param props    configuration source
      * @return integer value or null
      */
-    private static Integer getOptionalInt(String key, String sysAlias, Properties props) {
-        String value = System.getProperty(key);
-        if (value == null || value.isBlank()) {
-            value = props.getProperty(key);
-        }
-        if ((value == null || value.isBlank()) && sysAlias != null) {
-            value = System.getProperty(sysAlias);
-        }
-        if ((value == null || value.isBlank()) && sysAlias != null) {
-            value = props.getProperty(sysAlias);
-        }
-        if (value == null || value.isBlank()) {
+    private static Integer getOptionalInt(String key, String sysAlias, ConfigSource props) {
+        Optional<String> value = props.lookup(names(key, sysAlias), List.of());
+        if (value.isEmpty()) {
             return null;
         }
         try {
-            return Integer.parseInt(value.trim());
+            return Integer.parseInt(value.get());
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid integer for " + key + ": " + value, e);
+            throw new IllegalArgumentException("Invalid integer for " + key + ": " + value.get(), e);
         }
     }
 
     /**
-     * Reads a boolean config with environment variable fallback.
+     * Reads a boolean config with environment variable.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key
      * @param envName  environment variable name
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
     private static boolean getBooleanWithEnv(String key, String sysAlias, String envName,
-            boolean fallback, Properties props) {
+            boolean fallback, ConfigSource props) {
         String value = getStringWithEnv(key, sysAlias, envName, null, props);
         return value == null ? fallback : Boolean.parseBoolean(value);
     }
@@ -324,34 +315,17 @@ public class ConfigAdapter {
      * Reads a long config with fallback.
      *
      * @param key      primary config key
-     * @param sysAlias secondary system property key
+     * @param sysAlias secondary property key
      * @param fallback default value
-     * @param props    loaded properties
+     * @param props    configuration source
      * @return resolved value
      */
-    private static long getLong(String key, String sysAlias, long fallback, Properties props) {
+    private static long getLong(String key, String sysAlias, long fallback, ConfigSource props) {
         String raw = getString(key, sysAlias, String.valueOf(fallback), props);
         try {
             return Long.parseLong(raw);
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("Invalid long for " + key + ": " + raw, e);
         }
-    }
-
-    /**
-     * Loads properties from classpath resource.
-     *
-     * @return loaded Properties
-     */
-    private static Properties loadProperties() {
-        Properties properties = new Properties();
-        try (InputStream input = ConfigAdapter.class.getClassLoader().getResourceAsStream(CONFIG_RESOURCE)) {
-            if (input != null) {
-                properties.load(input);
-            }
-        } catch (IOException e) {
-            throw new ExceptionInInitializerError(e);
-        }
-        return properties;
     }
 }

@@ -274,7 +274,9 @@ PR checks (`.github/workflows/ci.yml`) enforce on every pull request:
 
 ## Configuration
 
-Configuration resolves from three tiers: **JVM property** → **`arrowflight.properties`** → **default**.
+Configuration resolves in this order: **JVM property** (`-D`, the short key and its `arrowflight.*` alias) →
+**environment variable** (where the setting has one) → **`etc/plugins/<ns>.properties`** (plugin keys) →
+**`arrowflight.properties`** (bundled defaults) → **default**. Blank values count as unset.
 
 Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 

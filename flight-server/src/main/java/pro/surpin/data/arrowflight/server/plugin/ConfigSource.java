@@ -14,10 +14,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 
 /**
- * Where configuration values come from, in the server's usual order: system properties, then
- * {@code arrowflight.properties} on the class path, for each name in turn, then environment
- * variables. Blank values count as unset. Plugin namespaces may also have a file
- * {@code <configDir>/<ns>.properties}.
+ * Where configuration values come from, in the server's order: system properties (every name in
+ * turn), then environment variables, then {@code arrowflight.properties} on the class path (every
+ * name in turn), so the bundled file only supplies defaults. Blank values count as unset. Plugin
+ * namespaces may also have a file {@code <configDir>/<ns>.properties}, read after the environment
+ * and before {@code arrowflight.properties}.
  */
 public final class ConfigSource {
 
@@ -66,22 +67,60 @@ public final class ConfigSource {
     }
 
     /**
-     * Looks up names in order: each as a system property and then in the properties file; then
-     * the environment variables in order.
+     * Looks up names in order: every name as a system property, then the environment variables,
+     * then every name in the properties file.
      *
      * @param names property names
      * @param environmentNames environment variable names
      * @return trimmed value, empty when unset
      */
     public Optional<String> lookup(List<String> names, List<String> environmentNames) {
+        return firstSystemProperty(names)
+                .or(() -> firstEnvironment(environmentNames))
+                .or(() -> firstFileProperty(names));
+    }
+
+    /**
+     * Reads the first of some names that is set as a system property.
+     *
+     * @param names property names
+     * @return trimmed value, empty when none is set
+     */
+    public Optional<String> firstSystemProperty(List<String> names) {
         for (String name : names) {
-            Optional<String> value = property(name);
+            Optional<String> value = systemProperty(name);
             if (value.isPresent()) {
                 return value;
             }
         }
-        for (String name : environmentNames) {
+        return Optional.empty();
+    }
+
+    /**
+     * Reads the first of some environment variables that is set.
+     *
+     * @param names variable names
+     * @return trimmed value, empty when none is set
+     */
+    public Optional<String> firstEnvironment(List<String> names) {
+        for (String name : names) {
             Optional<String> value = environment(name);
+            if (value.isPresent()) {
+                return value;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Reads the first of some names that is set in the properties file.
+     *
+     * @param names property names
+     * @return trimmed value, empty when none is set
+     */
+    public Optional<String> firstFileProperty(List<String> names) {
+        for (String name : names) {
+            Optional<String> value = fileProperty(name);
             if (value.isPresent()) {
                 return value;
             }

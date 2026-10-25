@@ -3,11 +3,11 @@ package pro.surpin.data.arrowflight.spi.config;
 import java.util.Optional;
 
 /**
- * Configuration of one namespace (a provider's name). Keys are looked up in this order: the
- * declared legacy aliases (system property, then properties file), {@code arrowflight.<ns>.<key>}
- * (system property, then properties file), {@code <ns>.<key>} (properties file),
- * {@code <key>} in {@code etc/plugins/<ns>.properties}, then {@code FLIGHT_<NS>_<KEY>} in the
- * environment. Blank values count as unset.
+ * Configuration of one namespace (a provider's name). Keys are looked up in this order: system
+ * properties (the declared legacy aliases, {@code arrowflight.<ns>.<key>}, {@code <ns>.<key>}),
+ * the environment ({@code FLIGHT_<NS>_<KEY>}, then upper case legacy aliases), {@code <key>} in
+ * {@code etc/plugins/<ns>.properties}, then the server's {@code arrowflight.properties} (same
+ * names as the system properties). Blank values count as unset.
  */
 public interface PluginConfig {
 

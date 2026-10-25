@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DuckDbExtensionsTest {
 
     @Test
-    void explicitKeysInTheLegacyOrder(@TempDir Path dir) throws Exception {
+    void explicitKeysPropertyThenEnvironmentThenFile(@TempDir Path dir) throws Exception {
         Path a = Files.writeString(dir.resolve("a.duckdb_extension"), "x");
         Path b = Files.writeString(dir.resolve("b.duckdb_extension"), "x");
         Path c = Files.writeString(dir.resolve("c.duckdb_extension"), "x");
@@ -36,11 +36,11 @@ class DuckDbExtensionsTest {
                 new ConfigSource(system::get, file, Map.of(), null));
         assertThrows(IllegalArgumentException.class, () -> extensions.apply("httpfs"));
 
-        env.put("DUCKDB_HTTPFS_EXTENSION", c.toString());
-        assertEquals(c.toString(),
-                new DuckDbExtensions(new ConfigSource(system::get, file, env, null)).apply("httpfs"));
         file.setProperty("arrowflight.duckdb.httpfs.extension", b.toString());
         assertEquals(b.toString(),
+                new DuckDbExtensions(new ConfigSource(system::get, file, env, null)).apply("httpfs"));
+        env.put("DUCKDB_HTTPFS_EXTENSION", c.toString());
+        assertEquals(c.toString(),
                 new DuckDbExtensions(new ConfigSource(system::get, file, env, null)).apply("httpfs"));
         system.put("duckDbHttpfsExtension", a.toString());
         assertEquals(a.toString(),

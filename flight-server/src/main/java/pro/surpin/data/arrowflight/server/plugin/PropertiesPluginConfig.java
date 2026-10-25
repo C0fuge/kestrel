@@ -121,28 +121,25 @@ public final class PropertiesPluginConfig implements PluginConfig {
     }
 
     /**
-     * Looks a plain key up in every source.
+     * Looks a plain key up in every source: system properties, environment, the namespace's
+     * file, then {@code arrowflight.properties}.
      *
      * @param key key name
      * @param declared declared key or null
      * @return trimmed value, empty when unset
      */
     private Optional<String> lookup(String key, ConfigKey declared) {
-        Optional<String> value = source.lookup(propertyNames(key, declared), List.of());
-        if (value.isPresent()) {
-            return value;
-        }
-        value = source.pluginFileProperty(namespace, key);
-        if (value.isPresent()) {
-            return value;
-        }
+        List<String> names = propertyNames(key, declared);
         List<String> environment = new ArrayList<>();
         environment.add(ConfigKey.environmentName(namespace, key));
         if (declared != null) {
             declared.legacyAliases().stream().filter(PropertiesPluginConfig::isEnvironmentName)
                     .forEach(environment::add);
         }
-        return source.lookup(List.of(), environment);
+        return source.firstSystemProperty(names)
+                .or(() -> source.firstEnvironment(environment))
+                .or(() -> source.pluginFileProperty(namespace, key))
+                .or(() -> source.firstFileProperty(names));
     }
 
     /**

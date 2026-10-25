@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests the namespaced plugin configuration. The s3 keys below are the contract the bench command
- * lines depend on: every flat name the server read before plugins still works, in the same order.
+ * lines depend on: every flat name the server read before plugins still works, in the same order
+ * within each source (system properties, then environment, then files).
  */
 @Tag("unit")
 class PropertiesPluginConfigTest {
@@ -55,20 +56,20 @@ class PropertiesPluginConfigTest {
         assertEquals(30, config.getInt("listingTtlSeconds", -1));
         assertTrue(config.getBoolean("metadataCache", false));
 
-        environment.put("FLIGHT_S3_ENDPOINT", "http://env:1");
-        assertEquals("http://env:1", config(null).get("endpoint", null));
         file.setProperty("s3.endpoint", "http://ns:1");
         assertEquals("http://ns:1", config(null).get("endpoint", null));
         file.setProperty("arrowflight.s3.endpoint", "http://file-canonical:1");
         assertEquals("http://file-canonical:1", config(null).get("endpoint", null));
-        system.put("arrowflight.s3.endpoint", "http://sys-canonical:1");
-        assertEquals("http://sys-canonical:1", config(null).get("endpoint", null));
         file.setProperty("s3Endpoint", "http://file-legacy:1");
         assertEquals("http://file-legacy:1", config(null).get("endpoint", null));
+        environment.put("FLIGHT_S3_ENDPOINT", "http://env:1");
+        assertEquals("http://env:1", config(null).get("endpoint", null));
+        system.put("arrowflight.s3.endpoint", "http://sys-canonical:1");
+        assertEquals("http://sys-canonical:1", config(null).get("endpoint", null));
         system.put("s3Endpoint", "  http://sys-legacy:1  ");
         assertEquals("http://sys-legacy:1", config(null).get("endpoint", null));
         system.put("s3Endpoint", " ");
-        assertEquals("http://file-legacy:1", config(null).get("endpoint", null));
+        assertEquals("http://sys-canonical:1", config(null).get("endpoint", null));
 
         system.put("arrowflight.duckdb.s3MetadataCache", "false");
         assertFalse(config(null).getBoolean("metadataCache", true));
@@ -79,13 +80,29 @@ class PropertiesPluginConfigTest {
     }
 
     @Test
-    void pluginFileComesAfterProperties(@TempDir Path dir) throws Exception {
+    void theEnvironmentBeatsTheBundledFile() {
+        // Regression: arrowflight.properties ships s3Region=us-east-1, which hid FLIGHT_S3_REGION.
+        file.setProperty("s3Region", "us-east-1");
+        file.setProperty("s3UrlStyle", "path");
+        environment.put("FLIGHT_S3_REGION", "eu-west-3");
+        assertEquals("eu-west-3", config(null).get("region", null));
+        assertEquals("path", config(null).get("urlStyle", null));
+        system.put("arrowflight.s3.region", "eu-north-1");
+        assertEquals("eu-north-1", config(null).get("region", null));
+    }
+
+    @Test
+    void pluginFileComesBetweenEnvironmentAndBundledFile(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("s3.properties"), "urlStyle=vhost\nregion=eu-west-3\n");
+        file.setProperty("s3UrlStyle", "path");
+        file.setProperty("s3Region", "us-east-1");
         system.put("s3Region", "eu-north-1");
         PropertiesPluginConfig config = config(dir);
         assertEquals("vhost", config.get("urlStyle", null));
         assertEquals("eu-north-1", config.get("region", null));
         environment.put("FLIGHT_S3_URL_STYLE", "path");
+        assertEquals("path", config(dir).get("urlStyle", null));
+        system.put("arrowflight.s3.urlStyle", "vhost");
         assertEquals("vhost", config(dir).get("urlStyle", null));
     }
 

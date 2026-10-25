@@ -225,8 +225,8 @@ class LibsSetTest {
     private static Process start(String classpath, Path dataDir, int port, Path log) throws IOException {
         Path java = Path.of(System.getProperty("java.home"), "bin", "java");
         ProcessBuilder builder = new ProcessBuilder(java.toString(),
-                // the short key: the bundled arrowflight.properties shadows -Darrowflight.metrics.enabled
-                "-DmetricsEnabled=false",
+                // the documented alias must beat the bundled file's metricsEnabled=true
+                "-Darrowflight.metrics.enabled=false",
                 "-Dhazelcast.phone.home.enabled=false",
                 "--add-opens=java.base/java.nio=ALL-UNNAMED",
                 "-cp", classpath,

@@ -1,11 +1,17 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -360,4 +366,66 @@ class ConfigAdapterTest {
         assertThrows(IllegalArgumentException.class, ConfigAdapter::getConfig);
     }
 
+    /** Regression: values in the bundled arrowflight.properties hid environment variables. */
+    @Test
+    void theEnvironmentBeatsTheBundledFile() throws IOException {
+        Map<String, String> env = new HashMap<>();
+        env.put("FLIGHT_RESULT_MODE", "partial");
+        env.put("FLIGHT_ENDPOINT_BACKUP_LOCATIONS", "0");
+        env.put("FLIGHT_METRICS_ENABLED", "false");
+        env.put("DUCKDB_LOCKDOWN", "false");
+        env.put("DUCKDB_STREAM_RESULTS", "false");
+        AppConfig cfg = ConfigAdapter.getConfig(source(Map.of(), env));
+        assertEquals("partial", cfg.resultMode());
+        assertEquals(0, cfg.endpointBackupLocations());
+        assertFalse(cfg.metricsEnabled());
+        assertFalse(cfg.duckDbLockdown());
+        assertFalse(cfg.duckDbStreamResults());
+
+        AppConfig bundled = ConfigAdapter.getConfig(source(Map.of(), Map.of()));
+        assertEquals("complete", bundled.resultMode());
+        assertEquals(2, bundled.endpointBackupLocations());
+        assertTrue(bundled.metricsEnabled());
+        assertTrue(bundled.duckDbLockdown());
+    }
+
+    /** Regression: the file's short key beat the documented -Darrowflight.* alias. */
+    @Test
+    void everySystemPropertyBeatsTheEnvironmentAndTheFile() throws IOException {
+        Map<String, String> env = Map.of("FLIGHT_METRICS_ENABLED", "true",
+                "FLIGHT_RESULT_MODE", "partial");
+        AppConfig cfg = ConfigAdapter.getConfig(source(Map.of(
+                "arrowflight.metrics.enabled", "false",
+                "arrowflight.resultMode", "complete",
+                "arrowflight.cluster.numServers", "9",
+                "arrowflight.duckdb.threads", "5"), env));
+        assertFalse(cfg.metricsEnabled());
+        assertEquals("complete", cfg.resultMode());
+        assertEquals(9, cfg.numServers());
+        assertEquals(5, cfg.duckDbThreads());
+
+        AppConfig primary = ConfigAdapter.getConfig(source(Map.of(
+                "numServers", "4", "arrowflight.cluster.numServers", "9"), Map.of()));
+        assertEquals(4, primary.numServers());
+    }
+
+    /** A blank system property or variable counts as unset and lets the next source through. */
+    @Test
+    void blankValuesFallThrough() throws IOException {
+        AppConfig cfg = ConfigAdapter.getConfig(source(Map.of("resultMode", " "),
+                Map.of("FLIGHT_RESULT_MODE", "partial", "FLIGHT_ENDPOINT_BACKUP_LOCATIONS", "")));
+        assertEquals("partial", cfg.resultMode());
+        assertEquals(2, cfg.endpointBackupLocations());
+    }
+
+    private static ConfigSource source(Map<String, String> system, Map<String, String> env)
+            throws IOException {
+        Properties bundled = new Properties();
+        try (InputStream input = ConfigAdapterTest.class.getClassLoader()
+                .getResourceAsStream("arrowflight.properties")) {
+            bundled.load(input);
+        }
+        Map<String, String> sys = Map.copyOf(system);
+        return new ConfigSource(sys::get, bundled, env, null);
+    }
 }
