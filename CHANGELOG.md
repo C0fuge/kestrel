@@ -65,6 +65,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (CVE-2024-36114, CVE-2025-67721: crash / memory leak on crafted LZ4/Snappy/Zstd input) and snappy-java
   1.1.8.3 → 1.1.10.8 (CVE-2023-43642, CVE-2023-34455 and others: DoS on crafted chunks). Data pages are still
   read by DuckDB. `DependencyFloorTest` guards Parquet >= 1.15, aircompressor >= 2.0.3, snappy-java >= 1.1.10.4.
+- Hive plugin: libthrift 0.9.3 → 0.24.0 for the metastore client (CVE-2026-43869, CVE-2026-43871,
+  CVE-2020-13949, CVE-2019-0205, CVE-2018-1320: parser DoS from a hostile metastore, TLS host checks). Hive
+  3.1.3's generated metastore classes and libfb303 0.9.3 run unchanged on it. Responses are capped at 1 GiB
+  (Hive 4's default; libthrift's own 100 MB would refuse large partition lists, 0.9.3 had no cap); frames stay
+  at 16 MB. The test metastore (Hive 3.1.3 server, which fails on libthrift 0.14+) now runs on 0.9.3 in its own
+  class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can

@@ -36,18 +36,20 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  * The hive catalog against a real metastore (Hive 3.1.3 on embedded Derby in this JVM) over
  * tables in a local directory: names, types, skipped and hidden tables, partitions with their
  * values from the metastore (custom locations, special characters, NULL), file listing rules,
- * caching and pinning, and a metastore outage.
+ * caching and pinning, a metastore outage, and the framed transport. The metastore runs on
+ * libthrift 0.9.3 in its own class loader, the plugin on its newer libthrift: Hive 3.1.3 servers
+ * in the field speak to this client the same way.
  */
 class HiveCatalogTest {
 
     @TempDir
     static Path dir;
-    static HmsFixture hms;
+    static IsolatedHms hms;
     static String root;
 
     @BeforeAll
     static void start() throws Exception {
-        hms = HmsFixture.shared();
+        hms = IsolatedHms.shared();
         root = dir.resolve("lake").toString();
         Files.createDirectories(dir.resolve("lake"));
         hms.createDatabase("hvt");
@@ -198,7 +200,7 @@ class HiveCatalogTest {
 
     @Test
     void anOutageIsAnErrorNotAnEmptyAnswer() throws Exception {
-        HmsFixture.Proxy proxy = hms.proxy();
+        IsolatedHms.Proxy proxy = hms.proxy();
         Catalog catalog = open(Map.of("uris", proxy.uri(), "metadataTtlSeconds", "0",
                 "namesTtlSeconds", "0", "connectTimeoutMillis", "2000", "socketTimeoutMillis", "5000"));
         try {
@@ -216,6 +218,39 @@ class HiveCatalogTest {
         IOException dead = assertThrows(IOException.class, () -> open(Map.of("uris",
                 "thrift://127.0.0.1:1", "connectTimeoutMillis", "1000")));
         assertTrue(dead.getMessage().contains("thrift://127.0.0.1:1"), dead.getMessage());
+    }
+
+    @Test
+    void theFramedTransportReachesTheMetastore() throws Exception {
+        TableName name = new TableName("hvt", "parted");
+        try (IsolatedHms.Proxy framed = hms.framedProxy();
+                Catalog catalog = open(Map.of("uris", framed.uri(), "framedTransport", "true",
+                        "metadataTtlSeconds", "0", "namesTtlSeconds", "0"));
+                Catalog plain = open(Map.of())) {
+            assertTrue(catalog.tables("hvt").contains("types"));
+            TableSnapshot parted = catalog.current(name).orElseThrow();
+            TableSnapshot expected = plain.current(name).orElseThrow();
+            assertEquals(4, parted.files().size(), parted.files().toString());
+            assertEquals(expected.columns(), parted.columns());
+            assertEquals(expected.files(), parted.files());
+        }
+    }
+
+    @Test
+    void thriftIsAtTheFloor() {
+        String version = org.apache.thrift.TBase.class.getPackage().getImplementationVersion();
+        assertTrue(atLeast(version, 0, 24), "libthrift " + version
+                + " of the plugin is below 0.24 (docs/dev/DEPENDENCY-AUDIT.md)");
+        assertFalse(atLeast("0.9.3", 0, 24));
+        assertTrue(atLeast("1.0.0", 0, 24));
+        assertEquals(1 << 30, ThriftMetastore.thriftConfiguration().getMaxMessageSize());
+        assertTrue(ThriftMetastore.thriftConfiguration().getMaxFrameSize() >= 16_384_000);
+    }
+
+    @Test
+    void theFixtureRunsTheOldThrift() throws Exception {
+        Class<?> base = Class.forName("org.apache.thrift.TBase", false, IsolatedHms.loader());
+        assertEquals("0.9.3", base.getPackage().getImplementationVersion());
     }
 
     @Test
@@ -253,7 +288,14 @@ class HiveCatalogTest {
                 false).table());
     }
 
-    private static Catalog open(Map<String, String> overrides) throws IOException {
+    private static boolean atLeast(String version, int major, int minor) {
+        String[] parts = version.split("\\.");
+        int ma = Integer.parseInt(parts[0]);
+        int mi = Integer.parseInt(parts[1]);
+        return ma != major ? ma > major : mi >= minor;
+    }
+
+    private static Catalog open(Map<String, String> overrides) throws Exception {
         Map<String, String> values = new HashMap<>();
         values.put("uris", hms.uri());
         values.put("roots", root);

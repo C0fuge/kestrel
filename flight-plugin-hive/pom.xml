@@ -17,14 +17,18 @@
         databases are schemas, Parquet tables are tables, partitions come from the metastore and
         their files from the server's stores. Iceberg tables registered in the metastore go to the
         iceberg plugin's table format when that plugin is installed. The metastore is read with the
-        Thrift client of Hive 3.1.3 (libthrift 0.9.3), without Hadoop.
+        Thrift client of Hive 3.1.3 on libthrift 0.24, without Hadoop.
         Installed as plugins/hive/ (target/plugin/hive): this jar, its runtime libraries and
         SHA256SUMS (tools/make-plugin-dir.sh). Not shaded: the plugin class loader isolates it.
     </description>
 
     <properties>
         <hive.version>3.1.3</hive.version>
-        <thrift.version>0.9.3</thrift.version>
+        <thrift.version>0.24.0</thrift.version>
+        <!-- fb303 has no release after 0.9.3; its generated code runs on the newer libthrift. -->
+        <fb303.version>0.9.3</fb303.version>
+        <!-- The in-process test metastore (Hive 3.1.3 server) only, in its own class loader. -->
+        <fixture.thrift.version>0.9.3</fixture.thrift.version>
         <!-- Same as flight-server. -->
         <hadoop.version>3.5.0</hadoop.version>
         <duckdb.version>1.4.5.0</duckdb.version>
@@ -72,7 +76,7 @@
         <dependency>
             <groupId>org.apache.thrift</groupId>
             <artifactId>libfb303</artifactId>
-            <version>${thrift.version}</version>
+            <version>${fb303.version}</version>
             <scope>compile</scope>
             <exclusions>
                 <exclusion>
@@ -562,8 +566,29 @@
                             <outputDirectory>${project.build.directory}/plugin/hive</outputDirectory>
                         </configuration>
                     </execution>
-                    <!-- target/fixture-libs: the metastore server's libraries for the server's
-                         tests (Hadoop and slf4j come from the server's own test class path). -->
+                    <!-- target/fixture-libs: libthrift 0.9.3 for the metastore server (Hive
+                         3.1.3's server classes fail on libthrift 0.14+, the plugin's client runs
+                         on ${thrift.version}). -->
+                    <execution>
+                        <id>fixture-thrift</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.apache.thrift</groupId>
+                                    <artifactId>libthrift</artifactId>
+                                    <version>${fixture.thrift.version}</version>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/fixture-libs</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <!-- target/fixture-libs: the metastore server's libraries for the plugin's
+                         and the server's tests, which run it in their own class loader (Hadoop
+                         and slf4j come from the test class path). -->
                     <execution>
                         <id>fixture-libs</id>
                         <phase>generate-test-resources</phase>
@@ -572,7 +597,7 @@
                         </goals>
                         <configuration>
                             <includeScope>test</includeScope>
-                            <includeArtifactIds>commons-collections,hive-standalone-metastore,libthrift,libfb303,jackson-databind,jackson-annotations,jackson-core,dropwizard-metrics-hadoop-metrics2-reporter,guava,protobuf-java,bonecp,HikariCP,commons-dbcp,commons-pool,metrics-core,metrics-jvm,metrics-json,javolution,antlr-runtime,commons-lang3,derby,hive-storage-api,commons-lang,datanucleus-api-jdo,datanucleus-core,datanucleus-rdbms,javax.jdo,transaction-api</includeArtifactIds>
+                            <includeArtifactIds>commons-collections,hive-standalone-metastore,libfb303,jackson-databind,jackson-annotations,jackson-core,dropwizard-metrics-hadoop-metrics2-reporter,guava,protobuf-java,bonecp,HikariCP,commons-dbcp,commons-pool,metrics-core,metrics-jvm,metrics-json,javolution,antlr-runtime,commons-lang3,derby,hive-storage-api,commons-lang,datanucleus-api-jdo,datanucleus-core,datanucleus-rdbms,javax.jdo,transaction-api</includeArtifactIds>
                             <outputDirectory>${project.build.directory}/fixture-libs</outputDirectory>
                         </configuration>
                     </execution>

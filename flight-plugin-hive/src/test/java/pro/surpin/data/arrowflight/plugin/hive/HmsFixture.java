@@ -1,5 +1,7 @@
 package pro.surpin.data.arrowflight.plugin.hive;
 
+import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,7 +34,9 @@ import org.apache.thrift.transport.TTransport;
 /**
  * A real Hive Metastore 3.1.3 in this JVM, on embedded Derby (one per JVM), with a warehouse in
  * a temporary directory; tables, partitions and views are created over Thrift. Used by the
- * plugin's tests and, in a class loader over target/fixture-libs, by the server's.
+ * plugin's and the server's tests in a class loader over target/fixture-libs: the Hive 3.1.3
+ * server needs libthrift 0.9.3, the plugin itself runs on a newer one. Calls only Thrift API
+ * that both versions have.
  */
 public final class HmsFixture {
 
@@ -219,7 +223,18 @@ public final class HmsFixture {
      * @throws IOException when it cannot listen
      */
     public Proxy proxy() throws IOException {
-        return new Proxy(port);
+        return new Proxy(port, false);
+    }
+
+    /**
+     * Starts a TCP proxy that speaks the framed transport to its clients and the unframed one
+     * the metastore listens with.
+     *
+     * @return the proxy; {@code uri()} names it, {@code close()} cuts every connection
+     * @throws IOException when it cannot listen
+     */
+    public Proxy framedProxy() throws IOException {
+        return new Proxy(port, true);
     }
 
     /** A TCP proxy to the metastore. */
@@ -228,9 +243,11 @@ public final class HmsFixture {
         private final List<Socket> sockets = new CopyOnWriteArrayList<>();
         private final Object lock = new Object();
         private final int target;
+        private final boolean framed;
 
-        Proxy(int target) throws IOException {
+        Proxy(int target, boolean framed) throws IOException {
             this.target = target;
+            this.framed = framed;
             this.server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
             Thread accept = new Thread(this::accept, "hms-proxy");
             accept.setDaemon(true);
@@ -261,23 +278,48 @@ public final class HmsFixture {
                             return;
                         }
                     }
-                    pump(in, out);
-                    pump(out, in);
+                    pump(in, out, framed ? Pump.UNFRAME : Pump.COPY);
+                    pump(out, in, framed ? Pump.FRAME : Pump.COPY);
                 } catch (IOException e) {
                     return;
                 }
             }
         }
 
-        private void pump(Socket from, Socket to) {
+        /** How a pump changes the bytes it forwards. */
+        private enum Pump {
+            /** As they are. */
+            COPY,
+            /** Each chunk read becomes one frame (a 4-byte length, then the bytes). */
+            FRAME,
+            /** Frames are read and only their bytes forwarded. */
+            UNFRAME
+        }
+
+        private void pump(Socket from, Socket to, Pump mode) {
             Thread t = new Thread(() -> {
                 byte[] buffer = new byte[65536];
                 try (InputStream input = from.getInputStream(); OutputStream output = to.getOutputStream()) {
+                    if (mode == Pump.UNFRAME) {
+                        DataInputStream frames = new DataInputStream(input);
+                        while (true) {
+                            byte[] frame = new byte[frames.readInt()];
+                            frames.readFully(frame);
+                            output.write(frame);
+                            output.flush();
+                        }
+                    }
                     int n;
                     while ((n = input.read(buffer)) >= 0) {
+                        if (mode == Pump.FRAME) {
+                            output.write(new byte[] {(byte) (n >>> 24), (byte) (n >>> 16),
+                                (byte) (n >>> 8), (byte) n});
+                        }
                         output.write(buffer, 0, n);
                         output.flush();
                     }
+                } catch (EOFException e) {
+                    // client closed between frames
                 } catch (IOException e) {
                     // connection cut
                 } finally {
@@ -344,7 +386,7 @@ public final class HmsFixture {
 
     private ThriftHiveMetastore.Client client() throws TException {
         if (transport == null || !transport.isOpen()) {
-            TSocket socket = new TSocket("127.0.0.1", port, 60_000, 5_000);
+            TSocket socket = new TSocket("127.0.0.1", port, 60_000);
             socket.open();
             transport = socket;
             client = new ThriftHiveMetastore.Client(new TBinaryProtocol(socket));

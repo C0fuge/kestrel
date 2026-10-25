@@ -21,10 +21,11 @@ import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.ThriftHiveMetastore;
 import org.apache.thrift.TApplicationException;
+import org.apache.thrift.TConfiguration;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocolException;
-import org.apache.thrift.transport.TFramedTransport;
+import org.apache.thrift.transport.layered.TFramedTransport;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
@@ -61,6 +62,22 @@ final class ThriftMetastore implements Metastore {
      * them the connect and socket timeouts.
      */
     static final long FAIL_FAST_MILLIS = 5_000;
+
+    /**
+     * Largest metastore response read (1 GiB, Hive 4's client default): libthrift's own default
+     * of 100 MB would turn a large partition list into an error, 0.9.3 had no limit at all.
+     */
+    static final int MAX_MESSAGE_BYTES = 1 << 30;
+
+    /**
+     * Returns the Thrift limits of a new connection: frame and recursion limits stay libthrift's
+     * (16 MB frames as with 0.9.3, depth 64).
+     *
+     * @return configuration
+     */
+    static TConfiguration thriftConfiguration() {
+        return TConfiguration.custom().setMaxMessageSize(MAX_MESSAGE_BYTES).build();
+    }
 
     /** One open connection. */
     private static final class Connection {
@@ -406,7 +423,8 @@ final class ThriftMetastore implements Metastore {
     private Connection open(String uri) throws TTransportException {
         URI parsed = URI.create(uri);
         int port = parsed.getPort() < 0 ? 9083 : parsed.getPort();
-        TSocket socket = new TSocket(parsed.getHost(), port, socketTimeoutMillis, connectTimeoutMillis);
+        TSocket socket = new TSocket(thriftConfiguration(), parsed.getHost(), port,
+                socketTimeoutMillis, connectTimeoutMillis);
         TTransport transport = framed ? new TFramedTransport(socket) : socket;
         transport.open();
         LOGGER.debug("hive=metastoreConnected uri={}", uri);
