@@ -87,6 +87,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Runtime libs set: ZooKeeper (3.8.6 with zookeeper-jute) and lz4-java (`at.yawk.lz4` 1.10.4, Hadoop's
+  coordinates) were missing, because Spark's test dependencies (ZooKeeper 3.6.3, `org.lz4` 1.8.0) took them
+  out of the `provided` scope; HA NameNode failover with ZooKeeper, the ZooKeeper delegation-token and
+  signer-secret managers, `ZKCuratorManager`, `SecurityUtil` reflection and Hadoop's `Lz4Codec` failed with
+  `NoClassDefFoundError`. The same cause gave the shaded jar curator-framework 2.13.0 next to curator-client
+  5.2.0 (and curator-recipes 2.13.0 in the set); Curator is now 5.2.0 throughout. `LibsSetTest` now loads
+  every class of hadoop-common, hadoop-hdfs-client and hadoop-auth on the thin class path and resolves their
+  member types (only jsch for SFTP / ssh fencing and the legacy protobuf-2.5 `ProtobufRpcEngine` are left
+  out), checks the HA/Kerberos/ZooKeeper classes by name and round-trips data through `Lz4Codec`.
 - Configuration precedence: environment variables (`FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
   `FLIGHT_METRICS_ENABLED`, `DUCKDB_*`, `HDFS_*`, `FLIGHT_S3_*`, ...) were ignored whenever the bundled
   `arrowflight.properties` set the same setting, and a `-Darrowflight.*` alias lost to the file's short key

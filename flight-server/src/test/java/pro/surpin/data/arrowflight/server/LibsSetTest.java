@@ -13,9 +13,15 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ServerSocket;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,10 +34,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -52,12 +61,40 @@ class LibsSetTest {
 
     /** Artifacts that must not come back with the set (stale stand set, duplicates of shaded classes). */
     private static final List<String> BANNED = List.of(
-            "netty-all", "netty", "zookeeper", "log4j-core", "log4j-1.2-api", "reload4j", "slf4j-reload4j",
-            "bcprov-jdk18on", "bcpkix-jdk18on", "hadoop-client-api", "hadoop-client-runtime", "jersey-bundle",
-            "lz4-java", "protobuf-java", "jackson-databind", "netty-codec-http2", "grpc-core", "arrow-vector",
+            "netty-all", "netty", "log4j-core", "log4j-1.2-api", "reload4j", "slf4j-reload4j", "logback-classic",
+            "logback-core", "bcprov-jdk18on", "bcpkix-jdk18on", "hadoop-client-api", "hadoop-client-runtime",
+            "jersey-bundle", "protobuf-java", "jackson-databind", "netty-codec-http2", "grpc-core", "arrow-vector",
             "duckdb_jdbc");
 
     private static final String STARTED = "Server Arrow Flight SQL started";
+
+    /**
+     * Classes on the production paths (HA NameNode with ZooKeeper failover, Kerberos, ZooKeeper token and
+     * secret managers) that must link on the set.
+     */
+    private static final List<String> HA_AND_KERBEROS = List.of(
+            "org.apache.hadoop.security.SecurityUtil",
+            "org.apache.hadoop.security.UserGroupInformation",
+            "org.apache.hadoop.security.SaslRpcClient",
+            "org.apache.hadoop.security.authentication.util.KerberosUtil",
+            "org.apache.hadoop.security.authentication.util.ZKSignerSecretProvider",
+            "org.apache.hadoop.security.token.delegation.ZKDelegationTokenSecretManager",
+            "org.apache.hadoop.ha.ActiveStandbyElector",
+            "org.apache.hadoop.ha.ZKFailoverController",
+            "org.apache.hadoop.util.curator.ZKCuratorManager",
+            "org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider",
+            "org.apache.hadoop.hdfs.server.namenode.ha.ObserverReadProxyProvider",
+            "org.apache.hadoop.hdfs.server.namenode.ha.RequestHedgingProxyProvider",
+            "org.apache.hadoop.io.compress.Lz4Codec",
+            "org.apache.zookeeper.ZooKeeper",
+            "org.apache.curator.framework.recipes.locks.InterProcessMutex");
+
+    /** Missing class prefixes of features the server does not ship (each with its reason). */
+    private static final List<String> OPTIONAL = List.of(
+            // jsch: SFTPFileSystem and the NameNode's ssh fencing (ZKFC daemon); not a server path
+            "com.jcraft.jsch.",
+            // legacy ProtobufRpcEngine on unshaded protobuf 2.5; Hadoop's own RPC uses ProtobufRpcEngine2
+            "com.google.protobuf.GeneratedMessage$");
 
     @Test
     void setHoldsOneVersionPerLibraryAtTheFloors() throws IOException {
@@ -73,6 +110,11 @@ class LibsSetTest {
         assertAtLeast(jars, "dnsjava", 3, 6, 0);
         assertAtLeast(jars, "avro", 1, 11, 4);
         assertAtLeast(jars, "woodstox-core", 5, 4, 0);
+        // HA NameNode with ZooKeeper, ZooKeeper token/secret managers, Lz4Codec (stand 2026-10-25)
+        assertAtLeast(jars, "zookeeper", 3, 8, 6);
+        assertEquals(jars.get("zookeeper"), jars.get("zookeeper-jute"), "one ZooKeeper version");
+        assertAtLeast(jars, "lz4-java", 1, 10, 1);
+        assertAtLeast(jars, "curator-recipes", 5, 2, 0);
         jars.forEach((artifact, version) -> {
             if (artifact.startsWith("jetty-")) {
                 assertTrue(atLeast(version, 9, 4, 58), artifact + " " + version + " is below 9.4.58");
@@ -134,6 +176,63 @@ class LibsSetTest {
     }
 
     @Test
+    void curatorOfTheShadedJarMatchesTheSet() throws Exception {
+        Map<String, String> set = jars(libsDir());
+        Map<String, String> server = new TreeMap<>();
+        for (String entry : serverClasspath().split(File.pathSeparator)) {
+            String name = Path.of(entry).getFileName().toString();
+            if (name.endsWith(".jar")) {
+                List<String> parts = split(name);
+                server.put(parts.get(0), parts.get(1));
+            }
+        }
+        assertEquals(set.get("curator-recipes"), server.get("curator-framework"), "curator-framework");
+        assertEquals(set.get("curator-recipes"), server.get("curator-client"), "curator-client");
+        assertFalse(server.containsKey("zookeeper"), "ZooKeeper belongs to the libs set: " + server.keySet());
+    }
+
+    @Test
+    void hadoopClientClassesLinkOnTheLibsSet() throws Exception {
+        Path libs = libsDir();
+        try (URLClassLoader loader = thinLoader()) {
+            Map<String, String> missing = new TreeMap<>();
+            for (String artifact : List.of("hadoop-common", "hadoop-hdfs-client", "hadoop-auth")) {
+                for (String name : classNames(jarOf(libs, artifact))) {
+                    String problem = link(loader, name);
+                    if (problem != null && !optional(problem)) {
+                        missing.putIfAbsent(problem, name);
+                    }
+                }
+            }
+            assertTrue(missing.isEmpty(), "classes missing from the libs set (missing class=first user): " + missing);
+            for (String name : HA_AND_KERBEROS) {
+                assertEquals(null, link(loader, name), name);
+            }
+        }
+    }
+
+    @Test
+    void lz4CodecRoundTripsOnTheLibsSet() throws Exception {
+        try (URLClassLoader loader = thinLoader()) {
+            Object conf = loader.loadClass("org.apache.hadoop.conf.Configuration").getConstructor().newInstance();
+            Class<?> codecClass = loader.loadClass("org.apache.hadoop.io.compress.Lz4Codec");
+            Object codec = codecClass.getConstructor().newInstance();
+            codecClass.getMethod("setConf", conf.getClass()).invoke(codec, conf);
+            byte[] data = "lz4 ".repeat(10_000).getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+            try (OutputStream out = (OutputStream) codecClass.getMethod("createOutputStream", OutputStream.class)
+                    .invoke(codec, compressed)) {
+                out.write(data);
+            }
+            assertTrue(compressed.size() < data.length / 10, "not compressed: " + compressed.size());
+            try (InputStream in = (InputStream) codecClass.getMethod("createInputStream", InputStream.class)
+                    .invoke(codec, new ByteArrayInputStream(compressed.toByteArray()))) {
+                assertArrayEquals(data, in.readAllBytes());
+            }
+        }
+    }
+
+    @Test
     void jarNamesSplitIntoArtifactAndVersion() {
         assertEquals(List.of("hadoop-common", "3.5.0"), split("hadoop-common-3.5.0.jar"));
         assertEquals(List.of("jetty-util-ajax", "9.4.58.v20250814"), split("jetty-util-ajax-9.4.58.v20250814.jar"));
@@ -142,6 +241,111 @@ class LibsSetTest {
         assertEquals(List.of("netty-transport-native-epoll", "4.2.19.Final"),
                 split("netty-transport-native-epoll-4.2.19.Final-linux-x86_64.jar"));
         assertEquals(List.of("netty", "3.10.6.Final"), split("netty-3.10.6.Final.jar"));
+    }
+
+    /**
+     * Builds a class loader over the thin start's class path (server classes, its libraries, the libs set) that
+     * sees nothing of the test class path.
+     *
+     * @return the class loader
+     * @throws Exception when the class path cannot be read
+     */
+    private static URLClassLoader thinLoader() throws Exception {
+        List<URL> urls = new ArrayList<>();
+        for (String entry : classpath(true).split(File.pathSeparator)) {
+            if (entry.endsWith(File.separator + "*")) {
+                try (Stream<Path> files = Files.list(Path.of(entry.substring(0, entry.length() - 2)))) {
+                    for (Path jar : files.filter(f -> f.toString().endsWith(".jar")).sorted().toList()) {
+                        urls.add(jar.toUri().toURL());
+                    }
+                }
+            } else {
+                urls.add(Path.of(entry).toUri().toURL());
+            }
+        }
+        return new URLClassLoader(urls.toArray(new URL[0]), ClassLoader.getPlatformClassLoader());
+    }
+
+    /**
+     * Loads a class without initialising it and resolves the types of its members.
+     *
+     * @param loader class loader
+     * @param name binary class name
+     * @return null when every type resolves, else the name of the first missing class
+     */
+    private static String link(ClassLoader loader, String name) {
+        try {
+            Class<?> c = Class.forName(name, false, loader);
+            c.getDeclaredMethods();
+            c.getDeclaredFields();
+            c.getDeclaredConstructors();
+            c.getGenericInterfaces();
+            return null;
+        } catch (ClassNotFoundException e) {
+            return e.getMessage();
+        } catch (LinkageError | TypeNotPresentException e) {
+            String message = String.valueOf(e.getMessage());
+            return message.replace('/', '.');
+        }
+    }
+
+    /**
+     * Tells whether a missing class belongs to a feature the server does not ship (see OPTIONAL).
+     *
+     * @param missing name of the missing class
+     * @return true when the class is optional
+     */
+    private static boolean optional(String missing) {
+        return OPTIONAL.stream().anyMatch(missing::startsWith);
+    }
+
+    /**
+     * Lists the class names of a jar.
+     *
+     * @param jar jar file
+     * @return binary class names, module-info and multi-release copies left out
+     * @throws IOException when the jar cannot be read
+     */
+    private static List<String> classNames(Path jar) throws IOException {
+        try (JarFile file = new JarFile(jar.toFile())) {
+            return file.stream().map(JarEntry::getName)
+                    .filter(n -> n.endsWith(".class") && !n.startsWith("META-INF/") && !n.contains("module-info"))
+                    .map(n -> n.substring(0, n.length() - ".class".length()).replace('/', '.'))
+                    .sorted().toList();
+        }
+    }
+
+    /**
+     * Finds the jar of an artifact in the libs set or among the libraries the shaded jar bundles.
+     *
+     * @param dir directory of the libs set
+     * @param artifact artifact id
+     * @return the jar
+     * @throws IOException when the set or the class path file cannot be read
+     */
+    private static Path jarOf(Path dir, String artifact) throws IOException {
+        List<Path> candidates = new ArrayList<>();
+        try (Stream<Path> files = Files.list(dir)) {
+            candidates.addAll(files.sorted().toList());
+        }
+        for (String entry : serverClasspath().split(File.pathSeparator)) {
+            candidates.add(Path.of(entry));
+        }
+        return candidates.stream().filter(f -> f.toString().endsWith(".jar"))
+                .filter(f -> split(f.getFileName().toString()).get(0).equals(artifact))
+                .findFirst().orElseThrow(() -> new AssertionError(artifact + " neither in the libs set nor the jar"));
+    }
+
+    /**
+     * Reads the class path of the libraries the shaded jar bundles.
+     *
+     * @return class path text
+     * @throws IOException when the file cannot be read
+     */
+    private static String serverClasspath() throws IOException {
+        String serverClasspath = System.getProperty("libs.set.serverClasspath", "");
+        assumeTrue(!serverClasspath.isBlank(), "no server class path file (run through Maven)");
+        return Files.readString(Path.of(serverClasspath), StandardCharsets.UTF_8).trim();
     }
 
     /**
@@ -199,13 +403,11 @@ class LibsSetTest {
      */
     private static String classpath(boolean withLibs) throws Exception {
         Path libs = libsDir();
-        String serverClasspath = System.getProperty("libs.set.serverClasspath", "");
-        assumeTrue(!serverClasspath.isBlank(), "no server class path file (run through Maven)");
         Path classes = Path.of(HadoopArrowFlightServer.class.getProtectionDomain().getCodeSource().getLocation()
                 .toURI());
         List<String> entries = new ArrayList<>();
         entries.add(classes.toString());
-        entries.add(Files.readString(Path.of(serverClasspath), StandardCharsets.UTF_8).trim());
+        entries.add(serverClasspath());
         if (withLibs) {
             entries.add(libs.toAbsolutePath() + File.separator + "*");
         }
