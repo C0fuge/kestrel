@@ -25,7 +25,7 @@
 
 0a. ~~**hadoopfs timeout defaults 3 s / 10 s**~~ — done 2026-10-24 (732e238, CI run 40140133221 green).
 
-> **Stand, 3-node S3 cluster on int7 (2026-10-25):** all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
+> **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
 
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
    public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
@@ -64,8 +64,9 @@
    **Done 2026-10-24 (Jackson):** one Jackson 2.21.8 (`jackson-bom`) in server, client-core, spark and
    starrocks; the Spark connector's shaded jar relocates Jackson (Spark 3.5 keeps its 2.15); Iceberg plugin
    2.22.3; floor tests in every module. Stand: run one Spark read with the new shaded connector jar.
-   Dev CI runs again (2026-10-24 22:49, repo public). Still open: aircompressor 0.21 → 2.0.3 and snappy-java → 1.1.10.12 (Parquet read path);
-   Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
+   Dev CI runs again (2026-10-24 22:49, repo public). **Done 2026-10-25 (Parquet read path):** server Parquet
+   1.13.1 → 1.18.1, bringing aircompressor 2.0.3 and snappy-java 1.1.10.8 (`DependencyFloorTest.parquetCodecs*`).
+   Still open: Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
    (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
    replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
    lz4-java 1.8.0). Full test suite green after each group of upgrades.
@@ -131,6 +132,10 @@
 - UPSTREAM-SYNC S11 (Flight batch compression, LZ4/ZSTD IPC buffers) deferred: upstream's own benchmark was
   negative (LZ4) or mixed (ZSTD), it helps only on slow links, and every client must then decode compressed buffers.
   Is there a slow link (WAN client, cross-site StarRocks) that wants it? If so it becomes an opt-in setting.
+- The stand findings (a)–(c) in Next steps (S3 outage read latency, unread plans keeping node load
+  reservations up to 10 min, slow first plan after B5 on S3) are not numbered, so sessions keep going down the
+  numbered list (1b next). Want one of them taken before 1b's remaining groups? (b) skews endpoint placement
+  for ~5 min; none gives wrong results.
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -251,3 +256,10 @@
   Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green
   (server 670 / 9 skipped, client-core 158, spark 175, starrocks 11, plugins green). Note: `./mvnw` got
   HTTP 429 from Maven Central for the Maven 3.10.0 download; `/opt/maven` 3.9.11 works.
+- 2026-10-25 (cloud session): item 1b, Parquet read path group (commit 6314b72): server Parquet 1.13.1 →
+  1.18.1 (`parquet.version`), which brings aircompressor 0.21 → 2.0.3 and snappy-java 1.1.8.3 → 1.1.10.8
+  (zstd-jni 1.5.0-1 → 1.5.7-15); the server only reads footers/statistics with it, data pages stay DuckDB's.
+  Spark keeps its provided Parquet 1.13.1; plugins unaffected (Iceberg already on aircompressor 2.0.3).
+  `DependencyFloorTest.parquetCodecsAreAtTheFloor` (fails on the old pom). Full local `clean verify
+  checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 671 / 9 skipped,
+  client-core 158, spark 175, starrocks 11, plugins green); push run 40148323187 green (6 min). Next: libthrift.
