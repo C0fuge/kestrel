@@ -319,9 +319,12 @@ public final class CatalogViews {
             String source;
             if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
                 source = icebergSource(iceberg.metadataLocation(), snapshot);
-                if (!source.startsWith("iceberg_scan(")) {
+                if (source.startsWith("(SELECT * FROM iceberg_scan(")) {
                     LOGGER.info("node={} views=icebergAllColumnsRead table={}.{}"
                             + " reason=equalityDeletes", LogUtil.node(), schema, table);
+                } else if (!source.startsWith("iceberg_scan(")) {
+                    LOGGER.info("node={} views=icebergDeletesApplied table={}.{}", LogUtil.node(),
+                            schema, table);
                 }
             } else if (snapshot.columns().isEmpty()) {
                 LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns", LogUtil.node(),
@@ -396,7 +399,10 @@ public final class CatalogViews {
     }
 
     /**
-     * Names the FROM source of a catalog table's complete-answer view. DuckDB 1.4.5's
+     * Names the FROM source of a catalog table's complete-answer view. A snapshot with equality
+     * deletes is read by {@link CatalogSources#deletesAppliedSource}, which applies its deletes
+     * with read_parquet and anti-joins. Where that cannot be used (deletion vectors, columns
+     * without field ID), DuckDB's iceberg_scan reads it. DuckDB 1.4.5's
      * iceberg_scan applies equality deletes only when it reads their columns: a query that does
      * not select them fails ("Equality deletes need the relevant columns to be selected"), and one
      * that only filters on them can fail with an INTERNAL error that invalidates the database
@@ -410,7 +416,8 @@ public final class CatalogViews {
      *
      * @param metadataLocation metadata file of the snapshot
      * @param snapshot the snapshot (its delete files tell whether there are equality deletes)
-     * @return {@code iceberg_scan(...)}, or a subquery over it that reads every column
+     * @return {@code iceberg_scan(...)}, the deletes-applied source, or a subquery over
+     *         iceberg_scan that reads every column
      */
     public static String icebergSource(String metadataLocation, TableSnapshot snapshot) {
         String scan = icebergScan(metadataLocation);
@@ -418,6 +425,10 @@ public final class CatalogViews {
                 .anyMatch(delete -> delete.kind() == DeleteFile.Kind.EQUALITY);
         if (!equalityDeletes || snapshot.columns().isEmpty()) {
             return scan;
+        }
+        String applied = CatalogSources.deletesAppliedSource(snapshot, snapshot.files());
+        if (applied != null) {
+            return applied;
         }
         List<String> keep = new ArrayList<>();
         for (ColumnSpec column : snapshot.columns()) {

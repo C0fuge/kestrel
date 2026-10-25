@@ -80,6 +80,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Iceberg equality deletes are applied by the server with read_parquet (complete answers):
+  snapshots with equality deletes were read through DuckDB's iceberg_scan with all their columns
+  and every filter kept above the scan (~25–90 s per query on the stand), because DuckDB 1.4.5's
+  iceberg_scan fails or mis-applies equality deletes under projections and pushed filters. Data
+  files are now read by field ID and anti-joined with their equality delete files (null matches
+  null) and position delete files (file path and row number), as the catalog's plan assigns them
+  (sequence numbers), so queries read only the columns they use and filters reach the scans.
+  Snapshots with deletion vectors, columns without field IDs or an equality column the schema no
+  longer has keep the old read. Partial answers of such snapshots are still answered completely.
 - README Quick Start and the release START-NOTES started the server with `java -jar` on the shaded jar,
   which fails with `NoClassDefFoundError: org/apache/hadoop/conf/Configuration` (Hadoop is not in the
   jar); START-NOTES also put the jar where its default `../plugins` did not point at the unpacked plugins.

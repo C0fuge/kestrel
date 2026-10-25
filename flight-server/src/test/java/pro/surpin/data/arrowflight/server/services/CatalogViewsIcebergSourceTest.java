@@ -1,6 +1,8 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -17,12 +19,18 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 
-/** Sources of Iceberg snapshots: equality deletes keep every column read by every query. */
+/**
+ * Sources of Iceberg snapshots: equality deletes are applied with read_parquet; where that is not
+ * possible they keep every column of iceberg_scan read by every query.
+ */
 class CatalogViewsIcebergSourceTest {
 
     private static final String METADATA = "hdfs://ns/t/metadata/v2.metadata.json";
 
     private static final String SCAN = "iceberg_scan('" + METADATA + "')";
+
+    private static final DeleteFile VECTOR = new DeleteFile("hdfs://ns/t/data/d.puffin", 1,
+            DeleteFile.Kind.DELETION_VECTOR, List.of());
 
     private static TableSnapshot snapshot(DeleteFile... deletes) {
         TableFile file = new TableFile("hdfs://ns/t/data/a.parquet", 10, 0, Set.of(), Map.of(), 5,
@@ -46,12 +54,25 @@ class CatalogViewsIcebergSourceTest {
                 "hdfs://ns/t/data/p.parquet", 1, DeleteFile.Kind.POSITION, List.of()))));
     }
 
-    /** Verifies that equality deletes keep all columns read, below a LIMIT. */
+    /** Verifies that equality deletes are applied with read_parquet, without iceberg_scan. */
     @Test
-    void equalityDeletesKeepAllColumns() {
+    void equalityDeletesAreAppliedWithReadParquet() {
+        String source = CatalogViews.icebergSource(METADATA, snapshot(equality(2), equality(1, 2)));
+        assertTrue(source.startsWith("(SELECT del_d.* FROM read_parquet(['hdfs://ns/t/data/a.parquet']"),
+                source);
+        assertFalse(source.contains("iceberg_scan"), source);
+        assertEquals(2, source.split("ANTI JOIN", -1).length - 1, source);
+    }
+
+    /**
+     * Verifies that equality deletes next to a deletion vector keep all columns read through
+     * iceberg_scan, below a LIMIT.
+     */
+    @Test
+    void equalityDeletesWithADeletionVectorKeepAllColumns() {
         assertEquals("(SELECT * FROM " + SCAN + " AS eq_keep WHERE hash(eq_keep.\"id\", eq_keep.\"status\","
                 + " eq_keep.\"v\") IS NOT NULL LIMIT " + Long.MAX_VALUE + ")",
-                CatalogViews.icebergSource(METADATA, snapshot(equality(2), equality(1, 2))));
+                CatalogViews.icebergSource(METADATA, snapshot(equality(2), equality(1, 2), VECTOR)));
     }
 
     /**
@@ -60,7 +81,7 @@ class CatalogViewsIcebergSourceTest {
      */
     @Test
     void keptFormIsAValidSource() throws Exception {
-        String source = CatalogViews.icebergSource(METADATA, snapshot(equality(1)))
+        String source = CatalogViews.icebergSource(METADATA, snapshot(equality(1), VECTOR))
                 .replace(SCAN, "(SELECT range AS id, {'a': range} AS status, range % 3 AS v FROM range(10))");
         try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = c.createStatement()) {

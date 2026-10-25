@@ -8,6 +8,7 @@ import java.util.Map;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
+import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -20,6 +21,9 @@ import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
  * joined with UNION ALL (DuckDB drops the branches a filter on a partition column rules out).
  */
 public final class CatalogSources {
+
+    /** Row number column read_parquet adds for position deletes. */
+    private static final String ROW_NUMBER = "file_row_number";
 
     private CatalogSources() {
     }
@@ -84,6 +88,135 @@ public final class CatalogSources {
     }
 
     /**
+     * Names some data files of an Iceberg snapshot as a FROM source that applies their delete
+     * files itself, with read_parquet only: a row is dropped when a position delete names its
+     * file and row number, or when an equality delete row has the same values (null matching
+     * null) in that delete's equality columns (anti hash joins). Which delete files apply to which data file
+     * (sequence numbers, partitions) is the catalog's plan, as in {@link TableFile#deletes()}.
+     * Files with the same delete files share one read_parquet; a file with position deletes is
+     * read alone, with its row numbers. Unlike DuckDB 1.4.5's iceberg_scan this reads only the
+     * columns a query uses (plus the equality columns), and a query's filters may go into the
+     * scans.
+     *
+     * @param snapshot Iceberg snapshot with its columns
+     * @param files files of the snapshot, with their delete files
+     * @return FROM source with the declared columns, or null when the deletes cannot be applied
+     *         this way (deletion vectors, columns without field ID, an equality column the
+     *         schema no longer has, a column named {@code file_row_number})
+     */
+    public static String deletesAppliedSource(TableSnapshot snapshot, List<TableFile> files) {
+        if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata) || files.isEmpty()
+                || snapshot.columns().isEmpty()) {
+            return null;
+        }
+        Map<Integer, ColumnSpec> byFieldId = new LinkedHashMap<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            if (column.fieldId() == null
+                    || ROW_NUMBER.equalsIgnoreCase(column.name())) {
+                return null;
+            }
+            byFieldId.put(column.fieldId(), column);
+        }
+        // Data files grouped by their delete files; a file with position deletes on its own.
+        Map<List<DeleteFile>, List<String>> groups = new LinkedHashMap<>();
+        List<TableFile> positional = new ArrayList<>();
+        for (TableFile file : files) {
+            boolean positions = false;
+            for (DeleteFile delete : file.deletes()) {
+                switch (delete.kind()) {
+                    case POSITION -> positions = true;
+                    case EQUALITY -> {
+                        if (delete.equalityFieldIds().isEmpty()
+                                || !byFieldId.keySet().containsAll(delete.equalityFieldIds())) {
+                            return null;
+                        }
+                    }
+                    default -> {
+                        return null;
+                    }
+                }
+            }
+            if (positions) {
+                positional.add(file);
+            } else {
+                groups.computeIfAbsent(file.deletes(), d -> new ArrayList<>()).add(file.location());
+            }
+        }
+        List<String> branches = new ArrayList<>();
+        for (Map.Entry<List<DeleteFile>, List<String>> group : groups.entrySet()) {
+            branches.add("SELECT del_d.* FROM " + fieldIdRead(snapshot.columns(), group.getValue(), "")
+                    + " AS del_d" + equalityJoins(group.getKey(), byFieldId));
+        }
+        for (TableFile file : positional) {
+            List<String> positionFiles = new ArrayList<>();
+            for (DeleteFile delete : file.deletes()) {
+                if (delete.kind() == DeleteFile.Kind.POSITION) {
+                    positionFiles.add(delete.location());
+                }
+            }
+            String location = CatalogLocations.normalize(file.location());
+            branches.add("SELECT del_d.* EXCLUDE (" + ROW_NUMBER + ") FROM "
+                    + fieldIdRead(snapshot.columns(), List.of(location), ", " + ROW_NUMBER + " = true")
+                    + " AS del_d ANTI JOIN (SELECT pos FROM " + fileList(positionFiles) + ") WHERE "
+                    + normalizedLocation("file_path") + " = " + DuckDbAdapter.sqlStringLiteral(location)
+                    + ") AS del_p ON del_p.pos = del_d." + ROW_NUMBER
+                    + equalityJoins(file.deletes(), byFieldId));
+        }
+        return "(" + String.join(" UNION ALL ", branches) + ")";
+    }
+
+    /**
+     * Writes one ANTI JOIN per set of equality columns of a data file's equality deletes; the
+     * delete files with the same columns are read together.
+     *
+     * @param deletes delete files of the data file (other kinds are skipped)
+     * @param byFieldId the snapshot's columns by field ID
+     * @return joins to append after {@code del_d}, or empty
+     */
+    private static String equalityJoins(List<DeleteFile> deletes,
+            Map<Integer, ColumnSpec> byFieldId) {
+        Map<List<Integer>, List<String>> byColumns = new LinkedHashMap<>();
+        for (DeleteFile delete : deletes) {
+            if (delete.kind() == DeleteFile.Kind.EQUALITY) {
+                byColumns.computeIfAbsent(delete.equalityFieldIds(), k -> new ArrayList<>())
+                        .add(delete.location());
+            }
+        }
+        StringBuilder sql = new StringBuilder();
+        int n = 0;
+        for (Map.Entry<List<Integer>, List<String>> entry : byColumns.entrySet()) {
+            String alias = "del_e" + n++;
+            List<ColumnSpec> keys = new ArrayList<>();
+            StringBuilder match = new StringBuilder();
+            for (Integer fieldId : entry.getKey()) {
+                ColumnSpec column = byFieldId.get(fieldId);
+                keys.add(column);
+                String name = DuckDbAdapter.quoteIdentifier(column.name());
+                match.append(match.isEmpty() ? "" : " AND ").append(alias).append('.').append(name)
+                        .append(" IS NOT DISTINCT FROM del_d.").append(name);
+            }
+            sql.append(" ANTI JOIN ").append(fieldIdRead(keys, entry.getValue(), ""))
+                    .append(" AS ").append(alias).append(" ON ").append(match);
+        }
+        return sql.toString();
+    }
+
+    /**
+     * Writes {@link CatalogLocations#normalize(String)} as a DuckDB expression, for the data file
+     * paths in position delete files (Iceberg writes them as the catalog names the file, for
+     * example with {@code file:}).
+     *
+     * @param expression SQL expression of a location
+     * @return SQL expression of the normalised location
+     */
+    static String normalizedLocation(String expression) {
+        String bare = "regexp_replace(trim(" + expression + "), '^[Ff][Ii][Ll][Ee]:(//)?', '')";
+        String slashes = "CASE WHEN contains(" + bare + ", '://') THEN " + bare
+                + " ELSE regexp_replace(" + bare + ", '^//+', '/') END";
+        return "regexp_replace(" + slashes + ", '(.)/+$', '\\1')";
+    }
+
+    /**
      * Writes a partition value as a constant of its column's type: NULL for a missing value,
      * the text itself for text columns, else {@code TRY_CAST} (a value that does not convert
      * reads NULL, as in Hive).
@@ -112,8 +245,21 @@ public final class CatalogSources {
      * @return FROM source
      */
     static String fieldIdSource(TableSnapshot snapshot, List<String> locations) {
-        StringBuilder sql = new StringBuilder(fileList(locations)).append(", schema = MAP {");
-        List<ColumnSpec> columns = snapshot.columns();
+        return fieldIdRead(snapshot.columns(), locations, "");
+    }
+
+    /**
+     * Reads some columns of files by Parquet field ID.
+     *
+     * @param columns columns to read, each with a field ID
+     * @param locations files
+     * @param options further read_parquet options, each starting with ", "; or empty
+     * @return FROM source
+     */
+    private static String fieldIdRead(List<ColumnSpec> columns, List<String> locations,
+            String options) {
+        StringBuilder sql = new StringBuilder(fileList(locations)).append(options)
+                .append(", schema = MAP {");
         for (int i = 0; i < columns.size(); i++) {
             ColumnSpec column = columns.get(i);
             sql.append(i > 0 ? ", " : "").append(column.fieldId().intValue())
