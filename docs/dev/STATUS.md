@@ -66,7 +66,10 @@
    2.22.3; floor tests in every module. Stand: run one Spark read with the new shaded connector jar.
    Dev CI runs again (2026-10-24 22:49, repo public). **Done 2026-10-25 (Parquet read path):** server Parquet
    1.13.1 → 1.18.1, bringing aircompressor 2.0.3 and snappy-java 1.1.10.8 (`DependencyFloorTest.parquetCodecs*`).
-   Still open: Hive plugin libthrift 0.9.3 → 0.24.0 (run the hive tests); then produce a fresh runtime libs set from the poms
+   **Done 2026-10-25 (Hive plugin):** libthrift 0.9.3 → 0.24.0 for the metastore client (1 GiB response cap);
+   the test metastore (Hive 3.1.3 server, broken on libthrift 0.14+) runs on 0.9.3 in its own class loader.
+   Stand: one Hive reference run (framed and unframed if the HMS has both) with the new plugin dir.
+   Still open: produce a fresh runtime libs set from the poms
    (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
    replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
    lz4-java 1.8.0). Full test suite green after each group of upgrades.
@@ -263,3 +266,15 @@
   `DependencyFloorTest.parquetCodecsAreAtTheFloor` (fails on the old pom). Full local `clean verify
   checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 671 / 9 skipped,
   client-core 158, spark 175, starrocks 11, plugins green); push run 40148323187 green (6 min). Next: libthrift.
+- 2026-10-25 (cloud session): item 1b, Hive plugin group (commit cf060fe): libthrift 0.9.3 → 0.24.0 for the
+  metastore client (`TSocket` with a `TConfiguration` capping responses at 1 GiB like Hive 4 — libthrift's
+  default 100 MB would refuse large partition lists; frames 16 MB as before; the read budget resets on every
+  flush, so pooled connections do not run into it); `TFramedTransport` moved to `transport.layered`. Hive 3.1.3's
+  generated classes and libfb303 0.9.3 run unchanged on it. The Hive 3.1.3 metastore server fails on libthrift
+  0.14+ (`TFramedTransport$Factory` gone), so the test metastore now runs on 0.9.3 in a child-first class loader
+  over target/fixture-libs in the plugin's tests too (`IsolatedHms`; the server's `HiveTestTables` already did):
+  the tests are a new client against an old server. New tests in `HiveCatalogTest`: framed transport through a
+  framing proxy (same snapshot as unframed), libthrift floor >= 0.24 and the 1 GiB cap, fixture on 0.9.3. Full
+  local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 671 / 9
+  skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push run 40156159318 green.
+  Next: the runtime libs set (1b's last group).
