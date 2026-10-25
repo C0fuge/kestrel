@@ -23,10 +23,9 @@
 
 ## Next steps (one per session)
 
-0c. **Maintainer decision 2026-10-26: make `duckDbThreads` default 4** (item 13a; the code default is currently 1 in
-    `ConfigAdapter`, the stand ran 2). Plain 4, not the size-aware variant. Update the default, START-NOTES/README/
-    TUNING.md where the default is named, add a unit test for the default, CI green, then cut a `package=true`
-    pre-release. Items 13b-d stay as proposals (behaviour/default changes there still need approval).
+0c. ~~**Maintainer decision 2026-10-26: make `duckDbThreads` default 4**~~ — done 2026-10-26 (60e888b, CI run
+    40245198713 green, pre-release `server-1.0.0-60e888bc26ec`). Items 13b-d stay as proposals (behaviour/default
+    changes there still need approval).
 
 0b. ~~**Bug: `duckDbStatementCacheSize=0` breaks parameterized prepared statements**~~ — done 2026-10-25 (see Log):
     `streamComplete` streams its bound statement directly; the parse check in `streamSql` used to evict and close it
@@ -215,7 +214,7 @@
    s3a warehouse and s3a data file paths in Iceberg metadata.
 
 13. **Tuning defaults from the perf campaign** (stand + CI screening 2026-10-25/26, `docs/dev/TUNING.md`):
-    (a) `duckDbThreads` default 2 -> 4 (SF10 JDBC 1.8x, SF1 1.3x faster; single point lookup +14 %, 32-client p95
+    (a) ~~`duckDbThreads` default 2 -> 4~~ done as item 0c (plain 4) (SF10 JDBC 1.8x, SF1 1.3x faster; single point lookup +14 %, 32-client p95
     unchanged), or a size-aware default (cores / 4, between 2 and 8); (b) `flightBackpressureThresholdBytes` default
     256 MiB -> 16 MiB (no measured loss; with `endpointsPerServer` 4/8 the 256 MiB per stream exhausts
     `MaxDirectMemorySize` and streams are CANCELLED); (c) `duckDbExternalFileCache=true` has no memory bound and gets the
@@ -572,3 +571,8 @@
 - 2026-10-26 (local perf campaign): `docs/dev/TUNING.md` (stand single node, HDFS, build 4eaab052deaf; CI screening on
   4eaab052deaf and c3b276054cc3); new item 13 (default changes). Storage HDFS vs S3 and 3-node runs with the best
   settings not measured yet (stand not available for valid measurements).
+- 2026-10-26 (cloud session): item 0c done (60e888b): `duckDbThreads` default 4 in code (was 1) and in the bundled
+  `arrowflight.properties` (was 2); unit test `ConfigAdapterTest.duckDbThreadsDefaultsToFourWithoutAnySetting`;
+  CHANGELOG, TUNING.md, START-NOTES, user guides. Package dispatch run 40245198713 green (build + package; the push
+  run 40245189332 was cancelled in its favour): pre-release `server-1.0.0-60e888bc26ec`. Stand: rerun with the new
+  default where it ran 2. Next: item 1b (dependency security upgrades).
