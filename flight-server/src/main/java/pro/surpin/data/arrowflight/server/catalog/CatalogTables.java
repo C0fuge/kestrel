@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
@@ -279,6 +280,35 @@ public final class CatalogTables implements AutoCloseable {
         }
         TableName name = tableName(entry.get(), schema, table);
         Optional<TableSnapshot> snapshot = entry.get().catalog().pinned(name, snapshotId);
+        return snapshot.filter(s -> checked(entry.get(), s)).map(s -> new Resolved(entry.get(), s));
+    }
+
+    /**
+     * Returns the snapshot of a catalog table at an earlier point (time travel), checked against
+     * the catalog's roots.
+     *
+     * @param schema schema name
+     * @param table table name (any case)
+     * @param point the point to read
+     * @return snapshot with its catalog, empty when the table does not exist or is hidden
+     * @throws IOException when the catalog cannot be read
+     * @throws IllegalArgumentException when the table has no snapshot for the point, or its
+     *         catalog keeps no snapshot history
+     */
+    public Optional<Resolved> asOf(String schema, String table, AsOf point) throws IOException {
+        Optional<Entry> entry = owner(schema);
+        if (entry.isEmpty()) {
+            return Optional.empty();
+        }
+        TableName name = tableName(entry.get(), schema, table);
+        Optional<TableSnapshot> snapshot;
+        try {
+            snapshot = entry.get().catalog().asOf(name, point);
+        } catch (UnsupportedOperationException e) {
+            throw new IllegalArgumentException("Time travel (FOR VERSION/TIMESTAMP AS OF) is not"
+                    + " supported for " + schema + "." + table + " (catalog " + entry.get().provider()
+                    + "): " + e.getMessage(), e);
+        }
         return snapshot.filter(s -> checked(entry.get(), s)).map(s -> new Resolved(entry.get(), s));
     }
 

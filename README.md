@@ -334,6 +334,30 @@ upper bound (`rowsExact: false`). Access is checked like `SELECT * FROM schema.t
 that keeps its files on local disks refuses it (`UNIMPLEMENTED`) when several nodes are live;
 an unknown table is `NOT_FOUND`. Same action name and request as upstream da6a357.
 
+### Iceberg time travel
+
+A query can read an earlier snapshot of an Iceberg catalog table (iceberg-hadoop, iceberg-rest)
+with the clause Trino and Spark use, right after the table name:
+
+```sql
+SELECT * FROM ice.events FOR VERSION AS OF 8213491011553364004;          -- snapshot ID
+SELECT * FROM ice.events FOR VERSION AS OF 'release-1';                  -- tag or branch
+SELECT count(*) FROM ice.events
+  FOR TIMESTAMP AS OF TIMESTAMP '2026-10-01 00:00:00 UTC' e;             -- latest commit at or before
+```
+
+The timestamp needs a time zone (`UTC`, `Z`, `+03:00`, `Europe/Vienna`; never the server's local
+time) and picks the latest entry of the table's snapshot log committed at or before it. The
+snapshot is read with its own data files, deletes and columns (the schema it was written with,
+e.g. before a rename), and a query may read several snapshots of one table (`FROM t c JOIN t FOR
+VERSION AS OF 1 o ON ...`). An unknown or expired snapshot ID, an unknown tag, or a time before
+the first commit is an error (`INVALID_ARGUMENT`), never the current snapshot; a missing table is
+`NOT_FOUND`. Tables of the data directory, Hive tables (also Iceberg tables registered in a Hive
+Metastore, for now) and snapshots whose files cannot be read one by one (deletion vectors, renamed
+nested fields) refuse the clause. Access is checked like a read of the table itself. In partial
+mode such a query gets its complete answer (one endpoint, logged as `answeredCompletely`). The
+clause needs no header or ticket change.
+
 ---
 
 ## Features

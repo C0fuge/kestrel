@@ -17,6 +17,7 @@ import org.apache.iceberg.TableMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -135,6 +136,29 @@ final class IcebergCatalog implements Catalog {
             }
         }
         return Optional.empty();
+    }
+
+    @Override
+    public Optional<TableSnapshot> asOf(TableName table, AsOf point) throws IOException {
+        // A snapshot ID names an immutable snapshot: cached metadata that has it is enough. A
+        // reference moves and a later commit may predate an instant: those read fresh metadata.
+        boolean cachedFirst = point instanceof AsOf.SnapshotId;
+        for (boolean fresh : cachedFirst ? new boolean[] {false, true} : new boolean[] {true}) {
+            Optional<TableSource.Loaded> table0 = load(table, fresh);
+            if (table0.isEmpty()) {
+                return Optional.empty();
+            }
+            TableMetadata metadata = table0.get().metadata();
+            Optional<Snapshot> snapshot = TimeTravel.find(metadata, point);
+            if (snapshot.isPresent()) {
+                return Optional.of(planner.plan(table, table0.get().metadataLocation(), metadata,
+                        snapshot.get(), TimeTravel.schemaOf(metadata, snapshot.get())).snapshot());
+            }
+            if (fresh) {
+                throw new IllegalArgumentException(TimeTravel.missing(table, metadata, point));
+            }
+        }
+        throw new IllegalStateException("unreachable");
     }
 
     @Override

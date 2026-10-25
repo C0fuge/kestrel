@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Iceberg time travel: `FROM ns.t FOR VERSION AS OF <snapshot id | 'tag'>` and `FOR TIMESTAMP AS OF
+  TIMESTAMP '<time> <zone>'` read an earlier snapshot of an iceberg-hadoop / iceberg-rest table with
+  its own files, deletes and columns (README "Iceberg time travel"); errors for points without a
+  snapshot, refused for other tables; partial mode answers such queries completely. SPI 1.2 adds
+  `Catalog.asOf` (default: refused); the iceberg plugin now needs SPI 1.2.
 - Several S3 stores per server: `arrowflight.s3.stores=<name>,...` with `arrowflight.s3.<name>.root`
   and that store's own endpoint, region, URL style and credentials (`FLIGHT_S3_<NAME>_ACCESS_KEY`,
   `..._SECRET_KEY`, `..._SESSION_TOKEN` or `arrowflight.s3.<name>.credentialsFile`) let catalogs read

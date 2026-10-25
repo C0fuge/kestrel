@@ -56,7 +56,8 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
  * iceberg/avro extensions v1.4.5 ({@code -Diceberg.it.extensionDir}; skipped without it).
  * Complete answers are compared with DuckDB reading the same metadata directly; partial answers
  * with complete ones (also on a snapshot with deletes, file by file); snapshots with nested
- * changes, and joins, are answered completely; a planned snapshot stays pinned after a commit.
+ * changes, and joins, are answered completely; a planned snapshot stays pinned after a commit;
+ * time travel reads an earlier snapshot.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class IcebergCatalogIntegrationTest {
@@ -307,6 +308,70 @@ class IcebergCatalogIntegrationTest {
         }
     }
 
+    /**
+     * Time travel: FOR VERSION AS OF / FOR TIMESTAMP AS OF read the first snapshot of evolved
+     * (ids 1-4, before the rename and the added column) with that snapshot's columns, in complete
+     * and partial mode (answered completely), next to the current snapshot in one query; points
+     * without a snapshot and tables without history are refused.
+     */
+    @Test
+    @Order(50)
+    void timeTravelReadsTheFirstSnapshotWithItsColumns() throws Exception {
+        for (String schema : List.of("ice", "rest_ice")) {
+            String meta = (schema.equals("ice") ? metadata : restMetadata).get("evolved");
+            long[] first = firstSnapshot(meta);
+            String table = schema + ".evolved";
+            String version = table + " FOR VERSION AS OF " + first[0];
+            String at = table + " FOR TIMESTAMP AS OF TIMESTAMP '"
+                    + java.time.Instant.ofEpochMilli(first[1]) + "'";
+            for (String mode : List.of("complete", "partial")) {
+                Answer old = answer("SELECT * FROM " + version + " ORDER BY id", mode);
+                assertEquals(List.of("id", "name", "amount"), old.schema().getFields().stream()
+                        .map(f -> f.getName()).toList(), mode + " " + table);
+                assertEquals(4, old.rows().size(), mode + " " + old.rows());
+                assertTrue(old.rows().get(0).startsWith("1|n1|"), old.rows().toString());
+                assertEquals(1, old.endpoints(), mode);
+                assertEquals(List.of("2|n2"), answer("SELECT e.id, e.name FROM " + version
+                        + " e WHERE e.id = 2", mode).rows(), mode);
+                assertEquals(List.of("4"), answer("SELECT count(*) FROM " + at, mode).rows(), mode);
+                assertEquals(List.of("4|7"), answer("SELECT count(o.id), count(c.id) FROM " + table
+                        + " c LEFT JOIN " + version + " AS o ON o.id = c.id", mode).rows(), mode);
+            }
+            // Deletes of the snapshot read are applied; nested renames cannot be read file by file.
+            String deletes = schema + ".deletes FOR VERSION AS OF " + snapshot((schema.equals("ice")
+                    ? metadata : restMetadata).get("deletes"), "DESC")[0];
+            assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"),
+                    answer("SELECT id, label FROM " + deletes + " ORDER BY id", "complete").rows());
+            String nested = schema + ".nested FOR VERSION AS OF " + snapshot((schema.equals("ice")
+                    ? metadata : restMetadata).get("nested"), "DESC")[0];
+            FlightRuntimeException unreadable = assertThrows(FlightRuntimeException.class,
+                    () -> answer("SELECT * FROM " + nested, "complete"));
+            assertTrue(unreadable.getMessage().contains("cannot be read by time travel"),
+                    unreadable.getMessage());
+            assertEquals(List.of("7"), answer("SELECT count(*) FROM " + table
+                    + " FOR TIMESTAMP AS OF TIMESTAMP '2999-01-01 00:00:00 UTC'", "complete").rows());
+            for (String[] refused : new String[][] {
+                    {table + " FOR VERSION AS OF 12345", "has no snapshot 12345"},
+                    {table + " FOR TIMESTAMP AS OF TIMESTAMP '2000-01-01 00:00:00 UTC'",
+                            "no snapshot committed at or before"},
+                    {table + " FOR TIMESTAMP AS OF TIMESTAMP '2000-01-01 00:00:00'",
+                            "needs a time zone"},
+                    {"dirs.t FOR VERSION AS OF 1", "only tables of an Iceberg catalog"},
+                    {schema + ".nope FOR VERSION AS OF 1", "nope"}}) {
+                for (String mode : List.of("complete", "partial")) {
+                    FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                            () -> answer("SELECT * FROM " + refused[0], mode), refused[0]);
+                    // A missing table is NOT_FOUND, as DuckDB's own catalog error.
+                    assertEquals(refused[0].contains(".nope ")
+                            ? org.apache.arrow.flight.FlightStatusCode.NOT_FOUND
+                            : org.apache.arrow.flight.FlightStatusCode.INVALID_ARGUMENT,
+                            e.status().code(), refused[0] + ": " + e);
+                    assertTrue(e.getMessage().contains(refused[1]), refused[0] + ": " + e.getMessage());
+                }
+            }
+        }
+    }
+
     @Test
     @Order(100)
     void plannedSnapshotStaysPinnedAfterACommit() throws Exception {
@@ -430,6 +495,32 @@ class IcebergCatalogIntegrationTest {
             try (ResultSet rs = s.executeQuery(fingerprintSql("iceberg_scan('" + metadataLocation + "')"))) {
                 rs.next();
                 return rs.getLong(1) + "|" + rs.getString(2);
+            }
+        }
+    }
+
+    private static long[] firstSnapshot(String metadataLocation) throws Exception {
+        return snapshot(metadataLocation, "ASC");
+    }
+
+    /**
+     * Returns the first or last snapshot of a table, as DuckDB's iceberg extension lists it.
+     *
+     * @param metadataLocation metadata file
+     * @param order ASC for the first, DESC for the last
+     * @return snapshot ID and commit time in epoch milliseconds
+     */
+    private static long[] snapshot(String metadataLocation, String order) throws Exception {
+        Path ext = Path.of(extensionDir, "v1.4.5", "linux_amd64");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");
+            s.execute("LOAD '" + ext.resolve("iceberg.duckdb_extension") + "'");
+            try (ResultSet rs = s.executeQuery("SELECT snapshot_id, epoch_ms(timestamp_ms) FROM"
+                    + " iceberg_snapshots('" + metadataLocation + "') ORDER BY sequence_number "
+                    + order + " LIMIT 1")) {
+                assertTrue(rs.next());
+                return new long[] {rs.getLong(1), rs.getLong(2)};
             }
         }
     }

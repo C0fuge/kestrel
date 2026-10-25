@@ -174,8 +174,9 @@ public final class ExecutionService {
         try {
             List<Object> values = parameters == null ? List.of()
                     : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
-            return duckDbAdapter.describeComplete(allocator, query, values, catalogViews.current());
-        } catch (IllegalArgumentException e) {
+            return duckDbAdapter.describeComplete(allocator,
+                    catalogViews.timeTravel(query, true), values, catalogViews.current());
+        } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
@@ -220,7 +221,8 @@ public final class ExecutionService {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            duckDbAdapter.streamComplete(allocator, query, values, catalogViews.current(), listener,
+            duckDbAdapter.streamComplete(allocator, catalogViews.timeTravel(query, false), values,
+                    catalogViews.current(), listener,
                     startListener);
         } catch (java.sql.SQLException e) {
             String message = String.valueOf(e.getMessage());
@@ -277,8 +279,9 @@ public final class ExecutionService {
      */
     public Schema completeParameterSchema(String query) {
         try {
-            return duckDbAdapter.describeParameters(query, catalogViews.current());
-        } catch (IllegalArgumentException e) {
+            return duckDbAdapter.describeParameters(catalogViews.timeTravel(query, true),
+                    catalogViews.current());
+        } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());

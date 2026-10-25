@@ -11,7 +11,7 @@ public final class SpiVersion {
     /** Incompatible changes. */
     public static final int MAJOR = 1;
     /** Compatible additions. */
-    public static final int MINOR = 1;
+    public static final int MINOR = 2;
 
     /** Not instantiable. */
     private SpiVersion() {

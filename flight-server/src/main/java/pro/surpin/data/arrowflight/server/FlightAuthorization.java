@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server;
 
 import org.apache.arrow.flight.CallStatus;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
+import pro.surpin.data.arrowflight.server.services.TimeTravelClause;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -34,7 +35,8 @@ public interface FlightAuthorization extends AutoCloseable {
      * @param query SQL statement
      */
     default void requireQuery(String principal, String query) {
-        ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+        // A table read at an earlier snapshot (FOR VERSION AS OF) is checked like the table.
+        ParquetQueryParser parsed = ParquetQueryParser.parse(TimeTravelClause.withoutClauses(query));
         Set<String> checked = new HashSet<>();
         if (parsed.isJoin) {
             if (parsed.joinTables.isEmpty()) {

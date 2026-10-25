@@ -72,7 +72,26 @@ public final class CatalogViews {
     private record TableViews(String fingerprint, String data, String empty) {
     }
 
+    /**
+     * SELECTs of a time-travel snapshot.
+     *
+     * @param data SELECT over the snapshot's files
+     * @param empty SELECT with the same columns and no rows
+     */
+    private record TravelViews(String data, String empty) {
+    }
+
+    /** Most time-travel snapshots kept described. */
+    private static final int TRAVEL_CAPACITY = 64;
+
     private final ParquetAdapter parquetAdapter;
+    /** Described time-travel snapshots, least recently used first. */
+    private final Map<String, TravelViews> travel = new java.util.LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, TravelViews> eldest) {
+            return size() > TRAVEL_CAPACITY;
+        }
+    };
     private final DuckDbAdapter duckDbAdapter;
     private final boolean widenUnsigned;
     private final Map<String, TableViews> tables = new HashMap<>();
@@ -316,24 +335,11 @@ public final class CatalogViews {
             if (previous != null && previous.fingerprint().equals(fingerprint)) {
                 return previous;
             }
-            String source;
-            if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
-                source = icebergSource(iceberg.metadataLocation(), snapshot);
-                if (source.startsWith("(SELECT * FROM iceberg_scan(")) {
-                    LOGGER.info("node={} views=icebergAllColumnsRead table={}.{}"
-                            + " reason=equalityDeletes", LogUtil.node(), schema, table);
-                } else if (!source.startsWith("iceberg_scan(")) {
-                    LOGGER.info("node={} views=icebergDeletesApplied table={}.{}", LogUtil.node(),
-                            schema, table);
-                }
-            } else if (snapshot.columns().isEmpty()) {
+            String source = snapshotSource(schema, table, snapshot);
+            if (source == null) {
                 LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns", LogUtil.node(),
                         schema, table);
                 return null;
-            } else if (snapshot.files().isEmpty()) {
-                source = declaredColumnsSource(snapshot);
-            } else {
-                source = CatalogSources.filesSource(snapshot, snapshot.files());
             }
             return describeSource(schema, table, source, fingerprint);
         } catch (SQLException | RuntimeException e) {
@@ -341,6 +347,146 @@ public final class CatalogViews {
                     LogUtil.node(), schema, table, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Names the FROM source of a catalog table's snapshot for complete answers.
+     *
+     * @param schema schema name, for the log
+     * @param table table name, for the log
+     * @param snapshot the snapshot
+     * @return FROM source, or null when the snapshot declares no columns and has no metadata
+     *         DuckDB could read them from
+     */
+    private static String snapshotSource(String schema, String table, TableSnapshot snapshot) {
+        if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
+            String source = icebergSource(iceberg.metadataLocation(), snapshot);
+            if (source.startsWith("(SELECT * FROM iceberg_scan(")) {
+                LOGGER.info("node={} views=icebergAllColumnsRead table={}.{}"
+                        + " reason=equalityDeletes", LogUtil.node(), schema, table);
+            } else if (!source.startsWith("iceberg_scan(")) {
+                LOGGER.info("node={} views=icebergDeletesApplied table={}.{}", LogUtil.node(),
+                        schema, table);
+            }
+            return source;
+        }
+        if (snapshot.columns().isEmpty()) {
+            return null;
+        }
+        return snapshot.files().isEmpty() ? declaredColumnsSource(snapshot)
+                : CatalogSources.filesSource(snapshot, snapshot.files());
+    }
+
+    /**
+     * Names the FROM source of a time-travel snapshot: its own data files, read by field ID with
+     * the snapshot's columns and deletes like partial answers read them. DuckDB's iceberg_scan
+     * reads the metadata file's current snapshot, so a snapshot whose files cannot be read one by
+     * one (deletion vectors, nested column renames) is refused rather than read wrongly.
+     *
+     * @param resolved the snapshot with its catalog
+     * @return FROM source
+     * @throws IllegalArgumentException when the snapshot cannot be read this way
+     */
+    private static String travelSource(CatalogTables.Resolved resolved) {
+        TableSnapshot snapshot = resolved.snapshot();
+        String which = "Snapshot " + snapshot.snapshotId() + " of " + snapshot.name();
+        if (snapshot.columns().isEmpty()) {
+            throw new IllegalArgumentException(which + " declares no columns");
+        }
+        if (snapshot.files().isEmpty()) {
+            return declaredColumnsSource(snapshot);
+        }
+        String reason = CatalogTables.completeReason(resolved);
+        if (reason != null) {
+            throw new IllegalArgumentException(which + " cannot be read by time travel: " + reason);
+        }
+        return ExecutionService.catalogFilesSource(snapshot, snapshot.files());
+    }
+
+    /**
+     * Replaces the table references of a client's SQL that carry a time-travel clause
+     * ({@link TimeTravelClause}) by a read of the snapshot they name, so that DuckDB runs the
+     * query over that snapshot: its data files, deletes and columns (see {@link #travelSource}). A reference keeps its table name as its alias unless the
+     * client gave one. SQL without a clause is returned unchanged.
+     *
+     * @param sql client SQL
+     * @param describe whether the text is for describing (no rows, no file is read)
+     * @return SQL DuckDB can run
+     * @throws java.io.UncheckedIOException when a catalog cannot be read
+     * @throws SQLException when DuckDB cannot read a snapshot's column types
+     * @throws IllegalArgumentException when a clause is malformed, names a table outside an
+     *         Iceberg catalog, or a point the table has no snapshot for
+     */
+    public String timeTravel(String sql, boolean describe) throws SQLException {
+        List<TimeTravelClause.Reference> references = TimeTravelClause.find(sql);
+        if (references.isEmpty()) {
+            return sql;
+        }
+        Map<TimeTravelClause.Reference, String> bodies = new HashMap<>();
+        for (TimeTravelClause.Reference reference : references) {
+            List<String> parts = reference.nameParts();
+            if (parts.size() != 2) {
+                throw new IllegalArgumentException("Time travel needs the table named with its"
+                        + " schema (schema.table), got " + String.join(".", parts));
+            }
+            String schema = parts.get(0);
+            String table = parts.get(1);
+            String name = schema + "." + table;
+            if (!parquetAdapter.isCatalogSchema(schema)) {
+                throw new IllegalArgumentException("Time travel (FOR VERSION/TIMESTAMP AS OF) is"
+                        + " not supported for " + name + ": only tables of an Iceberg catalog"
+                        + " have snapshots");
+            }
+            CatalogTables.Resolved resolved;
+            try {
+                resolved = parquetAdapter.catalogTables().asOf(schema, table, reference.point())
+                        .orElseThrow(() -> new IllegalArgumentException("Catalog Error: Table "
+                                + name + " does not exist"));
+            } catch (IOException e) {
+                // A catalog outage, not the client's SQL (UNAVAILABLE).
+                throw new java.io.UncheckedIOException(e);
+            }
+            TravelViews views = travelViews(schema, table, resolved);
+            LOGGER.debug("node={} views=timeTravel table={} point={} snapshot={}", LogUtil.node(),
+                    name, reference.point(), resolved.snapshot().snapshotId());
+            bodies.put(reference, "(" + (describe ? views.empty() : views.data()) + ")"
+                    + (reference.aliased() ? "" : " AS " + DuckDbAdapter.quoteIdentifier(table)));
+        }
+        return TimeTravelClause.rewrite(sql, references, bodies::get);
+    }
+
+    /**
+     * Returns the SELECTs of a time-travel snapshot, described once per snapshot.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @param resolved the snapshot with its catalog
+     * @return the SELECTs
+     * @throws SQLException when DuckDB cannot read its column types
+     */
+    private TravelViews travelViews(String schema, String table, CatalogTables.Resolved resolved)
+            throws SQLException {
+        TableSnapshot snapshot = resolved.snapshot();
+        String key = schema + "\u0000" + table + "\u0000" + snapshot.fingerprint();
+        synchronized (travel) {
+            TravelViews cached = travel.get(key);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        String source = travelSource(resolved);
+        TravelViews views;
+        synchronized (this) {
+            TableViews described = describeSource(schema, table, source, key);
+            String prefix = "CREATE OR REPLACE VIEW " + DuckDbAdapter.quoteIdentifier(schema) + "."
+                    + DuckDbAdapter.quoteIdentifier(table) + " AS ";
+            views = new TravelViews(described.data().substring(prefix.length()),
+                    described.empty().substring(prefix.length()));
+        }
+        synchronized (travel) {
+            travel.put(key, views);
+        }
+        return views;
     }
 
     /**

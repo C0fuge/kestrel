@@ -154,8 +154,14 @@
    correct: e.g. read data files + equality delete files yourself (anti-join on the equality columns with sequence-
    number rules), in complete and partial mode (partial: per-file anti-join on the node). Prove with a test table
    with eq + position deletes vs an independent answer.
-3. **Iceberg time travel**: expose snapshot reads (`FOR VERSION AS OF` / a `table@snapshot` name form or a session
-   setting — propose in Open questions first which form clients can send), pinned per query like the current snapshot.
+3. ~~**Iceberg time travel**~~ — done 2026-10-25 (see Log): `FOR VERSION AS OF <id | 'tag'>` / `FOR TIMESTAMP AS OF
+   TIMESTAMP '<time> <zone>'` after an iceberg-hadoop / iceberg-rest table name, complete mode (rewritten to a read of
+   the snapshot's own files, deletes and columns); partial mode answers such queries completely. Follow-ups (optional):
+   (a) partial mode in parts (plan the travelled snapshot's files; the executor already pins any snapshot ID via
+   `pinned`, but describe and the `fileUris == null` path read `current`); (b) Iceberg tables registered in a Hive
+   Metastore (`TableFormat` needs an `asOf`); (c) snapshots that cannot be read file by file (deletion vectors,
+   renamed nested fields) are refused — `iceberg_scan(..., snapshot_from_id => )` could read them if DuckDB 1.4.5 picks
+   the snapshot's schema (check first). For the coordinator: Trino plugin / StarRocks connector may forward the clause.
 4. ~~**Second S3 store**~~ — done 2026-10-25 (see Log): named stores `arrowflight.s3.stores=<name>,...`, each
    with `arrowflight.s3.<name>.root` and its own endpoint/region/URL style/credentials, own DuckDB secret
    `flight_s3_<name>`. Stand: one Iceberg or Hive catalog in a second MinIO bucket with another (read-only)

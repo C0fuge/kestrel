@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import pro.surpin.data.arrowflight.server.plugin.ThreadContext;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
@@ -76,6 +77,13 @@ public final class SpiCatalog implements Catalog {
             throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.pinnedColumns(table, snapshotId);
+        }
+    }
+
+    @Override
+    public Optional<TableSnapshot> asOf(TableName table, AsOf point) throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.asOf(table, point);
         }
     }
 

@@ -305,7 +305,9 @@ public final class QueryPlanner {
             return false;
         }
         try {
-            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            // Time-travel clauses only name catalog tables (others are refused when run).
+            ParquetQueryParser parsed = ParquetQueryParser.parse(
+                    TimeTravelClause.withoutClauses(query));
             if (parsed.isJoin) {
                 return parsed.joinTables.stream()
                         .allMatch(t -> parquetAdapter.isCatalogSchema(t.schema()));

@@ -67,6 +67,25 @@ public interface Catalog extends AutoCloseable {
     }
 
     /**
+     * Returns the snapshot of a table at an earlier point (time travel), planned with the columns
+     * that snapshot was written with. Another node pins it through {@link #pinned} like the
+     * current one. A point the table has no snapshot for (an unknown or expired snapshot ID, an
+     * unknown reference, an instant before the first commit) is an error, never the current
+     * snapshot. The default refuses: catalogs without snapshot history do not support it.
+     *
+     * @param table table name
+     * @param point the point to read
+     * @return snapshot, empty when the table does not exist
+     * @throws IOException when the catalog cannot be read
+     * @throws IllegalArgumentException when the table has no snapshot for the point
+     * @throws UnsupportedOperationException when the catalog keeps no snapshot history
+     * @since SPI 1.2
+     */
+    default Optional<TableSnapshot> asOf(TableName table, AsOf point) throws IOException {
+        throw new UnsupportedOperationException("the catalog keeps no snapshot history");
+    }
+
+    /**
      * Tells why the data files of a snapshot cannot each be read on their own with
      * {@code read_parquet} and the snapshot's columns (field IDs), so that the server answers
      * queries of the table completely instead of in parts: for example a nested column whose
