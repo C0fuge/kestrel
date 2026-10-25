@@ -209,6 +209,16 @@
    the S3 scheme forms as one in `StoreRegistry` (`holder`, `locate`) or normalise them; test with an
    s3a warehouse and s3a data file paths in Iceberg metadata.
 
+13. **Tuning defaults from the perf campaign** (stand + CI screening 2026-10-25/26, `docs/dev/TUNING.md`):
+    (a) `duckDbThreads` default 2 -> 4 (SF10 JDBC 1.8x, SF1 1.3x faster; single point lookup +14 %, 32-client p95
+    unchanged), or a size-aware default (cores / 4, between 2 and 8); (b) `flightBackpressureThresholdBytes` default
+    256 MiB -> 16 MiB (no measured loss; with `endpointsPerServer` 4/8 the 256 MiB per stream exhausts
+    `MaxDirectMemorySize` and streams are CANCELLED); (c) `duckDbExternalFileCache=true` has no memory bound and gets the
+    server OOM-killed on SF10 (HDFS and S3) - bound it or document it as unsafe; (d) ADBC Go driver connects rarely fail
+    with "failed to update autocommit: rpc error: code = Unimplemented" under 8 simultaneous connects although
+    SqlInfo says no transactions - find which call returns Unimplemented. Connector side (forward to the Trino
+    connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
+
 ## Open questions
 
 - Production versions (maintainer, 2026-10-25) vs our client side, not yet checked: the libs set carries the
@@ -554,3 +564,6 @@
   fix with the stand's error. Local: CatalogRegistryTest + StoreRegistryTest, checkstyle + spotbugs clean (local
   Maven: the wrapper's 3.10.0 download fails, `/opt/maven/bin/mvn` works); push run 40241864311 green.
   Next: item 12 (s3a/s3n catalog roots); 8 needs the maintainer first, 9 design first.
+- 2026-10-26 (local perf campaign): `docs/dev/TUNING.md` (stand single node, HDFS, build 4eaab052deaf; CI screening on
+  4eaab052deaf and c3b276054cc3); new item 13 (default changes). Storage HDFS vs S3 and 3-node runs with the best
+  settings not measured yet (stand not available for valid measurements).
