@@ -114,11 +114,10 @@
    with `arrowflight.s3.<name>.root` and its own endpoint/region/URL style/credentials, own DuckDB secret
    `flight_s3_<name>`. Stand: one Iceberg or Hive catalog in a second MinIO bucket with another (read-only)
    user next to the S3 data directory; check both secrets in the startup log and one query per store.
-5. **Config precedence bug (upstream)**: env vars such as `FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
-   `DUCKDB_*` are shadowed by values in the bundled `arrowflight.properties`; documented precedence is env > file.
-   Fix with tests (and keep `-D` highest). Same for the documented `-Darrowflight.*` aliases: the file's short
-   key wins over them (`metricsEnabled=true` in the file beats `-Darrowflight.metrics.enabled=false`; seen
-   2026-10-25 in `LibsSetTest`, which uses `-DmetricsEnabled=false` for now).
+5. ~~**Config precedence bug (upstream)**~~ — done 2026-10-25 (see Log): every `-D` name > environment >
+   `etc/plugins/<ns>.properties` > `arrowflight.properties` > default, server and plugin settings alike.
+   Stand: check that no leftover environment variable (e.g. `FLIGHT_RESULT_MODE`, `DUCKDB_*`) now changes
+   behaviour that the bundled file used to hide.
 6. ~~**Prepared-statement cache bound**~~ — done 2026-10-24 with UPSTREAM-SYNC S12: the statement cache already was
    an LRU of `duckDbStatementCacheSize` (default 64) per worker thread; now texts over 256 Ki chars stay out of it
    (and out of the parse and schema caches), evictions and skips are Prometheus counters.
@@ -209,6 +208,11 @@
   seen 2026-10-25 from the cloud sandbox, where the proxy refused it). Nothing in the config sets
   `hazelcast.phone.home.enabled=false`. Turn it off by default (no client-visible change)? Until then the stand
   can pass `-Dhazelcast.phone.home.enabled=false` or `HZ_PHONE_HOME_ENABLED=false`.
+- Item 5 (config precedence, done 2026-10-25) changes which value wins when a setting is set twice:
+  environment variables now beat `arrowflight.properties` (both the bundled one and one an operator puts on
+  the class path) and `etc/plugins/<ns>.properties`. Before upgrading the stand/production, check the
+  service environment for leftover variables that used to be ignored (most visible: `FLIGHT_RESULT_MODE`,
+  `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`, `FLIGHT_METRICS_ENABLED`, `DUCKDB_LOCKDOWN`). No wire change by itself.
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as
@@ -408,3 +412,18 @@
   (new item 12). Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services`
   green (server 687 / 9 skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push
   run 40186896468 green. Next: item 3 once the form is confirmed, else item 5 (config precedence).
+- 2026-10-25 (cloud session): item 3 still waits on the maintainer (Open questions). Item 5 done (commit 1da3703):
+  configuration precedence is now every `-D` name (short key and `arrowflight.*` alias) > environment >
+  `etc/plugins/<ns>.properties` > `arrowflight.properties` > default. Before, the bundled file hid environment
+  variables (`FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`, `FLIGHT_METRICS_ENABLED`, `DUCKDB_*`,
+  `FLIGHT_S3_REGION` via `s3Region`, ...) and the file's short key beat a `-Darrowflight.*` alias. `ConfigSource`
+  (`lookup`, new `firstSystemProperty` / `firstEnvironment` / `firstFileProperty`) carries the order;
+  `ConfigAdapter` reads through it (`getConfig(ConfigSource)`), `PropertiesPluginConfig` puts the plugin file
+  between environment and bundled file; SPI `PluginConfig` Javadoc, README, properties comments updated. Tests:
+  `ConfigAdapterTest` (env beats bundled file, every -D beats env/file, blanks fall through),
+  `PropertiesPluginConfigTest` and `DuckDbExtensionsTest` rewritten to the new order, `LibsSetTest` now starts
+  the child server with `-Darrowflight.metrics.enabled=false`. Upgrade note in CHANGELOG and Open questions.
+  Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server
+  691 / 9 skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push run 40195045583
+  green. Next: item 3 once the form is confirmed, else item 7 (Kerberos for the HMS client; 8/9 need the
+  maintainer first) or items 10–12.
