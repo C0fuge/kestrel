@@ -330,3 +330,19 @@
   computed in Java; fails with `=` instead of IS NOT DISTINCT FROM); `CatalogViewsIcebergSourceTest` updated. Local
   server tests green (681 / 9 skipped); push run 40170480666 green (incl. the Iceberg ITs on Iceberg-Java tables).
   Next: item 2 partial mode (see Next steps 2 (i)), then the stand timing (ii).
+- 2026-10-25 (cloud session): item 2 (i), partial mode (commit f518695). Iceberg snapshots with position/equality
+  deletes that `CatalogSources.deletesApplicable` covers (new; same checks `deletesAppliedSource` makes, they hold
+  for every subset of files) are no longer answered completely in partial mode: `completeReason` lets them through,
+  the plan spreads their files like any snapshot's (tickets unchanged: snapshot ID + location), and the executing
+  node, which re-plans the pinned snapshot anyway, reads its ticket files with their delete files through
+  `deletesAppliedSource` (`ExecutionService.catalogFilesSource`). Plans with delete files report records `-1`
+  (recorded rows overcount). Deletion vectors, columns without field ID, dropped equality columns stay complete.
+  Client-visible: such tables now give one endpoint per node in partial mode instead of one complete endpoint
+  (same as every other catalog table; no ticket or header change). Tests: `CatalogSourcesDeletesTest` (each file
+  alone with its own deletes adds up to the independent answer), `CatalogTablesTest` (reasons; plan in parts with
+  unknown row count; DV still complete), `IcebergCatalogIntegrationTest` (Iceberg-Java table, hadoop + REST: located
+  partial endpoint, a ticket per data file returns exactly that file's surviving rows, eq delete older than the
+  second file leaves it alone; the iceberg_scan-workaround queries now also run partially). Local server verify:
+  692 tests, only `LakeFsPluginTest` erred for the unbuilt lakeFS plugin in a single-module run (green after building
+  it); Checkstyle/SpotBugs clean. CI run: see next Log line. Next: item 2 (ii)/(iii) are stand work; next code item
+  is 3 (time travel; propose the form in Open questions first).
