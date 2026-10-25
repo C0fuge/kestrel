@@ -167,7 +167,7 @@
   Hadoop 3.5.0 unless the stand shows a problem? Proposal: stay, and test HA failover + Kerberos on the stand
   with release `server-1.0.0-c3b276054cc3` first.
 
-- **Item 3 (Iceberg time travel): which form? (proposal 2026-10-25, no code yet).** Recommended: the
+- **Item 3 (Iceberg time travel): ANSWERED 2026-10-25 — yes, implement the proposed `FOR VERSION AS OF` / `FOR TIMESTAMP AS OF` clause.** (proposal 2026-10-25:) Recommended: the
   SQL clause Trino and Spark use, after a catalog table name: `FROM ns.t FOR VERSION AS OF
   8213491011553364004` (snapshot ID) and `FOR TIMESTAMP AS OF TIMESTAMP '2026-10-01 00:00:00 UTC'`
   (latest snapshot committed at or before; a time zone is required, no server-local time). The

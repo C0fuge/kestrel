@@ -39,5 +39,8 @@ backlog, decisions, history pointers). The change record of earlier local work i
 - No secrets in the repo; test credentials generated in the job.
 - Commit/push only to this repository. Release artifacts (jars) go to this repo's releases only; the maintainer's local
   coordinator distributes them to the client repos.
+- Purely additive features that keep existing behaviour unchanged (new SQL syntax, new optional settings, new
+  Flight actions) do not need the maintainer's approval: implement them, document them, and mention them in the Log.
+  Ask only for changes to existing behaviour, defaults, wire format or security.
 - Anything needing the maintainer's decision → "Open questions" in docs/dev/STATUS.md.
 - Docs and commit messages in English.
