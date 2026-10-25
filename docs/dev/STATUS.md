@@ -81,7 +81,17 @@
    the API jars overlapping the shaded jar (javax.servlet 4.0.0 vs jakarta.servlet-api 4.0.4, JAX-RS 1.1 in
    Ranger's `jersey-bundle` vs jakarta.ws.rs-api 2.1.6, javax.annotation/inject) would go with them.
    Item 1b is done apart from the stand checks named above.
-2. **Iceberg equality deletes are correct but slow** (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
+2. **Iceberg equality deletes are correct but slow** — **complete mode done 2026-10-25** (5466f86): snapshots with
+   equality deletes are read by `CatalogSources.deletesAppliedSource` (read_parquet by field ID, ANTI JOINs on the
+   equality columns with IS NOT DISTINCT FROM, position deletes on normalised path + `file_row_number`; delete
+   assignment = the plugin's `FileScanTask.deletes()`, i.e. Iceberg's sequence-number rules); deletion vectors,
+   columns without field ID, equality columns the schema dropped, a column named `file_row_number` keep the old
+   iceberg_scan read. **Remaining:** (i) partial mode — `CatalogTables.completeReason` still refuses any delete
+   file; the ticket must carry each file's delete files (or the executing node re-derives them from the pinned
+   snapshot) so a node runs `deletesAppliedSource` over its own files; (ii) stand: time the int7 eq-delete
+   queries (was 25–90 s) on the new source and check answers vs the old ones; (iii) many data files with position
+   deletes become one UNION ALL branch each — measure planning time on a table after a large MERGE. Original
+   text: Iceberg equality deletes are correct but slow (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
    iceberg extension refuses or mis-applies eq deletes when filters/projections are pushed). Make them fast and
    correct: e.g. read data files + equality delete files yourself (anti-join on the equality columns with sequence-
    number rules), in complete and partial mode (partial: per-file anti-join on the node). Prove with a test table
