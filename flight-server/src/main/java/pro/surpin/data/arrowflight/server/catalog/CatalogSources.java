@@ -105,37 +105,16 @@ public final class CatalogSources {
      *         schema no longer has, a column named {@code file_row_number})
      */
     public static String deletesAppliedSource(TableSnapshot snapshot, List<TableFile> files) {
-        if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata) || files.isEmpty()
-                || snapshot.columns().isEmpty()) {
+        Map<Integer, ColumnSpec> byFieldId = applicableColumns(snapshot, files);
+        if (byFieldId == null) {
             return null;
-        }
-        Map<Integer, ColumnSpec> byFieldId = new LinkedHashMap<>();
-        for (ColumnSpec column : snapshot.columns()) {
-            if (column.fieldId() == null
-                    || ROW_NUMBER.equalsIgnoreCase(column.name())) {
-                return null;
-            }
-            byFieldId.put(column.fieldId(), column);
         }
         // Data files grouped by their delete files; a file with position deletes on its own.
         Map<List<DeleteFile>, List<String>> groups = new LinkedHashMap<>();
         List<TableFile> positional = new ArrayList<>();
         for (TableFile file : files) {
-            boolean positions = false;
-            for (DeleteFile delete : file.deletes()) {
-                switch (delete.kind()) {
-                    case POSITION -> positions = true;
-                    case EQUALITY -> {
-                        if (delete.equalityFieldIds().isEmpty()
-                                || !byFieldId.keySet().containsAll(delete.equalityFieldIds())) {
-                            return null;
-                        }
-                    }
-                    default -> {
-                        return null;
-                    }
-                }
-            }
+            boolean positions = file.deletes().stream()
+                    .anyMatch(delete -> delete.kind() == DeleteFile.Kind.POSITION);
             if (positions) {
                 positional.add(file);
             } else {
@@ -163,6 +142,61 @@ public final class CatalogSources {
                     + equalityJoins(file.deletes(), byFieldId));
         }
         return "(" + String.join(" UNION ALL ", branches) + ")";
+    }
+
+    /**
+     * Tells whether {@link #deletesAppliedSource} applies the delete files of some data files of
+     * a snapshot (it holds for every subset of files it holds for).
+     *
+     * @param snapshot snapshot with its columns
+     * @param files files of the snapshot, with their delete files
+     * @return true when the source can be written
+     */
+    public static boolean deletesApplicable(TableSnapshot snapshot, List<TableFile> files) {
+        return applicableColumns(snapshot, files) != null;
+    }
+
+    /**
+     * Checks that the delete files of some data files can be applied with read_parquet and
+     * returns the snapshot's columns by field ID.
+     *
+     * @param snapshot snapshot with its columns
+     * @param files files of the snapshot, with their delete files
+     * @return columns by field ID, or null when the deletes cannot be applied this way
+     */
+    private static Map<Integer, ColumnSpec> applicableColumns(TableSnapshot snapshot,
+            List<TableFile> files) {
+        if (!(snapshot.read() instanceof ReadSpec.IcebergMetadata) || files.isEmpty()
+                || snapshot.columns().isEmpty()) {
+            return null;
+        }
+        Map<Integer, ColumnSpec> byFieldId = new LinkedHashMap<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            if (column.fieldId() == null
+                    || ROW_NUMBER.equalsIgnoreCase(column.name())) {
+                return null;
+            }
+            byFieldId.put(column.fieldId(), column);
+        }
+        for (TableFile file : files) {
+            for (DeleteFile delete : file.deletes()) {
+                switch (delete.kind()) {
+                    case POSITION -> {
+                        // Applied on the file's row numbers.
+                    }
+                    case EQUALITY -> {
+                        if (delete.equalityFieldIds().isEmpty()
+                                || !byFieldId.keySet().containsAll(delete.equalityFieldIds())) {
+                            return null;
+                        }
+                    }
+                    default -> {
+                        return null;
+                    }
+                }
+            }
+        }
+        return byFieldId;
     }
 
     /**

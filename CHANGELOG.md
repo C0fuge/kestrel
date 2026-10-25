@@ -258,6 +258,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Package renamed from `net.surpin` to `pro.surpin`
 
 ### Changed
+- Partial results of Iceberg tables with delete files: a snapshot with position and/or equality
+  deletes is no longer answered completely by one node. Its data files are spread over the nodes
+  like other snapshots' (tickets unchanged: snapshot ID and file location), and the executing node
+  takes each file's delete files from the pinned snapshot's plan and applies them with read_parquet
+  anti-joins (as complete answers do). Such plans report an unknown row count (`-1`) instead of the
+  files' recorded rows. Deletion vectors, columns without field IDs and equality columns the schema
+  dropped still get the complete answer.
 - Metadata endpoints (catalogs, schemas, tables, SqlInfo, type info) carry no location by
   default: clients read them over their own connection (stock JDBC metadata 1.4-1.6x faster in
   plaintext, 3.2x with TLS). `metadataEndpointLocation=advertised`

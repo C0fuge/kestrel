@@ -148,10 +148,20 @@ class CatalogTablesTest {
                 snapshot("s", "t", meta, List.of(file(ROOT + "/t/f", 1))))));
         assertTrue(CatalogTables.completeReason(new CatalogTables.Resolved(entry,
                 snapshot("s", "t", meta, List.of()))).contains("no data files"));
+        // Deletes the server applies per file (position, equality on known columns) are read in
+        // parts; deletion vectors and equality columns the schema dropped are not.
+        assertNull(CatalogTables.completeReason(new CatalogTables.Resolved(entry,
+                snapshot("s", "t", meta, List.of(file(ROOT + "/t/f", 1, new DeleteFile(ROOT + "/t/d", 1,
+                        DeleteFile.Kind.EQUALITY, List.of(1)), new DeleteFile(ROOT + "/t/p", 1,
+                        DeleteFile.Kind.POSITION, List.of())), file(ROOT + "/t/g", 1))))));
         assertTrue(CatalogTables.completeReason(new CatalogTables.Resolved(entry,
                 snapshot("s", "t", meta, List.of(file(ROOT + "/t/f", 1, new DeleteFile(ROOT + "/t/d", 1,
-                        DeleteFile.Kind.EQUALITY, List.of(1)))))))
-                .contains("1 delete file(s)"));
+                        DeleteFile.Kind.EQUALITY, List.of(9)))))))
+                .contains("1 delete file(s) the server cannot apply"));
+        assertTrue(CatalogTables.completeReason(new CatalogTables.Resolved(entry,
+                snapshot("s", "t", meta, List.of(file(ROOT + "/t/g", 1), file(ROOT + "/t/f", 1,
+                        new DeleteFile(ROOT + "/t/v.puffin", 1, DeleteFile.Kind.DELETION_VECTOR,
+                                List.of())))))).contains("1 delete file(s) the server cannot apply"));
         TableSnapshot noIds = new TableSnapshot(new TableName("s", "t"), "1", "f",
                 List.of(new ColumnSpec("id", "BIGINT", true, null)), null,
                 List.of(file(ROOT + "/t/f", 1)), new ReadSpec.IcebergMetadata(meta));
@@ -194,7 +204,7 @@ class CatalogTablesTest {
     @Test
     void partialPlansSpreadTheSnapshotsFilesWithTheSnapshotId() throws Exception {
         FakeCatalog catalog = new FakeCatalog();
-        catalog.tables.put("ice", List.of("t", "d"));
+        catalog.tables.put("ice", List.of("t", "d", "p"));
         List<TableFile> files = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
             files.add(file(ROOT + "/ice/t/f" + i + ".parquet", 1000));
@@ -203,7 +213,12 @@ class CatalogTablesTest {
                 ROOT + "/ice/t/v1.metadata.json", files));
         catalog.snapshots.put(new TableName("ice", "d"), snapshot("ice", "d",
                 ROOT + "/ice/d/v1.metadata.json", List.of(file(ROOT + "/ice/d/f.parquet", 1,
-                        new DeleteFile(ROOT + "/ice/d/del.parquet", 1, DeleteFile.Kind.POSITION, null)))));
+                        new DeleteFile(ROOT + "/ice/d/del.puffin", 1, DeleteFile.Kind.DELETION_VECTOR,
+                                null)))));
+        catalog.snapshots.put(new TableName("ice", "p"), snapshot("ice", "p",
+                ROOT + "/ice/p/v1.metadata.json", List.of(file(ROOT + "/ice/p/f.parquet", 1,
+                        new DeleteFile(ROOT + "/ice/p/del.parquet", 1, DeleteFile.Kind.POSITION, null)),
+                        file(ROOT + "/ice/p/g.parquet", 1))));
         for (boolean shared : new boolean[] {true, false}) {
             CatalogTables tables = tables(catalog, shared);
             tables.schemas(Set.of());
@@ -240,6 +255,12 @@ class CatalogTablesTest {
             assertNull(planner.catalogCompleteReason("SELECT id FROM ice.t"));
 
             assertTrue(planner.catalogCompleteReason("SELECT id FROM ice.d").contains("delete file"));
+            // Deletes the nodes apply file by file: planned in parts, the row count unknown.
+            assertNull(planner.catalogCompleteReason("SELECT id FROM ice.p"));
+            QueryPlan deletes = planner.plan("SELECT id FROM ice.p");
+            assertEquals(-1L, deletes.totalRecords());
+            assertFalse(deletes.endpoints().get(0).getLocations().isEmpty());
+            assertFalse(states.getValue().complete());
             assertTrue(planner.catalogCompleteReason("SELECT a.id FROM ice.t a JOIN ice.d b ON a.id = b.id")
                     .contains("join"));
             QueryPlan complete = planner.plan("SELECT id FROM ice.d");

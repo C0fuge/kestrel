@@ -603,7 +603,8 @@ public final class ExecutionService {
     /**
      * Reads data files of a catalog table named in a partial-result ticket, with the columns of
      * the snapshot the planning node used. Iceberg files must belong to that snapshot, and the
-     * snapshot must still be readable file by file (no delete files); Parquet files of other
+     * snapshot must still be readable file by file; each file is read with the delete files the
+     * pinned snapshot's plan gives it (the ticket does not carry them). Parquet files of other
      * catalogs (Hive) come with their partition values in the ticket and must lie under the
      * catalog's roots. Otherwise the read is refused rather than answered wrongly.
      *
@@ -686,7 +687,7 @@ public final class ExecutionService {
             pathTracker.unknown("no-parquet-files");
             return;
         }
-        String source = CatalogSources.filesSource(resolved.snapshot(), files);
+        String source = catalogFilesSource(resolved.snapshot(), files);
         String duckSql;
         if (pq.hasAggregation) {
             pathTracker.select(ExecutionPath.DUCKDB_AGGREGATION);
@@ -700,6 +701,29 @@ public final class ExecutionService {
                 resolved.snapshot().snapshotId(), files.size());
         LogUtil.logTiming(t, "catalog.resolveFiles", FILES_TIMING_PREFIX + files.size());
         duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
+    }
+
+    /**
+     * Names data files of a catalog snapshot as a FROM source; files with delete files are read
+     * with their deletes applied.
+     *
+     * @param snapshot snapshot with its columns
+     * @param files files of the snapshot named in the ticket
+     * @return FROM source
+     * @throws IllegalStateException when the deletes of the files cannot be applied file by file
+     */
+    static String catalogFilesSource(TableSnapshot snapshot, List<TableFile> files) {
+        boolean deletes = files.stream().anyMatch(file -> !file.deletes().isEmpty());
+        if (!deletes) {
+            return CatalogSources.filesSource(snapshot, files);
+        }
+        String applied = CatalogSources.deletesAppliedSource(snapshot, files);
+        if (applied == null) {
+            throw new IllegalStateException("The delete files of " + snapshot.name() + " (snapshot "
+                    + snapshot.snapshotId() + ") cannot be applied file by file; ask for the"
+                    + " complete answer");
+        }
+        return applied;
     }
 
     /**

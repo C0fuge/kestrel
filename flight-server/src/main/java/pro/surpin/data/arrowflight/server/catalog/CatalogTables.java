@@ -283,7 +283,9 @@ public final class CatalogTables implements AutoCloseable {
     }
 
     /**
-     * Tells why a snapshot must be answered completely instead of in parts.
+     * Tells why a snapshot must be answered completely instead of in parts. Delete files are no
+     * reason when {@link CatalogSources#deletesAppliedSource} applies them: each node reads its
+     * data files with their own delete files.
      *
      * @param resolved snapshot with its catalog
      * @return reason, or null when its data files can be read one by one
@@ -297,9 +299,9 @@ public final class CatalogTables implements AutoCloseable {
         for (TableFile file : snapshot.files()) {
             deletes += file.deletes().size();
         }
-        if (deletes > 0) {
+        if (deletes > 0 && !CatalogSources.deletesApplicable(snapshot, snapshot.files())) {
             return "snapshot " + snapshot.snapshotId() + " of " + snapshot.name() + " has "
-                    + deletes + " delete file(s) for its data files";
+                    + deletes + " delete file(s) the server cannot apply file by file";
         }
         if (snapshot.columns().isEmpty()) {
             return "the catalog declares no columns for " + snapshot.name();

@@ -217,6 +217,26 @@ class CatalogSourcesDeletesTest {
                 count("SELECT count(*) FROM " + t));
     }
 
+    /**
+     * Verifies a partial answer: every file read on its own (as an executing node reads the
+     * files of its endpoint) with its own deletes, the parts together equal the whole answer, and
+     * a count per part adds up.
+     */
+    @Test
+    void filesReadOneByOneAddUpToTheWholeAnswer() throws Exception {
+        List<Row> parts = new ArrayList<>();
+        long counted = 0;
+        for (TableFile file : snapshot.files()) {
+            assertTrue(CatalogSources.deletesApplicable(snapshot, List.of(file)), file.location());
+            String t = CatalogSources.deletesAppliedSource(snapshot, List.of(file));
+            parts.addAll(rows("SELECT * FROM " + t));
+            counted += count("SELECT count(*) FROM " + t + " WHERE label IS DISTINCT FROM 'l9'");
+        }
+        parts.sort(java.util.Comparator.comparingLong(Row::id));
+        assertEquals(expected, parts);
+        assertEquals(expectedCount(r -> !"l9".equals(r.label())), counted);
+    }
+
     /** Verifies the cases the source does not cover are left to iceberg_scan. */
     @Test
     void unsupportedDeletesAreRefused() {
@@ -224,6 +244,9 @@ class CatalogSourcesDeletesTest {
         DeleteFile dv = new DeleteFile("/x.puffin", 1, DeleteFile.Kind.DELETION_VECTOR, List.of());
         assertNull(CatalogSources.deletesAppliedSource(with(columns(), withDeletes(f, dv)),
                 List.of(withDeletes(f, dv))));
+        assertFalse(CatalogSources.deletesApplicable(with(columns(), withDeletes(f, dv)),
+                List.of(withDeletes(f, dv))));
+        assertFalse(CatalogSources.deletesApplicable(snapshot, List.of()));
         DeleteFile dropped = new DeleteFile("/e.parquet", 1, DeleteFile.Kind.EQUALITY, List.of(9));
         assertNull(CatalogSources.deletesAppliedSource(with(columns(), withDeletes(f, dropped)),
                 List.of(withDeletes(f, dropped))));

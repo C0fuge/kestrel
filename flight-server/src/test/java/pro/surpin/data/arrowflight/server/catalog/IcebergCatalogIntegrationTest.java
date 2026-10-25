@@ -47,6 +47,7 @@ import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 
 /**
  * Runs the server with the iceberg plugin over Iceberg tables written by Iceberg Java: an
@@ -54,8 +55,8 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * a second warehouse), next to a Parquet directory table, under the DuckDB lockdown with the real
  * iceberg/avro extensions v1.4.5 ({@code -Diceberg.it.extensionDir}; skipped without it).
  * Complete answers are compared with DuckDB reading the same metadata directly; partial answers
- * with complete ones; snapshots with deletes or nested changes, and joins, are answered
- * completely; a planned snapshot stays pinned after a commit.
+ * with complete ones (also on a snapshot with deletes, file by file); snapshots with nested
+ * changes, and joins, are answered completely; a planned snapshot stays pinned after a commit.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class IcebergCatalogIntegrationTest {
@@ -188,9 +189,8 @@ class IcebergCatalogIntegrationTest {
 
     @Test
     @Order(4)
-    void deletesNestedChangesJoinsAndEmptySnapshotsAreAnsweredCompletely() throws Exception {
+    void nestedChangesJoinsAndEmptySnapshotsAreAnsweredCompletely() throws Exception {
         for (String sql : List.of(
-                "SELECT id, label FROM ice.deletes",
                 "SELECT * FROM ice.nested",
                 "SELECT * FROM ice.empty",
                 "SELECT a.id, b.label FROM ice.evolved a JOIN ice.deletes b ON a.id = b.id")) {
@@ -200,15 +200,49 @@ class IcebergCatalogIntegrationTest {
                     "complete-answer endpoint: " + sql);
             assertEquals(answer(sql, "complete").rows(), answer(sql, "partial").rows(), sql);
         }
-        assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"),
-                answer("SELECT id, label FROM ice.deletes", "partial").rows());
         assertEquals(List.of("1|{\"a\":10,\"c\":\"x1\"}", "2|{\"a\":20,\"c\":\"x2\"}",
                 "3|{\"a\":30,\"c\":\"x3\"}", "4|{\"a\":40,\"c\":\"x4\"}"),
                 answer("SELECT * FROM ice.nested", "partial").rows());
     }
 
+    /**
+     * A snapshot with position and equality deletes (Iceberg Java: the equality delete is older
+     * than the second data file, so it applies to the first only) is read in parts: the plan has
+     * located endpoints and no row count, and every data file read alone by a ticket naming only
+     * that file gives its own surviving rows; together they are the complete answer.
+     */
     @Test
     @Order(5)
+    void deletesAreReadInPartsFileByFile() throws Exception {
+        for (String schema : List.of("ice", "rest_ice")) {
+            String sql = "SELECT id, label FROM " + schema + ".deletes";
+            FlightInfo info = info(sql, "partial");
+            assertFalse(info.getEndpoints().get(0).getLocations().isEmpty(), "partial endpoint: " + sql);
+            assertEquals(-1, info.getRecords(), sql);
+            assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"), answer(sql, "partial").rows());
+            assertEquals(answer(sql, "complete").rows(), answer(sql, "partial").rows(), sql);
+            CatalogTables.Resolved resolved = helper.parquetAdapter.catalogTables()
+                    .current(schema, "deletes").orElseThrow();
+            List<TableFile> files = resolved.snapshot().files();
+            assertEquals(2, files.size(), schema);
+            List<String> parts = new ArrayList<>();
+            for (TableFile file : files) {
+                String key = new CatalogFileKey(resolved.snapshot().snapshotId(), file.location()).encode();
+                RowsListener listener = new RowsListener();
+                helper.executionService.readParquet(helper.allocator, sql, new String[] {key}, listener, true);
+                List<String> part = listener.rows;
+                part.sort(null);
+                assertEquals(file.deletes().isEmpty() ? List.of("6|n6", "7|n7") : List.of("1|n1", "3|n3", "5|n5"),
+                        part, schema + " " + file.location());
+                parts.addAll(part);
+            }
+            parts.sort(null);
+            assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"), parts, schema);
+        }
+    }
+
+    @Test
+    @Order(6)
     void lockdownStillRefusesOtherFiles() {
         for (String sql : List.of("SELECT * FROM read_text('/etc/hostname')",
                 "SELECT * FROM iceberg_scan('/etc/hostname')",
@@ -224,7 +258,7 @@ class IcebergCatalogIntegrationTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     void ticketsNamingFilesOutsideTheSnapshotAreRefused() throws Exception {
         String key = new CatalogFileKey("1.0", warehouse + "/ice/types/data/f1.parquet").encode();
         FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
@@ -310,6 +344,63 @@ class IcebergCatalogIntegrationTest {
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
+
+    /** Collects the rows an execution streams, as text. */
+    private static final class RowsListener implements FlightProducer.ServerStreamListener {
+        private final List<String> rows = new ArrayList<>();
+        private VectorSchemaRoot root;
+
+        @Override
+        public void start(VectorSchemaRoot r, org.apache.arrow.vector.dictionary.DictionaryProvider p,
+                org.apache.arrow.vector.ipc.message.IpcOption o) {
+            this.root = r;
+        }
+
+        @Override
+        public void putNext() {
+            rows.addAll(rows(root));
+        }
+
+        @Override
+        public void putNext(org.apache.arrow.memory.ArrowBuf metadata) {
+            rows.addAll(rows(root));
+        }
+
+        @Override
+        public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) {
+            // Metadata frames carry no rows.
+        }
+
+        @Override
+        public boolean isReady() {
+            return true;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return false;
+        }
+
+        @Override
+        public void setOnReadyHandler(Runnable handler) {
+            // Always ready.
+        }
+
+        @Override
+        public void setOnCancelHandler(Runnable handler) {
+            // Never cancelled.
+        }
+
+        @Override
+        public void error(Throwable ex) {
+            throw new IllegalStateException(ex);
+        }
+
+        @Override
+        public void completed() {
+            // The rows are read after the call returns.
+        }
+    }
 
     /**
      * An answer: announced schema, rows as text and number of endpoints.

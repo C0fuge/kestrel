@@ -365,7 +365,9 @@ public final class QueryPlanner {
                     ? new CatalogFileKey(snapshot.snapshotId(), file.location(), file.partitionValues())
                     : new CatalogFileKey(snapshot.snapshotId(), file.location());
             files.put(key.encode(), new FileAssignment(file.size(), Set.of()));
-            records = records < 0 || file.recordCount() < 0 ? -1 : records + file.recordCount();
+            // A file with delete files has fewer rows than it records: the total is unknown.
+            records = records < 0 || file.recordCount() < 0 || !file.deletes().isEmpty() ? -1
+                    : records + file.recordCount();
         }
         Map<String, Long> loads = new HashMap<>(cluster.serverLoads());
         if (!resolved.entry().shared() && loads.size() > 1) {

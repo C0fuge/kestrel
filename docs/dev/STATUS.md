@@ -86,10 +86,11 @@
    equality columns with IS NOT DISTINCT FROM, position deletes on normalised path + `file_row_number`; delete
    assignment = the plugin's `FileScanTask.deletes()`, i.e. Iceberg's sequence-number rules); deletion vectors,
    columns without field ID, equality columns the schema dropped, a column named `file_row_number` keep the old
-   iceberg_scan read. **Remaining:** (i) partial mode — `CatalogTables.completeReason` still refuses any delete
-   file; the ticket must carry each file's delete files (or the executing node re-derives them from the pinned
-   snapshot) so a node runs `deletesAppliedSource` over its own files; (ii) stand: time the int7 eq-delete
-   queries (was 25–90 s) on the new source and check answers vs the old ones; (iii) many data files with position
+   iceberg_scan read. **Partial mode done 2026-10-25** (see Log): `completeReason` accepts deletes that
+   `CatalogSources.deletesApplicable` covers; the executing node re-derives each ticket file's delete files from
+   the pinned snapshot (tickets unchanged) and reads them with `deletesAppliedSource`. **Remaining:** (ii) stand: time the int7 eq-delete
+   queries (was 25–90 s) on the new source and check answers vs the old ones, in complete mode (JDBC) and partial
+   mode (Trino, StarRocks: these tables now get one endpoint per node instead of one complete endpoint); (iii) many data files with position
    deletes become one UNION ALL branch each — measure planning time on a table after a large MERGE. Original
    text: Iceberg equality deletes are correct but slow (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
    iceberg extension refuses or mis-applies eq deletes when filters/projections are pushed). Make them fast and
