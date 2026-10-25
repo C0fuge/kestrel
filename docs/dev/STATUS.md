@@ -317,3 +317,15 @@
   dispatch run 40163642740 (`package=true`) on the same commit: green, pre-release `server-1.0.0-4eaab052deaf`
   with the libs asset (38.9 MB). Next: item 2 (Iceberg equality deletes), unless the maintainer picks a stand
   finding (a)–(c) first.
+- 2026-10-25 (cloud session): item 2, complete mode (commit 5466f86). Snapshots with equality deletes no longer go
+  through iceberg_scan with every column read: `CatalogSources.deletesAppliedSource` reads the data files by field
+  ID and applies the plan's delete files itself (ANTI JOIN per set of equality columns, IS NOT DISTINCT FROM; position
+  deletes on `file_row_number` and the delete file's path normalised in SQL like `CatalogLocations.normalize`); data
+  files with the same deletes share one read_parquet, a file with position deletes is its own UNION ALL branch.
+  EXPLAIN on DuckDB 1.4.5: plain hash anti joins, the data scan projects only the used + equality columns and takes
+  the query's filters. Deletion vectors, columns without field ID, dropped equality columns, a `file_row_number`
+  column keep the old read. New `CatalogSourcesDeletesTest` (3000 rows, renamed column, pos deletes with `file:` /
+  `file://` paths and rows of a file they do not apply to, equality deletes on 1 and 2 columns with nulls; answers
+  computed in Java; fails with `=` instead of IS NOT DISTINCT FROM); `CatalogViewsIcebergSourceTest` updated. Local
+  server tests green (681 / 9 skipped); push run 40170480666 green (incl. the Iceberg ITs on Iceberg-Java tables).
+  Next: item 2 partial mode (see Next steps 2 (i)), then the stand timing (ii).
