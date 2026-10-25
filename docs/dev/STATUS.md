@@ -142,13 +142,12 @@
    "The store opened for /wh does not hold it (roots [hdfs://<ns>/wh])" — `CatalogLocations.normalize` drops
    `file://` and the Hadoop store resolves the bare path against `fs.defaultFS`. Keep the scheme (or qualify bare
    paths with `file:`) for catalog roots and Hive/Iceberg locations; test with an HDFS default FS configured.
-11. **Runtime libs set gaps** (stand 2026-10-25; nothing tested fails): compared with the old libs dir, no
-   `org.apache.zookeeper` (used by ZK-based HA elector / ZKFC, `ZKCuratorManager`, ZK delegation-token and signer
-   secret managers, and the signature of `SecurityUtil.setSslConfiguration(ZKClientConfig, ...)` — reflection over
-   `SecurityUtil.getDeclaredMethods()` throws NoClassDefFoundError) and no lz4-java (`net.jpountz.lz4`, Hadoop
-   `Lz4Codec`). Decide: add zookeeper + lz4-java to the set, or document them as not needed by the server (none
-   is on its read path); extend `LibsSetTest` with a class-resolution check of hadoop-common/hdfs-client. A real
-   Kerberos login (KDC) with the new set is still untested (item 7).
+11. ~~**Runtime libs set gaps**~~ — done 2026-10-25 (see Log): the set now carries ZooKeeper 3.8.6 (+ jute,
+   audience-annotations) and lz4-java (`at.yawk.lz4` 1.10.4), Curator is 5.2.0 in jar and set alike (the jar had
+   curator-framework 2.13.0 with curator-client 5.2.0). `LibsSetTest` links every class of hadoop-common,
+   hadoop-hdfs-client and hadoop-auth on the thin class path. Stand: replace the libs dir with release `server-1.0.0-c3b276054cc3`'s
+   `flight-server-libs` asset and run one HDFS query against the HA nameservice; a real Kerberos login (KDC)
+   is still item 7. Note: lz4-java 1.12.1 exists (we follow Hadoop 3.5.0's 1.10.4).
 
 12. **`s3a://` / `s3n://` catalog roots are not matched by the open S3 stores** (found 2026-10-25 while
    testing item 4): `CatalogLocations.normalize` keeps the scheme, S3 stores name their roots `s3://`, so
@@ -436,3 +435,15 @@
   691 / 9 skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push run 40195045583
   green. Next: item 3 once the form is confirmed, else item 7 (Kerberos for the HMS client; 8/9 need the
   maintainer first) or items 10–12.
+- 2026-10-25 (cloud session): item 11 done (commit c3b2760), taken before item 7 per the maintainer's note.
+  Cause: Spark's test dependencies (zookeeper 3.6.3, org.lz4 1.8.0, curator 2.13.0) are nearer in the tree
+  than Hadoop's, so ZooKeeper and lz4-java became test-only and left the libs set, and the shaded jar got
+  curator-framework 2.13.0 next to curator-client 5.2.0. Fix: zookeeper 3.8.6 and at.yawk.lz4:lz4-java 1.10.4
+  declared `provided` (Hadoop 3.5.0's versions, hadoop-project exclusions: no Netty, logback, slf4j, jline),
+  Curator managed at 5.2.0, org.lz4 excluded from spark-core. Set: 62 jars. `LibsSetTest`: floors, one
+  Curator version, link check of all hadoop-common / hdfs-client / hadoop-auth classes (left out: jsch for
+  SFTP and ssh fencing, the protobuf-2.5 `ProtobufRpcEngine`), HA/Kerberos/ZK classes by name, `Lz4Codec`
+  round trip; proven to fail with ZooKeeper and lz4-java removed from the set. Full local `clean verify
+  checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 694 / 9 skipped,
+  client-core 158, spark 175); push run 40204556893 green; package dispatch run 40205062825 green: pre-release `server-1.0.0-c3b276054cc3` (jar, plugins, `flight-server-libs-1.0.0-c3b276054cc3.tar.zst`) for the stand. Next: item 3 once the form is confirmed, else
+  item 7 (Kerberos for the HMS client) or items 10, 12.
