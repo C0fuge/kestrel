@@ -47,6 +47,43 @@
 > RSS ~50 MB lower idle, same peak (2.1–2.5 GB after Trino). No missing class on any tested path; a Kerberos keytab
 > login (no KDC) reaches JAAS. Follow-ups: items 10 and 11.
 
+> **Stand, secure HA HDFS (production profile), build 4eaab052deaf (2026-10-25)** (unnumbered): on-demand stand with an
+> MIT Kerberos KDC, ZooKeeper 3.9.2 x3 (SASL client auth required + quorum SASL), Hadoop 3.1.3 with 2 NameNodes + ZKFC
+> (automatic failover, ConfiguredFailoverProxyProvider, RPC 8020), 3 JournalNodes, 3 DataNodes (Kerberos, block access
+> tokens, HTTPS_ONLY), Ranger Admin 2.4.0 (PostgreSQL) with the Ranger HDFS plugin on both NameNodes (policy download via
+> SPNEGO; test policies: one user reads `tpch` only, another nothing, the server principal reads all). Data SF1 tpch +
+> types. Results:
+> - **Works:** Kerberos Flight authentication (`FLIGHT_KERBEROS_*` + TLS) with a real KDC: keytab login, SPNEGO
+>   `Negotiate` handshake from a Java client, bearer session; the Java Hadoop client of the new libs set (3.5.0) against
+>   the 3.1.3 cluster: Kerberos RPC, HA nameservice and failover — no ZooKeeper class is needed on this client path
+>   (item 11 is still right for the elector/ZK code paths, not hit here). Queries with hadoopfs (libhdfs3, Kerberos from
+>   a ticket cache) read correctly once DataNodes do not require SASL on data transfer (secure DataNodes on privileged
+>   ports). Ranger: disabling the server principal's policy makes queries fail with HDFS `Permission denied` within the
+>   10 s policy poll; enabling it again restores them.
+> - **(a) hadoopfs cannot read from DataNodes with SASL data transfer protection** (`dfs.data.transfer.protection`, the
+>   usual Hadoop 3 secure setup without privileged ports) nor with `dfs.encrypt.data.transfer=true`: NameNode RPC works,
+>   every block read fails (`Read 8 bytes failed from <dn>:9866`; DataNode: `InvalidMagicNumberException`, the client never
+>   sends the SASL handshake). The Java client reads fine. Production must use privileged-port DataNodes, or the
+>   extension needs the SASL data-transfer handshake (libhdfs3) — check which one production uses.
+> - **(b) hadoopfs needs a ticket cache:** with only the server keytab (no `KRB5CCNAME` cache) the Java side starts and
+>   lists, every query fails `IO Error: Unable to connect to HDFS: hdfs://<ns>`. The server does not hand its keytab
+>   login to the extension; today an external `kinit -kt` (+ renewal before expiry) is required. Options: the server
+>   writes and renews a private ccache from its keytab, or the extension takes keytab + principal settings.
+> - **(c) Short-circuit is forced on:** `HadoopDataStoreProvider.open` sets `dfs.client.read.shortcircuit=true`; a client
+>   config without `dfs.domain.socket.path` (no local DataNode) stops the server at start (`The short-circuit local reads
+>   feature is enabled but dfs.domain.socket.path is not set`). Keep the deployment's value / make it a setting.
+> - **(d) NameNode host crash with libhdfs3 defaults:** killing the active NameNode *process* costs the running query
+>   ~10 s (60/60 OK). Killing the whole active NameNode *host* (its address disappears; new active after ~27 s): one
+>   query hung 170 s and failed (`Failed to invoke RPC call "getFileInfo" on server <old active>:8020 ... Connection reset
+>   by peer`), later queries OK. With `rpc.client.connect.timeout=5000`, `rpc.client.read.timeout=15000`,
+>   `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`, `rpc.client.connect.retry=2` in the libhdfs3 conf: 80/80
+>   OK, the slowest query 32.6 s (= the failover itself). Consider shipping these as defaults next to the DataNode
+>   timeouts (item 0a) or documenting them.
+> - **(e)** HDFS errors reach the Flight client with the NameNode's Java stack trace in the message (e.g. the
+>   `Permission denied` above, `FSPermissionChecker...`); trim to the first line.
+> - As expected without item 9, every authenticated user reads what the server principal may read (Ranger sees only
+>   the server principal). Kerberized HMS on this stand: prepared (principal + keytab, auth_to_local, proxyuser), not run.
+
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
    public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
    '+refs/heads/*:refs/remotes/upstream/*'`; never push there). Review per feature and port what beats ours (rule:
@@ -456,3 +493,6 @@
   checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 694 / 9 skipped,
   client-core 158, spark 175); push run 40204556893 green; package dispatch run 40205062825 green: pre-release `server-1.0.0-c3b276054cc3` (jar, plugins, `flight-server-libs-1.0.0-c3b276054cc3.tar.zst`) for the stand. Next: item 3 once the form is confirmed, else
   item 7 (Kerberos for the HMS client) or items 10, 12.
+- 2026-10-25 (maintainer's local agent, stand): secure HA HDFS stand (KDC, ZooKeeper 3.9.2 SASL, Hadoop 3.1.3 HA + ZKFC,
+  Ranger 2.4.0 HDFS plugin) and first smoke of 4eaab052deaf on it — see the note "Stand, secure HA HDFS" under Next steps
+  (hadoopfs: no SASL data transfer, needs a ticket cache; forced short-circuit; libhdfs3 RPC timeouts for NameNode host loss).
