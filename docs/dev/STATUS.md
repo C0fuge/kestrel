@@ -23,6 +23,11 @@
 
 ## Next steps (one per session)
 
+0c. **Maintainer decision 2026-10-26: make `duckDbThreads` default 4** (item 13a; the code default is currently 1 in
+    `ConfigAdapter`, the stand ran 2). Plain 4, not the size-aware variant. Update the default, START-NOTES/README/
+    TUNING.md where the default is named, add a unit test for the default, CI green, then cut a `package=true`
+    pre-release. Items 13b-d stay as proposals (behaviour/default changes there still need approval).
+
 0b. ~~**Bug: `duckDbStatementCacheSize=0` breaks parameterized prepared statements**~~ — done 2026-10-25 (see Log):
     `streamComplete` streams its bound statement directly; the parse check in `streamSql` used to evict and close it
     from a one-statement cache (0 is clamped to 1). Stand: rerun the perf screening's cache-size-0 case (JDBC + ADBC).
