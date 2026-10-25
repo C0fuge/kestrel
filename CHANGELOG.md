@@ -96,6 +96,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- A local catalog root (`arrowflight.iceberg-hadoop.warehouse=/wh`, `file:/wh` or `file:///wh`, local
+  Iceberg/Hive data file paths) stopped the server at start when the Hadoop configuration names a
+  non-local `fs.defaultFS` (`hdfs://<ns>`): "The store opened for /wh does not hold it". Catalog
+  locations without a scheme are local files (as DuckDB reads them) and now open a local store; a
+  data directory given as a plain path still follows `fs.defaultFS`.
 - `duckDbStatementCacheSize=0` (or 1) broke every parameterized prepared statement with "Invalid
   Input Error: Parameter count mismatch" (JDBC, ADBC): the parse check before streaming took a
   statement from the per-thread cache and closed the one the parameter values were bound to. The

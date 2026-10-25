@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.Assumptions;
@@ -23,6 +24,7 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 
 /**
  * Tests how the store registry opens catalogs from plugins: the DuckDB setup they contribute
@@ -56,7 +58,12 @@ class CatalogRegistryTest {
     }
 
     private StoreRegistry open(Path pluginsDir, String catalogs, Map<String, String> env) {
-        System.setProperty("dataDir", data.toString());
+        return open(pluginsDir, catalogs, env, new Configuration(), data.toString());
+    }
+
+    private StoreRegistry open(Path pluginsDir, String catalogs, Map<String, String> env,
+            Configuration hadoopConfig, String dataDir) {
+        System.setProperty("dataDir", dataDir);
         AppConfig config;
         try {
             config = ConfigAdapter.getConfig();
@@ -64,7 +71,7 @@ class CatalogRegistryTest {
             System.clearProperty("dataDir");
         }
         ConfigSource source = new ConfigSource(sys::get, new Properties(), env, null);
-        return StoreRegistry.open(config, new Configuration(), "localhost",
+        return StoreRegistry.open(config, hadoopConfig, "localhost",
                 new PluginSettings(pluginsDir, null, catalogs, false), source, List.of());
     }
 
@@ -98,6 +105,40 @@ class CatalogRegistryTest {
         try (StoreRegistry registry = open(plugins, "iceberg-hadoop", Map.of())) {
             assertEquals(List.of(data.toString(), inside.toString(), "file:" + inside),
                     registry.readableRoots());
+        }
+    }
+
+    /**
+     * Verifies a local warehouse (plain path, file: and file:/// alike) opens a local store when
+     * the Hadoop default file system is not local (the stand's fs.defaultFS = hdfs://ns): the
+     * store used to resolve the plain path against fs.defaultFS and the server refused to start
+     * ("The store opened for /wh does not hold it").
+     */
+    @Test
+    void localWarehouseUnderANonLocalDefaultFileSystem() throws Exception {
+        IcebergTestTables.write(warehouse.toString());
+        // viewfs stands in for HDFS: a default file system whose paths are not local paths.
+        Configuration hadoopConfig = new Configuration();
+        hadoopConfig.set("fs.viewfs.impl", "org.apache.hadoop.fs.viewfs.ViewFileSystem");
+        hadoopConfig.set("fs.defaultFS", "viewfs://cluster/");
+        hadoopConfig.set("fs.viewfs.mounttable.cluster.link." + dir, "file:" + dir);
+        for (String form : List.of(warehouse.toString(), "file:" + warehouse,
+                "file://" + warehouse, warehouse + "/")) {
+            sys.put("arrowflight.iceberg-hadoop.warehouse", form);
+            try (StoreRegistry registry = open(plugins, "iceberg-hadoop", Map.of(), hadoopConfig,
+                    "file:" + data)) {
+                assertEquals(List.of(data.toString(), warehouse.toString(), "file:" + warehouse),
+                        registry.readableRoots(), form);
+                registry.catalogTables().schemas(Set.of());
+                CatalogTables.Resolved types = registry.catalogTables().current("ice", "types")
+                        .orElseThrow();
+                assertFalse(types.snapshot().files().isEmpty(), form);
+                for (TableFile file : types.snapshot().files()) {
+                    String location = CatalogLocations.normalize(file.location());
+                    assertTrue(location.startsWith(warehouse + "/"), location);
+                    assertEquals("file", registry.locate(location).store().kind(), location);
+                }
+            }
         }
     }
 

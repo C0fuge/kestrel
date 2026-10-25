@@ -330,7 +330,10 @@ public final class StoreRegistry implements Stores, AutoCloseable {
             if (frozen) {
                 throw new IOException("No open store holds " + absoluteUri);
             }
-            Opened opened = opening.open(location, StoreUse.CATALOG_ROOT);
+            // A catalog location without a scheme names a local file (as DuckDB reads it), never
+            // a path of the Hadoop default file system (fs.defaultFS = hdfs://...).
+            Opened opened = opening.open(location.startsWith("/") ? "file:" + location : location,
+                    StoreUse.CATALOG_ROOT);
             boolean secondOfPlugin = !"hadoop".equals(opened.provider())
                     && (sameConfiguration(opened, dataDirectory)
                     || extras.stream().anyMatch(e -> sameConfiguration(opened, e)));
