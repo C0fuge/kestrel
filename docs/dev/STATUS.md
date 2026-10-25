@@ -177,9 +177,15 @@
 6. ~~**Prepared-statement cache bound**~~ — done 2026-10-24 with UPSTREAM-SYNC S12: the statement cache already was
    an LRU of `duckDbStatementCacheSize` (default 64) per worker thread; now texts over 256 Ki chars stay out of it
    (and out of the parse and schema caches), evictions and skips are Prometheus counters.
-7. **Kerberos for the HMS client** (SASL/GSSAPI in `flight-plugin-hive` `ThriftMetastore.open`) and check HDFS
-   Kerberos with the hadoopfs extension: CI with a KDC container (e.g. MIT krb5 in a container) + a kerberized HMS if
-   feasible; otherwise unit-level with a fake SASL server; docs.
+7. ~~**Kerberos for the HMS client**~~ — done 2026-10-25 (see Log): `arrowflight.hive.authentication=kerberos`,
+   SASL/GSSAPI as Hive's client (`metastorePrincipal` with `_HOST`, `saslQop` default
+   `auth-conf,auth-int,auth`), login from `clientPrincipal` + `clientKeytab` or the ticket cache
+   (`KRB5CCNAME` / `clientTicketCache`), renewed at 80 % of the TGT lifetime; framed + Kerberos refused.
+   Tested with an in-process Kerby KDC and a SASL front for the test metastore (no kerberized real HMS in CI).
+   Stand: the prepared kerberized HMS (principal, keytab, auth_to_local, proxyuser) — reference queries with
+   `authentication=kerberos`, once from the keytab and once from a `kinit` cache, with the metastore's
+   `hadoop.rpc.protection` = authentication and = privacy. HDFS Kerberos with hadoopfs: see the secure HA
+   stand findings (a)/(b) above (data-transfer SASL, ticket cache) — still open, not numbered.
 8. **Ranger hardening** (security): details are kept outside this public repo; ask the maintainer before starting. (The maintainer wants Ranger/
    Kerberos finished before production; implement here, the stand check comes later.)
 9. **Per-user identity** (needed for Ranger/Kerberos): JWT/bearer pass-through of the end user to Ranger checks;
@@ -532,3 +538,11 @@
   (sizes 0, 1, 2, 64; parameterized, plain, parameterized again, wrong value count) failed before the fix with the
   reported error. Local: DuckDbAdapterTest 87/87, checkstyle + spotbugs clean; push run 40222858195 green.
   Next: item 7 (Kerberos for the HMS client), or 10 / 12.
+- 2026-10-25 (cloud): **item 7 done** (d326dd6): Kerberos (SASL/GSSAPI) for the Hive Metastore client, new
+  `KerberosLogin` (JAAS Krb5LoginModule, keytab or ticket cache, renewal) and settings `metastorePrincipal`,
+  `clientPrincipal`, `clientKeytab`, `clientTicketCache`, `saslQop` (additive; `authentication=none` unchanged).
+  `KerberosMetastoreTest`: Kerby 2.0.3 KDC in the JVM (test scope), a `TSaslServerTransport` front as
+  `hive/localhost` forwarding to the real Hive 3.1.3 test metastore; keytab login at auth-conf, ticket cache at
+  auth / auth-int (catalog answers = plain metastore), unknown service principal, no common protection layer,
+  missing cache, wrong keytab principal, plain client against SASL. Local: hive module 16/16 + checkstyle +
+  spotbugs clean; push run 40232501858 green. Next: item 10 or 12 (8 needs the maintainer first, 9 design first).
