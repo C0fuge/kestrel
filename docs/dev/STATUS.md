@@ -110,8 +110,10 @@
    with eq + position deletes vs an independent answer.
 3. **Iceberg time travel**: expose snapshot reads (`FOR VERSION AS OF` / a `table@snapshot` name form or a session
    setting — propose in Open questions first which form clients can send), pinned per query like the current snapshot.
-4. **Second S3 store**: today one S3 store per server (a second S3 root is refused). Allow several S3 stores
-   (different endpoints/credentials/buckets) per server for catalogs (e.g. Iceberg warehouse on another S3).
+4. ~~**Second S3 store**~~ — done 2026-10-25 (see Log): named stores `arrowflight.s3.stores=<name>,...`, each
+   with `arrowflight.s3.<name>.root` and its own endpoint/region/URL style/credentials, own DuckDB secret
+   `flight_s3_<name>`. Stand: one Iceberg or Hive catalog in a second MinIO bucket with another (read-only)
+   user next to the S3 data directory; check both secrets in the startup log and one query per store.
 5. **Config precedence bug (upstream)**: env vars such as `FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
    `DUCKDB_*` are shadowed by values in the bundled `arrowflight.properties`; documented precedence is env > file.
    Fix with tests (and keep `-D` highest). Same for the documented `-Darrowflight.*` aliases: the file's short
@@ -140,7 +142,27 @@
    is on its read path); extend `LibsSetTest` with a class-resolution check of hadoop-common/hdfs-client. A real
    Kerberos login (KDC) with the new set is still untested (item 7).
 
+12. **`s3a://` / `s3n://` catalog roots are not matched by the open S3 stores** (found 2026-10-25 while
+   testing item 4): `CatalogLocations.normalize` keeps the scheme, S3 stores name their roots `s3://`, so
+   e.g. `arrowflight.iceberg-hadoop.warehouse=s3a://b/wh` fails at start ("The store opened for s3a://b/wh
+   does not hold it (roots [s3://b/wh/])"); the Hive plugin maps s3a/s3n itself, Iceberg does not. Match
+   the S3 scheme forms as one in `StoreRegistry` (`holder`, `locate`) or normalise them; test with an
+   s3a warehouse and s3a data file paths in Iceberg metadata.
+
 ## Open questions
+
+- **Item 3 (Iceberg time travel): which form? (proposal 2026-10-25, no code yet).** Recommended: the
+  SQL clause Trino and Spark use, after a catalog table name: `FROM ns.t FOR VERSION AS OF
+  8213491011553364004` (snapshot ID) and `FOR TIMESTAMP AS OF TIMESTAMP '2026-10-01 00:00:00 UTC'`
+  (latest snapshot committed at or before; a time zone is required, no server-local time). The
+  server's parser takes the clause out before DuckDB and pins that snapshot for the query exactly as
+  it pins the current one; tickets already carry the snapshot ID, so no ticket or header change, and
+  partial mode works the same. An unknown snapshot ID or a time before the first snapshot is an
+  error, never the current snapshot; data directory and Hive tables refuse the clause. Alternatives:
+  (a) a `t@<snapshot>` name form (no grammar for clients, but clashes with quoting and Trino's Iceberg
+  connector dropped it), (b) a session header such as `x-flight-iceberg-snapshot` (new header, one
+  table per query). For the coordinator: the Trino plugin / StarRocks connector would have to
+  forward the clause (or their own time-travel syntax translated to it). OK to implement the clause?
 
 - Upstream's `.github/workflows/ci.yml` now runs only on manual dispatch (it ran on every push and Dependabot PR,
   failed, and doubled the minutes; dev-ci.yml covers the same checks). Revert the `on:` block if you want it back.
@@ -372,3 +394,17 @@
 - 2026-10-25 (maintainer's local agent): single-node stand regression of release `server-1.0.0-4eaab052deaf`
   with the new libs set vs int7 — all checks pass, timings and memory equal (note under Next steps); new items 10
   (file:// catalog roots under an HDFS default FS, also in int7) and 11 (zookeeper / lz4-java absent from the set).
+- 2026-10-25 (cloud session): item 3 needs the maintainer first: proposal for the time-travel form (SQL
+  clause `FOR VERSION AS OF` / `FOR TIMESTAMP AS OF`) added to Open questions, no code. Item 4 done (commit
+  a4d0e63): named S3 stores `arrowflight.s3.stores` / `arrowflight.s3.<name>.root` with their own endpoint,
+  region, URL style and credentials (`FLIGHT_S3_<NAME>_ACCESS_KEY`, ...; never the main ones; CA file, TLS
+  check, metadata cache and listing settings default to the main store's, since DuckDB holds them per
+  connection), own DuckDB secret `flight_s3_<name>` scoped to the store root; `StoreRegistry` now refuses a
+  second store only for the same provider *and* configuration name (SPI `DataStore.configName()`); a broken
+  store list stops the start. Tests: plugin `S3NamedStoresTest` (names, longest root, settings view) and
+  server `S3NamedStoresTest` (real s3 + iceberg plugins: Iceberg warehouse in a second bucket next to an S3
+  data directory → two scoped secrets, locate per store; refusal names the remedy; missing credentials;
+  secret as property refused unprinted). Found on the way: `s3a://` catalog roots never match S3 stores
+  (new item 12). Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services`
+  green (server 687 / 9 skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push
+  run 40186896468 green. Next: item 3 once the form is confirmed, else item 5 (config precedence).
