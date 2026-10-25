@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Runtime libs set: the build copies the Hadoop client libraries the shaded server jar leaves to the
+  deployment (Hadoop is `provided`) to `flight-server/target/libs`, mediated against the jar's own
+  libraries (58 jars, Hadoop 3.5.0; none of the stale stand set's ZooKeeper 3.6, Netty 3, Jetty
+  9.4.51, BouncyCastle 1.79, log4j 2.20 or second Netty/Jackson/protobuf). The manual `package`
+  release of `dev-ci.yml` publishes it as `flight-server-libs-<version>-<sha>.tar.zst` (`libs/` with
+  `DEPENDENCIES.txt` and `SHA256SUMS`); start with `java -cp '<jar>:libs/*' <main class>`.
+  `LibsSetTest` checks the floors and starts the server on exactly this set.
 - Spark connector: a scan with a pushed global aggregation (no GROUP BY) reports one row to
   Spark's optimizer instead of the raw table size. Read option `statistics.filterSelectivity`
   (default `false`): `true` scales the reported rows and bytes by the estimated selectivity of the
@@ -73,6 +80,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- README Quick Start and the release START-NOTES started the server with `java -jar` on the shaded jar,
+  which fails with `NoClassDefFoundError: org/apache/hadoop/conf/Configuration` (Hadoop is not in the
+  jar); START-NOTES also put the jar where its default `../plugins` did not point at the unpacked plugins.
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can
   be megabytes, and each one differs) are no longer kept in the parse cache, the result-schema
   cache or the per-thread prepared-statement cache: each cache could pin up to its entry limit

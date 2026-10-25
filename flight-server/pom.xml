@@ -524,6 +524,9 @@
                         <!-- Iceberg catalog tests: DuckDB's iceberg/avro extensions (v1.4.5/<platform>/
                              below this directory); without it those tests are skipped. -->
                         <iceberg.it.extensionDir>${iceberg.it.extensionDir}</iceberg.it.extensionDir>
+                        <!-- LibsSetTest: the libraries of the libs-set and server-classpath executions -->
+                        <libs.set.dir>${project.build.directory}/libs</libs.set.dir>
+                        <libs.set.serverClasspath>${project.build.directory}/server-runtime.classpath</libs.set.serverClasspath>
                     </systemPropertyVariables>
                     <argLine>
                         @{argLine}
@@ -586,6 +589,53 @@
                                     </excludes>
                                 </filter>
                             </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.7.0</version>
+                <executions>
+                    <!-- target/libs: the Hadoop client libraries the shaded jar leaves to the deployment
+                         (scope provided here), mediated against the server's own libraries so no jar
+                         repeats one of the shaded jar. Start: java -cp '<shaded jar>:libs/*' (release
+                         asset flight-server-libs, see dev-ci.yml). Copied before the tests: LibsSetTest
+                         starts the server on exactly this set. -->
+                    <execution>
+                        <id>libs-set</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>provided</includeScope>
+                            <outputDirectory>${project.build.directory}/libs</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>libs-set-list</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>list</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>provided</includeScope>
+                            <sort>true</sort>
+                            <outputFile>${project.build.directory}/libs-dependencies.txt</outputFile>
+                        </configuration>
+                    </execution>
+                    <!-- The libraries the shaded jar bundles, for LibsSetTest's start. -->
+                    <execution>
+                        <id>server-classpath</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputFile>${project.build.directory}/server-runtime.classpath</outputFile>
                         </configuration>
                     </execution>
                 </executions>

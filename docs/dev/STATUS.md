@@ -69,10 +69,18 @@
    **Done 2026-10-25 (Hive plugin):** libthrift 0.9.3 → 0.24.0 for the metastore client (1 GiB response cap);
    the test metastore (Hive 3.1.3 server, broken on libthrift 0.14+) runs on 0.9.3 in its own class loader.
    Stand: one Hive reference run (framed and unframed if the HMS has both) with the new plugin dir.
-   Still open: produce a fresh runtime libs set from the poms
-   (`dependency:copy-dependencies`, only what the server needs) as a release asset `flight-server-libs-<sha>.tar.zst`
-   replacing the stale stand set (Arrow 18, gRPC 1.65, BouncyCastle 1.79, ZooKeeper 3.6.3, Netty 3.10.6, Jetty 9.4,
-   lz4-java 1.8.0). Full test suite green after each group of upgrades.
+   **Done 2026-10-25 (runtime libs set):** the build copies the Hadoop client libraries the shaded jar leaves to
+   the deployment (`provided`) to `flight-server/target/libs` (58 jars, 42 MB, Hadoop 3.5.0, mediated against
+   the jar's own libraries); the `package` dispatch publishes it as `flight-server-libs-<version>-<sha>.tar.zst`;
+   `LibsSetTest` checks floors and starts the server on jar classpath + libs (Parquet read) and without libs
+   (must fail). START-NOTES / README now start with `java -cp '<jar>:libs/*'` (`java -jar` never worked without
+   Hadoop on the class path). Stand: replace the old libs dir with the new asset (first `package` dispatch
+   pending, see Log) and run one HDFS + one S3 query. Follow-up (optional, after that stand run): prune what only
+   Hadoop daemons use from the set — MapReduce/YARN client, Jetty 9.4.58 (EOL line), Jersey 2/hk2, leveldbjni,
+   commons-daemon, jline, `hadoop-hdfs` (server) — the server's own code uses hadoop-common + hdfs-client only;
+   the API jars overlapping the shaded jar (javax.servlet 4.0.0 vs jakarta.servlet-api 4.0.4, JAX-RS 1.1 in
+   Ranger's `jersey-bundle` vs jakarta.ws.rs-api 2.1.6, javax.annotation/inject) would go with them.
+   Item 1b is done apart from the stand checks named above.
 2. **Iceberg equality deletes are correct but slow** (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
    iceberg extension refuses or mis-applies eq deletes when filters/projections are pushed). Make them fast and
    correct: e.g. read data files + equality delete files yourself (anti-join on the equality columns with sequence-
@@ -84,7 +92,9 @@
    (different endpoints/credentials/buckets) per server for catalogs (e.g. Iceberg warehouse on another S3).
 5. **Config precedence bug (upstream)**: env vars such as `FLIGHT_RESULT_MODE`, `FLIGHT_ENDPOINT_BACKUP_LOCATIONS`,
    `DUCKDB_*` are shadowed by values in the bundled `arrowflight.properties`; documented precedence is env > file.
-   Fix with tests (and keep `-D` highest).
+   Fix with tests (and keep `-D` highest). Same for the documented `-Darrowflight.*` aliases: the file's short
+   key wins over them (`metricsEnabled=true` in the file beats `-Darrowflight.metrics.enabled=false`; seen
+   2026-10-25 in `LibsSetTest`, which uses `-DmetricsEnabled=false` for now).
 6. ~~**Prepared-statement cache bound**~~ — done 2026-10-24 with UPSTREAM-SYNC S12: the statement cache already was
    an LRU of `duckDbStatementCacheSize` (default 64) per worker thread; now texts over 256 Ki chars stay out of it
    (and out of the parse and schema caches), evictions and skips are Prometheus counters.
@@ -139,6 +149,10 @@
   reservations up to 10 min, slow first plan after B5 on S3) are not numbered, so sessions keep going down the
   numbered list (1b next). Want one of them taken before 1b's remaining groups? (b) skews endpoint placement
   for ~5 min; none gives wrong results.
+- Hazelcast phone-home is on: a started node tries to reach `phonehome.hazelcast.com` (version, cluster size;
+  seen 2026-10-25 from the cloud sandbox, where the proxy refused it). Nothing in the config sets
+  `hazelcast.phone.home.enabled=false`. Turn it off by default (no client-visible change)? Until then the stand
+  can pass `-Dhazelcast.phone.home.enabled=false` or `HZ_PHONE_HOME_ENABLED=false`.
 - Upstream wire extensions (UPSTREAM-SYNC S7 `decimalWire=narrow`, S8 runtime IN/bloom filters in the ticket): want
   them (opt-in) for our StarRocks/Trino connectors? Both change what clients see/send; for the coordinator: upstream's
   StarRocks fork pushes runtime filters and partial aggregates (SUM cast to DOUBLE because integer SUM streams as

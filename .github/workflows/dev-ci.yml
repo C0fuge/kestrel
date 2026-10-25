@@ -1,6 +1,6 @@
 # Development CI of this fork: one full build per change set (all tests except perf and
-# real-services, Checkstyle, SpotBugs) and, on demand, a linux-only server jar + plugins dir
-# published as a pre-release of this repository. Test inputs come from the
+# real-services, Checkstyle, SpotBugs) and, on demand, a linux-only server jar + plugins dir +
+# runtime libs set published as a pre-release of this repository. Test inputs come from the
 # `ci-assets` release.
 name: Dev CI
 
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Also publish a linux-only jar + plugins dir as a release server-<version>-<sha>"
+        description: "Also publish a linux-only jar + plugins dir + libs set as a release server-<version>-<sha>"
         type: boolean
         default: false
 
@@ -113,7 +113,7 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Linux-only jar and plugins (tests ran in the build job)
+      - name: Linux-only jar, plugins and libs set (tests ran in the build job)
         run: ./mvnw clean package -Plinux-only -DskipTests
 
       - name: Assemble release assets
@@ -127,6 +127,13 @@ jobs:
           cp "flight-server/target/arrow-flight-server-${version}-shaded.jar" \
             "$out/arrow-flight-server-${version}-${sha}-linux.jar"
           tools/make-plugin-dir.sh "$RUNNER_TEMP/pd" s3 lakefs iceberg hive
+          # Hadoop client libraries the shaded jar leaves to the deployment (flight-server target/libs,
+          # checked by LibsSetTest in the build job): java -cp '<jar>:libs/*'.
+          mkdir -p "$RUNNER_TEMP/ld/libs"
+          cp flight-server/target/libs/*.jar "$RUNNER_TEMP/ld/libs/"
+          sed -n 's/^   \([^ ]*\).*/\1/p' flight-server/target/libs-dependencies.txt > "$RUNNER_TEMP/ld/libs/DEPENDENCIES.txt"
+          (cd "$RUNNER_TEMP/ld/libs" && sha256sum -- *.jar > SHA256SUMS)
+          tar -C "$RUNNER_TEMP/ld" -cf - libs | zstd -19 -T0 > "$out/flight-server-libs-${version}-${sha}.tar.zst"
           tar -C "$RUNNER_TEMP/pd" -cf - plugins | zstd -19 -T0 > "$out/flight-plugins-${version}-${sha}.tar.zst"
           sed -e "s/@VERSION@/${version}/g" -e "s/@SHA@/${sha}/g" -e "s/@COMMIT@/$(git rev-parse HEAD)/g" \
             docs/dev/START-NOTES.md > "$out/START-NOTES.md"

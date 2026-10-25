@@ -28,8 +28,11 @@ cd arrow-flight-server
 # Build (Java 21 required for build and run — Netty 4.2 + Arrow fail on JDK 24+; Maven Wrapper included)
 ./mvnw package -DskipTests
 
-# Start a single-node server with test data
-FLIGHT_ALLOW_INSECURE=true java -jar flight-server/target/arrow-flight-server-1.0.0-shaded.jar \
+# Start a single-node server with test data. Hadoop is not in the shaded jar (the deployment supplies it):
+# the build copies the Hadoop client libraries it needs to flight-server/target/libs.
+FLIGHT_ALLOW_INSECURE=true java \
+    -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:flight-server/target/libs/*" \
+    pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
     --data-dir flight-server/src/test/resources/test_db \
     --localhost 127.0.0.1 \
     --port 32010 \
