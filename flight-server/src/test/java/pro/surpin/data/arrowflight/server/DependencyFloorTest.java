@@ -12,10 +12,11 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Guards the security floors of the server's network and JSON libraries (docs/dev/DEPENDENCY-AUDIT.md).
+ * Guards the security floors of the server's network, JSON and Parquet libraries (docs/dev/DEPENDENCY-AUDIT.md).
  */
 @Tag("unit")
 class DependencyFloorTest {
@@ -67,6 +68,16 @@ class DependencyFloorTest {
     }
 
     @Test
+    void parquetCodecsAreAtTheFloor() throws ClassNotFoundException {
+        String parquet = org.apache.parquet.Version.VERSION_NUMBER;
+        assertTrue(atLeast(parquet, 1, 15, 0), "Parquet " + parquet + " is below 1.15.0");
+        String aircompressor = implementationVersion("io.airlift.compress.zstd.ZstdDecompressor");
+        assertTrue(atLeast(aircompressor, 2, 0, 3), "aircompressor " + aircompressor + " is below 2.0.3");
+        String snappy = implementationVersion("org.xerial.snappy.Snappy");
+        assertTrue(atLeast(snappy, 1, 1, 10, 4), "snappy-java " + snappy + " is below 1.1.10.4");
+    }
+
+    @Test
     void versionComparison() {
         assertTrue(atLeast("4.2.17.Final", 4, 2, 17));
         assertTrue(atLeast("4.3.0", 4, 2, 17));
@@ -74,22 +85,36 @@ class DependencyFloorTest {
         assertFalse(atLeast("4.2.9.Final", 4, 2, 17));
         assertFalse(atLeast("4.1.137.Final", 4, 2, 17));
         assertFalse(atLeast("5.6.0", 5, 7, 0));
+        assertTrue(atLeast("1.1.10.8", 1, 1, 10, 4));
+        assertFalse(atLeast("1.1.8.3", 1, 1, 10, 4));
+        assertFalse(atLeast("1.1.10", 1, 1, 10, 4));
+    }
+
+    /**
+     * Reads the version of the jar holding a class from its manifest.
+     *
+     * @param className a class of the jar
+     * @return the Implementation-Version of the jar
+     * @throws ClassNotFoundException when the jar is not on the classpath
+     */
+    private static String implementationVersion(String className) throws ClassNotFoundException {
+        String version = Class.forName(className, false, DependencyFloorTest.class.getClassLoader())
+                .getPackage().getImplementationVersion();
+        assertNotNull(version, className + " has no Implementation-Version");
+        return version;
     }
 
     /**
      * Tells whether a dotted version is at least the given one.
      *
      * @param version version text such as 4.2.19.Final
-     * @param major lowest major
-     * @param minor lowest minor
-     * @param patch lowest patch
-     * @return true when the version is not below major.minor.patch
+     * @param want lowest version numbers, most significant first (major, minor, patch, ...)
+     * @return true when the version is not below the given numbers
      */
-    private static boolean atLeast(String version, int major, int minor, int patch) {
+    private static boolean atLeast(String version, int... want) {
         String[] parts = version.split("[.-]");
-        int[] want = {major, minor, patch};
         for (int i = 0; i < want.length; i++) {
-            int have = Integer.parseInt(parts[i]);
+            int have = i < parts.length && parts[i].matches("\\d+") ? Integer.parseInt(parts[i]) : 0;
             if (have != want[i]) {
                 return have > want[i];
             }

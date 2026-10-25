@@ -61,6 +61,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `pro.surpin.data.arrowflight.shaded.jackson`: Spark 3.5 keeps its own 2.15, the connector runs on 2.21.8 (before,
   Spark's 2.15 shadowed the bundled copy). `DependencyFloorTest` / `JacksonFloorTest` guard one version >= 2.21.7.
   The Iceberg plugin (own class loader) bundles Jackson 2.22.3 instead of Iceberg 1.12's 2.22.2.
+- Server: Parquet 1.13.1 → 1.18.1 (footer and statistics reads), which lifts aircompressor 0.21 → 2.0.3
+  (CVE-2024-36114, CVE-2025-67721: crash / memory leak on crafted LZ4/Snappy/Zstd input) and snappy-java
+  1.1.8.3 → 1.1.10.8 (CVE-2023-43642, CVE-2023-34455 and others: DoS on crafted chunks). Data pages are still
+  read by DuckDB. `DependencyFloorTest` guards Parquet >= 1.15, aircompressor >= 2.0.3, snappy-java >= 1.1.10.4.
 
 ### Fixed
 - Query texts longer than 256 Ki characters (a join key list a connector sends as an IN list can
