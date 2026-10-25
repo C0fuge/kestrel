@@ -292,3 +292,18 @@
   local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 671 / 9
   skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push run 40156159318 green.
   Next: the runtime libs set (1b's last group).
+- 2026-10-25 (cloud session): item 1b, runtime libs set (commit 4eaab05). Finding: the shaded jar never carried
+  Hadoop (`provided`, "comes from the deployment"), so `java -jar` (README Quick Start, START-NOTES) failed with
+  `NoClassDefFoundError: org/apache/hadoop/conf/Configuration`; the stand ran on its stale libs dir. The build now
+  copies the provided closure (mediated against the jar's libraries: 58 jars, 42 MB, Hadoop 3.5.0, Jetty 9.4.58,
+  no ZooKeeper / Netty 3 / log4j / BouncyCastle / second Netty-Jackson-protobuf) to `flight-server/target/libs`;
+  the `package` dispatch publishes `flight-server-libs-<version>-<sha>.tar.zst` (`libs/` + DEPENDENCIES.txt +
+  SHA256SUMS). New `LibsSetTest` (floors, one version per jar, child-JVM start on server classpath + libs
+  reading Parquet, and a start without libs that must fail). README / START-NOTES start with
+  `java -cp '<jar>:libs/*'`; START-NOTES' layout also fixed (`../plugins` beside the jar). Found on the way: the
+  bundled properties shadow `-Darrowflight.*` too (added to item 5), Hazelcast phone-home is on (Open questions).
+  Full local `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 675
+  / 9 skipped, client-core 158, spark 175, starrocks 11, hive 11, plugins green); push run 40163635118 cancelled by
+  dispatch run 40163642740 (`package=true`) on the same commit: green, pre-release `server-1.0.0-4eaab052deaf`
+  with the libs asset (38.9 MB). Next: item 2 (Iceberg equality deletes), unless the maintainer picks a stand
+  finding (a)–(c) first.
