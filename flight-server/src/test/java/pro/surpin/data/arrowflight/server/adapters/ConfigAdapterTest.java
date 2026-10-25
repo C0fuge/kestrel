@@ -46,7 +46,7 @@ class ConfigAdapterTest {
         // so the value is core-count dependent: clamped to [minThreads=8, 64].
         assertTrue(cfg.ioParallelism() >= 8 && cfg.ioParallelism() <= 64,
                 "ioParallelism should be within the formula range, got " + cfg.ioParallelism());
-        assertEquals(2, cfg.duckDbThreads());
+        assertEquals(4, cfg.duckDbThreads());
         assertTrue(cfg.duckDbStreamResults());
         assertFalse(cfg.duckDbExternalFileCache());
         assertEquals(64, cfg.duckDbStatementCacheSize());
@@ -115,12 +115,20 @@ class ConfigAdapterTest {
         assertEquals(64, cfg.ioParallelism());
     }
 
+    /** The code default matches the bundled file: 4 threads without any setting (TUNING.md). */
+    @Test
+    void duckDbThreadsDefaultsToFourWithoutAnySetting() {
+        AppConfig cfg = ConfigAdapter.getConfig(
+                new ConfigSource(key -> null, new Properties(), Map.of(), null));
+        assertEquals(4, cfg.duckDbThreads());
+    }
+
     @Test
     void getConfigDuckDbThreads() {
-        setProp("duckDbThreads", "4");
+        setProp("duckDbThreads", "6");
 
         AppConfig cfg = ConfigAdapter.getConfig();
-        assertEquals(4, cfg.duckDbThreads());
+        assertEquals(6, cfg.duckDbThreads());
     }
 
     /** Verifies DuckDB HDFS extension settings map from system properties. */

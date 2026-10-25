@@ -138,7 +138,7 @@ flight-server/src/main/resources/arrowflight.properties
 - `ioParallelismMultiplier` - коэффициент умножения cores, по умолчанию `8`.
 - `duckDbWarmConnections` - сколько DuckDB connections прогревать при старте.
 - `duckDbGroups` - сколько групп использовать для старых grouped helper paths.
-- `duckDbThreads` - `SET threads` для DuckDB connection.
+- `duckDbThreads` - `SET threads` для DuckDB connection (по умолчанию 4).
 - `grpcMaxInboundMessageSize` - max inbound gRPC message size.
 - `flightBackpressureThresholdBytes` - максимум сериализованных outbound bytes в очереди до включения Flight backpressure.
 - `flightListenerReadyTimeoutMs` - timeout ожидания готовности Flight listener.

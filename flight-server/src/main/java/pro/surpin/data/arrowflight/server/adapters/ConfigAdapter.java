@@ -43,7 +43,7 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.warmConnections", Math.min(8, ioParallelism), props);
         int duckDbGroups = getInt("duckDbGroups",
                 "arrowflight.duckdb.groups", Math.min(8, ioParallelism), props);
-        int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 1, props);
+        int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 4, props);
         String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
                 "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
         boolean duckDbAllowUnsignedExtensions = getBooleanWithEnv("duckDbAllowUnsignedExtensions",

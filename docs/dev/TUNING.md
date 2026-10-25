@@ -22,7 +22,7 @@ Campaign 2026-10-25/26, server builds 4eaab052deaf (all sweeps) and c3b276054cc3
 
 | profile | settings | small JDBC c1 p50/p95 ms | small JDBC c32 p50/p95 ms | ADBC c1 p50 / c32 p95 ms | SF1 JDBC s | SF1 Trino s | SF10 JDBC s | SF10 Trino s | scan MB/s 1/4/8 clients | heavy4 slowest s | RSS peak GB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| default | `duckDbThreads=2` (build default) | 18.8 / 43.5 | 70 / 308 | 14.8 / 293 | 2.38 | 6.04 | 19.4 | 35.1 | 944 / 2942 / 3130 | 3.5 | 4.4 |
+| default | `duckDbThreads=2` (build default until 2026-10-26, now 4) | 18.8 / 43.5 | 70 / 308 | 14.8 / 293 | 2.38 | 6.04 | 19.4 | 35.1 | 944 / 2942 / 3130 | 3.5 | 4.4 |
 | best for small | = default | 18.8 / 43.5 | 70 / 308 | 14.8 / 293 | 2.38 | 6.04 | 19.4 | 35.1 | 944 / 2942 / 3130 | 3.5 | 4.4 |
 | **best balanced** | `duckDbThreads=4` | 21.4 / 39.4 | 95 / 302 | 17.5 / 286 | 1.85 | 6.05 | **10.8** | 33.1 | 916 / 3004 / 3162 | 2.4 | 4.1 |
 | best for heavy | `duckDbThreads=8` | 25.1 / 45.7 | 112 / 320 | 20.3 / 313 | 1.49 | 6.06 | **7.45** | 33.3 | 935 / 2943 / 3156 | 2.3 | 4.7 |
@@ -58,7 +58,8 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
 
 ## Recommended defaults
 
-- `duckDbThreads=4` (was 2). A size-aware default (for example cores / 4, between 2 and 8) would keep the balance on bigger hosts.
+- `duckDbThreads=4` (was 2) — adopted as the build default 2026-10-26 (plain 4). A size-aware default (for example cores / 4,
+  between 2 and 8) would keep the balance on bigger hosts (proposal, not adopted).
 - `flightBackpressureThresholdBytes=16777216` (16 MiB, was 256 MiB): no loss measured, and per-stream buffering times the number of
   concurrent streams must fit `MaxDirectMemorySize`; with several endpoints per node the 256 MiB default fails.
 - Keep: `duckDbStreamResults=true`, `duckDbExternalFileCache=false`, `resultMode=complete`, `endpointsPerServer=1`,

@@ -34,6 +34,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.4.5 must be installed as on the stand; the server
   checks the extension versions at startup.
+- DuckDB runs 4 threads per connection by default (`duckDbThreads`, was 2); set `-DduckDbThreads=1` /
+  `FLIGHT_DUCKDB_THREADS=1` where compute workers share the node.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.

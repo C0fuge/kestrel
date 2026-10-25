@@ -300,6 +300,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Package renamed from `net.surpin` to `pro.surpin`
 
 ### Changed
+- `duckDbThreads` defaults to 4 (was 2 in the bundled `arrowflight.properties`, 1 in code): SF10 1.8x and SF1
+  1.3x faster on the stand for +2.6 ms on a point lookup (docs/dev/TUNING.md). Set 1 where compute shares the node.
 - Partial results of Iceberg tables with delete files: a snapshot with position and/or equality
   deletes is no longer answered completely by one node. Its data files are spread over the nodes
   like other snapshots' (tickets unchanged: snapshot ID and file location), and the executing node
