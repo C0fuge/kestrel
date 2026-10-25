@@ -190,11 +190,11 @@
    Kerberos finished before production; implement here, the stand check comes later.)
 9. **Per-user identity** (needed for Ranger/Kerberos): JWT/bearer pass-through of the end user to Ranger checks;
    design in Open questions first.
-10. **Local catalog roots under an HDFS `fs.defaultFS`** (stand 2026-10-25, int7 and 4eaab05 alike): with the HDFS
-   client config on the class path, `-Darrowflight.iceberg-hadoop.warehouse=file:///wh` (or `/wh`) fails at start:
-   "The store opened for /wh does not hold it (roots [hdfs://<ns>/wh])" — `CatalogLocations.normalize` drops
-   `file://` and the Hadoop store resolves the bare path against `fs.defaultFS`. Keep the scheme (or qualify bare
-   paths with `file:`) for catalog roots and Hive/Iceberg locations; test with an HDFS default FS configured.
+10. ~~**Local catalog roots under an HDFS `fs.defaultFS`**~~ — done 2026-10-25 (see Log): a catalog location
+   without a scheme (`/wh`, `file:/wh`, `file:///wh` all normalise to `/wh`) now opens a local store
+   (`file:/wh`) instead of resolving against `fs.defaultFS`; the data directory as a plain path still follows
+   `fs.defaultFS`. Stand: the int7 case (`-Darrowflight.iceberg-hadoop.warehouse=file:///wh` with the HDFS
+   client config on the class path) must start and answer.
 11. ~~**Runtime libs set gaps**~~ — done 2026-10-25 (see Log): the set now carries ZooKeeper 3.8.6 (+ jute,
    audience-annotations) and lz4-java (`at.yawk.lz4` 1.10.4), Curator is 5.2.0 in jar and set alike (the jar had
    curator-framework 2.13.0 with curator-client 5.2.0). `LibsSetTest` links every class of hadoop-common,
@@ -546,3 +546,11 @@
   auth / auth-int (catalog answers = plain metastore), unknown service principal, no common protection layer,
   missing cache, wrong keytab principal, plain client against SASL. Local: hive module 16/16 + checkstyle +
   spotbugs clean; push run 40232501858 green. Next: item 10 or 12 (8 needs the maintainer first, 9 design first).
+- 2026-10-25 (cloud): **item 10 done** (67d809c): `StoreRegistry.CatalogStores.locate` opens a catalog location
+  without a scheme as `file:<path>` (normalised `/wh`, `file:/wh`, `file:///wh`), so a local warehouse no longer
+  resolves against a non-local `fs.defaultFS`; the data directory as a plain path is unchanged (follows
+  `fs.defaultFS`). Regression test `CatalogRegistryTest.localWarehouseUnderANonLocalDefaultFileSystem` (viewfs
+  default FS standing in for HDFS; four warehouse spellings; table files located in a local store) failed before the
+  fix with the stand's error. Local: CatalogRegistryTest + StoreRegistryTest, checkstyle + spotbugs clean (local
+  Maven: the wrapper's 3.10.0 download fails, `/opt/maven/bin/mvn` works); push run 40241864311 green.
+  Next: item 12 (s3a/s3n catalog roots); 8 needs the maintainer first, 9 design first.
