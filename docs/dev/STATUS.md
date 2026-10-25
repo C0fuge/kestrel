@@ -158,6 +158,15 @@
 
 ## Open questions
 
+- Production versions (maintainer, 2026-10-25) vs our client side, not yet checked: the libs set carries the
+  ZooKeeper 3.8.6 client (Hadoop 3.5.0's; talks to a 3.9.2 ensemble, SASL client code is the same line) and
+  hadoop-client 3.5.0 against a Hadoop 3.1.3 cluster (HDFS RPC and SASL are wire-compatible across 3.x, but
+  e.g. the 3.5 client's defaults — `dfs.client.*` timeouts, observer reads off — should be confirmed on the
+  stand); the embedded Ranger evaluator is ranger-plugins-common 2.8.0 against a Ranger 2.4.0 admin (policy
+  download REST). Should the libs set follow the cluster (ZooKeeper 3.9.x, or Hadoop 3.3.x client), or stay on
+  Hadoop 3.5.0 unless the stand shows a problem? Proposal: stay, and test HA failover + Kerberos on the stand
+  with release `server-1.0.0-c3b276054cc3` first.
+
 - **Item 3 (Iceberg time travel): which form? (proposal 2026-10-25, no code yet).** Recommended: the
   SQL clause Trino and Spark use, after a catalog table name: `FROM ns.t FOR VERSION AS OF
   8213491011553364004` (snapshot ID) and `FOR TIMESTAMP AS OF TIMESTAMP '2026-10-01 00:00:00 UTC'`
