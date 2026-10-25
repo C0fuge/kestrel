@@ -260,7 +260,8 @@ class HiveCatalogTest {
         assertThrows(IllegalArgumentException.class, () -> open(Map.of("uris", "http://x:1")));
         IllegalArgumentException kerberos = assertThrows(IllegalArgumentException.class,
                 () -> open(Map.of("authentication", "kerberos")));
-        assertTrue(kerberos.getMessage().contains("not supported yet"));
+        assertTrue(kerberos.getMessage().contains("metastorePrincipal is required"),
+                kerberos.getMessage());
         assertThrows(IllegalArgumentException.class, () -> open(Map.of("icebergTables", "require")));
     }
 

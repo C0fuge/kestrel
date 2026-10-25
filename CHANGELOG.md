@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Hive plugin: Kerberos metastores (`arrowflight.hive.authentication=kerberos`): SASL/GSSAPI
+  transport as Hive's own client (`metastorePrincipal` with `_HOST`, `saslQop`), login from
+  `clientPrincipal` + `clientKeytab` or from the ticket cache (`KRB5CCNAME` / `clientTicketCache`),
+  renewed before the ticket runs out. Tested against an in-process KDC (Apache Kerby, test scope only).
 - Iceberg time travel: `FROM ns.t FOR VERSION AS OF <snapshot id | 'tag'>` and `FOR TIMESTAMP AS OF
   TIMESTAMP '<time> <zone>'` read an earlier snapshot of an iceberg-hadoop / iceberg-rest table with
   its own files, deletes and columns (README "Iceberg time travel"); errors for points without a

@@ -6,9 +6,15 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+
+import javax.security.auth.Subject;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslException;
 
 import org.apache.hadoop.hive.metastore.api.ClientCapabilities;
 import org.apache.hadoop.hive.metastore.api.ClientCapability;
@@ -26,6 +32,7 @@ import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocolException;
 import org.apache.thrift.transport.layered.TFramedTransport;
+import org.apache.thrift.transport.TSaslClientTransport;
 import org.apache.thrift.transport.TSocket;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
@@ -36,8 +43,8 @@ import org.slf4j.LoggerFactory;
  * A Hive Metastore over Thrift (the generated client of Hive 3.1.3, which HMS 2.x to 4.x answer
  * for these calls), with a small pool of connections. A broken connection is dropped and the
  * call is tried once more on a new one, starting with the URI that worked last and going on to
- * the next ones. Authentication: none; a SASL (Kerberos) transport would wrap the socket in
- * {@link #open(String)}.
+ * the next ones. Authentication: none, or Kerberos over the SASL transport (GSSAPI, as Hive's
+ * own client with {@code hive.metastore.sasl.enabled}).
  */
 final class ThriftMetastore implements Metastore {
 
@@ -47,6 +54,8 @@ final class ThriftMetastore implements Metastore {
     private final int connectTimeoutMillis;
     private final int socketTimeoutMillis;
     private final boolean framed;
+    private final HiveSettings.Kerberos kerberos;
+    private final KerberosLogin login;
     private final Semaphore permits;
     private final Deque<Connection> idle = new ArrayDeque<>();
     private volatile int preferred;
@@ -123,6 +132,10 @@ final class ThriftMetastore implements Metastore {
         this.connectTimeoutMillis = settings.connectTimeoutMillis();
         this.socketTimeoutMillis = settings.socketTimeoutMillis();
         this.framed = settings.framedTransport();
+        this.kerberos = settings.kerberos();
+        this.login = kerberos == null ? null
+                : new KerberosLogin(kerberos.clientPrincipal(), kerberos.clientKeytab(),
+                        kerberos.clientTicketCache());
         this.permits = new Semaphore(settings.maxConnections(), true);
     }
 
@@ -382,7 +395,7 @@ final class ThriftMetastore implements Metastore {
                 Connection connection = open(uri);
                 preferred = index;
                 return connection;
-            } catch (TTransportException | RuntimeException e) {
+            } catch (IOException | TTransportException | RuntimeException e) {
                 errors.add(uri + ": " + e.getMessage());
             }
         }
@@ -419,15 +432,53 @@ final class ThriftMetastore implements Metastore {
      * @param uri {@code thrift://host:port}
      * @return connection
      * @throws TTransportException when it cannot be opened
+     * @throws IOException when the Kerberos login fails
      */
-    private Connection open(String uri) throws TTransportException {
+    private Connection open(String uri) throws TTransportException, IOException {
         URI parsed = URI.create(uri);
         int port = parsed.getPort() < 0 ? 9083 : parsed.getPort();
         TSocket socket = new TSocket(thriftConfiguration(), parsed.getHost(), port,
                 socketTimeoutMillis, connectTimeoutMillis);
-        TTransport transport = framed ? new TFramedTransport(socket) : socket;
-        transport.open();
+        TTransport transport;
+        if (kerberos != null) {
+            transport = saslOpen(socket, parsed.getHost(), login.subject());
+        } else {
+            transport = framed ? new TFramedTransport(socket) : socket;
+            transport.open();
+        }
         LOGGER.debug("hive=metastoreConnected uri={}", uri);
         return new Connection(uri, transport);
+    }
+
+    /**
+     * Opens the SASL (GSSAPI) transport over a socket as the logged-in subject.
+     *
+     * @param socket socket, not yet open
+     * @param host metastore host, for {@code _HOST} in the metastore principal
+     * @param subject Kerberos login
+     * @return open transport
+     * @throws TTransportException when the connection or the SASL handshake fails
+     */
+    private TTransport saslOpen(TSocket socket, String host, Subject subject)
+            throws TTransportException {
+        String[] service = KerberosLogin.servicePrincipal(kerberos.metastorePrincipal(), host);
+        String peer = service[0] + "/" + service[1];
+        try {
+            // The GSSAPI client takes its credentials from the subject: create and open in it.
+            return Subject.callAs(subject, () -> {
+                TSaslClientTransport transport = new TSaslClientTransport("GSSAPI", null,
+                        service[0], service[1],
+                        Map.of(Sasl.QOP, kerberos.qop(), Sasl.SERVER_AUTH, "true"), null, socket);
+                transport.open();
+                return transport;
+            });
+        } catch (CompletionException e) {
+            socket.close();
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            String message = cause instanceof TTransportException || cause instanceof SaslException
+                    ? cause.getMessage() : cause.toString();
+            throw new TTransportException("Kerberos (SASL) handshake with " + peer + " failed: "
+                    + message, cause);
+        }
     }
 }

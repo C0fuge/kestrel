@@ -24,19 +24,36 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param socketTimeoutMillis Thrift read timeout
  * @param maxConnections metastore connections kept open
  * @param framedTransport whether the metastore uses the framed Thrift transport
- * @param authentication how the client authenticates; only "none" today
+ * @param authentication how the client authenticates: none or kerberos (SASL/GSSAPI)
  * @param recursiveDirectories whether files in subdirectories of a location count
  * @param partitionBatchSize partitions fetched per metastore call
  * @param listThreads threads that list partition directories
  * @param icebergTables what to do with Iceberg tables registered in the metastore
  * @param defaultPartitionName the partition value that stands for NULL
+ * @param kerberos Kerberos settings, null without Kerberos
  */
 record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         Set<String> databases, long namesTtlMillis, long metadataTtlMillis,
         int connectTimeoutMillis, int socketTimeoutMillis, int maxConnections,
         boolean framedTransport, String authentication, boolean recursiveDirectories,
         int partitionBatchSize, int listThreads, IcebergTables icebergTables,
-        String defaultPartitionName) {
+        String defaultPartitionName, Kerberos kerberos) {
+
+    /** SASL protection levels the client accepts by default: the strongest the metastore offers. */
+    static final String DEFAULT_QOP = "auth-conf,auth-int,auth";
+
+    /**
+     * Kerberos settings of the metastore client.
+     *
+     * @param metastorePrincipal the metastore's principal, {@code hive/_HOST@REALM}
+     * @param clientPrincipal the client's principal, null to take the ticket cache's
+     * @param clientKeytab the client's keytab, null for the ticket cache
+     * @param clientTicketCache the ticket cache, null for {@code KRB5CCNAME} or the default
+     * @param qop SASL quality of protection values, in order of preference
+     */
+    record Kerberos(String metastorePrincipal, String clientPrincipal, String clientKeytab,
+            String clientTicketCache, String qop) {
+    }
 
     /** Provider name, also the configuration namespace. */
     static final String NAME = "hive";
@@ -73,7 +90,17 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         keys.add(ConfigKey.of("maxConnections", "metastore connections kept open", "4"));
         keys.add(ConfigKey.of("framedTransport", "whether the metastore uses the framed transport",
                 "false"));
-        keys.add(ConfigKey.of("authentication", "none (kerberos: not yet)", "none"));
+        keys.add(ConfigKey.of("authentication", "none | kerberos (SASL/GSSAPI)", "none"));
+        keys.add(ConfigKey.of("metastorePrincipal", "with kerberos: the metastore's principal,"
+                + " _HOST stands for the host of each URI, for example hive/_HOST@EXAMPLE.COM", null));
+        keys.add(ConfigKey.of("clientPrincipal", "with kerberos: the server's principal (required"
+                + " with clientKeytab; default the ticket cache's)", null));
+        keys.add(ConfigKey.of("clientKeytab", "with kerberos: keytab of clientPrincipal (default:"
+                + " the ticket cache, KRB5CCNAME, kept fresh by kinit)", null));
+        keys.add(ConfigKey.of("clientTicketCache", "with kerberos and no clientKeytab: ticket cache"
+                + " file (default KRB5CCNAME or the default cache)", null));
+        keys.add(ConfigKey.of("saslQop", "with kerberos: SASL quality of protection, auth |"
+                + " auth-int | auth-conf, comma separated in order of preference", DEFAULT_QOP));
         keys.add(ConfigKey.of("recursiveDirectories", "whether files in subdirectories of a table"
                 + " or partition location count", "false"));
         keys.add(ConfigKey.of("partitionBatchSize", "partitions fetched per metastore call", "500"));
@@ -110,10 +137,12 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                     + " elsewhere are hidden)");
         }
         String authentication = config.get("authentication", "none").strip().toLowerCase(Locale.ROOT);
-        if (!"none".equals(authentication)) {
-            throw new IllegalArgumentException("hive.authentication=" + authentication
-                    + " is not supported yet (only none; Kerberos/SASL is planned)");
-        }
+        Kerberos kerberos = switch (authentication) {
+            case "none" -> null;
+            case "kerberos" -> kerberos(config);
+            default -> throw new IllegalArgumentException("hive.authentication must be none or"
+                    + " kerberos: " + authentication);
+        };
         IcebergTables iceberg;
         try {
             iceberg = IcebergTables.valueOf(config.get("icebergTables", "auto").strip()
@@ -136,7 +165,65 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                 atLeast(config, "maxConnections", 4, 1), config.getBoolean("framedTransport", false),
                 authentication, config.getBoolean("recursiveDirectories", false),
                 atLeast(config, "partitionBatchSize", 500, 1), atLeast(config, "listThreads", 8, 1),
-                iceberg, config.get("defaultPartitionName", "__HIVE_DEFAULT_PARTITION__"));
+                iceberg, config.get("defaultPartitionName", "__HIVE_DEFAULT_PARTITION__"), kerberos);
+    }
+
+    /**
+     * Reads the Kerberos settings.
+     *
+     * @param config configuration of namespace hive
+     * @return settings
+     * @throws IllegalArgumentException when a value is missing or invalid
+     */
+    private static Kerberos kerberos(PluginConfig config) {
+        String metastorePrincipal = blankToNull(config.get("metastorePrincipal", ""));
+        if (metastorePrincipal == null) {
+            throw new IllegalArgumentException("hive.metastorePrincipal is required with"
+                    + " hive.authentication=kerberos, for example hive/_HOST@EXAMPLE.COM (the"
+                    + " metastore's hive.metastore.kerberos.principal)");
+        }
+        KerberosLogin.checkedPrincipal(metastorePrincipal);
+        String clientPrincipal = blankToNull(config.get("clientPrincipal", ""));
+        String clientKeytab = blankToNull(config.get("clientKeytab", ""));
+        String clientTicketCache = blankToNull(config.get("clientTicketCache", ""));
+        if (clientKeytab != null && clientTicketCache != null) {
+            throw new IllegalArgumentException("hive.clientKeytab and hive.clientTicketCache"
+                    + " exclude each other");
+        }
+        if (clientKeytab != null && clientPrincipal == null) {
+            throw new IllegalArgumentException("hive.clientPrincipal is required with"
+                    + " hive.clientKeytab");
+        }
+        if (config.getBoolean("framedTransport", false)) {
+            throw new IllegalArgumentException("hive.framedTransport=true does not go with"
+                    + " hive.authentication=kerberos: a Kerberos metastore uses the SASL transport");
+        }
+        List<String> qop = new ArrayList<>();
+        for (String part : config.get("saslQop", DEFAULT_QOP).split(",")) {
+            String value = part.strip().toLowerCase(Locale.ROOT);
+            if (!value.isEmpty()) {
+                if (!Set.of("auth", "auth-int", "auth-conf").contains(value)) {
+                    throw new IllegalArgumentException("hive.saslQop takes auth, auth-int and"
+                            + " auth-conf: " + value);
+                }
+                qop.add(value);
+            }
+        }
+        if (qop.isEmpty()) {
+            throw new IllegalArgumentException("hive.saslQop is empty");
+        }
+        return new Kerberos(metastorePrincipal, clientPrincipal, clientKeytab, clientTicketCache,
+                String.join(",", qop));
+    }
+
+    /**
+     * Returns a stripped value, null when blank.
+     *
+     * @param value value
+     * @return stripped value or null
+     */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
     }
 
     /**
@@ -182,6 +269,10 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                 + "', databases=" + databases + ", namesTtlMillis=" + namesTtlMillis
                 + ", metadataTtlMillis=" + metadataTtlMillis + ", maxConnections=" + maxConnections
                 + ", framed=" + framedTransport + ", authentication=" + authentication
+                + (kerberos == null ? "" : ", metastorePrincipal=" + kerberos.metastorePrincipal()
+                        + ", clientPrincipal=" + kerberos.clientPrincipal() + ", clientKeytab="
+                        + kerberos.clientKeytab() + ", clientTicketCache="
+                        + kerberos.clientTicketCache() + ", saslQop=" + kerberos.qop())
                 + ", recursive=" + recursiveDirectories + ", icebergTables=" + icebergTables + "}";
     }
 }
