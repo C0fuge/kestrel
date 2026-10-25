@@ -27,6 +27,17 @@
 
 > **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
 
+> **Stand regression, single node, build 4eaab052deaf with the new runtime libs set (2026-10-25)** (unnumbered): the
+> release jar + `flight-server-libs` (60 jars, Hadoop 3.5.0) instead of the old 335-jar libs dir, against int7 on the
+> same node, alternating runs. HDFS (HA nameservice, hadoopfs 51b7220-afc3): startup log shows timeouts 3000/10000,
+> extension versions and `storageSetupVerified` (lockdown check); TPC-H SF10 JDBC 22/22 `9e2af63e8711` x3, Trino 455
+> + plugin v10 22/22 `05bc0dc2713a` x3, jdbc.sh 27/2, safety 82/82. S3 plugin on MinIO (read-only user): JDBC 22/22
+> x2, 27/2 + 82/82. HMS catalog (hdfs + s3 roots, libthrift 0.24.0): reference queries 76 OK / 2 expected / 11
+> time travel in complete and partial mode (= int7). Iceberg local warehouse: 9/9 answers = int7, refusals intact.
+> Timings equal within noise (HDFS JDBC warm 24.6 vs 24.7 s, Trino 43.9 vs 43.7 s, S3 JDBC 33.0 vs 32.9 s); JVM
+> RSS ~50 MB lower idle, same peak (2.1–2.5 GB after Trino). No missing class on any tested path; a Kerberos keytab
+> login (no KDC) reaches JAAS. Follow-ups: items 10 and 11.
+
 0. **Upstream is active again (checked 2026-10-23)** — upstream `main` is still dbacd8d (our base), but new work sits on
    public upstream branches (read-only for us: `git fetch https://github.com/VadimSurpin/arrow-flight-server.git
    '+refs/heads/*:refs/remotes/upstream/*'`; never push there). Review per feature and port what beats ours (rule:
@@ -116,6 +127,18 @@
    Kerberos finished before production; implement here, the stand check comes later.)
 9. **Per-user identity** (needed for Ranger/Kerberos): JWT/bearer pass-through of the end user to Ranger checks;
    design in Open questions first.
+10. **Local catalog roots under an HDFS `fs.defaultFS`** (stand 2026-10-25, int7 and 4eaab05 alike): with the HDFS
+   client config on the class path, `-Darrowflight.iceberg-hadoop.warehouse=file:///wh` (or `/wh`) fails at start:
+   "The store opened for /wh does not hold it (roots [hdfs://<ns>/wh])" — `CatalogLocations.normalize` drops
+   `file://` and the Hadoop store resolves the bare path against `fs.defaultFS`. Keep the scheme (or qualify bare
+   paths with `file:`) for catalog roots and Hive/Iceberg locations; test with an HDFS default FS configured.
+11. **Runtime libs set gaps** (stand 2026-10-25; nothing tested fails): compared with the old libs dir, no
+   `org.apache.zookeeper` (used by ZK-based HA elector / ZKFC, `ZKCuratorManager`, ZK delegation-token and signer
+   secret managers, and the signature of `SecurityUtil.setSslConfiguration(ZKClientConfig, ...)` — reflection over
+   `SecurityUtil.getDeclaredMethods()` throws NoClassDefFoundError) and no lz4-java (`net.jpountz.lz4`, Hadoop
+   `Lz4Codec`). Decide: add zookeeper + lz4-java to the set, or document them as not needed by the server (none
+   is on its read path); extend `LibsSetTest` with a class-resolution check of hadoop-common/hdfs-client. A real
+   Kerberos login (KDC) with the new set is still untested (item 7).
 
 ## Open questions
 
@@ -346,3 +369,6 @@
   692 tests, only `LakeFsPluginTest` erred for the unbuilt lakeFS plugin in a single-module run (green after building
   it); Checkstyle/SpotBugs clean. CI: dispatch run 40178274322 green (the push had a [skip ci] head). Next: item 2 (ii)/(iii) are stand work; next code item
   is 3 (time travel; propose the form in Open questions first).
+- 2026-10-25 (maintainer's local agent): single-node stand regression of release `server-1.0.0-4eaab052deaf`
+  with the new libs set vs int7 — all checks pass, timings and memory equal (note under Next steps); new items 10
+  (file:// catalog roots under an HDFS default FS, also in int7) and 11 (zookeeper / lz4-java absent from the set).
