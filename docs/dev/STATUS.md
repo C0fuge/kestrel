@@ -114,7 +114,11 @@
 > - ~~**(c) Short-circuit is forced on:**~~ fixed 2026-10-26 (see Log): the deployment's value is kept, otherwise on only with a `dfs.domain.socket.path`. Original: `HadoopDataStoreProvider.open` sets `dfs.client.read.shortcircuit=true`; a client
 >   config without `dfs.domain.socket.path` (no local DataNode) stops the server at start (`The short-circuit local reads
 >   feature is enabled but dfs.domain.socket.path is not set`). Keep the deployment's value / make it a setting.
-> - **(d) NameNode host crash with libhdfs3 defaults:** killing the active NameNode *process* costs the running query
+> - **(d) NameNode host crash with libhdfs3 defaults:** partly done 2026-10-26 (8e0307f, see Log): the hadoopfs
+>   extension (afc3) has no RPC timeout setting, so the server cannot set them in DuckDB; it now WARNs at startup on HDFS
+>   for each of the four `rpc.client.*` timeouts LIBHDFS3_CONF leaves unset or over 60 s, and the values below are
+>   documented (`arrowflight.properties`, START-NOTES). **Stand:** put them into the stand's/production LIBHDFS3_CONF.
+>   Making the server supply them needs extension settings (`hdfs_rpc_*`, hadoopfs repo) — ask if wanted. Original: killing the active NameNode *process* costs the running query
 >   ~10 s (60/60 OK). Killing the whole active NameNode *host* (its address disappears; new active after ~27 s): one
 >   query hung 170 s and failed (`Failed to invoke RPC call "getFileInfo" on server <old active>:8020 ... Connection reset
 >   by peer`), later queries OK. With `rpc.client.connect.timeout=5000`, `rpc.client.read.timeout=15000`,
@@ -756,3 +760,12 @@
   load) — the stand rerun (13d in Next steps) decides. CI run 40348114333 on 4939fb7 green. Next: stand reruns of 0e/0f/13d; answers
   to the Open questions (0d crash case, 9, 13, reservation TTL); other unnumbered findings (secure HA (b) ticket cache
   from the keytab, (d) libhdfs3 RPC timeouts, 3-node S3 (c)).
+- 2026-10-26 (cloud session): secure HA stand finding (d) (libhdfs3 NameNode RPC timeouts). The hadoopfs
+  extension (v1.4.5-afc3, ci-assets) has settings only for DataNode connect/read and dead-node TTL, none for
+  `rpc.client.*`, so the server cannot ship them as DuckDB defaults. Added (additive, log only):
+  `HadoopArrowFlightServer.longHdfsRpcTimeouts` + startup WARN on HDFS naming each of
+  `rpc.client.{connect.timeout,read.timeout,write.timeout,timeout}` LIBHDFS3_CONF leaves unset or > 60 s with the
+  stand's value; values documented in `arrowflight.properties` and START-NOTES. Test
+  `HadoopArrowFlightServerTest.reportsLongHdfsRpcTimeouts`. CI run 40362074150 on 8e0307f green. Note: the extension's
+  `hdfs_dead_node_ttl_ms` is not exposed as a server setting yet (optional follow-up). Next: secure HA (b) (ticket
+  cache from the keytab), 3-node S3 (c), and the stand reruns of 0e/0f/13d.
