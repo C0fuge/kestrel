@@ -23,6 +23,15 @@
 
 ## Next steps (one per session)
 
+0f. **Bug (stand, 2026-10-26): 3-node cluster, 8 concurrent partial-mode full scans -> streams CANCELLED and a node
+    dies.** 3 servers (HDFS, `-Xmx2g`, `duckDbMemoryLimit=1GB`, 4 GB containers, server 4eaab052deaf), 8 clients each
+    reading all 3 endpoints of lineitem SF10: 7-10 endpoint reads per round fail "CANCELLED: Server sendMessage()
+    failed" in every round (1 and 8 DuckDB threads); with 8 threads the node serving the coordinator role was gone
+    after the scan in 2 of 2 valid rounds (container removed, no exit info). A single server with the same clients has
+    0 errors. Same mechanism as item 13b (256 MiB backpressure per stream exhausts direct memory): bound the per-stream
+    and total outbound buffer (13b default 16 MiB and/or a global budget), fail a stream instead of the process, and
+    add a test with many concurrent streams under a small `MaxDirectMemorySize`.
+
 0e. ~~**Bug (stand, 2026-10-26): S3 + `duckDbThreads=8` -> every complete-mode query fails**~~ "Could not
     establish connection" — done 2026-10-26 (c71ee2e, see Log): DuckDB now retries S3 requests (connect errors
     included) for ~6 s instead of its own ~0.5 s; settings `arrowflight.s3.httpRetries` / `httpRetryWaitMs` /
