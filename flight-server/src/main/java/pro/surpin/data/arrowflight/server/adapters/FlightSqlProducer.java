@@ -306,6 +306,65 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         });
     }
 
+    /**
+     * Answers CancelFlightInfo for a plan the client will not read (or not read to the end): the
+     * node-load reservations of its endpoints are released at once instead of after their 10-minute
+     * expiry, so later plans place endpoints by the load that is really running. Streams already
+     * running are not stopped (the client stops them by closing them); a ticket read after the
+     * cancel still answers, without tracked load.
+     *
+     * @param request the FlightInfo to cancel
+     * @param context call context
+     * @param listener receives CANCELLED, or INVALID_ARGUMENT for a ticket this server did not issue
+     */
+    @Override
+    public void cancelFlightInfo(org.apache.arrow.flight.CancelFlightInfoRequest request,
+            FlightProducer.CallContext context,
+            FlightProducer.StreamListener<org.apache.arrow.flight.CancelStatus> listener) {
+        int tracked = 0;
+        try {
+            for (FlightEndpoint endpoint : request.getInfo().getEndpoints()) {
+                byte[] handle = statementHandle(endpoint.getTicket());
+                if (handle == null) {
+                    continue;
+                }
+                HandleState state = clusterService.resolveEndpointHandle(handle);
+                if (state != null && state.loadTracked()) {
+                    clusterService.releaseEndpointLoad(handle, state);
+                    tracked++;
+                }
+            }
+        } catch (IllegalArgumentException e) {
+            listener.onError(CallStatus.INVALID_ARGUMENT
+                    .withDescription("Invalid Flight endpoint ticket").withCause(e)
+                    .toRuntimeException());
+            return;
+        }
+        LOGGER.info("node={} cancelFlightInfo endpoints={} tracked={}", LogUtil.node(),
+                request.getInfo().getEndpoints().size(), tracked);
+        listener.onNext(org.apache.arrow.flight.CancelStatus.CANCELLED);
+        listener.onCompleted();
+    }
+
+    /**
+     * Reads the statement handle out of a statement ticket.
+     *
+     * @param ticket endpoint ticket
+     * @return handle bytes, or null for a ticket that is not a statement query
+     * @throws IllegalArgumentException when the ticket is not a packed Flight SQL command
+     */
+    static byte[] statementHandle(Ticket ticket) {
+        try {
+            Any any = Any.parseFrom(ticket.getBytes());
+            if (!any.is(FlightSql.TicketStatementQuery.class)) {
+                return null;
+            }
+            return any.unpack(FlightSql.TicketStatementQuery.class).getStatementHandle().toByteArray();
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            throw new IllegalArgumentException("Not a Flight SQL ticket", e);
+        }
+    }
+
     @Override
     public void getStreamStatement(FlightSql.TicketStatementQuery ticket,
             FlightProducer.CallContext context,

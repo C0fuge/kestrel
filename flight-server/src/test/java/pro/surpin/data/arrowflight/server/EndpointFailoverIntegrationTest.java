@@ -3,6 +3,9 @@ package pro.surpin.data.arrowflight.server;
 import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
 import com.hazelcast.map.IMap;
+import org.apache.arrow.flight.CancelFlightInfoRequest;
+import org.apache.arrow.flight.CancelFlightInfoResult;
+import org.apache.arrow.flight.CancelStatus;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightStream;
@@ -124,6 +127,38 @@ class EndpointFailoverIntegrationTest {
         assertEquals(selfBefore, awaitLoad(registry, self, selfBefore));
         assertFalse(registry.containsKey(GONE), "a stale node must stay out of the pool");
         assertTrue(helper.clusterService.filterLiveServers(registry.keySet()).contains(self));
+    }
+
+    @Test
+    void cancelFlightInfoReleasesTheLoadOfAnUnreadPlanAtOnce() throws Exception {
+        FlightInfo info = helper.sqlClient().execute(QUERY);
+        List<String> files = new ArrayList<>();
+        for (FlightEndpoint endpoint : info.getEndpoints()) {
+            files.addAll(List.of(helper.clusterService
+                    .resolveEndpointHandle(handle(endpoint.getTicket())).filePaths()));
+        }
+        String self = helper.location.getUri().toString();
+        IMap<String, Long> registry = helper.hazelcastAdapter.serverRegistry();
+        long selfBefore = registry.getOrDefault(self, 0L);
+        // What the planner does for an endpoint of a multi-node plan: reserve, then sign.
+        helper.clusterService.addLoad(self, 300L);
+        byte[] handle = helper.clusterService.createEndpointHandle(HandleState.forServerFiles(
+                QUERY, files.toArray(new String[0]), self, 300L, true));
+        FlightInfo plan = new FlightInfo(info.getSchema(), info.getDescriptor(),
+                List.of(new FlightEndpoint(ticket(handle))), -1, -1);
+        assertEquals(selfBefore + 300L, registry.get(self));
+
+        CancelFlightInfoResult result = helper.sqlClient().cancelFlightInfo(
+                new CancelFlightInfoRequest(plan));
+
+        assertEquals(CancelStatus.CANCELLED, result.getStatus());
+        assertEquals(selfBefore, registry.get(self), "released at once, not after 10 minutes");
+        assertEquals(CancelStatus.CANCELLED, helper.sqlClient().cancelFlightInfo(
+                new CancelFlightInfoRequest(plan)).getStatus());
+        assertEquals(selfBefore, registry.get(self), "a second cancel releases nothing more");
+        assertFalse(rows(ticket(handle)).isEmpty(), "the ticket still answers");
+        Thread.sleep(200);
+        assertEquals(selfBefore, registry.get(self), "the read after the cancel releases nothing twice");
     }
 
     /**

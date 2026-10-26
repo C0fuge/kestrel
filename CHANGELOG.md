@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Flight `CancelFlightInfo` (and Flight SQL `CancelQuery`): releases the node-load reservations of
+  a plan's endpoints at once instead of after their 10-minute expiry, so plans a client abandons no
+  longer steer later endpoints away from a node (3-node S3 stand finding (b)); answers `CANCELLED`,
+  running streams continue (README "Cancelling a plan"). Was `UNIMPLEMENTED`.
 - Hive plugin: Kerberos metastores (`arrowflight.hive.authentication=kerberos`): SASL/GSSAPI
   transport as Hive's own client (`metastorePrincipal` with `_HOST`, `saslQop`), login from
   `clientPrincipal` + `clientKeytab` or from the ticket cache (`KRB5CCNAME` / `clientTicketCache`),

@@ -533,6 +533,97 @@ class FlightSqlProducerTest {
         verify(listener).completed();
     }
 
+    /** Verifies CancelFlightInfo, sent as the Flight action, releases the load of each tracked endpoint. */
+    @Test
+    void cancelFlightInfoReleasesTrackedEndpointLoad() throws Exception {
+        ClusterService clusterService = mock(ClusterService.class);
+        ByteString tracked = ByteString.copyFromUtf8("tracked");
+        ByteString untracked = ByteString.copyFromUtf8("untracked");
+        HandleState trackedState = HandleState.forServerFiles("select * from tpch.lineitem",
+                new String[]{"tpch/lineitem/a.parquet"}, "grpc+tcp://n1:32010", 100L, true);
+        HandleState untrackedState = HandleState.forServerFiles("select * from tpch.lineitem",
+                new String[]{"tpch/lineitem/b.parquet"}, "grpc+tcp://n1:32010", 100L, false);
+        when(clusterService.resolveEndpointHandle(tracked.toByteArray())).thenReturn(trackedState);
+        when(clusterService.resolveEndpointHandle(untracked.toByteArray()))
+                .thenReturn(untrackedState);
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                mock(ExecutionService.class), clusterService);
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+
+        producer.doAction(mock(FlightProducer.CallContext.class), cancelAction(
+                statementTicket(tracked), statementTicket(untracked)), listener);
+
+        ArgumentCaptor<org.apache.arrow.flight.Result> result =
+                ArgumentCaptor.forClass(org.apache.arrow.flight.Result.class);
+        verify(listener).onNext(result.capture());
+        verify(listener).onCompleted();
+        assertEquals(org.apache.arrow.flight.CancelStatus.CANCELLED,
+                org.apache.arrow.flight.CancelFlightInfoResult.deserialize(
+                        java.nio.ByteBuffer.wrap(result.getValue().getBody())).getStatus());
+        verify(clusterService).releaseEndpointLoad(tracked.toByteArray(), trackedState);
+        verify(clusterService, never()).releaseEndpointLoad(eq(untracked.toByteArray()), any());
+    }
+
+    /** Verifies CancelFlightInfo refuses forged or foreign tickets and skips non-statement ones. */
+    @Test
+    void cancelFlightInfoRefusesInvalidTickets() throws Exception {
+        ClusterService clusterService = mock(ClusterService.class);
+        ByteString forged = ByteString.copyFromUtf8("forged");
+        when(clusterService.resolveEndpointHandle(forged.toByteArray()))
+                .thenThrow(new IllegalArgumentException("bad signature"));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                mock(ExecutionService.class), clusterService);
+
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, cancelError(producer, statementTicket(forged)));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, cancelError(producer,
+                new org.apache.arrow.flight.Ticket(new byte[]{1, 2, 3})));
+        verify(clusterService, never()).releaseEndpointLoad(any(), any());
+
+        org.apache.arrow.flight.Ticket metadata = new org.apache.arrow.flight.Ticket(
+                com.google.protobuf.Any.pack(FlightSql.CommandGetCatalogs.getDefaultInstance())
+                        .toByteArray());
+        assertEquals(null, FlightSqlProducer.statementHandle(metadata));
+    }
+
+    private static org.apache.arrow.flight.Ticket statementTicket(ByteString handle) {
+        return new org.apache.arrow.flight.Ticket(com.google.protobuf.Any.pack(
+                FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(handle).build())
+                .toByteArray());
+    }
+
+    private static org.apache.arrow.flight.Action cancelAction(
+            org.apache.arrow.flight.Ticket... tickets) {
+        List<org.apache.arrow.flight.FlightEndpoint> endpoints = new java.util.ArrayList<>();
+        for (org.apache.arrow.flight.Ticket ticket : tickets) {
+            endpoints.add(new org.apache.arrow.flight.FlightEndpoint(ticket));
+        }
+        FlightInfo info = new FlightInfo(new Schema(List.of()),
+                FlightDescriptor.command(new byte[0]), endpoints, -1, -1);
+        java.nio.ByteBuffer body = new org.apache.arrow.flight.CancelFlightInfoRequest(info)
+                .serialize();
+        byte[] bytes = new byte[body.remaining()];
+        body.get(bytes);
+        return new org.apache.arrow.flight.Action(
+                org.apache.arrow.flight.FlightConstants.CANCEL_FLIGHT_INFO.getType(), bytes);
+    }
+
+    private static FlightStatusCode cancelError(FlightSqlProducer producer,
+            org.apache.arrow.flight.Ticket ticket) {
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+        producer.doAction(mock(FlightProducer.CallContext.class), cancelAction(ticket), listener);
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).onError(error.capture());
+        return assertInstanceOf(FlightRuntimeException.class, error.getValue()).status().code();
+    }
+
     /** Verifies binary ticket handles give readable query ids in the log. */
     @Test
     void queryIdOfABinaryHandleIsHex() {

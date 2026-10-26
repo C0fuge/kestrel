@@ -341,6 +341,16 @@ upper bound (`rowsExact: false`). Access is checked like `SELECT * FROM schema.t
 that keeps its files on local disks refuses it (`UNIMPLEMENTED`) when several nodes are live;
 an unknown table is `NOT_FOUND`. Same action name and request as upstream da6a357.
 
+### Cancelling a plan
+
+A client that will not read (all of) a plan's endpoints should send Flight's `CancelFlightInfo`
+action (Flight SQL's older `CancelQuery` maps to it) with the `FlightInfo`: in a cluster, planning
+reserves each endpoint's bytes as load on its node, and an endpoint that is never read keeps that
+reservation for 10 minutes, steering later plans away from the node. The cancel releases the
+reservations of the plan's endpoints at once and answers `CANCELLED`; repeating it does nothing more.
+Streams already running are not stopped (close them), and a ticket read after the cancel still
+answers. A ticket the server did not sign is `INVALID_ARGUMENT`.
+
 ### Iceberg time travel
 
 A query can read an earlier snapshot of an Iceberg catalog table (iceberg-hadoop, iceberg-rest)
