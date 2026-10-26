@@ -718,6 +718,6 @@
   status; message and `Caused by:` lines stay, multi-line DuckDB errors (Binder `LINE 1:` carets) are
   unchanged; `failureDescription` and the "Cannot read the table's files" text trim before the 1024-char cut.
   Server logs unchanged. Tests `StackTraceTrimmerTest` (incl. an in-process Flight server/client),
-  `HadoopArrowFlightServerUnitTest`. CI run: see next line. Next: stand reruns of 0e/0f; answers to the Open
+  `HadoopArrowFlightServerUnitTest`. Commit 5e573c1, CI run 40310036063 green. Next: stand reruns of 0e/0f; answers to the Open
   questions (0d crash case, 9, 13); other unnumbered findings (secure HA (b) ticket cache from the keytab,
   (d) libhdfs3 RPC timeouts as defaults = maintainer's call, 3-node S3 (b) reservation release, (c)).
