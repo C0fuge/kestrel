@@ -24,6 +24,7 @@ import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
 import pro.surpin.data.arrowflight.server.adapters.StackTraceTrimmer;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 /**
@@ -80,6 +81,7 @@ public class HadoopArrowFlightServer {
     private ServerComponent component;
     private MetricsService metricsService;
     private FlightSecurity flightSecurity;
+    private HdfsTicketCache hdfsTicketCache;
 
     /**
      * Starts the server with command-line arguments.
@@ -129,6 +131,9 @@ public class HadoopArrowFlightServer {
         } catch (IOException e) {
             throw new IllegalStateException("Unable to initialize Flight authentication", e);
         }
+        // Before the data store opens: the hadoopfs extension reads only a ticket cache.
+        hdfsTicketCache = HdfsTicketCache.start(ConfigSource.system(),
+                libhdfs3Properties(System.getenv("LIBHDFS3_CONF"))).orElse(null);
         String[] hazelcastHosts = hosts.split(",");
 
         // Create Dagger component with runtime parameters
@@ -258,6 +263,10 @@ public class HadoopArrowFlightServer {
             } catch (Exception e) {
                 LOGGER.error("Error closing allocator", e);
             }
+        }
+        if (hdfsTicketCache != null) {
+            hdfsTicketCache.close();
+            hdfsTicketCache = null;
         }
         if (flightSecurity != null) {
             try {

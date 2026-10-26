@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- HDFS with Kerberos: optional settings `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
+  (`HDFS_KERBEROS_*`, optional `hdfsKerberosTicketCache`) make the server log in from the keytab,
+  write the ticket-granting ticket as a MIT file ticket cache for the hadoopfs extension (libhdfs3
+  reads only a ticket cache) and replace it at 80 % of its lifetime: no external `kinit` + renewal
+  (secure HA stand finding (b)). The cache defaults to the one the extension reads; unset settings
+  change nothing. Tested with an in-process KDC; MIT `klist` / `kvno` read the cache in CI.
 - S3: a startup WARN when `net.ipv4.tcp_tw_reuse` is not 1, with the port range and the reads per
   second it allows: DuckDB's httpfs opens a new connection for most range reads at 4+ threads and
   each closed one holds its port 60 s, so 32 concurrent small queries at 8 threads ran the stand
