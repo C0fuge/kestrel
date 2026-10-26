@@ -8,6 +8,31 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class HadoopArrowFlightServerUnitTest {
 
+    /** Verifies the gRPC builder gets the keepalive permit and the outbound budget. */
+    @Test
+    void grpcOptionsInstallTheOutboundBudget() {
+        pro.surpin.data.arrowflight.server.adapters.OutboundBudget budget =
+                new pro.surpin.data.arrowflight.server.adapters.OutboundBudget(64L << 20);
+        io.grpc.netty.NettyServerBuilder builder = io.grpc.netty.NettyServerBuilder.forPort(0);
+        io.grpc.netty.NettyServerBuilder spy = org.mockito.Mockito.spy(builder);
+
+        HadoopArrowFlightServer.grpcOptions(budget).accept(spy);
+
+        org.mockito.Mockito.verify(spy).intercept(budget);
+        org.mockito.Mockito.verify(spy).permitKeepAliveWithoutCalls(true);
+    }
+
+    /** Verifies the outbound budget is the configured one, else derived from direct memory. */
+    @Test
+    void outboundBudgetIsConfiguredOrDerived() {
+        pro.surpin.data.arrowflight.server.model.AppConfig config =
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.getConfig();
+        assertEquals(pro.surpin.data.arrowflight.server.adapters.OutboundBudget.defaultBudgetBytes(),
+                HadoopArrowFlightServer.outboundBudget(config).budgetBytes());
+        assertEquals(64L << 20, HadoopArrowFlightServer.outboundBudget(
+                config.withFlightOutboundBudget(64L << 20)).budgetBytes());
+    }
+
     // ── getArgValue (private, non-static — tested via instance) ───────────
 
     @Test

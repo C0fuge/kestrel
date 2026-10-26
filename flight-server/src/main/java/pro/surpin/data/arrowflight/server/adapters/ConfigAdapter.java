@@ -80,6 +80,13 @@ public class ConfigAdapter {
                     "flightBackpressureThresholdBytes must be positive: "
                             + flightBackpressureThresholdBytes);
         }
+        // Queued outbound bytes all Flight streams share; 0 = a quarter of the direct memory limit.
+        long flightOutboundBudgetBytes = getLong("flightOutboundBudgetBytes",
+                "arrowflight.flight.outboundBudgetBytes", 0L, props);
+        if (flightOutboundBudgetBytes < 0) {
+            throw new IllegalArgumentException(
+                    "flightOutboundBudgetBytes must not be negative: " + flightOutboundBudgetBytes);
+        }
         long flightListenerReadyTimeoutMillis = getLong("flightListenerReadyTimeoutMs",
                 "arrowflight.flight.listenerReadyTimeoutMs", 300_000L, props);
         if (flightListenerReadyTimeoutMillis <= 0) {
@@ -166,7 +173,7 @@ public class ConfigAdapter {
                 endpointBackupLocations, metadataEndpointLocation,
                 duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
                 Boolean.parseBoolean(preserveOrder), duckDbStreamingBufferSize,
-                endpointsPerServer);
+                endpointsPerServer, flightOutboundBudgetBytes);
     }
 
     /**

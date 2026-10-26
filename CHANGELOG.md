@@ -96,6 +96,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Many concurrent streams no longer exhaust direct memory: every stream could queue up to
+  `flightBackpressureThresholdBytes` (256 MiB) for a slow client, so 8 clients scanning a 3-node
+  cluster got streams CANCELLED ("Server sendMessage() failed with Error", direct memory out) and a
+  node killed. All open streams of a node now share one outbound budget, new setting
+  `flightOutboundBudgetBytes` (default 0 = a quarter of the direct memory limit): each stream queues
+  at most budget / open streams (at least 1 MiB) and then waits for its client. Regression test runs
+  16 slow-read streams against a server JVM with 256 MiB direct memory.
 - S3: DuckDB retries failed S3 requests, connect errors included, for about 6 s instead of
   DuckDB's own ~0.5 s (3 retries from 100 ms, backoff 4), which a busy endpoint refusing
   connections outlasted at `duckDbThreads=8` (every complete-mode TPC-H query failed on a MinIO

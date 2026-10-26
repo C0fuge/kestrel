@@ -20,6 +20,7 @@ import java.util.function.IntSupplier;
 
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
+import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -165,6 +166,7 @@ public class HadoopArrowFlightServer {
             waitForCluster(hazelcastHosts, config.hazelcastClusterJoinTimeoutSec());
         }
 
+        OutboundBudget outboundBudget = outboundBudget(config);
         try {
             // Increase HTTP/2 initial flow control window from default 64KB to 1MB.
             // Allows server to send larger Arrow batches without waiting for WINDOW_UPDATE.
@@ -178,10 +180,13 @@ public class HadoopArrowFlightServer {
                     .maxInboundMessageSize(config.grpcMaxInboundMessageSize())
                     .backpressureThreshold(config.flightBackpressureThresholdBytes())
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
-                    .transportHint("grpc.builderConsumer", keepAlivePermit()))
+                    .transportHint("grpc.builderConsumer", grpcOptions(outboundBudget)))
                     .build();
             LOGGER.info("Default result mode: {}; metadata endpoint location: {}; Flight security: {}",
                     config.resultMode(), config.metadataEndpointLocation(), flightSecurity);
+            LOGGER.info("Flight outbound budget: {} bytes shared by all streams (per stream at most {},"
+                    + " at least {})", outboundBudget.budgetBytes(),
+                    config.flightBackpressureThresholdBytes(), OutboundBudget.MIN_STREAM_BYTES);
             server.start();
             // Only now may other nodes send clients here.
             component.clusterService().register();
@@ -255,6 +260,28 @@ public class HadoopArrowFlightServer {
             }
             flightSecurity = null;
         }
+    }
+
+    /**
+     * Combines the gRPC Netty builder settings of the server: keepalive permit and outbound budget.
+     *
+     * @param outboundBudget budget shared by all Flight streams
+     * @return gRPC Netty server builder customizer
+     */
+    static java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpcOptions(
+            OutboundBudget outboundBudget) {
+        return keepAlivePermit().andThen(builder -> builder.intercept(outboundBudget));
+    }
+
+    /**
+     * Creates the outbound byte budget all Flight streams of this server share.
+     *
+     * @param config server configuration
+     * @return the configured budget, else one derived from the direct memory limit
+     */
+    static OutboundBudget outboundBudget(AppConfig config) {
+        long configured = config.flightOutboundBudgetBytes();
+        return new OutboundBudget(configured > 0 ? configured : OutboundBudget.defaultBudgetBytes());
     }
 
     /**

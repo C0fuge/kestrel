@@ -332,6 +332,27 @@ class ConfigAdapterTest {
         assertTrue(error.getMessage().contains("flightBackpressureThresholdBytes"));
     }
 
+    /** Verifies the outbound budget of all Flight streams defaults to derived and is settable. */
+    @Test
+    void getConfigFlightOutboundBudget() {
+        assertEquals(0L, ConfigAdapter.getConfig().flightOutboundBudgetBytes());
+
+        setProp("flightOutboundBudgetBytes", "134217728");
+        assertEquals(134217728L, ConfigAdapter.getConfig().flightOutboundBudgetBytes());
+        assertEquals(134217728L, ConfigAdapter.getConfig().withEndpointsPerServer(2)
+                .flightOutboundBudgetBytes());
+    }
+
+    /** Verifies a negative outbound budget is rejected. */
+    @Test
+    void getConfigRejectsNegativeFlightOutboundBudget() {
+        setProp("flightOutboundBudgetBytes", "-1");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, ConfigAdapter::getConfig);
+        assertTrue(error.getMessage().contains("flightOutboundBudgetBytes"));
+    }
+
     /** Verifies benchmark metrics can be disabled with a system property. */
     @Test
     void getConfigMetricsDisabled() {

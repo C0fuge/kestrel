@@ -286,10 +286,17 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
-| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs` |
+| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `endpointBackupLocations`, `endpointsPerServer` |
+
+`flightBackpressureThresholdBytes` is the most a single Flight stream queues for a slow client;
+`flightOutboundBudgetBytes` (default 0 = a quarter of the JVM's direct memory limit,
+`-XX:MaxDirectMemorySize`, else the heap limit) is what all open streams of a node queue together:
+each stream gets budget / open streams (at least 1 MiB, at most the per-stream threshold) and waits
+for its client beyond that. Many concurrent scans then slow down instead of running the node out of
+direct memory (streams CANCELLED "Server sendMessage() failed with Error", container killed).
 
 ### Complete and partial answers
 
