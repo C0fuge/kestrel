@@ -733,7 +733,7 @@
   later read of the ticket releases nothing twice), answers `CANCELLED`, `INVALID_ARGUMENT` for unsigned tickets.
   Tests `FlightSqlProducerTest` (action wiring, tracked/untracked, forged and non-SQL tickets),
   `EndpointFailoverIntegrationTest.cancelFlightInfoReleasesTheLoadOfAnUnreadPlanAtOnce` (Flight client, real
-  Hazelcast). README "Cancelling a plan". Local: those tests + checkstyle + spotbugs clean; CI run 40325762742 pending.
+  Hazelcast). README "Cancelling a plan". Local: those tests + checkstyle + spotbugs clean; CI run 40325762742 green.
   Clients that never cancel still hold reservations 10 min → Open questions (connectors should cancel; TTL).
   Next: stand reruns of 0e/0f; answers to the Open questions (0d crash case, 9, 13, reservation TTL); other
   unnumbered findings (secure HA (b) ticket cache from the keytab, (d) libhdfs3 RPC timeouts, 3-node S3 (c)).
