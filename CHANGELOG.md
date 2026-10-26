@@ -100,6 +100,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Concurrent DoGet streams could corrupt each other's batches: Arrow Java's `ListVector` /
+  `LargeListVector` set the writer index of the process-wide empty buffer to 4 (8) when an empty
+  list is written to IPC, so another stream serialized its empty buffers with the wrong length
+  (a stream CANCELLED with `IndexOutOfBoundsException`, or, when the length changes between the
+  batch header and the body, a body the client decodes shifted).
+  Every SqlInfo answer has empty list/map children: the likely cause of ADBC connects that read
+  "transactions supported" and failed `failed to update autocommit: ... Unimplemented` (TUNING.md,
+  item 13d). Every batch a ticket sends now gives its empty list vectors own offset buffers first
+  (`EmptyListOffsets`). BeginTransaction stays `UNIMPLEMENTED`, now with a description and a WARN
+  log line.
 - Error texts sent to clients no longer carry Java stack frames: HDFS NameNode errors (e.g.
   `Permission denied`, through DuckDB or the Java Hadoop client) used to arrive with the NameNode's whole
   stack trace; a gRPC interceptor now drops `at ...(...)` and `... n more` lines from every error

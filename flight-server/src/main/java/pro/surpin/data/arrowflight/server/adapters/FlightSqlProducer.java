@@ -59,6 +59,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     /** Counts stream executions, for query ids in the log. */
     private static final java.util.concurrent.atomic.AtomicLong EXECUTIONS = new java.util.concurrent.atomic.AtomicLong();
     private static final String SCHEMA_NOT_FOUND_MESSAGE = "Could not find Arrow schema for query";
+    /** Description of the BeginTransaction refusal. */
+    static final String TRANSACTIONS_UNSUPPORTED = "This server has no transactions (SqlInfo"
+            + " FLIGHT_SQL_SERVER_TRANSACTION = NONE); use autocommit";
 
     /** Location of metadata endpoints; null = none, the client reads over its own connection. */
     private final Location metadataLocation;
@@ -344,6 +347,39 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 request.getInfo().getEndpoints().size(), tracked);
         listener.onNext(org.apache.arrow.flight.CancelStatus.CANCELLED);
         listener.onCompleted();
+    }
+
+    /**
+     * Serves a ticket; every batch is sent with own offset buffers for its empty list vectors
+     * (see {@link EmptyListOffsets}), so concurrent streams cannot corrupt each other's batches.
+     *
+     * @param context call context
+     * @param ticket ticket to read
+     * @param listener stream listener
+     */
+    @Override
+    public void getStream(FlightProducer.CallContext context, Ticket ticket,
+            FlightProducer.ServerStreamListener listener) {
+        super.getStream(context, ticket, EmptyListOffsets.guard(listener));
+    }
+
+    /**
+     * Refuses BeginTransaction as UNIMPLEMENTED with a description and a log line: SqlInfo
+     * advertises no transactions, so a client that still asks read another answer than this
+     * server sent, and the log line lets that be matched to the client's error.
+     *
+     * @param request transaction request
+     * @param context call context
+     * @param listener receives the UNIMPLEMENTED error
+     */
+    @Override
+    public void beginTransaction(FlightSql.ActionBeginTransactionRequest request,
+            FlightProducer.CallContext context,
+            FlightProducer.StreamListener<FlightSql.ActionBeginTransactionResult> listener) {
+        LOGGER.warn("node={} beginTransaction refused peer='{}': SqlInfo FLIGHT_SQL_SERVER_TRANSACTION"
+                + " is NONE", LogUtil.node(), context == null ? null : context.peerIdentity());
+        listener.onError(CallStatus.UNIMPLEMENTED.withDescription(TRANSACTIONS_UNSUPPORTED)
+                .toRuntimeException());
     }
 
     /**

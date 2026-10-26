@@ -359,6 +359,115 @@ class FlightSqlProducerTest {
         verify(unknownOnly, never()).error(any());
     }
 
+    /** Verifies BeginTransaction is refused as UNIMPLEMENTED with a description. */
+    @Test
+    void beginTransactionIsRefusedWithADescription() {
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class),
+                mock(ExecutionService.class), mock(ClusterService.class));
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<FlightSql.ActionBeginTransactionResult> listener =
+                mock(FlightProducer.StreamListener.class);
+
+        producer.beginTransaction(FlightSql.ActionBeginTransactionRequest.getDefaultInstance(),
+                mock(FlightProducer.CallContext.class), listener);
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).onError(error.capture());
+        FlightRuntimeException refused = assertInstanceOf(FlightRuntimeException.class, error.getValue());
+        assertEquals(FlightStatusCode.UNIMPLEMENTED, refused.status().code());
+        assertEquals(FlightSqlProducer.TRANSACTIONS_UNSUPPORTED, refused.status().description());
+        verify(listener, never()).onCompleted();
+    }
+
+    /**
+     * Regression for ADBC connects that asked for a transaction (TUNING.md): many clients asking
+     * for SqlInfo FLIGHT_SQL_SERVER_TRANSACTION at once over Flight all read NONE, and a
+     * BeginTransaction over the wire is UNIMPLEMENTED with the description.
+     */
+    @Test
+    void concurrentClientsAllReadNoTransactionSupport() throws Exception {
+        try (BufferAllocator allocator = new org.apache.arrow.memory.RootAllocator();
+                FlightSqlProducer producer = new FlightSqlProducer(
+                        null, allocator, mock(MetadataService.class), mock(QueryPlanner.class),
+                        mock(ExecutionService.class), mock(ClusterService.class));
+                org.apache.arrow.flight.FlightServer server = org.apache.arrow.flight.FlightServer
+                        .builder(allocator, Location.forGrpcInsecure("localhost", 0), producer)
+                        .build().start()) {
+            Location location = Location.forGrpcInsecure("localhost", server.getPort());
+            int clients = 16;
+            java.util.concurrent.ExecutorService pool =
+                    java.util.concurrent.Executors.newFixedThreadPool(clients);
+            try {
+                java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+                List<java.util.concurrent.Future<List<Object>>> answers = new java.util.ArrayList<>();
+                for (int c = 0; c < clients; c++) {
+                    answers.add(pool.submit(() -> {
+                        go.await();
+                        List<Object> values = new java.util.ArrayList<>();
+                        for (int round = 0; round < 25; round++) {
+                            try (org.apache.arrow.flight.FlightClient flight =
+                                    org.apache.arrow.flight.FlightClient.builder(allocator, location).build();
+                                    org.apache.arrow.flight.sql.FlightSqlClient client =
+                                            new org.apache.arrow.flight.sql.FlightSqlClient(flight)) {
+                                values.add(transactionSupport(client));
+                            }
+                        }
+                        return values;
+                    }));
+                }
+                go.countDown();
+                for (java.util.concurrent.Future<List<Object>> answer : answers) {
+                    for (Object value : answer.get(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                        assertEquals(FlightSql.SqlSupportedTransaction.SQL_SUPPORTED_TRANSACTION_NONE
+                                .getNumber(), value);
+                    }
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+
+            try (org.apache.arrow.flight.FlightClient flight =
+                    org.apache.arrow.flight.FlightClient.builder(allocator, location).build();
+                    org.apache.arrow.flight.sql.FlightSqlClient client =
+                            new org.apache.arrow.flight.sql.FlightSqlClient(flight)) {
+                FlightRuntimeException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                        FlightRuntimeException.class, client::beginTransaction);
+                assertEquals(FlightStatusCode.UNIMPLEMENTED, refused.status().code());
+                assertEquals(FlightSqlProducer.TRANSACTIONS_UNSUPPORTED, refused.status().description());
+            }
+        }
+    }
+
+    /**
+     * Reads the FLIGHT_SQL_SERVER_TRANSACTION value the way ADBC's Flight SQL driver does at connect.
+     *
+     * @param client Flight SQL client
+     * @return the value, or null when the answer has no such row
+     * @throws Exception when the call fails
+     */
+    private static Object transactionSupport(org.apache.arrow.flight.sql.FlightSqlClient client)
+            throws Exception {
+        FlightInfo info = client.getSqlInfo(FlightSql.SqlInfo.FLIGHT_SQL_SERVER_TRANSACTION);
+        Object value = null;
+        for (org.apache.arrow.flight.FlightEndpoint endpoint : info.getEndpoints()) {
+            try (org.apache.arrow.flight.FlightStream stream = client.getStream(endpoint.getTicket())) {
+                while (stream.next()) {
+                    VectorSchemaRoot root = stream.getRoot();
+                    org.apache.arrow.vector.UInt4Vector names =
+                            (org.apache.arrow.vector.UInt4Vector) root.getVector(0);
+                    for (int row = 0; row < root.getRowCount(); row++) {
+                        if (names.get(row) == FlightSql.SqlInfo.FLIGHT_SQL_SERVER_TRANSACTION_VALUE) {
+                            value = root.getVector(1).getObject(row);
+                        }
+                    }
+                }
+            }
+        }
+        return value;
+    }
+
     /** Verifies the default complete mode and the client's request for parts. */
     @Test
     void resultModeComesFromHeaderOrDefault() throws Exception {
