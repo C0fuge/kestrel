@@ -23,8 +23,16 @@
 
 ## Next steps (one per session)
 
-0g. **Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
-    ephemeral-port exhaustion.** Every round (3/3): 32-64 ADBC and 0-1 JDBC queries of the 32-client small-query step fail
+0g. ~~**Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
+    ephemeral-port exhaustion.**~~ — **cause found, workaround + startup WARN done 2026-10-26 (9f7eb4f, see Log); the
+    server-side fix needs a decision (Open questions, "S3 connection churn").** DuckDB 1.4.5 httpfs keeps HTTP
+    clients per open file handle only, and at 2+ threads a thread opens a file anew for each row group it takes, so
+    about every range read opens a new connection (`http_keep_alive`, the curl client and the prefetch settings change
+    nothing; measured 78 connections / 96 requests per query at 4-16 threads vs 32 at 1 thread, 16 files x 4 row
+    groups). Only `duckDbExternalFileCache=true` (DuckDB default, ours off) stops it for repeated reads: a repeated
+    query on the same connection opens 0 connections. **Stand:** rerun the 32-client small-query step at 8 threads
+    with `--sysctl net.ipv4.tcp_tw_reuse=1` (expect 0 failures, check the startup WARN is gone), and once with
+    `duckDbExternalFileCache=true` (count TIME_WAIT as before; note RSS). Original report: Every round (3/3): 32-64 ADBC and 0-1 JDBC queries of the 32-client small-query step fail
     "IO Error: Could not establish connection error for HTTP GET to '<s3 endpoint>/.../data_N.parquet'" (123-192 server
     log lines per round). Measured in the server's network namespace every 5 s: sockets in TIME_WAIT toward the S3
     endpoint reach 28231 = the whole `ip_local_port_range` (32768-60999) during that step; 4 threads peak at 20-22k
@@ -292,6 +300,16 @@
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 ## Open questions
+
+- **S3 connection churn (item 0g, 2026-10-26).** DuckDB's httpfs opens a new TCP connection for about every S3
+  range read at 2+ threads (per-file-handle client cache, a new handle per row group and thread); each closed one
+  holds a local port 60 s. Today: startup WARN + documented host workaround (`tcp_tw_reuse=1`, wider port range).
+  Options needing your call: (1) turn `duckDbExternalFileCache` on by default for S3 data stores only (repeated
+  reads need no connection; costs up to `duckDbMemoryLimit` of cache per live connection — the reason it is off);
+  (2) an in-process HTTP forward proxy with pooled keep-alive connections for DuckDB's S3 reads (`http_proxy`,
+  plain-HTTP endpoints only; HTTPS would tunnel 1:1 and gain nothing; touches the lockdown); (3) a pooled client
+  in httpfs itself (upstream DuckDB, or our own build like hadoopfs). Recommendation: decide after the stand rerun
+  with `tcp_tw_reuse=1`; if that is clean, keep (0) and document it as a deployment requirement.
 
 - **(2026-10-26, item 0d follow-up) Faster detection of a crashed member?** With kill -9 / host gone, every
   Hazelcast map operation touching the dead member's partitions (heartbeat puts, getAll, ticket reservations)
@@ -801,3 +819,15 @@
   speed as 4eaab at 4). 0f confirmed fixed (0 failed reads in 6/6 rounds) and corrected (the node death was the harness
   memory guard); 0e heavy path fixed (SF10 JDBC 22/22 at 8 threads on S3); new 0g (S3 ephemeral-port exhaustion at 8 threads
   x 32 clients), 0h (3-node heavy4 +18 %, recheck); ADBC autocommit race still seen once on 57d252b1437f (before 4939fb7).
+- 2026-10-26 (cloud session): item 0g (S3 ephemeral-port exhaustion). Cause measured with DuckDB 1.4.5 + the
+  ci-assets httpfs against a counting HTTP server/forwarder: httpfs caches HTTP clients per open file handle only
+  and at 2+ threads every row group read gets a new handle, so ~1 connection per range read (16 files x 4 row
+  groups: 78 conns/96 requests per query at 4-16 threads, 32 at 1 thread; `http_keep_alive`, curl client,
+  prefetch settings no help; metadata caches only save footers/HEADs). `duckDbExternalFileCache=true` makes a
+  repeated query open 0 connections. Added (additive, log only): S3 plugin WARNs once at startup when
+  `net.ipv4.tcp_tw_reuse` != 1 with port count and reads/s (`S3DataStoreProvider.ephemeralPortWarning`,
+  `S3DataStoreProviderTest`); workaround in `arrowflight.properties` and START-NOTES; regression test
+  `S3IntegrationTest.connectionsPerQueryAreBoundedAndCachedReadsOpenNone` (8 files x 4 row groups at 8 threads:
+  39/31 connections for the first/repeated query, with the cache 40/0). Server-side fix -> Open questions
+  ("S3 connection churn"). CI run 40399232182 on 9f7eb4f green. Next: 0h (stand recheck), stand rerun of 0g
+  with `tcp_tw_reuse=1`, then secure HA (b) (ticket cache from the keytab), 3-node S3 (c).
