@@ -623,3 +623,11 @@
   `CatalogSourcesDeletesTest`, `S3NamedStoresTest`, `PluginPartsTest`. CI run 40251162808 green. Next
   numbered items: 8 (ask the maintainer first), 9 (design in Open questions first), 13 (proposals awaiting
   approval); stand checks listed per item.
+- 2026-10-26 (cloud session): numbered items left are stand checks, 8 (ask first), 9 (design first) and 13
+  (proposals), so: item 9 design written to Open questions (phase A trusted-proxy header
+  `x-flight-effective-user`, B JWT provider, C storage-level identity; questions for the maintainer). Fixed
+  secure-HA stand finding (c) (6b20c3a): `HadoopDataStoreProvider` keeps the deployment's
+  `dfs.client.read.shortcircuit`, otherwise turns it on only with a `dfs.domain.socket.path` (was forced on and stopped
+  the start without a socket); `HadoopDataStoreProviderTest`. CI run 40260783151 green. Stand: int7 HDFS with local
+  DataNodes must still read short-circuit (socket path set). Next: answers to item 9 / 13, or the other unnumbered
+  stand findings (secure HA (d)/(e), 3-node S3 (a)-(c)).
