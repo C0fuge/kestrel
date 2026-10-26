@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anySet;
@@ -130,7 +131,7 @@ class GoldenQueryPlannerTest {
             when(cluster.filterLiveServers(anySet())).thenAnswer(
                     inv -> new LinkedHashSet<>((Set<?>) inv.getArgument(0)));
             when(cluster.hasFileInventory(anyString())).thenReturn(true);
-            when(cluster.fileLocations()).thenReturn(locality ? files : Map.of());
+            when(cluster.fileLocations(anyBoolean())).thenReturn(locality ? files : Map.of());
             when(cluster.createEndpointHandle(any())).thenAnswer(inv -> {
                 handles.add(inv.getArgument(0));
                 return ByteBuffer.allocate(4).putInt(handles.size() - 1).array();

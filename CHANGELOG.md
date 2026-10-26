@@ -96,6 +96,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Cluster: planning no longer waits ~10 s after a node stopped. The node loads (every plan) and, on
+  shared storage, the node inventories are read by key for the current Hazelcast members instead of
+  with a whole-map query, which blocks while the cluster settles after a member left whose address
+  no longer answers (GetFlightInfo timed out on a survivor). A stopped server now leaves the
+  Hazelcast cluster gracefully (Hazelcast's terminating shutdown hook is off; graceful wait at most
+  5 s). A crashed node still costs up to the 10 s member heartbeat timeout.
 - HDFS short-circuit reads are no longer forced on: the deployment's `dfs.client.read.shortcircuit`
   (hdfs-site.xml or `-D`) is kept, and without it short-circuit is on only when
   `dfs.domain.socket.path` is set. A client configuration without a domain socket (no local DataNode)

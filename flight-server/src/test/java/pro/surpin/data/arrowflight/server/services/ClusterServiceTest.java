@@ -179,6 +179,22 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /**
+     * Verifies loads of current members are read by key, not by a query of the whole map, which
+     * waits ~10 s after a member left.
+     */
+    @Test
+    void allServerLoadsReadsTheLoadsOfCurrentMembersByKey() {
+        when(hazelcast.memberServerUris()).thenReturn(Set.of("s1", "s2"));
+        when(serverRegistry.getAll(Set.of("s1", "s2"))).thenReturn(Map.of("s1", 100L));
+
+        ClusterService cs = createService("s1");
+        assertEquals(Map.of("s1", 100L), cs.allServerLoads(),
+                "a member that has not registered yet is not in the pool");
+        verify(serverRegistry, never()).entrySet();
+        cs.close();
+    }
+
     // ── addLoad ───────────────────────────────────────────────────────────
 
     @Test
@@ -468,6 +484,37 @@ class ClusterServiceTest {
         assertEquals(100L, result.get("f1.parquet").size());
         assertEquals(2, result.get("f1.parquet").hosts().size());
         assertEquals(1, result.get("f2.parquet").hosts().size());
+        cs.close();
+    }
+
+    /** Verifies a plan on shared storage reads the inventories of current members by key. */
+    @Test
+    void fileLocationsOfMembersReadsTheirInventoriesByKey() {
+        when(hazelcast.memberServerUris()).thenReturn(Set.of("s1", "s2"));
+        when(serverFiles.getAll(Set.of("s1", "s2"))).thenReturn(Map.of(
+                "s2", Map.of("f1.parquet", 100L)));
+
+        ClusterService cs = createService("s1");
+        Map<String, FileAssignment> result = cs.fileLocations(true);
+        assertEquals(Set.of("s2"), result.get("f1.parquet").hosts());
+        verify(serverFiles, never()).entrySet();
+        cs.close();
+    }
+
+    /**
+     * Verifies a plan on local disks keeps the inventories of nodes that left, so that their
+     * files fail the plan instead of leaving the answer.
+     */
+    @Test
+    void fileLocationsOfEveryNodeKeepsTheInventoriesOfNodesThatLeft() {
+        when(hazelcast.memberServerUris()).thenReturn(Set.of("s1"));
+        when(serverFiles.entrySet()).thenReturn(Set.of(
+                Map.entry("s1", Map.of("f1.parquet", 100L)),
+                Map.entry("s2", Map.of("f2.parquet", 200L))));
+
+        ClusterService cs = createService("s1");
+        assertEquals(Set.of("f1.parquet", "f2.parquet"), cs.fileLocations(false).keySet());
+        verify(serverFiles, never()).getAll(any());
         cs.close();
     }
 

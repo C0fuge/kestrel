@@ -47,4 +47,27 @@ class HazelcastAdapterTest {
             }
         }
     }
+
+    /**
+     * Verifies the member does not terminate in Hazelcast's own shutdown hook: a stopped server
+     * leaves the cluster gracefully in the server's hook, within a few seconds.
+     */
+    @Test
+    void leavesGracefullyInTheServerShutdownHook() throws Exception {
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        }
+        AppConfig config = new AppConfig(
+                1, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, port, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+        try (HazelcastAdapter adapter = new HazelcastAdapter(config)) {
+            assertEquals("false", adapter.instance().getConfig()
+                    .getProperty("hazelcast.shutdownhook.enabled"));
+            assertEquals("5", adapter.instance().getConfig()
+                    .getProperty("hazelcast.graceful.shutdown.max.wait"));
+        }
+    }
 }

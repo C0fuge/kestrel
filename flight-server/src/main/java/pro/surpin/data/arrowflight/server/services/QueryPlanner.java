@@ -497,7 +497,7 @@ public final class QueryPlanner {
     private Map<String, FileAssignment> loadFilePlan(
             ParquetQueryParser parsed, String cacheKey, long now) throws IOException {
         Map<String, FileAssignment> loaded = filterForQuery(
-                clusterService.fileLocations(), parsed);
+                clusterService.fileLocations(parquetAdapter.sharedStorage()), parsed);
         if (parquetAdapter.sharedStorage()) {
             loaded = withListedFiles(loaded, listedFiles(parsed), cacheKey);
         }

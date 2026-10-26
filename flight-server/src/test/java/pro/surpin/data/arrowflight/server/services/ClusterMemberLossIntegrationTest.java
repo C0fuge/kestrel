@@ -169,6 +169,48 @@ class ClusterMemberLossIntegrationTest {
     }
 
     /**
+     * Item 0d (StarRocks connector CI, a node stopped before a full scan): after a member left,
+     * every query of a whole map (entrySet) waited ~10 s while the cluster settled, and the
+     * planner ran one per plan for the node loads, so GetFlightInfo on a survivor took 10 s and
+     * more and timed out on a busy runner. The planner's reads are key lookups of the members
+     * now. In one JVM the left member's port refuses at once and the wait does not show; it does
+     * when its address stops answering (container gone; reproduced with an iptables DROP:
+     * allServerLoads 10.3 s before, 11 ms after).
+     */
+    @Test
+    void survivorPlansAtOnceAfterAMemberLeft() throws Exception {
+        int[] ports = {freePort(), freePort(), freePort()};
+        String[] seeds = new String[ports.length];
+        String[] uris = new String[ports.length];
+        for (int i = 0; i < ports.length; i++) {
+            seeds[i] = "127.0.0.1:" + ports[i];
+            uris[i] = "grpc+tcp://n" + (i + 1) + ":32010";
+        }
+        ClusterService survivor = start(ports[0], seeds, uris[0], files("n1", 10));
+        ClusterService stopped = start(ports[1], seeds, uris[1], files("n2", 10));
+        start(ports[2], seeds, uris[2], files("n3", 10));
+        awaitMembers(survivor, 3);
+        assertEquals(Set.of(uris), survivor.filterLiveServers(survivor.allServerLoads().keySet()));
+        // Partitions move to the new members first: then the leaving one owns its share.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (!survivor.getHazelcastInstance().getPartitionService().isClusterSafe()) {
+            assertTrue(System.nanoTime() < deadline, "the cluster did not settle");
+            Thread.sleep(50);
+        }
+
+        stopped.close();
+        awaitMembers(survivor, 2);
+
+        long started = System.nanoTime();
+        Set<String> live = survivor.filterLiveServers(survivor.allServerLoads().keySet());
+        Map<String, FileAssignment> local = survivor.fileLocations(true);
+        long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        assertTrue(millis < 5000, "planning reads took " + millis + " ms");
+        assertEquals(Set.of(uris[0], uris[2]), live);
+        assertEquals(20, local.size(), "the inventories of the members that are left");
+    }
+
+    /**
      * Terminates members at the same moment, as kill -9 of two containers: none of them hands
      * its partitions over first.
      *

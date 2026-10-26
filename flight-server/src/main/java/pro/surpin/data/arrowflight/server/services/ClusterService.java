@@ -205,8 +205,22 @@ public final class ClusterService implements AutoCloseable {
     public Map<String, Long> allServerLoads() {
         long t = LogUtil.mark();
         Map<String, Long> result = new LinkedHashMap<>();
-        for (Map.Entry<String, Long> entry : hazelcast.serverRegistry().entrySet()) {
-            result.put(entry.getKey(), entry.getValue());
+        Set<String> members = memberServerUris();
+        if (members != null) {
+            // Only the servers of current members can be planned. Key lookups, unlike a query of
+            // the whole map (entrySet), do not wait ~10 s after a member left while the cluster
+            // settles its partitions: every first plan after a node stopped used to.
+            Map<String, Long> loads = hazelcast.serverRegistry().getAll(members);
+            for (String uri : members) {
+                Long load = loads.get(uri);
+                if (load != null) {
+                    result.put(uri, load);
+                }
+            }
+        } else {
+            for (Map.Entry<String, Long> entry : hazelcast.serverRegistry().entrySet()) {
+                result.put(entry.getKey(), entry.getValue());
+            }
         }
         LogUtil.logTiming(t, "hazelcast.allServerLoads", "servers=" + result.size());
         return result;
@@ -241,10 +255,38 @@ public final class ClusterService implements AutoCloseable {
      * @return relative path to size and owning servers
      */
     public Map<String, FileAssignment> fileLocations() {
+        return fileLocations(false);
+    }
+
+    /**
+     * Merges published node inventories into planner file assignments, from every node that
+     * ever published one or from the current members only. Duplicate relative paths are treated
+     * as replicas and retain every owner.
+     *
+     * @param membersOnly whether to read only the inventories of current members, which a plan
+     *        on shared storage needs for locality alone (the store's listing names the files); a
+     *        plan on local disks needs every inventory, so that files only a lost node held fail
+     *        the plan instead of leaving the answer
+     * @return relative path to size and owning servers
+     */
+    public Map<String, FileAssignment> fileLocations(boolean membersOnly) {
         long t = LogUtil.mark();
         Map<String, Map<String, Long>> inventories = new LinkedHashMap<>();
-        for (Map.Entry<String, Map<String, Long>> entry : hazelcast.serverFiles().entrySet()) {
-            inventories.put(entry.getKey(), entry.getValue());
+        Set<String> members = membersOnly ? memberServerUris() : null;
+        if (members != null) {
+            // Key lookups do not wait for the cluster to settle after a member left, as
+            // entrySet does (see allServerLoads).
+            Map<String, Map<String, Long>> found = hazelcast.serverFiles().getAll(members);
+            for (String uri : members) {
+                Map<String, Long> inventory = found.get(uri);
+                if (inventory != null) {
+                    inventories.put(uri, inventory);
+                }
+            }
+        } else {
+            for (Map.Entry<String, Map<String, Long>> entry : hazelcast.serverFiles().entrySet()) {
+                inventories.put(entry.getKey(), entry.getValue());
+            }
         }
         Map<String, FileAssignment> result = new LinkedHashMap<>();
         for (Map.Entry<String, Map<String, Long>> server : inventories.entrySet()) {

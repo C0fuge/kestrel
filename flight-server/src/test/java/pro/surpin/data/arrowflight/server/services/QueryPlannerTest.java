@@ -247,7 +247,7 @@ class QueryPlannerTest {
         when(clusterService.hasFileInventory(S1)).thenReturn(true);
         Map<String, FileAssignment> files = Map.of(
                 "s/t/f.parquet", new FileAssignment(100L, Set.of(S1)));
-        when(clusterService.fileLocations()).thenReturn(files);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(files);
         when(clusterService.createEndpointHandle(any()))
                 .thenReturn(new byte[]{1, 2, 3});
         when(parquetAdapter.estimateRowCount(anyMap())).thenReturn(25L);
@@ -259,7 +259,7 @@ class QueryPlannerTest {
         assertEquals(100L, first.totalBytes());
         assertEquals(25L, first.totalRecords());
         assertEquals(1, second.endpoints().size());
-        verify(clusterService, times(1)).fileLocations();
+        verify(clusterService, times(1)).fileLocations(anyBoolean());
         verify(clusterService, never()).addLoad(anyString(), anyLong());
     }
 
@@ -397,7 +397,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(P2)),
                 "s/t/b.parquet", new FileAssignment(100L, Set.of(P3))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
@@ -430,7 +430,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(P2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
@@ -448,7 +448,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(P1, P2)),
                 "s/t/b.parquet", new FileAssignment(500L, Set.of(P2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
@@ -553,7 +553,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/small/f.parquet", new FileAssignment(10L, Set.of(S1))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         when(parquetAdapter.sharedStorage()).thenReturn(true);
@@ -572,7 +572,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/small/f.parquet", new FileAssignment(10L, Set.of(S1))));
         when(parquetAdapter.sharedStorage()).thenReturn(false);
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
@@ -586,7 +586,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/a/f.parquet", new FileAssignment(10L, Set.of(S1)),
                 "s/b/f.parquet", new FileAssignment(500L, Set.of(S2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
@@ -626,7 +626,7 @@ class QueryPlannerTest {
      * @throws IOException never (mock)
      */
     private void storageListsTheInventories() throws IOException {
-        storageLists(clusterService.fileLocations().keySet(), clusterService.fileLocations());
+        storageLists(clusterService.fileLocations(true).keySet(), clusterService.fileLocations(true));
     }
 
     /**
@@ -673,7 +673,7 @@ class QueryPlannerTest {
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
         when(clusterService.hasFileInventory(S1)).thenReturn(true);
         // Only the survivor's inventory is left; it also names a file deleted since.
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(S1)),
                 "s/t/gone.parquet", new FileAssignment(5L, Set.of(S1))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
@@ -715,7 +715,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
         when(clusterService.hasFileInventory(S1)).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(S1)),
                 "s/t/b.parquet", new FileAssignment(100L, Set.of(S2))));
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
@@ -799,7 +799,7 @@ class QueryPlannerTest {
 
         assertEquals(2, plan.endpoints().size());
         assertEquals(700L, plan.totalBytes());
-        verify(clusterService, never()).fileLocations();
+        verify(clusterService, never()).fileLocations(anyBoolean());
         verify(clusterService).addLoad(S1, 400L);
         verify(clusterService).addLoad(S2, 300L);
         verify(parquetAdapter).tableFiles("tpch", "lineitem");
@@ -940,7 +940,7 @@ class QueryPlannerTest {
         for (int i = 0; i < 5; i++) {
             files.put("s/t/f" + i + ".parquet", new FileAssignment(100L, Set.of(S1)));
         }
-        when(clusterService.fileLocations()).thenReturn(files);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(files);
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 2);
 
@@ -963,7 +963,7 @@ class QueryPlannerTest {
         when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
         when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
         when(clusterService.hasFileInventory(anyString())).thenReturn(true);
-        when(clusterService.fileLocations()).thenReturn(Map.of(
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
                 "s/t/a.parquet", new FileAssignment(100L, Set.of(P2, P3)),
                 "s/t/b.parquet", new FileAssignment(100L, Set.of(P2, P3)),
                 "s/t/c.parquet", new FileAssignment(100L, Set.of(P2, P3)),
@@ -996,7 +996,7 @@ class QueryPlannerTest {
         for (int i = 0; i < 4; i++) {
             files.put("s/t/f" + i + ".parquet", new FileAssignment(100L, Set.of(S1)));
         }
-        when(clusterService.fileLocations()).thenReturn(files);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(files);
         when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService, 2, 4);
 

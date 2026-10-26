@@ -87,6 +87,12 @@ public final class HazelcastAdapter implements AutoCloseable {
         // Same 10 s as the server's own heartbeat; -D system properties still override.
         setDefault(config, "hazelcast.heartbeat.interval.seconds", "1");
         setDefault(config, "hazelcast.max.no.heartbeat.seconds", "10");
+        // Hazelcast's own JVM shutdown hook terminates the member (no goodbye), so a stopped
+        // server (SIGTERM, docker stop) looked crashed: map operations on the other nodes waited
+        // for it until the heartbeat timeout. The server's shutdown hook leaves the cluster
+        // gracefully instead (close), and waits for that at most a few seconds.
+        setDefault(config, "hazelcast.shutdownhook.enabled", "false");
+        setDefault(config, "hazelcast.graceful.shutdown.max.wait", "5");
         NetworkConfig network = config.getNetworkConfig();
         network.setPort(appConfig.hazelcastPort());
         network.setPortAutoIncrement(false);
