@@ -23,8 +23,14 @@
 
 ## Next steps (one per session)
 
-0f. **Bug (stand, 2026-10-26): 3-node cluster, 8 concurrent partial-mode full scans -> streams CANCELLED and a node
-    dies.** 3 servers (HDFS, `-Xmx2g`, `duckDbMemoryLimit=1GB`, 4 GB containers, server 4eaab052deaf), 8 clients each
+0f. ~~**Bug (stand, 2026-10-26): 3-node cluster, 8 concurrent partial-mode full scans -> streams CANCELLED and a node
+    dies.**~~ — done 2026-10-26 (dd31117, see Log): all streams of a node share one outbound budget
+    (`flightOutboundBudgetBytes`, default a quarter of the direct memory limit; each stream budget / open streams,
+    at least 1 MiB). **Stand:** rerun the 8-client x 3-endpoint lineitem SF10 rounds (1 and 8 DuckDB threads) on
+    a pre-release with this commit; check the startup line `Flight outbound budget: ...` and that no endpoint read
+    fails and no node dies; note the timings against the single-server run. If a node still dies without a Java
+    error, it is native memory (DuckDB `duckDbMemoryLimit` x live connections, see Open questions), not Flight.
+    Original report: 3 servers (HDFS, `-Xmx2g`, `duckDbMemoryLimit=1GB`, 4 GB containers, server 4eaab052deaf), 8 clients each
     reading all 3 endpoints of lineitem SF10: 7-10 endpoint reads per round fail "CANCELLED: Server sendMessage()
     failed" in every round (1 and 8 DuckDB threads); with 8 threads the node serving the coordinator role was gone
     after the scan in 2 of 2 valid rounds (container removed, no exit info). A single server with the same clients has
@@ -690,3 +696,17 @@
   Root cause on the stand not confirmed (likely client ephemeral ports / endpoint limits from the connection
   churn) — stand check listed in item 0e. Next: stand rerun of 0e; answers to the Open questions (0d crash case,
   9, 13) or the unnumbered stand findings.
+- 2026-10-26 (cloud session): item 0f done. Reproduced the stand error in a test JVM: a Flight server with 256 MiB
+  direct memory streaming 1 MiB batches to 16 clients that read late fails every stream with "CANCELLED: Server
+  sendMessage() failed with Error" (`OutOfMemoryError: Cannot reserve ... direct buffer memory` in gRPC's
+  MessageFramer; peak direct 2.1 GB at `-XX:MaxDirectMemorySize=2g`, i.e. each stream filled its 256 MiB
+  threshold). Some streams of such a server never finish (no error, no data) — likely what clients saw as hangs.
+  Fix: new gRPC interceptor `OutboundBudget` (installed via the Flight builder's `grpc.builderConsumer`) caps
+  each streaming call's onReady threshold at budget / open streams (min 1 MiB, max the requested
+  `flightBackpressureThresholdBytes`, rebalanced when streams open/close; gRPC reads the threshold on every
+  readiness check). New setting `flightOutboundBudgetBytes` (default 0 = MaxDirectMemorySize / 4, else heap /
+  4); per-stream threshold default unchanged (13b stays a proposal). Measured: same 16 streams, budget 16 MiB,
+  peak direct ~130 MB of 256 MiB, all rows; budget 8-32 MiB at 2 GB: 0.37-0.42 GB peak, all rows.
+  Tests: `OutboundBudgetTest` (units + forked-JVM regression, also asserts the unbounded control fails),
+  `ConfigAdapterTest`, `HadoopArrowFlightServerUnitTest`. CI run 40297852948 on dd31117 green.
+  Next: stand rerun of 0f and 0e; answers to the Open questions (0d crash case, 9, 13).
