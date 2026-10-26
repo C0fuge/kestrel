@@ -1,7 +1,8 @@
 # Server tuning: measured settings and recommended defaults
 
 Campaign 2026-10-25/26, server builds 4eaab052deaf (all sweeps) and c3b276054cc3 (CI re-check of the winners; same defaults in
-`arrowflight.properties`). Goal: heavy loads must work reliably at acceptable speed, small queries must stay fast.
+`arrowflight.properties`); final phase on 57d252b1437f (HDFS, S3 and a 3-node cluster, below).
+Goal: heavy loads must work reliably at acceptable speed, small queries must stay fast.
 
 ## How it was measured
 
@@ -18,7 +19,83 @@ Campaign 2026-10-25/26, server builds 4eaab052deaf (all sweeps) and c3b276054cc3
 - **Correctness gate** for every variant: TPC-H answer checksums (JDBC SF10, Trino SF10, JDBC SF1), small-query answer
   signatures, scan row counts. A variant that changes results or fails is disqualified.
 
-## Final comparison (stand, HDFS, single node, build 4eaab052deaf, medians of 3 rounds)
+## Final comparison on build 57d252b1437f (2026-10-26, stand, medians of 3 rounds)
+
+Build 57d252b1437f: `duckDbThreads` default 4, S3 connect retry, one outbound byte budget shared by all Flight streams of a node
+(`Flight outbound budget: 536870912 bytes shared by all streams (per stream at most 268435456, at least 1048576)` at
+`-XX:MaxDirectMemorySize=2g`), planning without waiting for the cluster to settle after a member left. Threads were set explicitly
+in every variant. Two controls on the campaign build 4eaab052deaf (threads 4, single node and 3 nodes) ran interleaved in the same
+session, because the host had less free memory and page cache than during the earlier phases; Trino SF10 is 2-3 s higher for both
+builds than in the earlier phases for that reason. Same workloads as above; S3 = MinIO on the same host (no SF1 there); 3 nodes =
+three servers on the same host and the same DataNode (`-Xmx2g`, `duckDbMemoryLimit=1GB`, 5 GB containers), raw scans in partial
+mode (3 endpoints). "default" = build 57d252b1437f with its default 4 threads. Small latencies in ms (JDBC unless ADBC), TPC-H in s
+(sum of the 22 warm medians), scan MB/s at 1/4/8 concurrent clients, RSS = peak of the server JVM (max over nodes).
+
+### HDFS, single node
+
+| profile | setting | small c1 p50/p95 | small c32 p50/p95 | ADBC c1 p50 / c32 p95 | SF1 JDBC | SF1 Trino | SF10 JDBC | SF10 Trino | scan 1/4/8 | heavy4 max s | RSS GB | errors |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **default** | threads 4 | 21.5 / 39.6 | 94.5 / 307 | 16.9 / 305 | 1.89 | 6.19 | 10.82 | 33.6 | 939 / 2749 / 3161 | 2.6 | 4.0 | 1 of 9 ADBC c32 runs: connect race (item 13d, fixed after this build) |
+| best for small | threads 2 (campaign build) | 18.0 / 41.8 | 65.2 / 300 | 14.7 / 282 | 2.29 | 5.80 | 19.01 | 32.4 | 996 / 3078 / 3463 | 3.4 | 4.2 | none |
+| (small, alternative) | threads 1 | 19.4 / 62.3 | 60.9 / 300 | 15.4 / 276 | 3.79 | 6.30 | 36.51 | 39.6 | 843 / 2870 / 3225 | 5.8 | 4.3 | none |
+| **best balanced** | = default (threads 4) | 21.5 / 39.6 | 94.5 / 307 | 16.9 / 305 | 1.89 | 6.19 | 10.82 | 33.6 | 939 / 2749 / 3161 | 2.6 | 4.0 | as default |
+| best for heavy | threads 8 | 24.3 / 45.9 | 112.2 / 367 | 20.2 / 335 | 1.54 | 6.41 | 7.95 | 37.6 | 901 / 2736 / 3028 | 2.5 | 4.6 | none |
+| control | campaign build, threads 4 | 21.9 / 40.1 | 95.1 / 327 | 17.1 / 295 | 1.94 | 6.22 | 11.16 | 34.7 | 955 / 2877 / 3092 | 2.6 | 4.1 | none |
+
+Build 57d252b1437f at 4 threads equals the campaign build at 4 threads within noise on every metric: no single-node regression.
+1 thread only lowers the 32-client p50 (-36 %) and costs p95 (+57 % at 1 client), SF10 (3.4x) and heavy4 (2.2x); 2 threads stay the
+best pure small-query setting.
+
+### S3 (MinIO), single node
+
+| profile | setting | small c1 p50/p95 | small c32 p50/p95 | ADBC c1 p50 / c32 p95 | SF10 JDBC | SF10 Trino | scan 1/4/8 | heavy4 max s | RSS GB | errors |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **default** | threads 4 | 20.0 / 50.4 | 107.8 / 704 | 14.4 / 817 | 33.39 | 66.7 | 742 / 2441 / 2916 | 7.1 | 3.7 | none |
+| best for small | threads 2 (campaign build) | 18.0 / 75.3 | 67.6 / 607 | 12.6 / 593 | 54.42 | 66.5 | 814 / 2789 / 3313 | 8.5 | 4.4 | none |
+| **best balanced** | = default (threads 4) | 20.0 / 50.4 | 107.8 / 704 | 14.4 / 817 | 33.39 | 66.7 | 742 / 2441 / 2916 | 7.1 | 3.7 | none |
+| best for heavy (few clients) | threads 8 | 20.3 / 35.5 | 130.5 / 794 | 14.5 / fails | **24.17** | 69.1 | 754 / 2488 / 2780 | 6.8 | 3.9 | 32 concurrent small queries: 32-64 ADBC and 0-1 JDBC failures in every round |
+| before the fix | threads 8 (campaign build) | 21.1 / 172.5 | 122.1 / 625 | 16.9 / fails | **0/22** | 65.6 | 873 / 2770 / 3332, 1- and 4-client scans failed in 2 of 3 rounds | 6.9 | 4.3 | every SF10 JDBC query, ~800 ADBC c32 |
+
+The S3 connect retry fixes the heavy path at 8 threads (SF10 JDBC 22/22 in 3/3 rounds, 1.38x faster than 4 threads, all scans
+complete). Still failing at 8 threads: 32 concurrent small queries, "IO Error: Could not establish connection error for HTTP GET",
+123-192 failures per round. Measured in the server's network namespace: sockets in TIME_WAIT toward the S3 endpoint reach the whole
+ephemeral port range (28231 of 28232, range 32768-60999) during that step in 3/3 rounds; at 4 threads they peak at 20-22k (70-78 %
+of the range), the SF10 JDBC step at 18-24k. httpfs opens a new connection for most range GETs, every DuckDB instance has its own,
+and TIME_WAIT lasts 60 s, so a retry of a few seconds cannot bridge it (Next steps item 0g). S3 vs HDFS at 4 threads: SF10 JDBC
+3.1x slower, Trino 2x, 32-client p95 2.3x, single-client scan -21 %.
+
+### 3-node cluster, HDFS, partial-mode scans
+
+| profile | setting | small c1 p50/p95 | small c32 p50/p95 | ADBC c1 p50 / c32 p95 | SF1 JDBC | SF1 Trino | SF10 JDBC | SF10 Trino | scan 1/4/8 | heavy4 max s | RSS GB (max node) | errors |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **default** | threads 4 | 23.6 / 45.4 | 96.3 / 355 | 17.7 / 325 | 2.15 | 7.73 | 13.74 | 38.9 | 1604 / 2527 / 2635 | 5.2 | 4.1 | scans 0; Trino q18 heap (Trino side) |
+| best for small | threads 2 (campaign build) | 19.4 / 44.3 | 71.7 / 288 | 15.4 / 279 | 2.27 | 6.69 | 20.51 | 35.9 | 1830 / 3066 / 3085 * | 3.9 | 4.5 | campaign build: 7-8 failed endpoint reads at 8 clients |
+| **best balanced** | = default (threads 4) | 23.6 / 45.4 | 96.3 / 355 | 17.7 / 325 | 2.15 | 7.73 | 13.74 | 38.9 | 1604 / 2527 / 2635 | 5.2 | 4.1 | as default |
+| best for heavy | threads 8 | 25.3 / 48.3 | 119.9 / 414 | 21.2 / 393 | 1.65 | 7.48 | 11.12 | 38.6 | 1557 / 2626 / 2702 | 4.9 | 4.1 | scans 0; Trino q18 heap |
+| control | campaign build, threads 4 | 21.9 / 41.5 | 101.5 / 343 | 17.4 / 331 | 1.89 | 7.64 | 15.32 | 37.8 | 1679 / 2590 / 2753 * | 4.4 | 4.6 | 5 / 7 / 10 failed endpoint reads at 8 clients |
+
+\* rounds with failed endpoint reads: MB/s of the rows delivered, not comparable. 8 clients x 3 endpoints of lineitem SF10:
+**0 failed reads in 6 of 6 rounds** on 57d252b1437f (4 and 8 threads), all 480 M rows, no node lost, max node RSS 4.1 GB; the
+campaign build in the same session failed 5-10 reads per round (`OutOfMemoryError: Cannot reserve ... direct buffer memory` ->
+`CANCELLED: Server sendMessage() failed`). On one host the cluster adds no hardware: only partial scans gain (1 client 1.6 GB/s over
+3 endpoints vs 0.94 GB/s on one node); SF10 JDBC is 27 % slower than one node. heavy4 slowest query 5.2 s vs 4.4 s for the control
+(rounds 4.9-5.3 vs 3.7-4.7), not seen on one node: possible small regression, to recheck. Trino q18 "Java heap space" (6 GB Trino
+heap) whenever a query has more than one endpoint: Trino connector side.
+
+Correction (2026-10-26): the earlier report of a node dying under 8 concurrent cluster scans was an artifact of the benchmark
+harness. Its memory guard removes the server container when host free memory falls below 4.5 GB, and that scan needs ~10-11 GB of
+host memory for three servers plus the client; the removals fell inside the scan steps. No server crash was observed.
+
+### Choice
+
+- Keep `duckDbThreads=4` as the default: balanced on HDFS, S3 and the cluster.
+- 8 threads for heavy-only HDFS servers (SF10 1.36x faster, 32-client p95 +20 %); not on S3 with concurrent clients until item 0g
+  is fixed.
+- 2 threads for latency-only services with many concurrent small queries.
+- S3 with many concurrent queries: until connections are reused, `net.ipv4.tcp_tw_reuse=1` and a wider `ip_local_port_range`
+  on the server host, or fewer threads.
+
+## Campaign comparison (stand, HDFS, single node, build 4eaab052deaf, medians of 3 rounds)
 
 | profile | settings | small JDBC c1 p50/p95 ms | small JDBC c32 p50/p95 ms | ADBC c1 p50 / c32 p95 ms | SF1 JDBC s | SF1 Trino s | SF10 JDBC s | SF10 Trino s | scan MB/s 1/4/8 clients | heavy4 slowest s | RSS peak GB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -68,9 +145,8 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
 
 ## Open points
 
-- Storage comparison HDFS vs S3 on the stand and the 3-node cluster run with the best settings were not measured in this campaign
-  (stand unavailable for valid measurements); the emulated S3 in CI is too slow to compare storages.
-- ADBC (Go Flight SQL driver): rarely (about 3 of 45 runs with 8 clients connecting at once) a connect fails with
-  "failed to update autocommit: rpc error: code = Unimplemented" although the server advertises no transaction support.
-  Cause (2026-10-26): concurrent streams corrupted the SqlInfo answer through Arrow Java's shared empty buffer
-  (see CHANGELOG, `EmptyListOffsets`); fixed in 4939fb7, stand rerun pending.
+- S3 with 8 threads and 32 concurrent small queries: ephemeral-port exhaustion toward the S3 endpoint (above, STATUS item 0g).
+- 3 nodes: heavy4 slowest query +18 % on 57d252b1437f vs the campaign build (3 rounds each), to recheck.
+- ADBC (Go Flight SQL driver): rarely (about 3 of 45 runs with 8 clients connecting at once; 1 of 9 32-client runs on
+  57d252b1437f) a connect fails with "failed to update autocommit: rpc error: code = Unimplemented"; fixed after that build
+  (item 13d, shared empty buffer), stand recheck pending.

@@ -23,6 +23,23 @@
 
 ## Next steps (one per session)
 
+0g. **Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
+    ephemeral-port exhaustion.** Every round (3/3): 32-64 ADBC and 0-1 JDBC queries of the 32-client small-query step fail
+    "IO Error: Could not establish connection error for HTTP GET to '<s3 endpoint>/.../data_N.parquet'" (123-192 server
+    log lines per round). Measured in the server's network namespace every 5 s: sockets in TIME_WAIT toward the S3
+    endpoint reach 28231 = the whole `ip_local_port_range` (32768-60999) during that step; 4 threads peak at 20-22k
+    (70-78 %, no failures yet), the SF10 JDBC step 18-24k at both. TIME_WAIT lasts 60 s, so the ~6 s retry of 0e cannot
+    bridge it. Fix: reuse HTTP connections (httpfs keep-alive across queries / one connection cache for all DuckDB
+    instances of a node, check `http_keep_alive` and whether each worker's instance opens its own), or fewer, larger
+    range reads; test: count new connections per query at 8 threads x 32 clients against a local S3 (rclone/MinIO) and
+    assert it stays bounded. Document the deployment workaround (`net.ipv4.tcp_tw_reuse=1`, wider port range).
+    (MinIO's `MINIO_API_REQUESTS_MAX` not checked; the failures are TCP connect errors, not 503 throttling.)
+
+0h. **Recheck (stand): 3-node heavy4 slower on 57d252b1437f?** 4 concurrent heavy JDBC queries (q01 q09 q18 q21, SF10,
+    complete mode, 4 threads): slowest 5.2 s (rounds 4.9-5.3) vs 4.4 s (3.7-4.7) for 4eaab052deaf in the same session;
+    single node unchanged (2.6 vs 2.6 s), cluster SF10 JDBC not slower (13.7 vs 15.3 s). Possibly the outbound budget
+    (per-stream share = budget / open streams) or the planner change; rerun with more rounds before acting.
+
 0f. ~~**Bug (stand, 2026-10-26): 3-node cluster, 8 concurrent partial-mode full scans -> streams CANCELLED and a node
     dies.**~~ — done 2026-10-26 (dd31117, see Log): all streams of a node share one outbound budget
     (`flightOutboundBudgetBytes`, default a quarter of the direct memory limit; each stream budget / open streams,
@@ -37,6 +54,13 @@
     0 errors. Same mechanism as item 13b (256 MiB backpressure per stream exhausts direct memory): bound the per-stream
     and total outbound buffer (13b default 16 MiB and/or a global budget), fail a stream instead of the process, and
     add a test with many concurrent streams under a small `MaxDirectMemorySize`.
+    **Correction (2026-10-26, stand):** the "node dies" part was a benchmark-harness artifact, not a server crash: the
+    harness memory guard removes the server container when host MemAvailable falls below 4.5 GB, and this scan needs
+    ~10-11 GB of host memory (3 servers + client); both removals fell inside the scan step. The CANCELLED errors were
+    real. **Stand result on 57d252b1437f:** 8 clients x 3 endpoints, 0 failed endpoint reads in 6/6 rounds (4 and 8
+    threads), all 480 M rows, no node lost, max node RSS 4.1 GB, startup line `Flight outbound budget: 536870912 bytes
+    shared by all streams (per stream at most 268435456, at least 1048576)`; control 4eaab052deaf in the same session:
+    5/7/10 failed reads per round (direct-memory OOM -> CANCELLED). Fixed. Timings in `docs/dev/TUNING.md`.
 
 0e. ~~**Bug (stand, 2026-10-26): S3 + `duckDbThreads=8` -> every complete-mode query fails**~~ "Could not
     establish connection" — done 2026-10-26 (c71ee2e, see Log): DuckDB now retries S3 requests (connect errors
@@ -48,6 +72,9 @@
     connections / 352 requests at 8 threads, 322 at 32, 32 at 1), so ephemeral-port exhaustion is the likely
     limit; then raise `httpRetries` or report the numbers. Also recheck the S3-outage time (3-node stand (a)):
     a read now retries ~6 s before failing.
+    **Stand result on 57d252b1437f (2026-10-26):** SF10 JDBC on MinIO at 8 threads 22/22 in 3/3 rounds (24.2 s; 4 threads
+    33.4 s), all raw scans complete -> heavy path fixed. The 32-client small-query step still fails at 8 threads:
+    ephemeral-port exhaustion, measured -> new item 0g.
 
 0d. ~~**Intermittent `GetFlightInfo` TIMED_OUT with a cluster member down (StarRocks connector CI)**~~ — done
     2026-10-26 (8e755fb, see Log): the planner's node-load read (and, on shared storage, the inventory read) was a
@@ -769,3 +796,8 @@
   `HadoopArrowFlightServerTest.reportsLongHdfsRpcTimeouts`. CI run 40362074150 on 8e0307f green. Note: the extension's
   `hdfs_dead_node_ttl_ms` is not exposed as a server setting yet (optional follow-up). Next: secure HA (b) (ticket
   cache from the keytab), 3-node S3 (c), and the stand reruns of 0e/0f/13d.
+- 2026-10-26 (local perf campaign, final phase on 57d252b1437f, 3 rounds, HDFS threads 1/4/8, S3 4/8, 3 nodes 4/8 + two
+  4eaab052deaf controls): `docs/dev/TUNING.md` final comparison (default 4 threads = balanced on HDFS, S3 and 3 nodes; same
+  speed as 4eaab at 4). 0f confirmed fixed (0 failed reads in 6/6 rounds) and corrected (the node death was the harness
+  memory guard); 0e heavy path fixed (SF10 JDBC 22/22 at 8 threads on S3); new 0g (S3 ephemeral-port exhaustion at 8 threads
+  x 32 clients), 0h (3-node heavy4 +18 %, recheck); ADBC autocommit race still seen once on 57d252b1437f (before 4939fb7).
