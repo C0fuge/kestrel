@@ -6,8 +6,9 @@ import java.util.Locale;
 
 /**
  * Names Iceberg file locations the way the server's stores and DuckDB name them: a local file as
- * a plain absolute path ({@code file:/x}, {@code file:///x} and {@code /x} alike), every other URI
- * as written.
+ * a plain absolute path ({@code file:/x}, {@code file:///x} and {@code /x} alike), an S3 object
+ * as {@code s3://} ({@code s3a://} and {@code s3n://} alike, as Spark's S3A writes them), every
+ * other URI as written.
  */
 final class Locations {
 
@@ -18,13 +19,15 @@ final class Locations {
      * Normalises a location.
      *
      * @param location location from Iceberg metadata or configuration
-     * @return plain path for a local file, the location otherwise; without a trailing slash
-     *         unless it is the only character
+     * @return plain path for a local file, {@code s3://} for an S3 object, the location
+     *         otherwise; without a trailing slash unless it is the only character
      */
     static String normalize(String location) {
         String result = location.strip();
         String lower = result.toLowerCase(Locale.ROOT);
-        if (lower.startsWith("file://")) {
+        if (lower.startsWith("s3a://") || lower.startsWith("s3n://")) {
+            result = "s3://" + result.substring("s3a://".length());
+        } else if (lower.startsWith("file://")) {
             result = result.substring("file://".length());
         } else if (lower.startsWith("file:")) {
             result = result.substring("file:".length());

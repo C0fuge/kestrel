@@ -94,6 +94,30 @@ class S3NamedStoresTest {
         }
     }
 
+    /**
+     * Regression (Next steps 12): an s3a:// or s3n:// warehouse opens on the store whose root
+     * is named s3://, and its s3a:// files are located there.
+     */
+    @Test
+    void anS3aWarehouseOpensOnTheS3Store() throws Exception {
+        support.properties.put("arrowflight.s3.stores", "wh");
+        support.properties.put("arrowflight.s3.wh.root", "s3://warehouse");
+        support.properties.put("arrowflight.s3.wh.endpoint", s3.endpoint());
+        support.environment.put("FLIGHT_S3_WH_ACCESS_KEY", "AKIAWH");
+        support.environment.put("FLIGHT_S3_WH_SECRET_KEY", "WHSECRET");
+        for (String warehouse : List.of("s3a://warehouse/iceberg", "S3N://warehouse/iceberg/")) {
+            support.properties.put("arrowflight.iceberg-hadoop.warehouse", warehouse);
+            try (StoreRegistry registry = support.open(
+                    StoreRegistryTest.config("s3://lake/parquet"), "iceberg-hadoop")) {
+                assertTrue(registry.readableRoots().contains("s3a://warehouse/iceberg"),
+                        registry.readableRoots().toString());
+                Located table = registry.locate("s3a://warehouse/iceberg/ns/t/data/f.parquet");
+                assertEquals("iceberg/ns/t/data/f.parquet", table.relativePath());
+                assertEquals("wh", table.store().configName());
+            }
+        }
+    }
+
     /** Verifies the old refusal stays for a root no named store holds, and names the remedy. */
     @Test
     void aRootOutsideEveryStoreIsStillRefused() {

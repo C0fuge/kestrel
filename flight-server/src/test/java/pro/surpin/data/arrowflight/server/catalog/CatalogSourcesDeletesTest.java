@@ -261,7 +261,7 @@ class CatalogSourcesDeletesTest {
     void positionDeletePathsAreNormalisedLikeTheCatalog() throws Exception {
         for (String location : List.of("file:/a/b.parquet", "FILE:///a/b.parquet", "//a/b.parquet",
                 "/a/b.parquet/", " s3://bucket//k/x.parquet", "hdfs://ns/a/b.parquet", "file://host/x",
-                "/")) {
+                "/", "s3a://bucket/k/x.parquet", " S3N://bucket/k/", "s3://bucket/k")) {
             try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
                     Statement s = c.createStatement(); ResultSet rs = s.executeQuery("SELECT "
                             + CatalogSources.normalizedLocation("'" + location + "'"))) {

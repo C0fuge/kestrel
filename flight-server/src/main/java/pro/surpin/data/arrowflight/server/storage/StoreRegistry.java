@@ -577,6 +577,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     @Override
     public Located locate(String absoluteUri) throws IOException {
         Objects.requireNonNull(absoluteUri, "absoluteUri");
+        // Compared as the catalogs name them: s3a:// and s3n:// lie under an s3:// root.
+        String location = CatalogLocations.normalize(absoluteUri);
         String best = null;
         DataStore bestStore = null;
         List<DataStore> all = new ArrayList<>();
@@ -584,8 +586,9 @@ public final class StoreRegistry implements Stores, AutoCloseable {
         all.addAll(extraStores);
         for (DataStore store : all) {
             for (String root : store.duckDbRoots()) {
-                String prefix = root.endsWith("/") ? root : root + "/";
-                if ((absoluteUri.startsWith(prefix) || absoluteUri.equals(root))
+                String r = CatalogLocations.normalize(root);
+                String prefix = r.endsWith("/") ? r : r + "/";
+                if ((location.startsWith(prefix) || location.equals(r))
                         && (best == null || prefix.length() > best.length())) {
                     best = prefix;
                     bestStore = store;
@@ -595,7 +598,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
         if (best == null) {
             throw new IOException("No open store holds " + absoluteUri);
         }
-        String relative = absoluteUri.length() <= best.length() ? "" : absoluteUri.substring(best.length());
+        String relative = location.length() <= best.length() ? "" : location.substring(best.length());
         return new Located(bestStore, relative);
     }
 

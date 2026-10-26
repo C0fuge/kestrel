@@ -238,13 +238,14 @@ public final class CatalogSources {
     /**
      * Writes {@link CatalogLocations#normalize(String)} as a DuckDB expression, for the data file
      * paths in position delete files (Iceberg writes them as the catalog names the file, for
-     * example with {@code file:}).
+     * example with {@code file:} or {@code s3a://}).
      *
      * @param expression SQL expression of a location
      * @return SQL expression of the normalised location
      */
     static String normalizedLocation(String expression) {
-        String bare = "regexp_replace(trim(" + expression + "), '^[Ff][Ii][Ll][Ee]:(//)?', '')";
+        String s3 = "regexp_replace(trim(" + expression + "), '^[Ss]3[AaNn]://', 's3://')";
+        String bare = "regexp_replace(" + s3 + ", '^[Ff][Ii][Ll][Ee]:(//)?', '')";
         String slashes = "CASE WHEN contains(" + bare + ", '://') THEN " + bare
                 + " ELSE regexp_replace(" + bare + ", '^//+', '/') END";
         return "regexp_replace(" + slashes + ", '(.)/+$', '\\1')";

@@ -96,6 +96,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- An `s3a://` or `s3n://` catalog root (`arrowflight.iceberg-hadoop.warehouse=s3a://b/wh`) stopped the
+  server at start ("The store opened for s3a://b/wh does not hold it (roots [s3://b/wh/])"), and Iceberg
+  tables whose metadata names `s3a://` / `s3n://` files under an `s3://` root were hidden. Catalog
+  locations now treat the three S3 scheme forms as one (store lookup, roots check, `read_parquet` file
+  lists and the data file paths inside position delete files); DuckDB already accepted all three forms.
 - A local catalog root (`arrowflight.iceberg-hadoop.warehouse=/wh`, `file:/wh` or `file:///wh`, local
   Iceberg/Hive data file paths) stopped the server at start when the Hadoop configuration names a
   non-local `fs.defaultFS` (`hdfs://<ns>`): "The store opened for /wh does not hold it". Catalog

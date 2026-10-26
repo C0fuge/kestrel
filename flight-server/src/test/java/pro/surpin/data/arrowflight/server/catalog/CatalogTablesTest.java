@@ -138,6 +138,27 @@ class CatalogTablesTest {
         assertEquals(Optional.empty(), tables.current("nope", "in"));
     }
 
+    /** Regression (Next steps 12): files a writer named through S3A lie under an s3:// root. */
+    @Test
+    void s3aAndS3nFilesLieUnderAnS3Root() throws IOException {
+        FakeCatalog catalog = new FakeCatalog();
+        catalog.tables.put("ice", List.of("spark", "elsewhere"));
+        TableSnapshot spark = snapshot("ice", "spark", "s3a://lake/wh/ice/spark/v1.metadata.json",
+                List.of(file("s3a://lake/wh/ice/spark/f1.parquet", 1, new DeleteFile(
+                        "S3N://lake/wh/ice/spark/d1.parquet", 1, DeleteFile.Kind.POSITION, null))));
+        catalog.snapshots.put(new TableName("ice", "spark"), spark);
+        catalog.snapshots.put(new TableName("ice", "elsewhere"), snapshot("ice", "elsewhere",
+                "s3a://lake/wh/ice/e/v1.metadata.json", List.of(file("s3a://lake/whx/f.parquet", 1))));
+        CatalogTables tables = tables(catalog, true);
+        tables.schemas(Set.of());
+        assertTrue(tables.current("ice", "spark").isPresent());
+        assertEquals(Optional.empty(), tables.current("ice", "elsewhere"));
+        String source = CatalogSources.deletesAppliedSource(spark, spark.files());
+        assertTrue(source.contains("'s3://lake/wh/ice/spark/f1.parquet'"), source);
+        assertTrue(source.contains("'s3://lake/wh/ice/spark/d1.parquet'"), source);
+        assertFalse(source.contains("s3a://"), source);
+    }
+
     @Test
     void completeAnswerReasons() {
         FakeCatalog catalog = new FakeCatalog();
@@ -191,7 +212,12 @@ class CatalogTablesTest {
         assertTrue(CatalogLocations.underAny("/tmp/wh", List.of("/tmp/wh/")));
         assertFalse(CatalogLocations.underAny("/tmp/whx/a", List.of("/tmp/wh")));
         assertFalse(CatalogLocations.underAny("/tmp/wh/../etc", List.of("/tmp/wh")));
-        assertFalse(CatalogLocations.underAny("s3a://lake/wh/f", List.of(ROOT)));
+        // s3a:// and s3n:// name the same objects as s3:// (Next steps 12).
+        assertEquals("s3://lake/wh/f", CatalogLocations.normalize("S3A://lake/wh/f/"));
+        assertTrue(CatalogLocations.underAny("s3a://lake/wh/f", List.of(ROOT)));
+        assertTrue(CatalogLocations.underAny("s3://lake/wh/f", List.of("s3n://lake/wh/")));
+        assertFalse(CatalogLocations.underAny("s3a://lake/whx/f", List.of(ROOT)));
+        assertFalse(CatalogLocations.underAny("s3a://other/wh/f", List.of(ROOT)));
     }
 
     @Test

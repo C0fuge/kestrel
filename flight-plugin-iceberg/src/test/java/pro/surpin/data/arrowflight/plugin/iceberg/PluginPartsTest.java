@@ -39,6 +39,11 @@ class PluginPartsTest {
         assertEquals("/tmp/a", Locations.normalize("/tmp/a//"));
         assertEquals("s3://lake/wh", Locations.normalize("s3://lake/wh/"));
         assertEquals("hdfs://nn:8020/wh", Locations.normalize("hdfs://nn:8020/wh"));
+        // Next steps 12: S3A names the same objects as s3://.
+        assertEquals("s3://lake/wh/t", Locations.normalize("s3a://lake/wh/t/"));
+        assertEquals("s3://lake/wh", Locations.normalize("S3N://lake/wh"));
+        assertTrue(Locations.underAny(Locations.normalize("s3a://lake/wh/t/v1.metadata.json"),
+                Locations.roots("s3://lake/wh")));
         assertTrue(Locations.under("/tmp/a/b", "/tmp/a"));
         assertTrue(Locations.under("/tmp/a", "/tmp/a"));
         assertFalse(Locations.under("/tmp/ab", "/tmp/a"));
