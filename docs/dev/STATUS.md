@@ -142,7 +142,12 @@
 >   every block read fails (`Read 8 bytes failed from <dn>:9866`; DataNode: `InvalidMagicNumberException`, the client never
 >   sends the SASL handshake). The Java client reads fine. Production must use privileged-port DataNodes, or the
 >   extension needs the SASL data-transfer handshake (libhdfs3) — check which one production uses.
-> - **(b) hadoopfs needs a ticket cache:** with only the server keytab (no `KRB5CCNAME` cache) the Java side starts and
+> - ~~**(b) hadoopfs needs a ticket cache:**~~ done 2026-10-26 (2b2cac8, see Log): optional `hdfsKerberosPrincipal` +
+>   `hdfsKerberosKeytab` make the server write and renew the MIT ticket cache the extension reads (default: LIBHDFS3_CONF's
+>   `hadoop.security.kerberos.ticket.cache.path`, else `KRB5CCNAME`, else `/tmp/krb5cc_<uid>`). **Stand:** on the secure
+>   HA stand drop the external `kinit`, set both settings (server keytab), check the startup line
+>   `hdfs=kerberosTicketCache ... ticketEnd=...` and no cache WARN, run queries; with a short `ticket_lifetime` (e.g.
+>   10 min) check that queries keep working past the first lifetime (a renewal line every ~8 min). Original: with only the server keytab (no `KRB5CCNAME` cache) the Java side starts and
 >   lists, every query fails `IO Error: Unable to connect to HDFS: hdfs://<ns>`. The server does not hand its keytab
 >   login to the extension; today an external `kinit -kt` (+ renewal before expiry) is required. Options: the server
 >   writes and renews a private ccache from its keytab, or the extension takes keytab + principal settings.
@@ -262,7 +267,7 @@
    Stand: the prepared kerberized HMS (principal, keytab, auth_to_local, proxyuser) — reference queries with
    `authentication=kerberos`, once from the keytab and once from a `kinit` cache, with the metastore's
    `hadoop.rpc.protection` = authentication and = privacy. HDFS Kerberos with hadoopfs: see the secure HA
-   stand findings (a)/(b) above (data-transfer SASL, ticket cache) — still open, not numbered.
+   stand findings (a) above (data-transfer SASL) — still open, not numbered; (b) (ticket cache) done 2026-10-26.
 8. **Ranger hardening** (security): details are kept outside this public repo; ask the maintainer before starting. (The maintainer wants Ranger/
    Kerberos finished before production; implement here, the stand check comes later.)
 9. **Per-user identity** (needed for Ranger/Kerberos): JWT/bearer pass-through of the end user to Ranger checks;
@@ -831,3 +836,14 @@
   39/31 connections for the first/repeated query, with the cache 40/0). Server-side fix -> Open questions
   ("S3 connection churn"). CI run 40399232182 on 9f7eb4f green. Next: 0h (stand recheck), stand rerun of 0g
   with `tcp_tw_reuse=1`, then secure HA (b) (ticket cache from the keytab), 3-node S3 (c).
+- 2026-10-26 (cloud session): secure HA stand finding (b) (hadoopfs needs a ticket cache). libhdfs3 (afc3) reads
+  only a ticket cache (`hadoop.security.kerberos.ticket.cache.path` in LIBHDFS3_CONF, else `KRB5CCNAME`, else the
+  default). Added (additive, off unless set): `hdfsKerberosPrincipal` + `hdfsKerberosKeytab` (`HDFS_KERBEROS_*`,
+  optional `hdfsKerberosTicketCache`) — `HdfsTicketCache` logs in from the keytab (JAAS), writes the TGT as a MIT
+  file cache v4 (owner-only, atomic replace) before the data store opens, and logs in again at 80 % of the
+  lifetime (retry every minute on failure; a failed first login stops the start); WARN when the cache is not the
+  one the extension reads. Test `HdfsTicketCacheTest` (in-process Kerby KDC; the cache is read by the JDK, Kerby
+  and MIT `klist`/`kvno`, which also gets a service ticket with it — verified locally; Dev CI now installs
+  krb5-user so that case runs there too). CI run 40415521254 on 2b2cac8 green. Next: 0h (stand recheck), stand
+  reruns (0g with `tcp_tw_reuse=1`, secure HA (b) without `kinit`), then 3-node S3 (c) (first plan after B5 waits
+  9-10 s), optional: expose the extension's `hdfs_dead_node_ttl_ms` as a server setting.
