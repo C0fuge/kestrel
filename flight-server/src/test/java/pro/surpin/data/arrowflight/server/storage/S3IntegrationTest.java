@@ -28,6 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -73,6 +74,7 @@ class S3IntegrationTest {
     private String secretKey;
     private String bucket;
     private int threads = 1;
+    private boolean externalFileCache;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -321,6 +323,76 @@ class S3IntegrationTest {
         }
     }
 
+    /**
+     * Counts the TCP connections a query opens at 8 DuckDB threads (item 0g: on the stand 32
+     * clients ran the host out of local ports, every closed connection holding its port 60 s in
+     * TIME_WAIT). httpfs keeps connections per open file only, and a thread opens a file anew for
+     * each row group it takes, so a scan opens about one connection per range read: bounded by
+     * the files and row groups, never more than the requests. With the external file cache a
+     * connection reads the same files again without opening a connection.
+     */
+    @Test
+    void connectionsPerQueryAreBoundedAndCachedReadsOpenNone() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 8;
+        int rowGroups = 4;
+        Path data = dir.resolve("groups.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT range AS id, md5(range::VARCHAR) AS pad FROM range(" + rowGroups * 20_000
+                    + ")) TO '" + data + "' (FORMAT parquet, ROW_GROUP_SIZE 20000)");
+        }
+        byte[] bytes = Files.readAllBytes(data);
+        StringBuilder list = new StringBuilder();
+        for (int i = 0; i < files; i++) {
+            s3.put(bucket, "flight-it/g/x" + i + ".parquet", bytes);
+            list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                    .append("/flight-it/g/x").append(i).append(".parquet'");
+        }
+        String sql = "SELECT count(*), sum(id) FROM read_parquet([" + list + "]) WHERE id % 7 = 1";
+        long rows = 0;
+        long sum = 0;
+        for (long id = 1; id < rowGroups * 20_000L; id += 7) {
+            rows++;
+            sum += id;
+        }
+        try (Forwarder forwarder = new Forwarder(s3.endpoint())) {
+            endpoint = forwarder.endpoint();
+            threads = 8;
+            int[] uncached = connectionsOfTwoQueries(forwarder, sql, files * rows, files * sum);
+            long requests = s3.requests().stream().filter(r -> r.path().contains("/g/")).count();
+
+            assertTrue(uncached[0] + uncached[1] <= requests,
+                    uncached[0] + "+" + uncached[1] + " connections for " + requests + " requests");
+            assertTrue(uncached[0] <= files * (rowGroups + 2), "first query: " + uncached[0]);
+            assertTrue(uncached[1] >= files, "without the cache each file is read again: " + uncached[1]);
+            assertTrue(uncached[1] <= files * (rowGroups + 2), "second query: " + uncached[1]);
+
+            duckDb.close();
+            registry.close();
+            externalFileCache = true;
+            int[] cached = connectionsOfTwoQueries(forwarder, sql, files * rows, files * sum);
+            assertTrue(cached[0] <= files * (rowGroups + 2), "first query: " + cached[0]);
+            assertEquals(0, cached[1], "the cached files are read without a connection");
+        }
+    }
+
+    private int[] connectionsOfTwoQueries(Forwarder forwarder, String sql, long rows, long sum) throws Exception {
+        open(null);
+        int[] opened = new int[2];
+        for (int q = 0; q < 2; q++) {
+            int before = forwarder.connections();
+            try (Statement s = duckDb.connection().createStatement();
+                    ResultSet rs = s.executeQuery(sql)) {
+                assertTrue(rs.next());
+                assertEquals(rows, rs.getLong(1));
+                assertEquals(sum, rs.getLong(2));
+            }
+            opened[q] = forwarder.connections() - before;
+        }
+        return opened;
+    }
+
     private void openRegistry(String caFile) {
         plugin.properties.put("s3Endpoint", endpoint);
         plugin.properties.put("s3UrlStyle", "path");
@@ -345,7 +417,7 @@ class S3IntegrationTest {
     private AppConfig config() {
         return new AppConfig(3, 1024, 2, 131072, 0, 1, threads, null, false, null, null, null,
                 null, "512MB", false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
-                5701, 60, 3, 1000, 0, true, false, 16, dir.resolve("spill").toString(), null,
+                5701, 60, 3, 1000, 0, true, externalFileCache, 16, dir.resolve("spill").toString(), null,
                 "complete", true, true);
     }
 
@@ -359,6 +431,7 @@ class S3IntegrationTest {
         private final List<Socket> open = new CopyOnWriteArrayList<>();
         private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
         private final ExecutorService pipes = Executors.newCachedThreadPool();
+        private final AtomicInteger accepted = new AtomicInteger();
         private final int port;
         private volatile ServerSocket listener;
         private volatile boolean closed;
@@ -384,6 +457,15 @@ class S3IntegrationTest {
          */
         String endpoint() {
             return "http://127.0.0.1:" + port;
+        }
+
+        /**
+         * Counts the connections accepted so far.
+         *
+         * @return connections
+         */
+        int connections() {
+            return accepted.get();
         }
 
         /**
@@ -418,6 +500,7 @@ class S3IntegrationTest {
                 while (!closed && !socket.isClosed()) {
                     try {
                         Socket client = socket.accept();
+                        accepted.incrementAndGet();
                         Socket server = new Socket(target.getAddress(), target.getPort());
                         open.add(client);
                         open.add(server);

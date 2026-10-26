@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3: a startup WARN when `net.ipv4.tcp_tw_reuse` is not 1, with the port range and the reads per
+  second it allows: DuckDB's httpfs opens a new connection for most range reads at 4+ threads and
+  each closed one holds its port 60 s, so 32 concurrent small queries at 8 threads ran the stand
+  out of local ports (item 0g). Workaround documented in `arrowflight.properties` and START-NOTES
+  (`tcp_tw_reuse=1`, wider port range, `duckDbExternalFileCache=true` for repeated reads); no
+  setting changes.
 - HDFS: a startup WARN names every libhdfs3 NameNode RPC timeout (`rpc.client.connect.timeout`,
   `read`, `write`, `timeout`) the `LIBHDFS3_CONF` file leaves unset or over a minute; libhdfs3's
   defaults let a query hang ~170 s after the active NameNode host vanished (secure HA stand finding

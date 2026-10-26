@@ -40,6 +40,12 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,
   `rpc.client.connect.retry=2`); libhdfs3's defaults let a query hang for minutes after a NameNode host crash. The
   server logs a WARN at startup while one of them is unset or over a minute.
+- S3: set `net.ipv4.tcp_tw_reuse=1` in the server's network namespace (container: `--sysctl
+  net.ipv4.tcp_tw_reuse=1`) and widen `net.ipv4.ip_local_port_range` (e.g. `1024 65535`). DuckDB's httpfs opens a
+  new connection for most S3 range reads at 4+ threads and each closed one holds its local port 60 s, so many
+  concurrent queries run out of ports ("Could not establish connection"). The server logs a WARN at startup while
+  `tcp_tw_reuse` is not 1. Where the same files are read again and again, `duckDbExternalFileCache=true` serves
+  repeated reads from memory without a connection (costs up to `duckDbMemoryLimit` per connection).
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.
