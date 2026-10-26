@@ -23,14 +23,16 @@
 
 ## Next steps (one per session)
 
-0e. **Bug (stand, 2026-10-26): S3 + `duckDbThreads=8` -> every complete-mode query fails** "IO Error: Could not
-    establish connection error for HTTP GET to 'http://<minio>:9000/.../data_N.parquet'" (single server on a MinIO
-    store, TPC-H SF10 through JDBC: 0/22 in 3 of 3 rounds, ~1500 such errors per round). Same server, same round:
-    Trino through the plugin (partial mode, smaller per-request scans) 22/22; threads 1 and 4 on S3 22/22 (SF10 JDBC
-    55 s / 31 s, HDFS 19 s / 10.4 s / t8 7.3 s). Likely DuckDB httpfs opens threads x files parallel connections and
-    the endpoint refuses them, with no retry. Find the limit (httpfs `http_retries`/`http_retry_wait_ms`/keep-alive,
-    connection pool size, MinIO limits), make S3 reads robust at any thread count (bounded connections and/or retry
-    on connect errors), add an integration test with the fake S3 at high thread count. Default 4 is not affected.
+0e. ~~**Bug (stand, 2026-10-26): S3 + `duckDbThreads=8` -> every complete-mode query fails**~~ "Could not
+    establish connection" — done 2026-10-26 (c71ee2e, see Log): DuckDB now retries S3 requests (connect errors
+    included) for ~6 s instead of its own ~0.5 s; settings `arrowflight.s3.httpRetries` / `httpRetryWaitMs` /
+    `httpRetryBackoff`. **Stand:** rerun SF10 JDBC on MinIO at `duckDbThreads=8` (and 4 as control, timings). If
+    it still fails, the endpoint refuses for longer than 6 s: count client sockets in TIME_WAIT during the round
+    (`ss -tan state time-wait | wc -l` vs `net.ipv4.ip_local_port_range`) and MinIO's
+    `MINIO_API_REQUESTS_MAX` — httpfs opens a new connection for most range GETs at 8+ threads (measured: 144
+    connections / 352 requests at 8 threads, 322 at 32, 32 at 1), so ephemeral-port exhaustion is the likely
+    limit; then raise `httpRetries` or report the numbers. Also recheck the S3-outage time (3-node stand (a)):
+    a read now retries ~6 s before failing.
 
 0d. ~~**Intermittent `GetFlightInfo` TIMED_OUT with a cluster member down (StarRocks connector CI)**~~ — done
     2026-10-26 (8e755fb, see Log): the planner's node-load read (and, on shared storage, the inventory read) was a
@@ -666,3 +668,16 @@
   unreachable peer hung 363 s). Tests: `ClusterServiceTest` (key reads, inventories kept on local disks),
   `ClusterMemberLossIntegrationTest.survivorPlansAtOnceAfterAMemberLeft`, `HazelcastAdapterTest`. Crash case
   (10 s) → Open questions. CI run 40272329184 green. Next: answers to the Open questions (0d crash case, 9, 13) or the unnumbered stand findings.
+- 2026-10-26 (cloud session): item 0e done (c71ee2e + golden 8b4ffe7). Measured with DuckDB 1.4.5 + the ci-assets
+  httpfs against a local S3 stand-in (16 Parquet files, 352 range requests per query): httpfs opened 32 TCP
+  connections at 1 thread, 144 at 8, 322 at 32 (keep-alive reuse collapses with threads), and against a
+  refusing port its default retries (3 from 100 ms, backoff 4) gave up after 0.5 s; with 6 retries from 200 ms,
+  backoff 2 a query rode out a 3 s refusal. The s3 plugin now sets `http_retries` / `http_retry_wait_ms` /
+  `http_retry_backoff` (new settings `httpRetries` 6, `httpRetryWaitMs` 200, `httpRetryBackoff` 2, ~6 s in
+  all; inherited by named stores; validator allowlist extended). Tests: `S3SettingsTest`, `S3DataStoreTest`,
+  `S3NamedStoresTest`, `S3PluginTest`, golden `duckdb-setup.txt`, and
+  `S3IntegrationTest.connectRefusalsAreRetried` (forwarder refuses connections 1.5 s during an 8-thread read;
+  retries 0 fails as control). CI run 40282571105 red (golden file not updated), 40283144913 on 8b4ffe7 green.
+  Root cause on the stand not confirmed (likely client ephemeral ports / endpoint limits from the connection
+  churn) — stand check listed in item 0e. Next: stand rerun of 0e; answers to the Open questions (0d crash case,
+  9, 13) or the unnumbered stand findings.
