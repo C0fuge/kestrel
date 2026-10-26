@@ -77,7 +77,7 @@
 >   lists, every query fails `IO Error: Unable to connect to HDFS: hdfs://<ns>`. The server does not hand its keytab
 >   login to the extension; today an external `kinit -kt` (+ renewal before expiry) is required. Options: the server
 >   writes and renews a private ccache from its keytab, or the extension takes keytab + principal settings.
-> - **(c) Short-circuit is forced on:** `HadoopDataStoreProvider.open` sets `dfs.client.read.shortcircuit=true`; a client
+> - ~~**(c) Short-circuit is forced on:**~~ fixed 2026-10-26 (see Log): the deployment's value is kept, otherwise on only with a `dfs.domain.socket.path`. Original: `HadoopDataStoreProvider.open` sets `dfs.client.read.shortcircuit=true`; a client
 >   config without `dfs.domain.socket.path` (no local DataNode) stops the server at start (`The short-circuit local reads
 >   feature is enabled but dfs.domain.socket.path is not set`). Keep the deployment's value / make it a setting.
 > - **(d) NameNode host crash with libhdfs3 defaults:** killing the active NameNode *process* costs the running query
@@ -193,7 +193,8 @@
 8. **Ranger hardening** (security): details are kept outside this public repo; ask the maintainer before starting. (The maintainer wants Ranger/
    Kerberos finished before production; implement here, the stand check comes later.)
 9. **Per-user identity** (needed for Ranger/Kerberos): JWT/bearer pass-through of the end user to Ranger checks;
-   design in Open questions first.
+   design in Open questions first. **Design written 2026-10-26** (Open questions, "Item 9"): phase A trusted-proxy
+   header, phase B JWT provider, phase C storage-level identity; waits on the maintainer's answers.
 10. ~~**Local catalog roots under an HDFS `fs.defaultFS`**~~ — done 2026-10-25 (see Log): a catalog location
    without a scheme (`/wh`, `file:/wh`, `file:///wh` all normalise to `/wh`) now opens a local store
    (`file:/wh`) instead of resolving against `fs.defaultFS`; the data directory as a plain path still follows
@@ -223,6 +224,46 @@
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 ## Open questions
+
+- **Item 9 (per-user identity): design proposal 2026-10-26 — please answer the questions at the end.** Today the
+  embedded Ranger gate (`FLIGHT_AUTHORIZATION_PROVIDER=ranger`, service type `arrowflight`, schema/table policies)
+  already decides per Flight peer identity on every call that names data (GetFlightInfo, DoGet re-check of the
+  ticket's query, catalog listings, `arrowflight.table_statistics`). The gap: when the Flight client is a shared
+  service (Trino coordinator + workers, StarRocks BEs, a gateway) the peer identity is that service's principal,
+  so every end user gets the service's rights; and storage (HDFS, HMS) is always read as the server principal, so
+  the cluster's own Ranger HDFS/Hive policies see only the server. Proposal in three phases, each opt-in and off
+  by default (no change for existing deployments):
+  - **A. Trusted-proxy impersonation (server only).** New settings `FLIGHT_IMPERSONATION_PROXIES=<principal or
+    short name>,...` and optional `FLIGHT_IMPERSONATION_USERS` / `FLIGHT_IMPERSONATION_GROUPS` (allow lists, same
+    idea as Hadoop's `hadoop.proxyuser.<svc>.users/groups`). A call may carry `x-flight-effective-user: <name>`;
+    when the authenticated peer is a listed proxy and the target user/group is allowed, the effective user becomes
+    the call's identity — implemented as a wrapper around the configured `CallHeaderAuthenticator`, so every
+    existing `peerIdentity()` check uses it without further changes. The header from a non-proxy, or for a user
+    outside the allow list, is rejected (`PERMISSION_DENIED`), never silently ignored. Ranger audit records the
+    effective user and names the proxy in the request data; the server log line too. Partial mode: DoGet already
+    re-checks with the caller's identity, so the connector's workers must send the same header on each endpoint
+    call (connector work, for the coordinator); tickets stay unchanged (alternative: bind the effective user into
+    the signed ticket — ticket format change, not proposed). Requires an identity-establishing provider (Kerberos
+    or B); the static bearer token (identity `token`) cannot be a proxy, `FlightSecurity` already enforces that.
+  - **B. JWT authentication provider** `FLIGHT_AUTH_PROVIDER=jwt` (TLS required): verifies signed JWTs (JWKS URL
+    or public key file, required issuer and audience, clock skew limit, configurable user claim — `sub` or
+    `preferred_username`); identity = that claim. Fits clients where users log in through OAuth2/OIDC and the
+    client forwards the user's token (Trino with OAuth2 can pass it through); then no impersonation is needed.
+    Library: nimbus-jose-jwt (already in the dependency tree through hadoop-auth) as a direct dependency at a
+    current version. Session tokens of the Kerberos provider are unaffected.
+  - **C. Storage-level identity (bigger, separate decision).** Read HDFS and query HMS as the effective user via
+    Hadoop proxy users: the Java side (listing, footers, statistics) under `UserGroupInformation.createProxyUser
+    (user, login).doAs`, the HMS client with `set_ugi` / SASL proxy; needs `hadoop.proxyuser.<server>.hosts/users`
+    on the cluster. The hard part is DuckDB's hadoopfs reads: one DuckDB instance per worker thread with one
+    libhdfs3 connection cache, so per-user reads need per-user connections (or an effective-user setting per
+    query) — whether libhdfs3 supports a proxy user over Kerberos is unverified; plus every server cache (listing,
+    footer, statistics, external file cache) must be keyed by user or filled only after the user's own check.
+    Only worth it if the cluster's Ranger HDFS/Hive policies must be the single source of truth.
+  Questions: (1) Which clients reach production and how do their users authenticate to them (Trino with
+  Kerberos/LDAP/OAuth2, StarRocks, BI tools)? That picks A, B or both. (2) Is the embedded `arrowflight` Ranger
+  service (schema/table policies on the server) enough, or must the cluster's HDFS/Hive Ranger policies decide per
+  user (phase C)? (3) Header name `x-flight-effective-user` and reject-on-misuse OK? Proposal: implement A first
+  (one session, plus connector header forwarding), B if (1) shows OAuth2/OIDC, C only on explicit request.
 
 - Production versions (maintainer, 2026-10-25) vs our client side, not yet checked: the libs set carries the
   ZooKeeper 3.8.6 client (Hadoop 3.5.0's; talks to a 3.9.2 ensemble, SASL client code is the same line) and

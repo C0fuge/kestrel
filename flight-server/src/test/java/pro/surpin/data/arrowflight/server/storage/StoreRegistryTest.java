@@ -76,7 +76,7 @@ class StoreRegistryTest {
             assertEquals(List.of(dir.toString()), registry.readableRoots());
             assertEquals(List.of(), registry.duckDbSetup().statements());
             assertEquals(131072, hadoopConfig.getInt("io.file.buffer.size", 0));
-            assertTrue(hadoopConfig.getBoolean("dfs.client.read.shortcircuit", false));
+            assertFalse(hadoopConfig.getBoolean("dfs.client.read.shortcircuit", true));
             assertFalse(hadoopConfig.getBoolean("dfs.client.read.shortcircuit.skip.checksum", true));
             assertTrue(hadoopConfig.getBoolean("fs.file.impl.disable.cache", false));
         }

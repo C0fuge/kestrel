@@ -15,6 +15,9 @@ import java.io.UncheckedIOException;
  */
 public final class HadoopDataStoreProvider {
 
+    /** Hadoop client setting for short-circuit local reads. */
+    private static final String SHORT_CIRCUIT = "dfs.client.read.shortcircuit";
+
     /** Not instantiable. */
     private HadoopDataStoreProvider() {
     }
@@ -32,7 +35,7 @@ public final class HadoopDataStoreProvider {
     public static HadoopDataStore open(String dataDirectory, Configuration hadoopConfig,
             int ioFileBufferSize, String storageHost) {
         hadoopConfig.setInt("io.file.buffer.size", ioFileBufferSize);
-        hadoopConfig.setBoolean("dfs.client.read.shortcircuit", true);
+        applyShortCircuit(hadoopConfig);
         hadoopConfig.setBoolean("dfs.client.read.shortcircuit.skip.checksum", false);
         hadoopConfig.setBoolean("fs.file.impl.disable.cache", true);
         registerFileSystems(hadoopConfig);
@@ -42,6 +45,46 @@ public final class HadoopDataStoreProvider {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * Turns HDFS short-circuit reads on when the deployment configures a DataNode domain socket
+     * and does not set {@code dfs.client.read.shortcircuit} itself. A value from the deployment's
+     * configuration (hdfs-site.xml or -D) is kept; without a socket path short-circuit stays off,
+     * since the Hadoop client refuses to start with it on and no socket.
+     *
+     * @param hadoopConfig configuration to complete
+     */
+    static void applyShortCircuit(Configuration hadoopConfig) {
+        if (explicit(hadoopConfig, SHORT_CIRCUIT)) {
+            return;
+        }
+        hadoopConfig.setBoolean(SHORT_CIRCUIT,
+                !hadoopConfig.getTrimmed("dfs.domain.socket.path", "").isEmpty());
+    }
+
+    /**
+     * Tells whether a configuration sets a property itself rather than through Hadoop's bundled
+     * {@code *-default.xml} files.
+     *
+     * @param hadoopConfig configuration
+     * @param name property name
+     * @return true when a non-default source sets it
+     */
+    static boolean explicit(Configuration hadoopConfig, String name) {
+        if (hadoopConfig.get(name) == null) {
+            return false;
+        }
+        String[] sources = hadoopConfig.getPropertySources(name);
+        if (sources == null) {
+            return true;
+        }
+        for (String source : sources) {
+            if (!source.endsWith("-default.xml")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

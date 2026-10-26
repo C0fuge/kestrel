@@ -96,6 +96,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- HDFS short-circuit reads are no longer forced on: the deployment's `dfs.client.read.shortcircuit`
+  (hdfs-site.xml or `-D`) is kept, and without it short-circuit is on only when
+  `dfs.domain.socket.path` is set. A client configuration without a domain socket (no local DataNode)
+  used to stop the server at start.
 - An `s3a://` or `s3n://` catalog root (`arrowflight.iceberg-hadoop.warehouse=s3a://b/wh`) stopped the
   server at start ("The store opened for s3a://b/wh does not hold it (roots [s3://b/wh/])"), and Iceberg
   tables whose metadata names `s3a://` / `s3n://` files under an `s3://` root were hidden. Catalog
