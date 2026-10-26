@@ -76,7 +76,7 @@
 
 0a. ~~**hadoopfs timeout defaults 3 s / 10 s**~~ — done 2026-10-24 (732e238, CI run 40140133221 green).
 
-> **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) plans that are never read keep their node load reservation up to 10 min, skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
+> **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) ~~plans that are never read keep their node load reservation up to 10 min~~ — partly fixed 2026-10-26 (9168a44, see Log): `CancelFlightInfo` / `CancelQuery` release a plan's reservations at once; clients that abandon a plan without cancelling still hold them 10 min (shorter TTL = default change, Open questions). Original: skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
 
 > **Stand regression, single node, build 4eaab052deaf with the new runtime libs set (2026-10-25)** (unnumbered): the
 > release jar + `flight-server-libs` (60 jars, Hadoop 3.5.0) instead of the old 335-jar libs dir, against int7 on the
@@ -366,6 +366,12 @@
 - UPSTREAM-SYNC S11 (Flight batch compression, LZ4/ZSTD IPC buffers) deferred: upstream's own benchmark was
   negative (LZ4) or mixed (ZSTD), it helps only on slow links, and every client must then decode compressed buffers.
   Is there a slow link (WAN client, cross-site StarRocks) that wants it? If so it becomes an opt-in setting.
+- **(2026-10-26, 3-node S3 finding (b)) Reservation TTL of unread endpoints.** `CancelFlightInfo` now releases a
+  plan's node-load reservations at once (additive). A client that drops a plan without cancelling still holds
+  them 10 min (tickets carry no expiry). Options: (1) connectors (Trino plugin, StarRocks connector) send
+  `CancelFlightInfo` when a query is abandoned / finished early (LIMIT) — for the coordinator; (2) a shorter
+  reservation TTL (e.g. 2 min, or a new setting with the 10 min default kept); (3) both. Proposal: (1) plus an
+  opt-in setting. Which?
 - The stand findings (a)–(c) in Next steps (S3 outage read latency, unread plans keeping node load
   reservations up to 10 min, slow first plan after B5 on S3) are not numbered, so sessions keep going down the
   numbered list (1b next). Want one of them taken before 1b's remaining groups? (b) skews endpoint placement
@@ -721,3 +727,13 @@
   `HadoopArrowFlightServerUnitTest`. Commit 5e573c1, CI run 40310036063 green. Next: stand reruns of 0e/0f; answers to the Open
   questions (0d crash case, 9, 13); other unnumbered findings (secure HA (b) ticket cache from the keytab,
   (d) libhdfs3 RPC timeouts as defaults = maintainer's call, 3-node S3 (b) reservation release, (c)).
+- 2026-10-26 (cloud session): 3-node S3 stand finding (b) partly fixed (9168a44): Flight `CancelFlightInfo` (and Flight
+  SQL `CancelQuery`, which Arrow maps to it) was `UNIMPLEMENTED`; now it resolves each endpoint's signed ticket and
+  releases its node-load reservation at once (idempotent through the reservation key; running streams continue; a
+  later read of the ticket releases nothing twice), answers `CANCELLED`, `INVALID_ARGUMENT` for unsigned tickets.
+  Tests `FlightSqlProducerTest` (action wiring, tracked/untracked, forged and non-SQL tickets),
+  `EndpointFailoverIntegrationTest.cancelFlightInfoReleasesTheLoadOfAnUnreadPlanAtOnce` (Flight client, real
+  Hazelcast). README "Cancelling a plan". Local: those tests + checkstyle + spotbugs clean; CI run 40325762742 pending.
+  Clients that never cancel still hold reservations 10 min → Open questions (connectors should cancel; TTL).
+  Next: stand reruns of 0e/0f; answers to the Open questions (0d crash case, 9, 13, reservation TTL); other
+  unnumbered findings (secure HA (b) ticket cache from the keytab, (d) libhdfs3 RPC timeouts, 3-node S3 (c)).
