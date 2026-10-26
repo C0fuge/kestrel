@@ -23,6 +23,15 @@
 
 ## Next steps (one per session)
 
+0e. **Bug (stand, 2026-10-26): S3 + `duckDbThreads=8` -> every complete-mode query fails** "IO Error: Could not
+    establish connection error for HTTP GET to 'http://<minio>:9000/.../data_N.parquet'" (single server on a MinIO
+    store, TPC-H SF10 through JDBC: 0/22 in 3 of 3 rounds, ~1500 such errors per round). Same server, same round:
+    Trino through the plugin (partial mode, smaller per-request scans) 22/22; threads 1 and 4 on S3 22/22 (SF10 JDBC
+    55 s / 31 s, HDFS 19 s / 10.4 s / t8 7.3 s). Likely DuckDB httpfs opens threads x files parallel connections and
+    the endpoint refuses them, with no retry. Find the limit (httpfs `http_retries`/`http_retry_wait_ms`/keep-alive,
+    connection pool size, MinIO limits), make S3 reads robust at any thread count (bounded connections and/or retry
+    on connect errors), add an integration test with the fake S3 at high thread count. Default 4 is not affected.
+
 0d. ~~**Intermittent `GetFlightInfo` TIMED_OUT with a cluster member down (StarRocks connector CI)**~~ — done
     2026-10-26 (8e755fb, see Log): the planner's node-load read (and, on shared storage, the inventory read) was a
     Hazelcast whole-map query (`entrySet`), which waits ~10 s after a member left whose address stops answering
