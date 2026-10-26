@@ -72,3 +72,5 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
   (stand unavailable for valid measurements); the emulated S3 in CI is too slow to compare storages.
 - ADBC (Go Flight SQL driver): rarely (about 3 of 45 runs with 8 clients connecting at once) a connect fails with
   "failed to update autocommit: rpc error: code = Unimplemented" although the server advertises no transaction support.
+  Cause (2026-10-26): concurrent streams corrupted the SqlInfo answer through Arrow Java's shared empty buffer
+  (see CHANGELOG, `EmptyListOffsets`); fixed in 4939fb7, stand rerun pending.

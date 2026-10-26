@@ -252,9 +252,12 @@
     unchanged), or a size-aware default (cores / 4, between 2 and 8); (b) `flightBackpressureThresholdBytes` default
     256 MiB -> 16 MiB (no measured loss; with `endpointsPerServer` 4/8 the 256 MiB per stream exhausts
     `MaxDirectMemorySize` and streams are CANCELLED); (c) `duckDbExternalFileCache=true` has no memory bound and gets the
-    server OOM-killed on SF10 (HDFS and S3) - bound it or document it as unsafe; (d) ADBC Go driver connects rarely fail
-    with "failed to update autocommit: rpc error: code = Unimplemented" under 8 simultaneous connects although
-    SqlInfo says no transactions - find which call returns Unimplemented. Connector side (forward to the Trino
+    server OOM-killed on SF10 (HDFS and S3) - bound it or document it as unsafe; (d) ~~ADBC Go driver connects rarely fail
+    with "failed to update autocommit: rpc error: code = Unimplemented"~~ — fixed 2026-10-26 (4939fb7, see Log):
+    the call is BeginTransaction (ADBC sends it only when it decoded SqlInfo TRANSACTION as supported); concurrent
+    DoGet streams corrupted each other's empty buffers through Arrow's shared empty buffer (`EmptyListOffsets`).
+    **Stand:** rerun the 8-client ADBC connect rounds (45 runs); expect no autocommit error and no
+    `beginTransaction refused` WARN line in the server log; if one appears, note the ADBC version. Connector side (forward to the Trino
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 ## Open questions
@@ -737,3 +740,19 @@
   Clients that never cancel still hold reservations 10 min → Open questions (connectors should cancel; TTL).
   Next: stand reruns of 0e/0f; answers to the Open questions (0d crash case, 9, 13, reservation TTL); other
   unnumbered findings (secure HA (b) ticket cache from the keytab, (d) libhdfs3 RPC timeouts, 3-node S3 (c)).
+- 2026-10-26 (cloud session): item 13(d) (ADBC "failed to update autocommit: ... Unimplemented"). ADBC's Go driver
+  sends BeginTransaction only when its connect-time SqlInfo read decoded FLIGHT_SQL_SERVER_TRANSACTION as
+  TRANSACTION/SAVEPOINT, so the client had read a wrong answer. Root cause found in Arrow Java (19.0.0, also arrow-java
+  main): `ListVector`/`LargeListVector.getFieldBuffers` set `writerIndex(4/8)` on the offset buffer even when empty,
+  and an unallocated vector's buffer is the allocation manager's process-wide empty `ArrowBuf`; every other empty
+  vector sets it to 0, so concurrent streams serialize empty buffers with the wrong length (a CANCELLED stream with
+  `IndexOutOfBoundsException` in `ArrowMessage.asInputStream`, or a header/body mismatch the client decodes shifted).
+  Every SqlInfo answer has empty list/map union children. Fix: `EmptyListOffsets` wraps every DoGet listener
+  (`FlightSqlProducer.getStream`) and allocates own offset buffers for empty list vectors before each batch;
+  BeginTransaction stays UNIMPLEMENTED with a description + WARN line (to match on the stand). Repro:
+  `FlightSqlProducerTest.concurrentClientsAllReadNoTransactionSupport` (16 clients x 25 SqlInfo reads over Flight)
+  failed 3/3 without the guard, passes 3/3 with it; `EmptyListOffsetsTest`. Not reproduced against a locally started
+  server with ADBC Go 1.8.0 / Python ADBC 1.13.0 (~13 000 concurrent connects, insecure and TLS+bearer, CPU
+  load) — the stand rerun (13d in Next steps) decides. CI run 40348114333 on 4939fb7 green. Next: stand reruns of 0e/0f/13d; answers
+  to the Open questions (0d crash case, 9, 13, reservation TTL); other unnumbered findings (secure HA (b) ticket cache
+  from the keytab, (d) libhdfs3 RPC timeouts, 3-node S3 (c)).
