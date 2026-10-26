@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class HadoopArrowFlightServerUnitTest {
 
-    /** Verifies the gRPC builder gets the keepalive permit and the outbound budget. */
+    /** Verifies the gRPC builder gets the keepalive permit, the outbound budget and the trimmer. */
     @Test
     void grpcOptionsInstallTheOutboundBudget() {
         pro.surpin.data.arrowflight.server.adapters.OutboundBudget budget =
@@ -19,6 +19,8 @@ class HadoopArrowFlightServerUnitTest {
         HadoopArrowFlightServer.grpcOptions(budget).accept(spy);
 
         org.mockito.Mockito.verify(spy).intercept(budget);
+        org.mockito.Mockito.verify(spy).intercept(org.mockito.ArgumentMatchers.any(
+                pro.surpin.data.arrowflight.server.adapters.StackTraceTrimmer.class));
         org.mockito.Mockito.verify(spy).permitKeepAliveWithoutCalls(true);
     }
 

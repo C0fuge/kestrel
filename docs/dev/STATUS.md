@@ -121,7 +121,7 @@
 >   `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`, `rpc.client.connect.retry=2` in the libhdfs3 conf: 80/80
 >   OK, the slowest query 32.6 s (= the failover itself). Consider shipping these as defaults next to the DataNode
 >   timeouts (item 0a) or documenting them.
-> - **(e)** HDFS errors reach the Flight client with the NameNode's Java stack trace in the message (e.g. the
+> - ~~**(e)**~~ fixed 2026-10-26 (see Log): stack frames are dropped from every client error text. Original: HDFS errors reach the Flight client with the NameNode's Java stack trace in the message (e.g. the
 >   `Permission denied` above, `FSPermissionChecker...`); trim to the first line.
 > - As expected without item 9, every authenticated user reads what the server principal may read (Ranger sees only
 >   the server principal). Kerberized HMS on this stand: prepared (principal + keytab, auth_to_local, proxyuser), not run.
@@ -710,3 +710,14 @@
   Tests: `OutboundBudgetTest` (units + forked-JVM regression, also asserts the unbounded control fails),
   `ConfigAdapterTest`, `HadoopArrowFlightServerUnitTest`. CI run 40297852948 on dd31117 green.
   Next: stand rerun of 0f and 0e; answers to the Open questions (0d crash case, 9, 13).
+- 2026-10-26 (cloud session): no numbered item open without a maintainer answer or a stand run (0d-0f, 1b, 2,
+  item 0 stand measurements; 8, 9, 13 wait on Open questions), so took the secure HA stand finding (e). Hadoop
+  IPC sends the NameNode exception stringified with its stack trace, which reached Flight clients as the error
+  description. New gRPC interceptor `StackTraceTrimmer` (installed next to `OutboundBudget` in `grpcOptions`)
+  drops Java frame lines (`at a.B.c(B.java:1)`, module/`app//` forms) and `... n more` from every closing
+  status; message and `Caused by:` lines stay, multi-line DuckDB errors (Binder `LINE 1:` carets) are
+  unchanged; `failureDescription` and the "Cannot read the table's files" text trim before the 1024-char cut.
+  Server logs unchanged. Tests `StackTraceTrimmerTest` (incl. an in-process Flight server/client),
+  `HadoopArrowFlightServerUnitTest`. CI run: see next line. Next: stand reruns of 0e/0f; answers to the Open
+  questions (0d crash case, 9, 13); other unnumbered findings (secure HA (b) ticket cache from the keytab,
+  (d) libhdfs3 RPC timeouts as defaults = maintainer's call, 3-node S3 (b) reservation release, (c)).

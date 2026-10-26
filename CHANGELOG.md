@@ -96,6 +96,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Error texts sent to clients no longer carry Java stack frames: HDFS NameNode errors (e.g.
+  `Permission denied`, through DuckDB or the Java Hadoop client) used to arrive with the NameNode's whole
+  stack trace; a gRPC interceptor now drops `at ...(...)` and `... n more` lines from every error
+  status (the message and `Caused by:` lines stay; the server log keeps the full text).
 - Many concurrent streams no longer exhaust direct memory: every stream could queue up to
   `flightBackpressureThresholdBytes` (256 MiB) for a slow client, so 8 clients scanning a 3-node
   cluster got streams CANCELLED ("Server sendMessage() failed with Error", direct memory out) and a

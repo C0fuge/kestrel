@@ -486,7 +486,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 }
             }
         }
-        String message = root.getMessage();
+        String message = StackTraceTrimmer.trim(root.getMessage());
         String description = "Query execution failed: " + root.getClass().getSimpleName();
         if (message != null && !message.isBlank()) {
             description += ": " + message;
@@ -769,7 +769,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             IOException storage = storageFailure(e);
             if (storage != null) {
                 // Listing or footer reads failed (store or lakeFS unreachable, refused): say so.
-                String why = "Cannot read the table's files: " + storage.getMessage();
+                String why = "Cannot read the table's files: "
+                        + StackTraceTrimmer.trim(storage.getMessage());
                 throw CallStatus.UNAVAILABLE
                         .withDescription(why.length() <= 1024 ? why : why.substring(0, 1024))
                         .withCause(e).toRuntimeException();

@@ -21,6 +21,7 @@ import java.util.function.IntSupplier;
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
+import pro.surpin.data.arrowflight.server.adapters.StackTraceTrimmer;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -263,14 +264,16 @@ public class HadoopArrowFlightServer {
     }
 
     /**
-     * Combines the gRPC Netty builder settings of the server: keepalive permit and outbound budget.
+     * Combines the gRPC Netty builder settings of the server: keepalive permit, outbound budget
+     * and the removal of stack frames from error texts sent to clients.
      *
      * @param outboundBudget budget shared by all Flight streams
      * @return gRPC Netty server builder customizer
      */
     static java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpcOptions(
             OutboundBudget outboundBudget) {
-        return keepAlivePermit().andThen(builder -> builder.intercept(outboundBudget));
+        return keepAlivePermit().andThen(builder -> builder.intercept(outboundBudget)
+                .intercept(new StackTraceTrimmer()));
     }
 
     /**
