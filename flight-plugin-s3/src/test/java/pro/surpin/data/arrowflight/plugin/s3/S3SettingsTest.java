@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -57,6 +59,33 @@ class S3SettingsTest {
         assertThrows(IllegalArgumentException.class, () -> new S3Settings(null, null, null,
                 null, true, null, null, null, -1, 1, true));
         assertThrows(IllegalArgumentException.class, () -> settings("http://h:1", "AK", null));
+        for (int[] retry : new int[][] {{-1, 200, 2}, {21, 200, 2}, {6, -1, 2}, {6, 60_001, 2},
+                {6, 200, 0}, {6, 200, 11}}) {
+            assertThrows(IllegalArgumentException.class, () -> new S3Settings(null, null, null,
+                    null, true, null, null, null, 30, 1, true, retry[0], retry[1], retry[2]),
+                    Arrays.toString(retry));
+        }
+    }
+
+    /** Verifies DuckDB's retries default to about 6 s in all and can be configured. */
+    @Test
+    void httpRetriesFromTheConfiguration() {
+        Map<String, String> values = new HashMap<>();
+        S3Settings defaults = S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false);
+        assertEquals(6, defaults.httpRetries());
+        assertEquals(200, defaults.httpRetryWaitMs());
+        assertEquals(2, defaults.httpRetryBackoff());
+
+        values.putAll(Map.of("httpRetries", "0", "httpRetryWaitMs", "50", "httpRetryBackoff", "1"));
+        S3Settings configured = S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false);
+        assertEquals(0, configured.httpRetries());
+        assertEquals(50, configured.httpRetryWaitMs());
+        assertEquals(1, configured.httpRetryBackoff());
+        assertTrue(configured.toString().contains("httpRetries=0"), configured.toString());
+
+        values.put("httpRetries", "21");
+        assertThrows(IllegalArgumentException.class,
+                () -> S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false));
     }
 
     /** Verifies toString shows neither the secret key nor the session token. */

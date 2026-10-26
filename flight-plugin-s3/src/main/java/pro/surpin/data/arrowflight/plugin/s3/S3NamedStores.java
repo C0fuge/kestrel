@@ -26,7 +26,8 @@ final class S3NamedStores {
     private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9]{0,15}");
     /** Keys a named store takes from the main store when it does not set them. */
     private static final Set<String> INHERITED = Set.of("caFile", "verifyTls", "metadataCache",
-            "listingTtlSeconds", "maxConnections");
+            "listingTtlSeconds", "maxConnections", "httpRetries", "httpRetryWaitMs",
+            "httpRetryBackoff");
 
     private S3NamedStores() {
     }

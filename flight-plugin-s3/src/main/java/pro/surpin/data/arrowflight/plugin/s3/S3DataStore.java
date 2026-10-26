@@ -465,7 +465,8 @@ public final class S3DataStore implements DataStore {
      * The settings httpfs fills from AWS_* and DUCKDB_S3_* environment variables are blanked;
      * the credentials go into a temporary secret scoped to the data directory, never into a
      * setting, because settings can be read back; query parameters on s3:// URLs, which could
-     * point a read at another endpoint, are switched off.
+     * point a read at another endpoint, are switched off. DuckDB retries failed requests,
+     * connect errors included, as the settings say.
      *
      * @param setup receives the extension, settings and secret, in this order
      * @param settings S3 settings with credentials
@@ -492,6 +493,9 @@ public final class S3DataStore implements DataStore {
         }
         setup.set("s3_url_compatibility_mode", true);
         setup.set("enable_http_logging", false);
+        setup.set("http_retries", (long) settings.httpRetries());
+        setup.set("http_retry_wait_ms", (long) settings.httpRetryWaitMs());
+        setup.set("http_retry_backoff", (long) settings.httpRetryBackoff());
         if (settings.useSsl()) {
             setup.set("enable_server_cert_verification", settings.verifyTls());
             if (settings.caFile() != null) {

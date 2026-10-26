@@ -75,7 +75,7 @@ class S3NamedStoresTest {
     void namedSettingsAreTheStoresOwn() {
         values.putAll(Map.of("endpoint", "http://main:9000", "region", "eu-west-1",
                 "urlStyle", "vhost", "verifyTls", "false", "listingTtlSeconds", "5",
-                "metadataCache", "false"));
+                "metadataCache", "false", "httpRetries", "9"));
         secrets.putAll(Map.of("accessKey", "MAINKEY", "secretKey", "MAINSECRET"));
         values.put("stores", "wh");
         values.put("wh.root", "s3://warehouse/");
@@ -94,6 +94,7 @@ class S3NamedStoresTest {
         assertFalse(settings.verifyTls());
         assertFalse(settings.metadataCache());
         assertEquals(60, settings.listingTtlSeconds());
+        assertEquals(9, settings.httpRetries(), "inherited: one DuckDB setting per server");
 
         secrets.remove("wh.accessKey");
         secrets.remove("wh.secretKey");

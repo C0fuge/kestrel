@@ -37,15 +37,35 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  *                          refreshed in the background; 0 lists on every use
  * @param maxConnections HTTP connections of the Java client
  * @param metadataCache whether DuckDB caches Parquet footers and HTTP metadata
+ * @param httpRetries times DuckDB retries a failed HTTP request, connect errors included
+ * @param httpRetryWaitMs DuckDB's wait before the first retry, in milliseconds
+ * @param httpRetryBackoff factor by which each further wait grows
  */
 public record S3Settings(String endpoint, String region, String urlStyle, String caFile,
         boolean verifyTls, String accessKey, String secretKey, String sessionToken,
-        int listingTtlSeconds, int maxConnections, boolean metadataCache) {
+        int listingTtlSeconds, int maxConnections, boolean metadataCache, int httpRetries,
+        int httpRetryWaitMs, int httpRetryBackoff) {
 
     /** Region when none is configured. */
     public static final String DEFAULT_REGION = "us-east-1";
     /** Seconds a listing is used when nothing is configured. */
     public static final int DEFAULT_LISTING_TTL_SECONDS = 30;
+    /**
+     * DuckDB retries of a failed request. DuckDB's own 3 retries (100 ms, backoff 4) give up
+     * after about half a second, which a busy endpoint refusing connections outlasts at 8
+     * DuckDB threads; 6 retries from 200 ms doubling wait about 6 s in all.
+     */
+    public static final int DEFAULT_HTTP_RETRIES = 6;
+    /** Milliseconds DuckDB waits before its first retry. */
+    public static final int DEFAULT_HTTP_RETRY_WAIT_MS = 200;
+    /** Growth factor of DuckDB's retry waits. */
+    public static final int DEFAULT_HTTP_RETRY_BACKOFF = 2;
+    /** Most retries accepted. */
+    private static final int MAX_HTTP_RETRIES = 20;
+    /** Longest first wait accepted, in milliseconds. */
+    private static final int MAX_HTTP_RETRY_WAIT_MS = 60_000;
+    /** Largest growth factor accepted. */
+    private static final int MAX_HTTP_RETRY_BACKOFF = 10;
 
     /** Environment variable with the access key ID. */
     public static final String ACCESS_KEY_ENV = "FLIGHT_S3_ACCESS_KEY";
@@ -73,6 +93,13 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                     + " ioParallelism", "0", "s3MaxConnections"),
             ConfigKey.of("metadataCache", "DuckDB caches Parquet footers and HTTP metadata", "true",
                     "duckDbS3MetadataCache", "arrowflight.duckdb.s3MetadataCache"),
+            ConfigKey.of("httpRetries", "Times DuckDB retries a failed S3 request, connect"
+                    + " errors included (0-" + MAX_HTTP_RETRIES + ")",
+                    Integer.toString(DEFAULT_HTTP_RETRIES)),
+            ConfigKey.of("httpRetryWaitMs", "Milliseconds DuckDB waits before its first retry",
+                    Integer.toString(DEFAULT_HTTP_RETRY_WAIT_MS)),
+            ConfigKey.of("httpRetryBackoff", "Factor by which each further retry wait grows (1-"
+                    + MAX_HTTP_RETRY_BACKOFF + ")", Integer.toString(DEFAULT_HTTP_RETRY_BACKOFF)),
             ConfigKey.secret("accessKey", "Access key ID", "s3AccessKey"),
             ConfigKey.secret("secretKey", "Secret access key", "s3SecretKey"),
             ConfigKey.secret("sessionToken", "Session token of temporary credentials",
@@ -100,6 +127,9 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
      * @param listingTtlSeconds listing lifetime in seconds
      * @param maxConnections HTTP connections of the Java client
      * @param metadataCache whether DuckDB caches metadata
+     * @param httpRetries DuckDB retries of a failed request
+     * @param httpRetryWaitMs DuckDB's first retry wait in milliseconds
+     * @param httpRetryBackoff growth factor of the retry waits
      */
     public S3Settings {
         endpoint = blankToNull(endpoint);
@@ -122,12 +152,38 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
         if (maxConnections <= 0) {
             throw new IllegalArgumentException("s3MaxConnections must be positive: " + maxConnections);
         }
+        requireRange("httpRetries", httpRetries, 0, MAX_HTTP_RETRIES);
+        requireRange("httpRetryWaitMs", httpRetryWaitMs, 0, MAX_HTTP_RETRY_WAIT_MS);
+        requireRange("httpRetryBackoff", httpRetryBackoff, 1, MAX_HTTP_RETRY_BACKOFF);
         if (endpoint != null) {
             endpoint = normalizeEndpoint(endpoint);
         }
         if ((accessKey == null) != (secretKey == null)) {
             throw new IllegalArgumentException("S3 credentials need both an access key and a secret key");
         }
+    }
+
+    /**
+     * Creates settings with the default DuckDB retries.
+     *
+     * @param endpoint endpoint URL, or null for AWS
+     * @param region signing region
+     * @param urlStyle "path" or "vhost"
+     * @param caFile PEM file of trusted certificates, or null
+     * @param verifyTls whether certificates are checked
+     * @param accessKey access key ID, or null
+     * @param secretKey secret access key, or null
+     * @param sessionToken session token, or null
+     * @param listingTtlSeconds listing lifetime in seconds
+     * @param maxConnections HTTP connections of the Java client
+     * @param metadataCache whether DuckDB caches metadata
+     */
+    public S3Settings(String endpoint, String region, String urlStyle, String caFile,
+            boolean verifyTls, String accessKey, String secretKey, String sessionToken,
+            int listingTtlSeconds, int maxConnections, boolean metadataCache) {
+        this(endpoint, region, urlStyle, caFile, verifyTls, accessKey, secretKey, sessionToken,
+                listingTtlSeconds, maxConnections, metadataCache, DEFAULT_HTTP_RETRIES,
+                DEFAULT_HTTP_RETRY_WAIT_MS, DEFAULT_HTTP_RETRY_BACKOFF);
     }
 
     /**
@@ -186,7 +242,8 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
     public S3Settings withCredentials(Credentials credentials) {
         return new S3Settings(endpoint, region, urlStyle, caFile, verifyTls,
                 credentials.accessKey(), credentials.secretKey(), credentials.sessionToken(),
-                listingTtlSeconds, maxConnections, metadataCache);
+                listingTtlSeconds, maxConnections, metadataCache, httpRetries, httpRetryWaitMs,
+                httpRetryBackoff);
     }
 
     /**
@@ -208,7 +265,10 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                 config.get("caFile", null), config.getBoolean("verifyTls", true), null, null, null,
                 config.getInt("listingTtlSeconds", DEFAULT_LISTING_TTL_SECONDS),
                 maxConnections > 0 ? maxConnections : Math.max(1, ioParallelism),
-                config.getBoolean("metadataCache", true));
+                config.getBoolean("metadataCache", true),
+                config.getInt("httpRetries", DEFAULT_HTTP_RETRIES),
+                config.getInt("httpRetryWaitMs", DEFAULT_HTTP_RETRY_WAIT_MS),
+                config.getInt("httpRetryBackoff", DEFAULT_HTTP_RETRY_BACKOFF));
         if (!withCredentials) {
             return settings;
         }
@@ -265,7 +325,9 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                 + ", secretKey=" + (secretKey == null ? null : REDACTED)
                 + ", sessionToken=" + (sessionToken == null ? null : REDACTED)
                 + ", listingTtlSeconds=" + listingTtlSeconds + ", maxConnections=" + maxConnections
-                + ", metadataCache=" + metadataCache + "]";
+                + ", metadataCache=" + metadataCache + ", httpRetries=" + httpRetries
+                + ", httpRetryWaitMs=" + httpRetryWaitMs + ", httpRetryBackoff=" + httpRetryBackoff
+                + "]";
     }
 
     /**
@@ -364,6 +426,22 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                     + endpoint);
         }
         return scheme + "://" + uri.getRawAuthority();
+    }
+
+    /**
+     * Refuses a number outside its range.
+     *
+     * @param name setting name, for the message
+     * @param value value
+     * @param min smallest value accepted
+     * @param max largest value accepted
+     * @throws IllegalArgumentException when the value is out of range
+     */
+    private static void requireRange(String name, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException("s3 " + name + " must be between " + min + " and "
+                    + max + ": " + value);
+        }
     }
 
     /**

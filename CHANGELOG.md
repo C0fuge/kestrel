@@ -96,6 +96,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- S3: DuckDB retries failed S3 requests, connect errors included, for about 6 s instead of
+  DuckDB's own ~0.5 s (3 retries from 100 ms, backoff 4), which a busy endpoint refusing
+  connections outlasted at `duckDbThreads=8` (every complete-mode TPC-H query failed on a MinIO
+  store with "Could not establish connection"). New settings `arrowflight.s3.httpRetries` (default
+  6, 0-20), `httpRetryWaitMs` (200, first wait) and `httpRetryBackoff` (2, 1-10) set
+  `http_retries`, `http_retry_wait_ms` and `http_retry_backoff`; named stores inherit them (they
+  are per DuckDB connection, so differing values are refused at start).
 - Cluster: planning no longer waits ~10 s after a node stopped. The node loads (every plan) and, on
   shared storage, the node inventories are read by key for the current Hazelcast members instead of
   with a whole-map query, which blocks while the cluster settles after a member left whose address

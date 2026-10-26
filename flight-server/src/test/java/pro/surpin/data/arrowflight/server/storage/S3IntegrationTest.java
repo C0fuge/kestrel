@@ -8,6 +8,13 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -17,7 +24,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -62,6 +72,7 @@ class S3IntegrationTest {
     private String accessKey;
     private String secretKey;
     private String bucket;
+    private int threads = 1;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -269,6 +280,47 @@ class S3IntegrationTest {
         }
     }
 
+    /**
+     * Verifies a read rides out an endpoint that refuses connections for a while, at 8 DuckDB
+     * threads (item 0e: on the stand MinIO refused connections at 8 threads and DuckDB's own
+     * half-second of retries gave up), and that without retries the same outage fails the query.
+     */
+    @Test
+    void connectRefusalsAreRetried() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        byte[] bytes = Files.readAllBytes(dir.resolve("data.parquet"));
+        StringBuilder files = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            s3.put(bucket, "flight-it/m/x" + i + ".parquet", bytes);
+            files.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                    .append("/flight-it/m/x").append(i).append(".parquet'");
+        }
+        String sql = "SELECT count(*), sum(id) FROM read_parquet([" + files + "])";
+        try (Forwarder forwarder = new Forwarder(s3.endpoint())) {
+            endpoint = forwarder.endpoint();
+            threads = 8;
+            open(null);
+            forwarder.refuseFor(1500);
+            try (Statement s = duckDb.connection().createStatement();
+                    ResultSet rs = s.executeQuery(sql)) {
+                assertTrue(rs.next());
+                assertEquals(8 * 5000, rs.getLong(1));
+                assertEquals(8 * (5000L * 4999 / 2), rs.getLong(2));
+            }
+
+            duckDb.close();
+            registry.close();
+            plugin.properties.put("arrowflight.s3.httpRetries", "0");
+            open(null);
+            forwarder.refuseFor(1500);
+            try (Statement s = duckDb.connection().createStatement()) {
+                SQLException e = assertThrows(SQLException.class, () -> s.executeQuery(sql));
+                assertTrue(e.getMessage().contains("connection"), e.getMessage());
+                assertFalse(e.getMessage().contains(secretKey));
+            }
+        }
+    }
+
     private void openRegistry(String caFile) {
         plugin.properties.put("s3Endpoint", endpoint);
         plugin.properties.put("s3UrlStyle", "path");
@@ -291,9 +343,110 @@ class S3IntegrationTest {
     }
 
     private AppConfig config() {
-        return new AppConfig(3, 1024, 2, 131072, 0, 1, 1, null, false, null, null, null,
+        return new AppConfig(3, 1024, 2, 131072, 0, 1, threads, null, false, null, null, null,
                 null, "512MB", false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
                 5701, 60, 3, 1000, 0, true, false, 16, dir.resolve("spill").toString(), null,
                 "complete", true, true);
+    }
+
+    /**
+     * Forwards TCP connections to the fake S3 and can refuse new ones for a while, the way an
+     * endpoint does that has no more connections to give: the port stops listening and the open
+     * connections are cut.
+     */
+    private static final class Forwarder implements AutoCloseable {
+        private final InetSocketAddress target;
+        private final List<Socket> open = new CopyOnWriteArrayList<>();
+        private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
+        private final ExecutorService pipes = Executors.newCachedThreadPool();
+        private final int port;
+        private volatile ServerSocket listener;
+        private volatile boolean closed;
+
+        /**
+         * Starts forwarding.
+         *
+         * @param target endpoint URL of the fake S3
+         * @throws IOException when no port is free
+         */
+        Forwarder(String target) throws IOException {
+            URI uri = URI.create(target);
+            this.target = new InetSocketAddress(uri.getHost(), uri.getPort());
+            listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+            port = listener.getLocalPort();
+            accept(listener);
+        }
+
+        /**
+         * Names the forwarding endpoint.
+         *
+         * @return {@code http://127.0.0.1:<port>}
+         */
+        String endpoint() {
+            return "http://127.0.0.1:" + port;
+        }
+
+        /**
+         * Stops listening and cuts every connection, then listens again after a while.
+         *
+         * @param millis how long connections are refused
+         * @throws IOException when the port cannot be closed
+         */
+        void refuseFor(long millis) throws IOException {
+            listener.close();
+            for (Socket socket : open) {
+                socket.close();
+            }
+            open.clear();
+            timer.schedule(this::listenAgain, millis, TimeUnit.MILLISECONDS);
+        }
+
+        private void listenAgain() {
+            try {
+                ServerSocket socket = new ServerSocket();
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 50);
+                listener = socket;
+                accept(socket);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        private void accept(ServerSocket socket) {
+            pipes.execute(() -> {
+                while (!closed && !socket.isClosed()) {
+                    try {
+                        Socket client = socket.accept();
+                        Socket server = new Socket(target.getAddress(), target.getPort());
+                        open.add(client);
+                        open.add(server);
+                        pipes.execute(() -> pipe(client, server));
+                        pipes.execute(() -> pipe(server, client));
+                    } catch (IOException e) {
+                        // Closed for an outage or at the end.
+                    }
+                }
+            });
+        }
+
+        private static void pipe(Socket from, Socket to) {
+            try (from; to) {
+                from.getInputStream().transferTo(to.getOutputStream());
+            } catch (IOException e) {
+                // The other side or an outage closed it.
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            closed = true;
+            listener.close();
+            for (Socket socket : open) {
+                socket.close();
+            }
+            timer.shutdownNow();
+            pipes.shutdownNow();
+        }
     }
 }

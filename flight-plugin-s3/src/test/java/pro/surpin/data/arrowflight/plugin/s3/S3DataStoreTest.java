@@ -272,6 +272,9 @@ class S3DataStoreTest {
                 "SET s3_region = ''",
                 "SET s3_url_compatibility_mode = true",
                 "SET enable_http_logging = false",
+                "SET http_retries = 6",
+                "SET http_retry_wait_ms = 200",
+                "SET http_retry_backoff = 2",
                 "SET enable_server_cert_verification = true",
                 "SET ca_cert_file = '/etc/ca.pem'",
                 "SET parquet_metadata_cache = true",
@@ -291,9 +294,22 @@ class S3DataStoreTest {
 
         assertTrue(calls.stream().noneMatch(c -> c.contains("cert")), calls.toString());
         assertTrue(calls.stream().noneMatch(c -> c.contains("metadata_cache")), calls.toString());
+        assertTrue(calls.contains("SET http_retries = 6"), calls.toString());
         assertEquals("SECRET flight_s3 s3 s3://lake/ {KEY_ID=AKIATEST, SECRET=*SECRETTEST,"
                 + " SESSION_TOKEN=*TOKEN, REGION=us-east-1, ENDPOINT=minio:9000, URL_STYLE=path,"
                 + " USE_SSL=false, URL_COMPATIBILITY_MODE=true}", calls.get(calls.size() - 1));
+    }
+
+    /** Verifies configured DuckDB retries reach the setup (item 0e: connect errors at 8 threads). */
+    @Test
+    void duckDbRetriesAsConfigured() {
+        S3Settings settings = new S3Settings("http://minio:9000", null, null, null, true,
+                "AKIATEST", "SECRETTEST", null, 30, 4, true, 0, 1000, 1);
+
+        List<String> calls = contribution(settings, "s3://lake");
+
+        assertTrue(calls.containsAll(List.of("SET http_retries = 0", "SET http_retry_wait_ms = 1000",
+                "SET http_retry_backoff = 1")), calls.toString());
     }
 
     private static List<String> contribution(S3Settings settings, String dataDirectory) {

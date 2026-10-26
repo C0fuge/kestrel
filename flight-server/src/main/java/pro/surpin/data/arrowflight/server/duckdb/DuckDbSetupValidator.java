@@ -97,7 +97,9 @@ public final class DuckDbSetupValidator {
             Map.entry("parquet_metadata_cache", Rule.BOOLEAN),
             Map.entry("enable_http_metadata_cache", Rule.BOOLEAN),
             Map.entry("http_timeout", Rule.NON_NEGATIVE),
-            Map.entry("http_retries", Rule.NON_NEGATIVE));
+            Map.entry("http_retries", Rule.NON_NEGATIVE),
+            Map.entry("http_retry_wait_ms", Rule.NON_NEGATIVE),
+            Map.entry("http_retry_backoff", Rule.NON_NEGATIVE));
 
     private final UnaryOperator<String> extensionResolver;
     private final SecretRedactor redactor;
