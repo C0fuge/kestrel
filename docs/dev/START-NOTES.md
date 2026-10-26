@@ -36,6 +36,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   checks the extension versions at startup.
 - DuckDB runs 4 threads per connection by default (`duckDbThreads`, was 2); set `-DduckDbThreads=1` /
   `FLIGHT_DUCKDB_THREADS=1` where compute workers share the node.
+- HDFS: put the NameNode RPC timeouts into the `LIBHDFS3_CONF` file (`rpc.client.connect.timeout=5000`,
+  `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,
+  `rpc.client.connect.retry=2`); libhdfs3's defaults let a query hang for minutes after a NameNode host crash. The
+  server logs a WARN at startup while one of them is unset or over a minute.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.

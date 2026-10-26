@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- HDFS: a startup WARN names every libhdfs3 NameNode RPC timeout (`rpc.client.connect.timeout`,
+  `read`, `write`, `timeout`) the `LIBHDFS3_CONF` file leaves unset or over a minute; libhdfs3's
+  defaults let a query hang ~170 s after the active NameNode host vanished (secure HA stand finding
+  (d)). Recommended values in `arrowflight.properties` and START-NOTES; no setting changes.
 - Flight `CancelFlightInfo` (and Flight SQL `CancelQuery`): releases the node-load reservations of
   a plan's endpoints at once instead of after their 10-minute expiry, so plans a client abandons no
   longer steer later endpoints away from a node (3-node S3 stand finding (b)); answers `CANCELLED`,

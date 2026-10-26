@@ -154,6 +154,12 @@ public class HadoopArrowFlightServer {
                         + " Set duckDbHdfsConnectTimeoutMs / duckDbHdfsReadTimeoutMs, or a few seconds"
                         + " in the LIBHDFS3_CONF file (e.g. 3000 / 10000).", problem);
             }
+            java.util.List<String> rpc = longHdfsRpcTimeouts(System.getenv("LIBHDFS3_CONF"));
+            if (!rpc.isEmpty()) {
+                LOGGER.warn("{}: a query whose NameNode host vanished (crash, failover) can hang that long."
+                        + " Set them in the LIBHDFS3_CONF file, with rpc.client.connect.retry=2.",
+                        String.join("; ", rpc));
+            }
         }
         String nameEncoding = System.getProperty("sun.jnu.encoding", "");
         if (!"UTF-8".equalsIgnoreCase(nameEncoding)) {
@@ -467,27 +473,7 @@ public class HadoopArrowFlightServer {
         if (!connect && !read) {
             return problems;
         }
-        java.util.Map<String, String> props = new java.util.HashMap<>();
-        if (confPath != null && !confPath.isBlank()) {
-            try {
-                javax.xml.parsers.DocumentBuilderFactory factory =
-                        javax.xml.parsers.DocumentBuilderFactory.newInstance();
-                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-                org.w3c.dom.NodeList list = factory.newDocumentBuilder()
-                        .parse(new java.io.File(confPath)).getElementsByTagName("property");
-                for (int i = 0; i < list.getLength(); i++) {
-                    org.w3c.dom.Element property = (org.w3c.dom.Element) list.item(i);
-                    org.w3c.dom.NodeList names = property.getElementsByTagName("name");
-                    org.w3c.dom.NodeList values = property.getElementsByTagName("value");
-                    if (names.getLength() > 0 && values.getLength() > 0) {
-                        props.put(names.item(0).getTextContent().trim(),
-                                values.item(0).getTextContent().trim());
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.warn("Cannot read LIBHDFS3_CONF {}: {}", confPath, e.getMessage());
-            }
-        }
+        java.util.Map<String, String> props = libhdfs3Properties(confPath);
         java.util.List<String> keys = new java.util.ArrayList<>();
         if (connect) {
             keys.add("input.connect.timeout");
@@ -509,5 +495,71 @@ public class HadoopArrowFlightServer {
             }
         }
         return problems;
+    }
+
+    /** libhdfs3 NameNode RPC timeouts and the values tested on the secure HA stand (host crash, failover). */
+    private static final java.util.Map<String, Long> HDFS_RPC_TIMEOUTS = java.util.Map.of(
+            "rpc.client.connect.timeout", 5_000L,
+            "rpc.client.read.timeout", 15_000L,
+            "rpc.client.write.timeout", 15_000L,
+            "rpc.client.timeout", 20_000L);
+
+    /**
+     * Finds libhdfs3 NameNode RPC timeouts that let a query wait minutes when the active NameNode
+     * host disappears: the library defaults to a 600 s connect and 3600 s read, write and call
+     * timeouts, and the hadoopfs extension has no setting for them.
+     *
+     * @param confPath the LIBHDFS3_CONF file, or null
+     * @return one line per RPC timeout that is unset or longer than a minute, in name order
+     */
+    static java.util.List<String> longHdfsRpcTimeouts(String confPath) {
+        java.util.Map<String, String> props = libhdfs3Properties(confPath);
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        for (String key : new java.util.TreeSet<>(HDFS_RPC_TIMEOUTS.keySet())) {
+            String value = props.get(key);
+            long millis;
+            try {
+                millis = value == null ? -1 : Long.parseLong(value);
+            } catch (NumberFormatException e) {
+                millis = -1;
+            }
+            if (millis <= 0 || millis > HDFS_TIMEOUT_LIMIT_MILLIS) {
+                problems.add("libhdfs3 " + key + " is "
+                        + (value == null ? "not set (library default: minutes)" : value + " ms")
+                        + ", e.g. " + HDFS_RPC_TIMEOUTS.get(key));
+            }
+        }
+        return problems;
+    }
+
+    /**
+     * Reads the name/value properties of a libhdfs3 configuration file.
+     *
+     * @param confPath the LIBHDFS3_CONF file, or null
+     * @return the properties; empty when the path is unset or the file cannot be read
+     */
+    private static java.util.Map<String, String> libhdfs3Properties(String confPath) {
+        java.util.Map<String, String> props = new java.util.HashMap<>();
+        if (confPath != null && !confPath.isBlank()) {
+            try {
+                javax.xml.parsers.DocumentBuilderFactory factory =
+                        javax.xml.parsers.DocumentBuilderFactory.newInstance();
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                org.w3c.dom.NodeList list = factory.newDocumentBuilder()
+                        .parse(new java.io.File(confPath)).getElementsByTagName("property");
+                for (int i = 0; i < list.getLength(); i++) {
+                    org.w3c.dom.Element property = (org.w3c.dom.Element) list.item(i);
+                    org.w3c.dom.NodeList names = property.getElementsByTagName("name");
+                    org.w3c.dom.NodeList values = property.getElementsByTagName("value");
+                    if (names.getLength() > 0 && values.getLength() > 0) {
+                        props.put(names.item(0).getTextContent().trim(),
+                                values.item(0).getTextContent().trim());
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Cannot read LIBHDFS3_CONF {}: {}", confPath, e.getMessage());
+            }
+        }
+        return props;
     }
 }
