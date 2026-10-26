@@ -23,14 +23,13 @@
 
 ## Next steps (one per session)
 
-0d. **Intermittent `GetFlightInfo` TIMED_OUT with a cluster member down (reported by the StarRocks connector CI,
-    2026-10-26).** marten m4 check 6, item "flight2 stopped before the query" (3-server cluster, flight2 stopped, then a
-    full lineitem scan through flight1): on 60e888bc26ec GetFlightInfo TIMED_OUT on both URIs after ~15 s in 2 of 3
-    runs (m4 40255396864, 40259166769; pass 40262586606 in 10.9 s); on 20b887839edf it passes (11.0 s). The only server
-    difference is `duckDbThreads` 4 (3 servers x 4 threads on a 4-vCPU runner). Related to the S3-cluster note (c):
-    the first plan after a member dies waits 9-10 s while dead members are dropped. Find why planning blocks that long
-    with a dead member (member removal / load lookup / endpoint health check on the planning path), make it fast and
-    independent of DuckDB threads, add a test. The StarRocks repo keeps 20b887839edf as its default until then.
+0d. ~~**Intermittent `GetFlightInfo` TIMED_OUT with a cluster member down (StarRocks connector CI)**~~ — done
+    2026-10-26 (8e755fb, see Log): the planner's node-load read (and, on shared storage, the inventory read) was a
+    Hazelcast whole-map query (`entrySet`), which waits ~10 s after a member left whose address stops answering
+    (container gone); now key lookups of the current members. A stopped server leaves Hazelcast gracefully
+    (Hazelcast's terminating shutdown hook off, graceful wait max 5 s). Left: a *crashed* node (kill -9, host gone)
+    still blocks every map operation on its partitions until Hazelcast drops the member (10 s, see Open questions).
+    StarRocks repo: rerun marten m4 check 6 on the next pre-release before moving its default off 20b887839edf.
 
 0c. ~~**Maintainer decision 2026-10-26: make `duckDbThreads` default 4**~~ — done 2026-10-26 (60e888b, CI run
     40245198713 green, pre-release `server-1.0.0-60e888bc26ec`). Items 13b-d stay as proposals (behaviour/default
@@ -233,6 +232,14 @@
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 ## Open questions
+
+- **(2026-10-26, item 0d follow-up) Faster detection of a crashed member?** With kill -9 / host gone, every
+  Hazelcast map operation touching the dead member's partitions (heartbeat puts, getAll, ticket reservations)
+  waits until the member is dropped: `hazelcast.max.no.heartbeat.seconds=10` (our default). Measured in one JVM
+  with an iptables DROP: first plan 10.4 s, then ~10 ms. Side effect seen: a survivor's own heartbeat put can block
+  as long, so other nodes briefly drop that live node as stale (back within 3 s; no wrong answers). Options: lower
+  it to 5 s (risk: members dropped on GC pauses / busy runners), or plan from a local cluster snapshot refreshed by
+  the heartbeat thread. Both change existing behaviour — maintainer's call.
 
 - **Item 9 (per-user identity): design proposal 2026-10-26 — please answer the questions at the end.** Today the
   embedded Ranger gate (`FLIGHT_AUTHORIZATION_PROVIDER=ranger`, service type `arrowflight`, schema/table policies)
@@ -640,3 +647,13 @@
   the start without a socket); `HadoopDataStoreProviderTest`. CI run 40260783151 green. Stand: int7 HDFS with local
   DataNodes must still read short-circuit (socket path set). Next: answers to item 9 / 13, or the other unnumbered
   stand findings (secure HA (d)/(e), 3-node S3 (a)-(c)).
+- 2026-10-26 (cloud session): item 0d done (8e755fb). Reproduced in one JVM (3 Hazelcast members, iptables DROP on
+  the leaving member's port to mimic a gone container): after a member left, even gracefully, `entrySet` on the
+  survivor took 10.3 s while key ops took ms; `ClusterService.allServerLoads` (every plan) used it. Now
+  `getAll(memberUris)` (entrySet only when members carry no URI), and `fileLocations(true)` reads members'
+  inventories by key on shared storage (local disks keep every inventory so a lost node's files fail the plan).
+  Measured after the fix: 11 ms. Hazelcast's shutdown hook (TERMINATE = looks like a crash) disabled; the server's
+  hook leaves gracefully, `hazelcast.graceful.shutdown.max.wait` 5 s (was 600 s: a graceful leave against an
+  unreachable peer hung 363 s). Tests: `ClusterServiceTest` (key reads, inventories kept on local disks),
+  `ClusterMemberLossIntegrationTest.survivorPlansAtOnceAfterAMemberLeft`, `HazelcastAdapterTest`. Crash case
+  (10 s) → Open questions. CI run 40272329184 green. Next: answers to the Open questions (0d crash case, 9, 13) or the unnumbered stand findings.
