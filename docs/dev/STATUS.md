@@ -206,12 +206,11 @@
    `flight-server-libs` asset and run one HDFS query against the HA nameservice; a real Kerberos login (KDC)
    is still item 7. Note: lz4-java 1.12.1 exists (we follow Hadoop 3.5.0's 1.10.4).
 
-12. **`s3a://` / `s3n://` catalog roots are not matched by the open S3 stores** (found 2026-10-25 while
-   testing item 4): `CatalogLocations.normalize` keeps the scheme, S3 stores name their roots `s3://`, so
-   e.g. `arrowflight.iceberg-hadoop.warehouse=s3a://b/wh` fails at start ("The store opened for s3a://b/wh
-   does not hold it (roots [s3://b/wh/])"); the Hive plugin maps s3a/s3n itself, Iceberg does not. Match
-   the S3 scheme forms as one in `StoreRegistry` (`holder`, `locate`) or normalise them; test with an
-   s3a warehouse and s3a data file paths in Iceberg metadata.
+12. ~~**`s3a://` / `s3n://` catalog roots are not matched by the open S3 stores**~~ — done 2026-10-26 (514782d,
+   see Log): `CatalogLocations.normalize` (server) and `Locations.normalize` (iceberg plugin) map s3a/s3n to
+   s3, so store lookup (`holder`, both `locate`s), the roots checks, `read_parquet` lists and the position
+   delete `file_path` match treat the three forms as one. Stand: one Iceberg table written by Spark through S3A
+   (`s3a://` paths in its metadata) under an `s3://` or `s3a://` warehouse, complete and partial mode.
 
 13. **Tuning defaults from the perf campaign** (stand + CI screening 2026-10-25/26, `docs/dev/TUNING.md`):
     (a) ~~`duckDbThreads` default 2 -> 4~~ done as item 0c (plain 4) (SF10 JDBC 1.8x, SF1 1.3x faster; single point lookup +14 %, 32-client p95
@@ -576,3 +575,10 @@
   CHANGELOG, TUNING.md, START-NOTES, user guides. Package dispatch run 40245198713 green (build + package; the push
   run 40245189332 was cancelled in its favour): pre-release `server-1.0.0-60e888bc26ec`. Stand: rerun with the new
   default where it ran 2. Next: item 1b (dependency security upgrades).
+- 2026-10-26 (cloud session): item 12 done (514782d): `s3a://` / `s3n://` catalog locations are matched as
+  `s3://` — `CatalogLocations.normalize`, the SQL `normalizedLocation` for position delete paths,
+  `StoreRegistry.locate` and the iceberg plugin's `Locations.normalize` (an s3a warehouse used to stop the
+  start; s3a files under an s3 root were hidden). Regression tests in `CatalogTablesTest`,
+  `CatalogSourcesDeletesTest`, `S3NamedStoresTest`, `PluginPartsTest`. CI run 40251162808 green. Next
+  numbered items: 8 (ask the maintainer first), 9 (design in Open questions first), 13 (proposals awaiting
+  approval); stand checks listed per item.
