@@ -10,7 +10,9 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.plugin.s3.S3DataStore;
+import pro.surpin.data.arrowflight.plugin.s3.S3ReadCache;
 import pro.surpin.data.arrowflight.plugin.s3.S3Settings;
+import pro.surpin.data.arrowflight.plugin.s3.S3Uri;
 import pro.surpin.data.arrowflight.spi.config.ConfigKey;
 import pro.surpin.data.arrowflight.spi.config.PluginConfig;
 import pro.surpin.data.arrowflight.spi.storage.DataStore;
@@ -23,7 +25,9 @@ import software.amazon.awssdk.services.s3.S3Client;
  * Opens lakeFS repositories ({@code lakefs://repository/ref/prefix}) as stores. Configuration
  * namespace {@code lakefs}: the s3 plugin's keys without their legacy aliases ({@code endpoint}
  * is the lakeFS server, whose S3 gateway is at its root; path style by default), plus
- * {@code apiEndpoint}, {@code pinBranches}, {@code pinTtlMillis} and {@code apiTimeoutMillis}.
+ * {@code apiEndpoint}, {@code pinBranches}, {@code pinTtlMillis}, {@code apiTimeoutMillis} and
+ * the read cache settings {@code cacheMegabytes} / {@code cacheCheckSeconds} (a cache of its own,
+ * separate from the s3 plugin's).
  * Credentials only as {@code FLIGHT_LAKEFS_ACCESS_KEY} / {@code FLIGHT_LAKEFS_SECRET_KEY} or
  * {@code credentialsFile}.
  */
@@ -96,8 +100,17 @@ public final class LakeFsDataStoreProvider implements DataStoreProvider {
                 + " pinTtlMillis={} tls={} caFile={} listingTtlSeconds={}", context.nodeName(),
                 uri.uri(), settings.endpointUri(), api, pin, pinTtl, settings.useSsl(),
                 settings.caFile(), settings.listingTtlSeconds());
+        S3ReadCache cache;
+        try {
+            // DuckDB may read the whole repository (pinned commits), so may the route.
+            cache = S3ReadCache.open(context, "lakefs", S3Uri.parse("s3://" + uri.repository()), client, settings)
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            client.close();
+            throw e;
+        }
         return new LakeFsDataStore(uri, settings, client, resolver, pin, pinTtl, System::nanoTime,
-                context.threadFactory("lakefs-listing"), context.nodeName());
+                context.threadFactory("lakefs-listing"), context.nodeName(), cache);
     }
 
     /**
@@ -126,6 +139,7 @@ public final class LakeFsDataStoreProvider implements DataStoreProvider {
                 Integer.toString(DEFAULT_PIN_TTL_MILLIS)));
         keys.add(ConfigKey.of("apiTimeoutMillis", "Connect and request timeout of the REST API",
                 "10000"));
+        keys.addAll(S3ReadCache.CONFIG_KEYS);
         return List.copyOf(keys);
     }
 }

@@ -60,6 +60,12 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   While it runs, the Prometheus endpoint (`/metrics`) shows `arrowflight_s3_cache_*`: capacity/used bytes and
   blocks (gauges), `hits_total`, `misses_total`, `evictions_total`, `joined_total` (blocks taken from another
   request's read) and the requests it sent to S3 (`s3_reads_total`, `s3_read_bytes_total`, `s3_lookups_total` = HEADs).
+- lakeFS read cache (opt-in, `arrowflight.lakefs.cacheMegabytes` / `arrowflight.lakefs.cacheCheckSeconds`, same
+  meaning and defaults): DuckDB reads the lakeFS S3 gateway through the same kind of loopback cache, for the whole
+  repository (pinned commits never change, so their blocks stay valid). It is a cache of its own, separate from the
+  s3 plugin's: with both on, keep the two sizes together below half of `-Xmx`. Log lines `lakefs=cacheOpen` /
+  `lakefs=cacheClosed`, metrics `arrowflight_lakefs_cache_*`. A miss read whose answer carries another ETag than the
+  one looked up is refused like a failed `If-Match` (for gateways that ignore `If-Match`; both caches).
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
   Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`

@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- lakeFS read cache (item 17 (b); opt-in): `arrowflight.lakefs.cacheMegabytes` (default 0 = off) and
+  `arrowflight.lakefs.cacheCheckSeconds` (default 10) let DuckDB read the lakeFS S3 gateway through a node-wide,
+  byte-bounded cache like the s3 plugin's (`arrowflight.s3.cacheMegabytes`), scoped to the repository; separate
+  from the s3 cache (log `lakefs=cacheOpen` / `lakefs=cacheClosed`, metrics `arrowflight_lakefs_cache_*`). The lakefs
+  plugin descriptor now says `spi=1.3`. New public s3 plugin class `S3ReadCache` for plugins built on it.
+
 - S3 read cache metrics (item 17 (d)): while `arrowflight.s3.cacheMegabytes` > 0 the Prometheus endpoint shows
   `arrowflight_s3_cache_capacity_bytes`, `_used_bytes`, `_blocks` (gauges) and `arrowflight_s3_cache_hits_total`,
   `_misses_total`, `_evictions_total`, `_joined_total`, `_s3_reads_total`, `_s3_read_bytes_total`,
@@ -193,6 +199,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- S3 read cache: a miss read whose answer carries another ETag than the version looked up is refused like a failed
+  `If-Match`, so a store or gateway that ignores `If-Match` cannot mix two versions of an object in one answer.
 - S3 (DuckDB 1.5.6): after an object was rewritten, the first query of every server connection
   that had read it before failed "HTTP Error: ETag on reading file ... was initially ... this likely
   means the remote file has changed" (DuckDB keeps a file's metadata per connection; the next query

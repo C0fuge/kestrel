@@ -13,6 +13,7 @@ import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.plugin.s3.S3DataStore;
+import pro.surpin.data.arrowflight.plugin.s3.S3ReadCache;
 import pro.surpin.data.arrowflight.plugin.s3.S3Settings;
 import pro.surpin.data.arrowflight.plugin.s3.S3Uri;
 import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
@@ -30,7 +31,7 @@ import software.amazon.awssdk.services.s3.S3Client;
  * {@code @<commit>/<path>}: that is the name the planner puts into tickets, so every node and
  * endpoint of one query reads the same commit, whatever the branch does meanwhile. A tag or
  * commit id is confirmed once and read through the full commit id it names; branches with
- * pinning off are read as they are.
+ * pinning off are read as they are. With a read cache, DuckDB reads the gateway through it.
  */
 public final class LakeFsDataStore implements DataStore {
 
@@ -51,6 +52,7 @@ public final class LakeFsDataStore implements DataStore {
     private final LongSupplier nanoClock;
     private final ThreadFactory threads;
     private final String node;
+    private final S3ReadCache cache;
     private final Map<String, S3DataStore> stores = new LinkedHashMap<>(8, 0.75f, true);
     private final Object resolution = new Object();
     private final ThreadLocal<Scope> scopes = new ThreadLocal<>();
@@ -89,6 +91,28 @@ public final class LakeFsDataStore implements DataStore {
     public LakeFsDataStore(LakeFsUri root, S3Settings settings, S3Client client,
             RefResolver resolver, boolean pinBranches, long pinTtlMillis, LongSupplier nanoClock,
             ThreadFactory threads, String node) {
+        this(root, settings, client, resolver, pinBranches, pinTtlMillis, nanoClock, threads, node, null);
+    }
+
+    /**
+     * Creates a store whose DuckDB reads may go through a read cache.
+     *
+     * @param root data directory
+     * @param settings S3 gateway settings with credentials
+     * @param client S3 client of the gateway; this store closes it
+     * @param resolver branch to commit resolution
+     * @param pinBranches whether branches are pinned to their head commit per query plan
+     * @param pinTtlMillis how long one resolution is shared by listings
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param threads creates the listing threads
+     * @param node name of this server node, for logs
+     * @param cache route through the read cache of the repository, or null to let DuckDB read
+     *        the gateway directly; this store closes it
+     */
+    public LakeFsDataStore(LakeFsUri root, S3Settings settings, S3Client client,
+            RefResolver resolver, boolean pinBranches, long pinTtlMillis, LongSupplier nanoClock,
+            ThreadFactory threads, String node, S3ReadCache cache) {
+        this.cache = cache;
         this.root = Objects.requireNonNull(root, "root");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.client = Objects.requireNonNull(client, "client");
@@ -185,7 +209,11 @@ public final class LakeFsDataStore implements DataStore {
 
     @Override
     public void contributeDuckDb(DuckDbSetup setup) {
-        S3DataStore.contribute(setup, settings, repositoryRoot());
+        if (cache == null) {
+            S3DataStore.contribute(setup, settings, repositoryRoot());
+        } else {
+            cache.contribute(setup, settings, repositoryRoot());
+        }
     }
 
     @Override
@@ -244,6 +272,9 @@ public final class LakeFsDataStore implements DataStore {
                 store.close();
             }
             stores.clear();
+        }
+        if (cache != null) {
+            cache.close();
         }
         client.close();
     }

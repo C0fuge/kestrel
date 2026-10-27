@@ -184,6 +184,45 @@ class S3CacheEndpointTest {
     }
 
     /**
+     * Verifies a store that ignores If-Match (a gateway) cannot mix versions either: a miss read
+     * that comes back with another ETag is refused and the new version is sent under its own ETag.
+     */
+    @Test
+    void aStoreThatIgnoresIfMatchIsNeverMixedEither() {
+        s3.ignoreIfMatch(true);
+        assertArrayEquals(Arrays.copyOfRange(data, 0, 100), range(0, 99));
+        byte[] second = bytes(SIZE, 4);
+        s3.put(BUCKET, KEY, second, Instant.parse("2026-10-27T09:00:00Z"));
+
+        ResponseBytes<GetObjectResponse> answer = duckDb.getObjectAsBytes(r -> r.bucket(BUCKET).key(KEY)
+                .range("bytes=0-" + (S3CacheEndpoint.BLOCK_BYTES + 9)));
+        assertArrayEquals(Arrays.copyOfRange(second, 0, S3CacheEndpoint.BLOCK_BYTES + 10), answer.asByteArray());
+        assertEquals(etagOf(second), answer.response().eTag());
+        s3.clearRequests();
+        assertArrayEquals(Arrays.copyOfRange(second, 0, 100), range(0, 99), "the old block is not served again");
+        assertEquals(0, gets());
+    }
+
+    /** Verifies the endpoint of another plugin names its settings and metrics after it. */
+    @Test
+    void anotherPluginsEndpointHasItsOwnMetricNames() throws IOException {
+        S3CacheEndpoint lakefs = new S3CacheEndpoint(S3CacheEndpoint.BLOCK_BYTES, 10, "n1", clock::get, "lakefs");
+        try {
+            Map<String, Double> values = values(lakefs.samples());
+            assertEquals(10, values.size());
+            assertTrue(values.keySet().stream().allMatch(name -> name.startsWith("arrowflight_lakefs_cache_")),
+                    values.toString());
+        } finally {
+            lakefs.close();
+        }
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new S3CacheEndpoint(1, -1, "n1", clock::get, "lakefs"));
+        assertTrue(e.getMessage().contains("arrowflight.lakefs.cacheCheckSeconds"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> S3ReadCache.cacheBytes("lakefs", 513, 1L << 30));
+        assertTrue(e.getMessage().contains("arrowflight.lakefs.cacheMegabytes"), e.getMessage());
+    }
+
+    /**
      * Verifies concurrent requests for the same missing blocks read them from S3 once: the later
      * requests take the first one's read (single flight).
      *

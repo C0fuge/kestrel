@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -48,6 +49,7 @@ public final class FakeS3 implements AutoCloseable {
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger pageSize = new AtomicInteger(1000);
     private final AtomicLong latencyMillis = new AtomicLong();
+    private final AtomicBoolean ignoreIfMatch = new AtomicBoolean();
 
     private FakeS3(HttpServer server, String scheme) {
         this.server = server;
@@ -126,6 +128,15 @@ public final class FakeS3 implements AutoCloseable {
      */
     public void pageSize(int size) {
         pageSize.set(size);
+    }
+
+    /**
+     * Makes GETs ignore If-Match, as some S3 gateways do: the current version is always sent.
+     *
+     * @param ignore true to ignore If-Match
+     */
+    public void ignoreIfMatch(boolean ignore) {
+        ignoreIfMatch.set(ignore);
     }
 
     /**
@@ -279,7 +290,7 @@ public final class FakeS3 implements AutoCloseable {
                 DateTimeFormatter.RFC_1123_DATE_TIME.format(object.lastModified().atOffset(ZoneOffset.UTC)));
         String etag = etag(data);
         String ifMatch = exchange.getRequestHeaders().getFirst("If-Match");
-        if (ifMatch != null && !ifMatch.equals(etag)) {
+        if (ifMatch != null && !ifMatch.equals(etag) && !ignoreIfMatch.get()) {
             exchange.getResponseHeaders().remove("Content-Range");
             send(exchange, 412, "<Error><Code>PreconditionFailed</Code><Message>changed</Message></Error>");
             return;

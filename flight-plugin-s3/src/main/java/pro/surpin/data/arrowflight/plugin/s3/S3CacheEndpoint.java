@@ -9,9 +9,11 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.spi.metrics.MetricSample;
 import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
 
+import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -54,10 +56,12 @@ import java.util.function.LongSupplier;
  *
  * <p>Each object's version (ETag) is checked against S3 with a HEAD at most every
  * {@code checkSeconds}; a block missing from the cache is read with {@code If-Match} on that
- * version, so the bytes of one answer always come from one version of an object. A block that
+ * version and the answer's ETag is compared with it (a gateway may ignore If-Match), so the bytes
+ * of one answer always come from one version of an object. A block that
  * one request is already reading from S3 is not read again by a concurrent one: that request
  * waits for the first read (single flight). HEADs from DuckDB always go to S3. Listings and other
- * requests with a query are not served.
+ * requests with a query are not served. There is one endpoint per plugin class loader: the
+ * lakefs plugin, which bundles this code, runs its own ({@code arrowflight_lakefs_cache_*}).
  */
 final class S3CacheEndpoint {
 
@@ -79,6 +83,7 @@ final class S3CacheEndpoint {
     private final long checkNanos;
     private final LongSupplier nanoClock;
     private final String node;
+    private final String kind;
     private final Map<String, Route> routes = new ConcurrentHashMap<>();
     private final Map<String, Version> versions = new ConcurrentHashMap<>();
     private final Map<S3BlockCache.BlockKey, CompletableFuture<byte[]>> reading = new ConcurrentHashMap<>();
@@ -151,8 +156,26 @@ final class S3CacheEndpoint {
      * @throws IOException when no loopback port can be bound
      */
     S3CacheEndpoint(long capacityBytes, int checkSeconds, String node, LongSupplier nanoClock) throws IOException {
+        this(capacityBytes, checkSeconds, node, nanoClock, "s3");
+    }
+
+    /**
+     * Starts an endpoint of a plugin.
+     *
+     * @param capacityBytes bytes the cache holds at most
+     * @param checkSeconds seconds an object's version is trusted before it is looked up again
+     * @param node node name, for logs
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param kind plugin whose stores read through it ({@code s3}, {@code lakefs}): names its log
+     *        lines, settings and metrics
+     * @throws IOException when no loopback port can be bound
+     */
+    S3CacheEndpoint(long capacityBytes, int checkSeconds, String node, LongSupplier nanoClock, String kind)
+            throws IOException {
+        this.kind = Objects.requireNonNull(kind, "kind");
         if (checkSeconds < 0) {
-            throw new IllegalArgumentException("arrowflight.s3.cacheCheckSeconds must be >= 0: " + checkSeconds);
+            throw new IllegalArgumentException("arrowflight." + kind + ".cacheCheckSeconds must be >= 0: "
+                    + checkSeconds);
         }
         this.cache = new S3BlockCache(capacityBytes);
         this.checkNanos = TimeUnit.SECONDS.toNanos(checkSeconds);
@@ -184,17 +207,37 @@ final class S3CacheEndpoint {
      * @return route; closing it unregisters the data directory, the last close stops the endpoint
      * @throws IOException when the endpoint cannot be started
      */
-    static synchronized Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
+    static Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
             S3Client client, S3Settings settings, PluginMetrics pluginMetrics) throws IOException {
+        return register(capacityBytes, checkSeconds, node, root, client, settings, pluginMetrics, "s3");
+    }
+
+    /**
+     * Registers a data directory with the endpoint of this plugin's class loader; see
+     * {@link #register(long, int, String, S3Uri, S3Client, S3Settings, PluginMetrics)}.
+     *
+     * @param capacityBytes bytes the cache holds at most
+     * @param checkSeconds seconds an object's version is trusted
+     * @param node node name, for logs
+     * @param root data directory
+     * @param client S3 client of the store
+     * @param settings store settings
+     * @param pluginMetrics where the endpoint publishes its metrics while it runs
+     * @param kind plugin of the store ({@code s3}, {@code lakefs}), set by the first registration
+     * @return route; closing it unregisters the data directory, the last close stops the endpoint
+     * @throws IOException when the endpoint cannot be started
+     */
+    static synchronized Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
+            S3Client client, S3Settings settings, PluginMetrics pluginMetrics, String kind) throws IOException {
         if (shared == null) {
-            shared = new S3CacheEndpoint(capacityBytes, checkSeconds, node, System::nanoTime);
+            shared = new S3CacheEndpoint(capacityBytes, checkSeconds, node, System::nanoTime, kind);
             shared.metrics = pluginMetrics.register(shared::samples);
-            LOGGER.info("node={} s3=cacheOpen endpoint=127.0.0.1:{} capacityBytes={} blockBytes={} checkSeconds={}",
-                    node, shared.port(), capacityBytes, BLOCK_BYTES, checkSeconds);
+            LOGGER.info("node={} {}=cacheOpen endpoint=127.0.0.1:{} capacityBytes={} blockBytes={} checkSeconds={}",
+                    node, kind, shared.port(), capacityBytes, BLOCK_BYTES, checkSeconds);
         } else if (shared.cache.capacityBytes() != capacityBytes
                 || shared.checkNanos != TimeUnit.SECONDS.toNanos(checkSeconds)) {
-            LOGGER.warn("node={} s3=cacheSettingsIgnored capacityBytes={} checkSeconds={} (the running cache"
-                    + " keeps its own)", node, capacityBytes, checkSeconds);
+            LOGGER.warn("node={} {}=cacheSettingsIgnored capacityBytes={} checkSeconds={} (the running cache"
+                    + " keeps its own)", node, kind, capacityBytes, checkSeconds);
         }
         return shared.route(root, client, settings);
     }
@@ -254,26 +297,27 @@ final class S3CacheEndpoint {
      */
     List<MetricSample> samples() {
         S3BlockCache.Use use = cache.use();
+        String prefix = "arrowflight_" + kind + "_cache_";
         return List.of(
-                MetricSample.gauge("arrowflight_s3_cache_capacity_bytes",
+                MetricSample.gauge(prefix + "capacity_bytes",
                         "Most bytes the S3 read cache holds", cache.capacityBytes()),
-                MetricSample.gauge("arrowflight_s3_cache_used_bytes",
+                MetricSample.gauge(prefix + "used_bytes",
                         "Bytes held by the S3 read cache", use.usedBytes()),
-                MetricSample.gauge("arrowflight_s3_cache_blocks",
+                MetricSample.gauge(prefix + "blocks",
                         "Blocks held by the S3 read cache", use.blocks()),
-                MetricSample.counter("arrowflight_s3_cache_hits_total",
+                MetricSample.counter(prefix + "hits_total",
                         "Blocks the S3 read cache answered from memory", use.hits()),
-                MetricSample.counter("arrowflight_s3_cache_misses_total",
+                MetricSample.counter(prefix + "misses_total",
                         "Blocks the S3 read cache did not hold when asked", use.misses()),
-                MetricSample.counter("arrowflight_s3_cache_evictions_total",
+                MetricSample.counter(prefix + "evictions_total",
                         "Blocks dropped from the S3 read cache to make room", use.evictions()),
-                MetricSample.counter("arrowflight_s3_cache_joined_total",
+                MetricSample.counter(prefix + "joined_total",
                         "Missed blocks taken from another request's S3 read", joined.get()),
-                MetricSample.counter("arrowflight_s3_cache_s3_reads_total",
+                MetricSample.counter(prefix + "s3_reads_total",
                         "GET requests the S3 read cache sent to S3", s3Reads.get()),
-                MetricSample.counter("arrowflight_s3_cache_s3_read_bytes_total",
+                MetricSample.counter(prefix + "s3_read_bytes_total",
                         "Bytes the S3 read cache read from S3", s3ReadBytes.get()),
-                MetricSample.counter("arrowflight_s3_cache_s3_lookups_total",
+                MetricSample.counter(prefix + "s3_lookups_total",
                         "HEAD requests the S3 read cache sent to S3", s3Lookups.get()));
     }
 
@@ -282,7 +326,7 @@ final class S3CacheEndpoint {
         if (metrics != null) {
             metrics.close();
         }
-        LOGGER.info("node={} s3=cacheClosed {}", node, stats());
+        LOGGER.info("node={} {}=cacheClosed {}", node, kind, stats());
         server.stop(0);
         handlers.shutdownNow();
     }
@@ -327,7 +371,7 @@ final class S3CacheEndpoint {
             String key = slash < 0 ? "" : trimmed.substring(slash + 1);
             if (uri.getRawQuery() != null && !uri.getRawQuery().isEmpty()) {
                 error(exchange, method, 501, "NotImplemented", "the S3 read cache serves object reads only,"
-                        + " no listings: name files, not globs, or turn arrowflight.s3.cacheMegabytes off");
+                        + " no listings: name files, not globs, or turn arrowflight." + kind + ".cacheMegabytes off");
                 return;
             }
             if (!bucket.equals(route.root().bucket()) || !key.startsWith(route.root().prefix())
@@ -345,10 +389,10 @@ final class S3CacheEndpoint {
         } catch (NoSuchFileException e) {
             sendQuietly(exchange, 404, "NoSuchKey", "missing");
         } catch (StorageException e) {
-            LOGGER.warn("node={} s3=cacheReadFailed error={}", node, e.getMessage());
+            LOGGER.warn("node={} {}=cacheReadFailed error={}", node, kind, e.getMessage());
             sendQuietly(exchange, 503, "SlowDown", "S3 read failed");
         } catch (IOException | RuntimeException e) {
-            LOGGER.debug("node={} s3=cacheRequestFailed error={}", node, e.toString());
+            LOGGER.debug("node={} {}=cacheRequestFailed error={}", node, kind, e.toString());
         }
     }
 
@@ -633,7 +677,7 @@ final class S3CacheEndpoint {
      * @param from first byte
      * @param to last byte
      * @return exactly the bytes from..to
-     * @throws ChangedException when S3 refuses the version (412)
+     * @throws ChangedException when S3 refuses the version (412) or answers with another ETag
      * @throws NoSuchFileException when the object does not exist
      * @throws StorageException when S3 cannot be read or sends too few bytes
      */
@@ -644,8 +688,15 @@ final class S3CacheEndpoint {
             GetObjectRequest request = GetObjectRequest.builder().bucket(route.root().bucket()).key(key)
                     .range("bytes=" + from + "-" + to).ifMatch(version.etag()).build();
             s3Reads.incrementAndGet();
-            byte[] bytes = route.client().getObjectAsBytes(request).asByteArray();
+            ResponseBytes<GetObjectResponse> response = route.client().getObjectAsBytes(request);
+            byte[] bytes = response.asByteArray();
             s3ReadBytes.addAndGet(bytes.length);
+            String etag = response.response().eTag();
+            if (etag != null && !etag.equals(version.etag())) {
+                // A store that ignores If-Match (a gateway) sent another version.
+                versions.remove(versionKey(route, key));
+                throw new ChangedException();
+            }
             if (bytes.length > count && bytes.length > to) {
                 // A store that ignores Range sends the whole object.
                 return Arrays.copyOfRange(bytes, (int) from, (int) from + count);

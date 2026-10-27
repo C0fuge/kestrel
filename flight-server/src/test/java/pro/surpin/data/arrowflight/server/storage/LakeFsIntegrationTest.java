@@ -23,9 +23,12 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
@@ -133,6 +136,51 @@ class LakeFsIntegrationTest {
                     assertFalse(String.valueOf(e.getMessage()).contains(SECRET), sql);
                 }
             }
+        }
+    }
+
+    /**
+     * Verifies that with {@code arrowflight.lakefs.cacheMegabytes} DuckDB reads the gateway
+     * through the plugin's read cache: the secret names the loopback endpoint, a second
+     * connection reads the pinned commit without a GET to the gateway, a moved branch is read at
+     * its new commit, and the hits show up as {@code arrowflight_lakefs_cache_*} metrics.
+     */
+    @Test
+    void duckDbReadsThePinnedCommitThroughTheReadCache() throws Exception {
+        support.properties.put("arrowflight.lakefs.cacheMegabytes", "16");
+        try (StoreRegistry registry = support.open(StoreRegistryTest.config("lakefs://lake/main/wh"))) {
+            DataStore store = registry.dataDirectory();
+            DataFile pinned = store.tableFiles("tpch", "nation").get(0);
+            String uri = store.duckDbUri(pinned);
+            gateway.clearRequests();
+            try (DuckDbAdapter duckDb = new DuckDbAdapter(config(store.root()), ioPool,
+                    registry.duckDbSetup());
+                    Statement s = duckDb.connection().createStatement()) {
+                assertEquals(25, count(s, uri));
+                assertTrue(gateway.count("GET") > 0, "the first read reaches the gateway");
+                try (ResultSet rs = s.executeQuery("SELECT scope::VARCHAR, secret_string FROM duckdb_secrets()")) {
+                    assertTrue(rs.next());
+                    assertTrue(rs.getString(1).contains("s3://lake/"), rs.getString(1));
+                    String gatewayHost = gateway.endpoint().substring("http://".length());
+                    assertFalse(rs.getString(2).contains(gatewayHost), rs.getString(2));
+                    assertFalse(rs.getString(2).contains(SECRET), "redacted");
+                }
+            }
+            gateway.clearRequests();
+            try (DuckDbAdapter other = new DuckDbAdapter(config(store.root()), ioPool,
+                    registry.duckDbSetup());
+                    Statement s = other.connection().createStatement()) {
+                assertEquals(25, count(s, uri));
+                assertEquals(0, gateway.count("GET"), "another connection reads the commit from the cache");
+                head.set("c2");
+                DataFile moved = store.tableFiles("tpch", "nation").get(0);
+                assertEquals("@c2/tpch/nation/n.parquet", moved.relativePath());
+                assertEquals(30, count(s, store.duckDbUri(moved)));
+            }
+            Matcher hits = Pattern.compile("\narrowflight_lakefs_cache_hits_total (\\S+)\n")
+                    .matcher(MetricsService.render());
+            assertTrue(hits.find(), "lakefs cache metrics on the Prometheus endpoint");
+            assertTrue(Double.parseDouble(hits.group(1)) > 0, hits.group());
         }
     }
 
