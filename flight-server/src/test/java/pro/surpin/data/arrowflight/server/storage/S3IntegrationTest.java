@@ -317,7 +317,8 @@ class S3IntegrationTest {
             forwarder.refuseFor(1500);
             try (Statement s = duckDb.connection().createStatement()) {
                 SQLException e = assertThrows(SQLException.class, () -> s.executeQuery(sql));
-                assertTrue(e.getMessage().contains("connection"), e.getMessage());
+                // "Could not establish connection" (1.4.5), "Could not connect to server" (1.5.6)
+                assertTrue(e.getMessage().contains("connect"), e.getMessage());
                 assertFalse(e.getMessage().contains(secretKey));
             }
         }

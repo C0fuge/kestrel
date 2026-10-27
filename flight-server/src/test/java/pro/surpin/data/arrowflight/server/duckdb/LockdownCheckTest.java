@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -70,6 +71,38 @@ class LockdownCheckTest {
         assertEquals("s3:/lake/p/", LockdownCheck.comparable("s3:/lake/p/"));
         assertEquals("hdfs:/ns/d/", LockdownCheck.comparable("hdfs://ns/d"));
         assertEquals("/tmp/a/b/", LockdownCheck.comparable("/tmp/a//b/"));
+        assertEquals("/tmp/lake/", LockdownCheck.comparable("file:///tmp/lake"));
+    }
+
+    /**
+     * Verifies a local root given as a file URI (Iceberg and Hive warehouses) passes the check
+     * whether DuckDB shows it as set or as a plain path (1.5.6), and that the lockdown still
+     * reads below it and refuses next to it.
+     */
+    @Test
+    void acceptsFileUriRoots(@TempDir Path dir) throws Exception {
+        Path temp = Files.createDirectories(dir.resolve("tmp"));
+        Path lake = Files.createDirectories(dir.resolve("lake"));
+        Path other = Files.createDirectories(dir.resolve("other"));
+        for (Path p : List.of(lake, other)) {
+            try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                    Statement s = conn.createStatement()) {
+                s.execute("COPY (SELECT 1 AS x) TO '" + p.resolve("x.parquet") + "' (FORMAT parquet)");
+            }
+        }
+        try (Connection conn = lockedDown("file://" + lake + "/", temp + "/")) {
+            LockdownCheck.verify(conn, List.of(lake.toString(), "file://" + lake), temp, List.of());
+            try (Statement s = conn.createStatement();
+                    ResultSet rs = s.executeQuery("SELECT x FROM read_parquet('file://" + lake
+                            + "/x.parquet')")) {
+                assertTrue(rs.next());
+                assertEquals(1, rs.getInt(1));
+            }
+            try (Statement s = conn.createStatement()) {
+                assertThrows(SQLException.class, () -> s.executeQuery(
+                        "SELECT x FROM read_parquet('" + other.resolve("x.parquet") + "')"));
+            }
+        }
     }
 
     @Test

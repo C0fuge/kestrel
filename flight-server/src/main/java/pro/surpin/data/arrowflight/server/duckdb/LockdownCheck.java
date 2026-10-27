@@ -118,14 +118,16 @@ public final class LockdownCheck {
      * Returns a directory in the form DuckDB shows it from 1.4.4 on, ending in a slash: DuckDB
      * 1.4.5 collapses repeated slashes when it stores allowed_directories ({@code s3://b/p/} reads
      * back as {@code s3:/b/p/}, {@code hdfs://ns/d/} as {@code hdfs:/ns/d/}) and matches the
-     * paths of queries the same way; 1.4.1 kept them as set.
+     * paths of queries the same way; 1.4.1 kept them as set. 1.5.6 also shows a local
+     * {@code file:///d/} root as {@code /d/}.
      *
      * @param directory directory as set or read back
      * @return comparable form
      */
     static String comparable(String directory) {
         String withSlash = directory.endsWith("/") ? directory : directory + "/";
-        return withSlash.replaceAll("/{2,}", "/");
+        String collapsed = withSlash.replaceAll("/{2,}", "/");
+        return collapsed.startsWith("file:/") ? collapsed.substring("file:".length()) : collapsed;
     }
 
     /**
