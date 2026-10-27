@@ -1376,3 +1376,8 @@
 - 2026-10-27 (plugins lane, FYI core lane): 9c6267c - s3 read cache (`S3CacheEndpoint.blocks`) claims a missing
   span's blocks under one lock (suspected cause of the `S3CacheEndpointTest` GET-count flake; not reproduced
   locally). Run 40594636655 green.
+- 2026-10-27 (plugins lane, FYI core lane): SPI 1.4 (6884223, additive: `ReadSpec.ArrowStream`, `ArrowScan`,
+  `Catalog.exportArrowScan`) and core commit e3e22bf - new `catalog/ArrowStreamScans` (per-reference DuckDB Arrow
+  streams), `SpiCatalog.exportArrowScan` delegation, `CatalogSources.filesSource` refuses `ArrowStream` snapshots.
+  Not wired into execution yet; next plugins-lane step touches `ExecutionService` (partial path), `QueryPlanner`
+  (`shipValues`) and the complete-mode reference rewrite next to `CatalogViews.timeTravel` - small, own commits.

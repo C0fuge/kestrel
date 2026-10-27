@@ -24,22 +24,34 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     `org.apache.arrow.*` from the server and refuses plugin jars carrying Arrow classes (core commit 08966aa, test
     `PluginSharingTest`); hive descriptor `share=hadoop,arrow` (df0328d) - `HiveCatalogIntegrationTest` passes with
     the server's Hadoop and Arrow (locally with a UTF-8 locale: its partition path has non-ASCII characters).
-    **Next step (step 2 (b)), settle the server side before writing the SPI:** findings this session - (1) DuckDB's
-    `registerArrowStream` is a one-shot replacement scan per connection: a catalog table read twice in one query
-    (self-join, subquery) needs one stream per reference, and the complete-mode catalog views (`CatalogViews`,
-    `declaredColumnsSource`) cannot sit on top of a stream - so ORC needs per-query FROM sources, i.e. rewriting
-    each reference of an ORC table to its own registered name (`ExecutionService.catalogFilesSource` is the
-    partial-mode hook; complete mode reads views - check `CatalogViews.icebergSource`/`declaredColumnsSource` for the
-    equivalent hook). (2) The SPI has no Arrow dependency: proposal `Catalog.exportArrowScan(TableSnapshot,
-    List<TableFile>, ArrowScan request, long arrowArrayStreamAddress)` (default refuses) - the server allocates the
-    `ArrowArrayStream`, the plugin (sharing Arrow) fills it with `Data.exportArrayStream` from its own child
-    allocator; `ArrowScan` = projected columns + simple predicates (column, op, literal values) as SPI records; new
-    `ReadSpec.ArrowStream` (sealed interface gains a record: check every `instanceof ReadSpec.*` site in the server,
-    listed by `grep -rn "ReadSpec\." flight-server/src/main`). (3) Partial mode: `QueryPlanner` ships partition
-    values only for `ParquetFiles` (`shipValues`); `ExecutionService.ticketFiles` refuses other read specs - extend
-    both to the new spec. Then (c) `hive.orcTables` + ACID refusal and (d) end-to-end tests as planned above. Risk
-    still open: the plugin ships zstd-jni 1.5.6-10 next to the server's copy (separate class loaders extract their
-    own temp copy of the native library - expected to work, confirm in the end-to-end test).
+    *Step 2 (b) part 1 done 2026-10-27:* SPI 1.4 (6884223): `ReadSpec.ArrowStream(format)`, `ArrowScan(columns,
+    predicates)` (columns non-empty - DuckDB refuses a stream without columns, "must have at least one column";
+    predicates are hints, the server keeps every filter above the stream), `Catalog.exportArrowScan(snapshot, files,
+    scan, streamAddress, Object allocator)` (default refuses; partition columns come as UTF-8 text, the server
+    casts). Core e3e22bf: `ArrowStreamScans` (per query: one `ArrowArrayStream` + `registerArrowStream` view per table
+    reference, `DROP VIEW` + release on close; test `ArrowStreamScansTest` 5/5: self-join over two streams, partition
+    text -> INTEGER, unread and failed streams released with 0 bytes leaked), `SpiCatalog` delegation,
+    `CatalogSources.filesSource` refuses ArrowStream snapshots (so complete-mode views skip such tables with a log
+    line, partial queries fail clearly). Checked by experiment on duckdb_jdbc 1.5.6.0: `registerArrowStream` =
+    `CREATE OR REPLACE TEMP VIEW` over a one-shot stream - a second read (second statement, second reference,
+    even a re-prepare) fails "This stream has been released"; a view over it can be read once. duckdb_jdbc 1.5.6
+    also has Java table functions (`DuckDBTableFunction`), considered and rejected: projection pushdown only, no
+    filter pushdown, per-value JNI writes, no LIST/MAP/STRUCT/BLOB.
+    **Next step (step 2 (b) part 2), wire it into execution, each in a small core commit with a STATUS.md Log line:**
+    (1) partial mode - `ExecutionService` catalog path (around `catalogFilesSource`, line ~770): for ArrowStream
+    build the `ArrowScan` from the parsed query (`pq` projected + filter columns; for `count(*)` the first declared
+    column) and simple predicates, open `ArrowStreamScans` on `duckDbAdapter.connection()`, and run the SQL WITHOUT
+    the session statement cache (`session.statement(duckSql)` caches by text - a cached statement over a released
+    stream fails; add an uncached `streamSql` variant in `DuckDbAdapter`); close the scans in `finally` after
+    streaming. `QueryPlanner` `shipValues` and `ExecutionService.ticketFiles`/`shipped` must accept ArrowStream like
+    ParquetFiles; `catalogDescribeSource` needs a schema without reading (use `CatalogViews.declaredColumnsSource`).
+    (2) complete mode - rewrite each reference of an ArrowStream table in the client SQL to its own stream source,
+    the same way `CatalogViews.timeTravel(sql, describe)` already rewrites time-travel references (reuse its
+    reference finder); describe -> `declaredColumnsSource`. Then (c) hive `exportArrowScan` with `OrcArrowReader`
+    (one reader per file chained; set the plugin's context class loader inside `loadNextBatch`, since DuckDB calls
+    it on its own threads; predicates -> ORC SARG), `hive.orcTables` + ACID refusal, (d) end-to-end tests as planned
+    above. Risk still open: the plugin ships zstd-jni 1.5.6-10 next to the server's copy (separate class loaders
+    extract their own temp copy of the native library - expected to work, confirm in the end-to-end test).
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -91,3 +103,10 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   recurs, look again (next suspect: a reader arriving between the 412 and the version being forgotten). Run
   40594636655 (9c6267c, all modules) green. No package release: no runtime behaviour visible to
   clients changes (ORC still skipped). Step 2 (b) findings and proposal in Next steps.
+- 2026-10-27 (plugins session): P1 step 2 (b) part 1 - SPI 1.4 (6884223: `ReadSpec.ArrowStream`, `ArrowScan`,
+  `Catalog.exportArrowScan`) and core e3e22bf (`ArrowStreamScans`, `SpiCatalog` delegation, read_parquet refusal
+  of ArrowStream snapshots; FYI line in STATUS.md Log). Local: `SpiTest` 7/7, `ArrowStreamScansTest` 5/5,
+  `PluginLoadingTest` 6/6 (its SPI-version expectation now follows `SpiVersion.current()`), Checkstyle + SpotBugs
+  clean. CI: run 40603510805 (e3e22bf) cancelled by the core lane's push; run 40603766088 (ba4139a, on top of
+  e3e22bf) green, all modules. No package release: no client-visible change.
+

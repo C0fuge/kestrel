@@ -17,6 +17,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   call (unlike Arrow's own session middleware); sessions are bound to the caller's identity, expire after
   `flightSessionIdleSeconds` (3600) idle and are capped at `flightSessionMax` (10000) per node. ListActions now
   lists the three session actions.
+- SPI 1.4 (P1 step 2 (b), additive, no runtime change yet): a catalog may hand table data to the server as Arrow
+  streams - `ReadSpec.ArrowStream`, `ArrowScan` (columns + filter hints) and `Catalog.exportArrowScan` (default
+  refuses). Server side `ArrowStreamScans` registers one DuckDB Arrow stream per table reference and drops it after
+  the query (DuckDB's registered streams are read once); read_parquet sources refuse such snapshots. Plugins built
+  against SPI <= 1.3 load unchanged.
 - LZ4 compression of result streams (item 20, step (b)): `arrow-compression: lz4` (also `lz4_frame`) and
   `flightCompression=lz4` send Arrow LZ4_FRAME batches, compressed by our own codec on lz4-java (JNI) from the
   runtime libs set straight between Arrow buffers (~510 MB/s single thread vs ZSTD level 1 ~330 MB/s, at half
