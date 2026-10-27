@@ -38,6 +38,15 @@
 >    2026-10-27 (6acc9cc, pre-release `server-1.0.0-6acc9cce0b26`; `arrowflight.s3.connectionCaching`, default true = DuckDB 1.5 `httpfs_connection_caching`; see item 0g and Log); stand rerun pending.
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
+>    *2026-10-27 findings (cloud session, DuckDB 1.5.6 + fake S3):* (i) footers: DuckDB 1.5.6 already keeps a file's HEAD + footer
+>    per connection: a repeated 4-file query makes 12 instead of 20 requests with `parquet_metadata_cache` off, and turning it on
+>    changes nothing (20 -> 12 both ways) - no footer-cache setting needed; listing cache not looked at yet. (ii) memory bound:
+>    1.5.6 has no size setting for the external file cache (only `enable_external_file_cache` / `validate_external_file_cache`);
+>    it lives in each connection's buffer pool, so the only bound is `duckDbMemoryLimit` x live connections (one DuckDB per
+>    worker thread). A real bound needs either a shared DuckDB database (UPSTREAM-SYNC S5, rejected for view isolation) or a
+>    node-wide cache of our own below DuckDB - design question, next session. (iii) bug found and fixed (7562a5b): the
+>    per-connection metadata makes the first query after an S3 object is rewritten fail with httpfs's ETag-changed error on
+>    every connection that read it before; now retried once before the first batch (pre-release `server-1.0.0-7562a5bdb7b9`, see Log).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
 >    compute its part (partial aggregates / filtered scans) in parallel and merge on the planning node, for queries where this is
 >    provably correct; fall back to today's path otherwise. Opt-in setting first; must keep the complete-mode wire contract.
@@ -1046,3 +1055,15 @@
   skipped). Package run 40470316519 (push run 40470310907 cancelled in its favour): build + package green,
   pre-release `server-1.0.0-6acc9cce0b26`. Next: stand rerun of 0g (see item 0g Stand) and item 15 Stand on this
   pre-release (it carries item 15 step 3 too); then item 17.
+- 2026-10-27 (cloud session): item 15 still waits for the stand, so stage 2 item 17 (S3 read path). Findings (item 17
+  in the stage 2 list): DuckDB 1.5.6 already caches HEAD + footer per connection (`parquet_metadata_cache` adds nothing:
+  20 -> 12 requests for a repeated 4-file query either way), and has no size cap for the external file cache. Bug
+  found on the way: after an S3 object is rewritten, the first query of each connection that had read it fails
+  "ETag on reading file ... was initially ..." (with and without `connectionCaching`; the connection's next query reads
+  the new file). 7562a5b: such a refusal before the listener started runs the query once more (INFO
+  `duckdb=changedFileRetry`), after the first batch it still fails; no wire or setting change. Tests:
+  `S3IntegrationTest.aQueryAfterAFileWasRewrittenReadsTheNewFile` (fails without the fix),
+  `DuckDbAdapterTest.recognisesARewrittenRemoteFile`. Package run 40472888557 (push run 40472882410 cancelled in its
+  favour): build + package green, pre-release `server-1.0.0-7562a5bdb7b9`. **Stand:** rewrite one S3 data file while the 32-client small-query step runs; expect no ETag
+  errors at the clients and `duckdb=changedFileRetry` lines in the server log. Next: item 15 stand + close; item 17
+  memory-bound design (Open questions candidate), listing cache, parallel range reads.
