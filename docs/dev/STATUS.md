@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Stage 2, approved by the maintainer 2026-10-26 - take these in this order before the other open items** (basis: `docs/dev/TUNING.md`
+> and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
+> changes runtime behaviour, so the coordinator can measure it on the stand):
+> 1. item 14 - DuckDB 1.5.6 (hadoopfs for 1.5.6 already builds in the hadoopfs repo; keep answers identical, TPC-H checksums).
+> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query).
+> 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
+> 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
+>    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
+> 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
+>    compute its part (partial aggregates / filtered scans) in parallel and merge on the planning node, for queries where this is
+>    provably correct; fall back to today's path otherwise. Opt-in setting first; must keep the complete-mode wire contract.
+> 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).
+> 7. item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.
+
 0g. ~~**Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
     ephemeral-port exhaustion.**~~ — **cause found, workaround + startup WARN done 2026-10-26 (9f7eb4f, see Log); the
     server-side fix needs a decision (Open questions, "S3 connection churn").** DuckDB 1.4.5 httpfs keeps HTTP
