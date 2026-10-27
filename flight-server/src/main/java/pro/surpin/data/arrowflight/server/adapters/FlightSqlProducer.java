@@ -772,7 +772,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      * answers for its own files only, and some queries cannot be computed that way (see
      * {@code ParquetQueryParser.completeAnswerReason}), and queries of catalog tables whose
      * snapshot has delete files or other files that cannot be read one by one, and queries with
-     * a time-travel clause.
+     * time-travel queries other than reads of one catalog table whose earlier snapshot can be
+     * read file by file.
      *
      * @param query client SQL
      * @return reason, or null when endpoints answer for their own files (also for SQL the parser
@@ -780,8 +781,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     private String completeAnswerReason(String query) {
         if (pro.surpin.data.arrowflight.server.services.TimeTravelClause.present(query)) {
-            // The endpoints of a partial plan read the current snapshot's files.
-            return "the query reads an earlier snapshot (FOR VERSION/TIMESTAMP AS OF)";
+            // Endpoints read the snapshot their file entries name: one table, read in parts.
+            return queryPlanner.travelledTable(query) != null ? null
+                    : "the query reads an earlier snapshot (FOR VERSION/TIMESTAMP AS OF)";
         }
         String reason;
         try {
@@ -831,6 +833,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      *         for an unknown table
      */
     private Schema schemaForQuery(String query) {
+        if (pro.surpin.data.arrowflight.server.services.TimeTravelClause.present(query)) {
+            // Read in parts: describe as the endpoints stream it, with the earlier snapshot's
+            // columns; otherwise planned as a complete answer.
+            QueryPlanner.TravelledTable travelled = queryPlanner.travelledTable(query);
+            return travelled == null ? completeSchemaFor(query) : describeComplete(query,
+                    () -> executionService.travelledSchema(allocator, travelled.parsed(),
+                            travelled.resolved()));
+        }
         if (completeAnswerReason(query) != null) {
             // Planned as a complete answer (see completeFlightInfo): describe that answer.
             return completeSchemaFor(query);

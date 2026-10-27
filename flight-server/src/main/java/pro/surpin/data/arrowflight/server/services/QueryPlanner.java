@@ -52,6 +52,9 @@ public final class QueryPlanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryPlanner.class);
     private static final long FILE_PLAN_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    /** SELECT keywords: more than one means a subquery, CTE or set operation. */
+    private static final java.util.regex.Pattern SELECT_WORD =
+            java.util.regex.Pattern.compile("(?i)\\bselect\\b");
     /** Backup locations per partial-result endpoint unless configured otherwise. */
     public static final int DEFAULT_BACKUP_LOCATIONS = 2;
 
@@ -203,7 +206,17 @@ public final class QueryPlanner {
 
     private QueryPlan planInScope(String query, boolean plannerAsBackup) throws IOException {
         long t = LogUtil.mark();
-        ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+        TravelledTable travelled = null;
+        if (TimeTravelClause.present(query)) {
+            travelled = travelledTable(query);
+            if (travelled == null) {
+                // The caller checked; the snapshot changed since, or the call came from elsewhere.
+                LOGGER.info("node={} query=answeredCompletely mode=partial reason='{}' query='{}'",
+                        LogUtil.node(), "the earlier snapshot cannot be read in parts", query);
+                return planComplete(query, null);
+            }
+        }
+        ParquetQueryParser parsed = travelled != null ? travelled.parsed() : ParquetQueryParser.parse(query);
         long tSv = LogUtil.mark();
         ClusterSnapshot cluster = validatedCluster();
         Set<String> allServerUris = cluster.serverUris();
@@ -215,8 +228,16 @@ public final class QueryPlanner {
             throw new IllegalArgumentException(singleNodeFeature
                     + " is not supported when the table is served by several Flight nodes");
         }
+        if (travelled != null) {
+            return planCatalogTable(query, travelled.ticketQuery(), parsed, travelled.resolved(),
+                    cluster, plannerAsBackup);
+        }
         if (!parsed.isJoin && parquetAdapter.isCatalogSchema(parsed.schema)) {
-            return planCatalogTable(query, parsed, cluster, plannerAsBackup);
+            CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
+                    .current(parsed.schema, parsed.table)
+                    .orElseThrow(() -> new IOException("No distributed Parquet files found for query: "
+                            + "no table " + parsed.schema + "." + parsed.table + " in its catalog"));
+            return planCatalogTable(query, query, parsed, resolved, cluster, plannerAsBackup);
         }
         int parts = endpointsPerNode(parsed);
         long tPaths = LogUtil.mark();
@@ -293,6 +314,61 @@ public final class QueryPlanner {
     }
 
     /**
+     * A time-travel query of one catalog table that its endpoints can read in parts.
+     *
+     * @param ticketQuery the query without its clause, for the tickets: their file entries
+     *        carry the snapshot ID
+     * @param parsed the parsed ticket query
+     * @param resolved the snapshot the clause names, with that snapshot's columns
+     */
+    public record TravelledTable(String ticketQuery, ParquetQueryParser parsed,
+            CatalogTables.Resolved resolved) {
+    }
+
+    /**
+     * Resolves a time-travel query that reads one catalog table and nothing else, when the
+     * snapshot it names can be read file by file. Anything else (joins, subqueries, set
+     * operations, several clauses, queries that need one node to see all rows, snapshots with
+     * unreadable files, refused points) is answered completely, and the complete path reports
+     * its errors.
+     *
+     * @param query client SQL with a time-travel clause
+     * @return the table to plan in parts, or null for a complete answer
+     */
+    public TravelledTable travelledTable(String query) {
+        CatalogTables catalogTables = parquetAdapter.catalogTables();
+        if (catalogTables == null || catalogTables.isEmpty()) {
+            return null;
+        }
+        try {
+            List<TimeTravelClause.Reference> references = TimeTravelClause.find(query);
+            if (references.size() != 1) {
+                return null;
+            }
+            String ticketQuery = TimeTravelClause.withoutClauses(query);
+            if (SELECT_WORD.matcher(ticketQuery).results().count() != 1) {
+                return null;
+            }
+            ParquetQueryParser parsed = ParquetQueryParser.parse(ticketQuery);
+            List<String> name = references.get(0).nameParts();
+            if (parsed.isJoin || parsed.completeAnswerReason != null || parsed.table == null
+                    || !parquetAdapter.isCatalogSchema(parsed.schema) || name.size() != 2
+                    || !name.get(0).equalsIgnoreCase(parsed.schema)
+                    || !name.get(1).equalsIgnoreCase(parsed.table)) {
+                return null;
+            }
+            CatalogTables.Resolved resolved = catalogTables.asOf(parsed.schema, parsed.table,
+                    references.get(0).point()).orElse(null);
+            if (resolved == null || CatalogTables.completeReason(resolved) != null) {
+                return null;
+            }
+            return new TravelledTable(ticketQuery, parsed, resolved);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
      * Tells whether every table a query reads belongs to a catalog besides the data directory:
      * then a complete answer does not depend on the data directory's files on other nodes.
      *
@@ -319,25 +395,25 @@ public final class QueryPlanner {
     }
 
     /**
-     * Plans a query of one catalog table in parts: the data files of its current snapshot go
-     * to the live nodes like Parquet files without locality, each named with the snapshot ID,
-     * so that every node reads the same snapshot. A snapshot whose files cannot be read one by
-     * one (it changed after the caller checked) is answered completely instead.
+     * Plans a query of one catalog table in parts: the data files of a snapshot (the current
+     * one, or the one a time-travel clause names) go to the live nodes like Parquet files
+     * without locality, each named with the snapshot ID, so that every node reads the same
+     * snapshot. A snapshot whose files cannot be read one by one (it changed after the caller
+     * checked) is answered completely instead.
      *
      * @param query client SQL
-     * @param parsed parsed query
+     * @param ticketQuery SQL the endpoints run: the client SQL without its time-travel clause
+     * @param parsed parsed ticket query
+     * @param resolved the snapshot to read
      * @param cluster live nodes and their loads
      * @param plannerAsBackup whether this node may be listed as a backup
      * @return plan
-     * @throws IOException when the table does not exist or its catalog cannot be read
+     * @throws IOException when the catalog cannot be read
      */
-    private QueryPlan planCatalogTable(String query, ParquetQueryParser parsed,
-            ClusterSnapshot cluster, boolean plannerAsBackup) throws IOException {
+    private QueryPlan planCatalogTable(String query, String ticketQuery, ParquetQueryParser parsed,
+            CatalogTables.Resolved resolved, ClusterSnapshot cluster, boolean plannerAsBackup)
+            throws IOException {
         long t = LogUtil.mark();
-        CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
-                .current(parsed.schema, parsed.table)
-                .orElseThrow(() -> new IOException("No distributed Parquet files found for query: "
-                        + "no table " + parsed.schema + "." + parsed.table + " in its catalog"));
         String reason = CatalogTables.completeReason(resolved);
         if (reason != null) {
             LOGGER.info("node={} query=answeredCompletely mode=partial reason='{}' query='{}'",
@@ -380,7 +456,7 @@ public final class QueryPlanner {
         boolean loadTracked = loads.size() > 1;
         Backups backups = new Backups(files, loads, resolved.entry().shared(),
                 plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
-        List<FlightEndpoint> endpoints = distributeEndpointsWithoutLocality(query, files, loads,
+        List<FlightEndpoint> endpoints = distributeEndpointsWithoutLocality(ticketQuery, files, loads,
                 loadTracked, backups, endpointsPerNode(parsed));
         long totalBytes = files.values().stream().mapToLong(FileAssignment::size).sum();
         LogUtil.logTiming(t, "planning.catalogTable", "table=" + snapshot.name() + " snapshot="

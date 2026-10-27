@@ -372,7 +372,10 @@ the first commit is an error (`INVALID_ARGUMENT`), never the current snapshot; a
 `NOT_FOUND`. Tables of the data directory, Hive tables (also Iceberg tables registered in a Hive
 Metastore, for now) and snapshots whose files cannot be read one by one (deletion vectors, renamed
 nested fields) refuse the clause. Access is checked like a read of the table itself. In partial
-mode such a query gets its complete answer (one endpoint, logged as `answeredCompletely`). The
+mode a query that reads one table and nothing else (no join, subquery, set operation or second
+clause) is answered in parts like a query of the current snapshot: each endpoint reads files of
+the earlier snapshot, with its columns and deletes; any other such query gets its complete answer
+(one endpoint, logged as `answeredCompletely`). The
 clause needs no header or ticket change.
 
 ---

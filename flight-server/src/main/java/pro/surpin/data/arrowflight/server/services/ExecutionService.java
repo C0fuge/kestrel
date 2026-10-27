@@ -391,11 +391,10 @@ public final class ExecutionService {
             }
         }
         if (parquetAdapter.isCatalogSchema(pq.schema)) {
-            String from = "(SELECT * FROM " + catalogDescribeSource(pq) + " LIMIT 0)";
-            String duckSql = pq.hasAggregation
-                    ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
-                    : DuckDbAdapter.buildSelectSql(pq, from);
-            return duckDbAdapter.describeSql(allocator, duckSql);
+            CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
+                    .current(pq.schema, pq.table).orElseThrow(() -> new java.io.FileNotFoundException(
+                            "No Parquet files for table " + pq.schema + "." + pq.table));
+            return describeCatalog(allocator, pq, resolved);
         }
         try {
             return describeAgainstSample(allocator, pq);
@@ -408,6 +407,49 @@ public final class ExecutionService {
             parquetAdapter.forgetSampleFile(pq.schema, pq.table);
             return describeAgainstSample(allocator, pq);
         }
+    }
+
+    /**
+     * Describes a partial query of a catalog table read at an earlier snapshot (time travel),
+     * as its endpoints stream it: with that snapshot's columns.
+     *
+     * @param allocator Arrow buffer allocator
+     * @param pq        parsed query without its time-travel clause
+     * @param resolved  the earlier snapshot
+     * @return result schema
+     * @throws IllegalArgumentException when DuckDB rejects the query's text
+     */
+    public Schema travelledSchema(BufferAllocator allocator, ParquetQueryParser pq,
+            CatalogTables.Resolved resolved) {
+        try {
+            return describeCatalog(allocator, pq, resolved);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            if (isBindError(message)) {
+                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+            }
+            throw new IllegalStateException(message, e);
+        }
+    }
+
+    /**
+     * Asks DuckDB for the result schema of a partial query of a catalog table snapshot.
+     *
+     * @param allocator Arrow buffer allocator
+     * @param pq        parsed query
+     * @param resolved  snapshot the query reads
+     * @return result schema
+     * @throws Exception if DuckDB cannot bind the query
+     */
+    private Schema describeCatalog(BufferAllocator allocator, ParquetQueryParser pq,
+            CatalogTables.Resolved resolved) throws Exception {
+        String from = "(SELECT * FROM " + catalogDescribeSource(resolved) + " LIMIT 0)";
+        String duckSql = pq.hasAggregation
+                ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
+                : DuckDbAdapter.buildSelectSql(pq, from);
+        return duckDbAdapter.describeSql(allocator, duckSql);
     }
 
     /**
@@ -818,14 +860,10 @@ public final class ExecutionService {
      * data file read like the executing nodes read it, or DuckDB's scan of the whole snapshot
      * when its files cannot be read one by one.
      *
-     * @param pq parsed query
+     * @param resolved the snapshot the query reads
      * @return FROM source
-     * @throws IOException when the table does not exist or its catalog cannot be read
      */
-    private String catalogDescribeSource(ParquetQueryParser pq) throws IOException {
-        CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
-                .current(pq.schema, pq.table).orElseThrow(() -> new java.io.FileNotFoundException(
-                        "No Parquet files for table " + pq.schema + "." + pq.table));
+    private static String catalogDescribeSource(CatalogTables.Resolved resolved) {
         TableSnapshot snapshot = resolved.snapshot();
         if (CatalogTables.completeReason(resolved) == null) {
             return CatalogSources.filesSource(snapshot, snapshot.files().subList(0, 1));

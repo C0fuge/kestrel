@@ -311,7 +311,7 @@ class IcebergCatalogIntegrationTest {
     /**
      * Time travel: FOR VERSION AS OF / FOR TIMESTAMP AS OF read the first snapshot of evolved
      * (ids 1-4, before the rename and the added column) with that snapshot's columns, in complete
-     * and partial mode (answered completely), next to the current snapshot in one query; points
+     * and partial mode, next to the current snapshot in one query; points
      * without a snapshot and tables without history are refused.
      */
     @Test
@@ -368,6 +368,57 @@ class IcebergCatalogIntegrationTest {
                             e.status().code(), refused[0] + ": " + e);
                     assertTrue(e.getMessage().contains(refused[1]), refused[0] + ": " + e.getMessage());
                 }
+            }
+        }
+    }
+
+    /**
+     * Partial mode reads an earlier snapshot of one table in parts: the endpoints have a location
+     * and their tickets name that snapshot's files, answers and columns equal the complete ones
+     * (also with the snapshot's deletes applied file by file); joins, subqueries and set
+     * operations over a travelled table still get one complete endpoint.
+     */
+    @Test
+    @Order(51)
+    void timeTravelInPartialModeIsReadInParts() throws Exception {
+        for (String schema : List.of("ice", "rest_ice")) {
+            Map<String, String> tables = schema.equals("ice") ? metadata : restMetadata;
+            String table = schema + ".evolved";
+            long[] first = firstSnapshot(tables.get("evolved"));
+            String version = table + " FOR VERSION AS OF " + first[0];
+            String at = table + " FOR TIMESTAMP AS OF TIMESTAMP '"
+                    + java.time.Instant.ofEpochMilli(first[1]) + "'";
+            String deletes = schema + ".deletes FOR VERSION AS OF "
+                    + snapshot(tables.get("deletes"), "DESC")[0];
+            for (String sql : List.of(
+                    "SELECT * FROM " + version,
+                    "SELECT id, name FROM " + version + " WHERE id > 1",
+                    "SELECT count(*) AS n, sum(amount) AS s FROM " + at,
+                    "SELECT id, label FROM " + deletes)) {
+                FlightInfo info = info(sql, "partial");
+                assertFalse(info.getEndpoints().get(0).getLocations().isEmpty(), "in parts: " + sql);
+                Answer partial = answer(sql, "partial");
+                Answer complete = answer(sql, "complete");
+                assertEquals(complete.schema(), partial.schema(), sql);
+                assertEquals(complete.rows(), partial.rows(), sql);
+            }
+            assertEquals(List.of("id", "name", "amount"), answer("SELECT * FROM " + version, "partial")
+                    .schema().getFields().stream().map(f -> f.getName()).toList(), table);
+            assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"),
+                    answer("SELECT id, label FROM " + deletes, "partial").rows(), schema);
+            assertEquals(List.of("4|10"), answer("SELECT count(*), sum(id) FROM " + version, "partial")
+                    .rows(), table);
+            for (String sql : List.of(
+                    "SELECT count(o.id), count(c.id) FROM " + table + " c LEFT JOIN " + version
+                            + " AS o ON o.id = c.id",
+                    "SELECT id FROM " + version + " WHERE id IN (SELECT id FROM " + table
+                            + " WHERE id > 2)",
+                    "SELECT id FROM " + version + " UNION ALL SELECT id FROM " + table,
+                    "SELECT count(*) FROM " + version + " v, " + at + " a WHERE v.id = a.id")) {
+                FlightInfo info = info(sql, "partial");
+                assertEquals(1, info.getEndpoints().size(), sql);
+                assertTrue(info.getEndpoints().get(0).getLocations().isEmpty(), "complete: " + sql);
+                assertEquals(answer(sql, "complete").rows(), answer(sql, "partial").rows(), sql);
             }
         }
     }

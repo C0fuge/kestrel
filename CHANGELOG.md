@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Iceberg time travel in partial mode (item 3 (a)): a query that reads one iceberg-hadoop / iceberg-rest table
+  `FOR VERSION AS OF` / `FOR TIMESTAMP AS OF` and nothing else is planned in parts like a query of the current
+  snapshot (endpoints with locations; each ticket names files of the earlier snapshot, read with that snapshot's
+  columns and deletes) instead of one complete endpoint. Joins, subqueries, set operations, several clauses and
+  snapshots that cannot be read file by file still get the complete answer. Ticket format unchanged.
 - Perf test `ScanThroughputPerfTest` (tag `perf`, item 16): one client streams a full table scan over Flight SQL
   (complete mode) per variant of `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` and prints MB/s and
   batches (`-Dperf.variants=true:,true:64MiB`, `-Dperf.threads`, `-Dperf.rows`, `-Dperf.runs`). Defaults unchanged.
