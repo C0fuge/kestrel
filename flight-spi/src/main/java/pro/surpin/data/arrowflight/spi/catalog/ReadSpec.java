@@ -36,4 +36,29 @@ public sealed interface ReadSpec {
             Objects.requireNonNull(metadataLocation, "metadataLocation");
         }
     }
+
+    /**
+     * The catalog reads the snapshot's files itself and hands the rows to the server as Arrow
+     * streams through {@link Catalog#exportArrowScan}, for file formats DuckDB cannot read (ORC).
+     * The server opens one stream per reference of the table in a query and asks for the
+     * columns and filters of that reference ({@link ArrowScan}). Partition columns come in the
+     * stream as text (UTF-8, NULL for a missing value), the server converts them to their
+     * declared types as for {@link ParquetFiles}; every other column comes as an Arrow type
+     * DuckDB reads as the column's declared type. In partial mode the planning node ships every
+     * file's partition values in the ticket, as for {@link ParquetFiles}.
+     *
+     * @param format name of the file format, for messages (for example {@code orc})
+     * @since SPI 1.4
+     */
+    record ArrowStream(String format) implements ReadSpec {
+
+        /**
+         * Checks the format name.
+         *
+         * @param format file format
+         */
+        public ArrowStream {
+            Objects.requireNonNull(format, "format");
+        }
+    }
 }

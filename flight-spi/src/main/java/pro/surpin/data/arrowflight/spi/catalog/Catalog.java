@@ -100,6 +100,31 @@ public interface Catalog extends AutoCloseable {
     }
 
     /**
+     * Reads some data files of a snapshot read as {@link ReadSpec.ArrowStream} into an Arrow C
+     * stream the server allocated: the plugin fills the {@code ArrowArrayStream} at the address
+     * (for example with Arrow Java's {@code Data.exportArrayStream}) and must not keep it; the
+     * server consumes and releases it, from another thread. Only plugins that take Arrow from
+     * the server ({@code share=arrow} in the descriptor) can implement this. The batches carry
+     * exactly the columns of the request, in its order, with the files' rows in the files'
+     * order. Errors while reading surface through the stream. The stream's callbacks run on
+     * DuckDB's threads, without the plugin's context class loader. The default refuses.
+     *
+     * @param snapshot a snapshot this catalog returned, read as {@link ReadSpec.ArrowStream}
+     * @param files files of the snapshot to read, with their partition values
+     * @param scan columns and filter hints
+     * @param streamAddress memory address of an empty {@code ArrowArrayStream} C struct
+     * @param allocator the server's {@code org.apache.arrow.memory.BufferAllocator} for the
+     *                  stream's buffers; the plugin may make a child allocator of it
+     * @throws IOException when the stream cannot be opened
+     * @throws UnsupportedOperationException when the catalog has no tables read this way
+     * @since SPI 1.4
+     */
+    default void exportArrowScan(TableSnapshot snapshot, List<TableFile> files, ArrowScan scan,
+            long streamAddress, Object allocator) throws IOException {
+        throw new UnsupportedOperationException("the catalog has no tables read as Arrow streams");
+    }
+
+    /**
      * Returns the roots every file and metadata location of this catalog lies under; the server
      * hides tables with locations elsewhere.
      *

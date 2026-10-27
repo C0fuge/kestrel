@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
+import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
@@ -30,12 +32,13 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.3", SpiVersion.current());
+        assertEquals("1.4", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
         assertTrue(SpiVersion.supports("1.3"));
-        assertFalse(SpiVersion.supports("1.4"));
+        assertTrue(SpiVersion.supports("1.4"));
+        assertFalse(SpiVersion.supports("1.5"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -112,5 +115,48 @@ class SpiTest {
         assertThrows(IllegalArgumentException.class, () -> MetricSample.counter("arrowflight_hits", "x", 1));
         assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("arrowflight_a", "x\ny", 1));
         PluginMetrics.none().register(() -> List.of(counter)).close();
+    }
+
+    @Test
+    void arrowScansCheckTheirPredicates() throws Exception {
+        ArrowScan.Predicate in = new ArrowScan.Predicate("k", ArrowScan.Op.IN,
+                java.util.Arrays.asList(1L, null));
+        assertEquals(2, in.values().size());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArrowScan.Predicate("k", ArrowScan.Op.EQ, List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArrowScan.Predicate("k", ArrowScan.Op.IS_NULL, List.of(1L)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArrowScan.Predicate("k", ArrowScan.Op.IN, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArrowScan(List.of("a", "a"), null));
+        assertThrows(IllegalArgumentException.class, () -> new ArrowScan(null, null));
+        assertThrows(IllegalArgumentException.class, () -> new ArrowScan(List.of(), List.of()));
+        assertThrows(NullPointerException.class, () -> new ReadSpec.ArrowStream(null));
+        Catalog catalog = new Catalog() {
+            @Override
+            public List<String> schemas() {
+                return List.of();
+            }
+
+            @Override
+            public List<String> tables(String schema) {
+                return List.of();
+            }
+
+            @Override
+            public java.util.Optional<TableSnapshot> current(TableName table) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public List<String> readableRoots() {
+                return List.of();
+            }
+        };
+        TableSnapshot snapshot = new TableSnapshot(new TableName("s", "t"), "1", "f", null, null,
+                null, new ReadSpec.ArrowStream("orc"));
+        assertThrows(UnsupportedOperationException.class, () -> catalog.exportArrowScan(snapshot,
+                List.of(), new ArrowScan(List.of("a"), null), 0L, null));
     }
 }
