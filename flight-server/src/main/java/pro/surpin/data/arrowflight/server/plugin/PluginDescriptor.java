@@ -26,15 +26,18 @@ import java.util.zip.ZipFile;
  * @param catalogs names of its catalog providers
  * @param formats names of its table formats ({@code provides.format})
  * @param shareHadoop whether it uses the server's Hadoop classes ({@code share=hadoop})
+ * @param shareArrow whether it uses the server's Arrow classes ({@code share=arrow})
  * @param directory plugin directory
  * @param jars jars of the directory, in name order
  */
 public record PluginDescriptor(String name, String spi, Set<String> storageSchemes,
-        Set<String> catalogs, Set<String> formats, boolean shareHadoop, Path directory,
-        List<Path> jars) {
+        Set<String> catalogs, Set<String> formats, boolean shareHadoop, boolean shareArrow,
+        Path directory, List<Path> jars) {
 
     /** Where a plugin jar carries its descriptor. */
     public static final String DESCRIPTOR = "META-INF/arrowflight/plugin.properties";
+    /** Libraries a plugin may take from the server ({@code share}, comma separated). */
+    private static final Set<String> SHAREABLE = Set.of("hadoop", "arrow");
 
     /**
      * Copies the collections.
@@ -45,6 +48,7 @@ public record PluginDescriptor(String name, String spi, Set<String> storageSchem
      * @param catalogs catalog names
      * @param formats table format names
      * @param shareHadoop whether Hadoop is shared
+     * @param shareArrow whether Arrow is shared
      * @param directory plugin directory
      * @param jars jars
      */
@@ -97,15 +101,15 @@ public record PluginDescriptor(String name, String spi, Set<String> storageSchem
                     + name + "\"; the directory must have the plugin's name");
         }
         String spi = descriptor.getProperty("spi", "").trim();
-        String share = descriptor.getProperty("share", "").trim().toLowerCase(Locale.ROOT);
-        if (!share.isEmpty() && !"hadoop".equals(share)) {
-            throw new IllegalArgumentException("Plugin " + name + ": share must be empty or hadoop: "
-                    + share);
+        Set<String> share = list(descriptor.getProperty("share"));
+        if (!SHAREABLE.containsAll(share)) {
+            throw new IllegalArgumentException("Plugin " + name + ": share must list only hadoop"
+                    + " and arrow: " + String.join(",", share));
         }
         return new PluginDescriptor(name, spi, list(descriptor.getProperty("provides.storage")),
                 list(descriptor.getProperty("provides.catalog")),
-                list(descriptor.getProperty("provides.format")), "hadoop".equals(share), directory,
-                jars);
+                list(descriptor.getProperty("provides.format")), share.contains("hadoop"),
+                share.contains("arrow"), directory, jars);
     }
 
     /**

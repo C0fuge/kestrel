@@ -50,6 +50,8 @@ public final class PluginManager implements AutoCloseable {
     private static final List<String> REFUSED_PREFIXES = List.of(
             "org/duckdb/", "org/apache/arrow/memory/", "org/slf4j/impl/", "org/slf4j/simple/",
             "pro/surpin/data/arrowflight/spi/");
+    /** Arrow classes, which a {@code share=arrow} plugin may not ship. */
+    private static final String ARROW_CLASSES = "org/apache/arrow/";
     /** Service file of Hadoop file systems, which Hadoop loads once per JVM. */
     private static final String HADOOP_FILE_SYSTEMS = "META-INF/services/org.apache.hadoop.fs.FileSystem";
     /** Checksums of a plugin directory, as written by sha256sum. */
@@ -295,7 +297,7 @@ public final class PluginManager implements AutoCloseable {
             }
         }
         PluginClassLoader loader = new PluginClassLoader(name, urls.toArray(new URL[0]), server,
-                descriptor.shareHadoop());
+                descriptor.shareHadoop(), descriptor.shareArrow());
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             List<Plugin> plugins = new ArrayList<>();
             for (Plugin plugin : ServiceLoader.load(Plugin.class, loader)) {
@@ -324,11 +326,12 @@ public final class PluginManager implements AutoCloseable {
                     formats);
             loaded.put(name, result);
             LOGGER.info("node={} plugin=loaded name={} spi={} jars={} storage={} catalogs={}"
-                    + " formats={} shareHadoop={} dir={}", node, name, descriptor.spi(),
+                    + " formats={} shareHadoop={} shareArrow={} dir={}", node, name,
+                    descriptor.spi(),
                     descriptor.jars().size(), storage.stream().map(DataStoreProvider::name).toList(),
                     catalogs.stream().map(CatalogProvider::name).toList(),
                     formats.stream().map(TableFormatProvider::name).toList(),
-                    descriptor.shareHadoop(), descriptor.directory());
+                    descriptor.shareHadoop(), descriptor.shareArrow(), descriptor.directory());
             return result;
         } catch (RuntimeException | ServiceConfigurationError | LinkageError e) {
             closeQuietly(loader);
@@ -360,6 +363,11 @@ public final class PluginManager implements AutoCloseable {
                                     + " is refused: " + jarName + " contains " + refused
                                     + " (the server's copy must be the only one in the JVM)");
                         }
+                    }
+                    if (descriptor.shareArrow() && entry.startsWith(ARROW_CLASSES)) {
+                        throw new IllegalStateException("Plugin " + descriptor.name()
+                                + " shares Arrow but ships " + jarName + " with " + entry
+                                + ": the server's Arrow must be the only one");
                     }
                     if (HADOOP_FILE_SYSTEMS.equals(entry)) {
                         throw new IllegalStateException("Plugin " + descriptor.name()

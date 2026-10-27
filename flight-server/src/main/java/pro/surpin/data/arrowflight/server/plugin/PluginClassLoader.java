@@ -13,7 +13,9 @@ import java.util.Objects;
  * Class loader of one plugin, child first: a plugin's own jars win over everything but the JDK,
  * the SPI and slf4j (always the server's), and with {@code share=hadoop} the cluster's
  * {@code org.apache.hadoop.*} classes (but not {@code org.apache.hadoop.hive.*}) and Hadoop's
- * {@code core-*.xml}/{@code hdfs-*.xml} resources. Other server classes are invisible.
+ * {@code core-*.xml}/{@code hdfs-*.xml} resources, and with {@code share=arrow} the server's
+ * {@code org.apache.arrow.*} classes (one Arrow memory and C data library per JVM, so Arrow data
+ * crosses between plugin and server). Other server classes are invisible.
  */
 public final class PluginClassLoader extends URLClassLoader {
 
@@ -28,9 +30,12 @@ public final class PluginClassLoader extends URLClassLoader {
     private static final String HADOOP = "org.apache.hadoop.";
     /** Hadoop packages a plugin always has its own copy of. */
     private static final String HIVE = "org.apache.hadoop.hive.";
+    /** Arrow packages a {@code share=arrow} plugin takes from the server. */
+    private static final String ARROW = "org.apache.arrow.";
 
     private final ClassLoader server;
     private final boolean shareHadoop;
+    private final boolean shareArrow;
 
     /**
      * Creates a loader.
@@ -39,24 +44,30 @@ public final class PluginClassLoader extends URLClassLoader {
      * @param jars plugin jars
      * @param server the server's class loader, for shared classes
      * @param shareHadoop whether Hadoop classes come from the server
+     * @param shareArrow whether Arrow classes come from the server
      */
-    public PluginClassLoader(String name, URL[] jars, ClassLoader server, boolean shareHadoop) {
+    public PluginClassLoader(String name, URL[] jars, ClassLoader server, boolean shareHadoop,
+            boolean shareArrow) {
         super("plugin-" + name, jars, ClassLoader.getPlatformClassLoader());
         this.server = Objects.requireNonNull(server, "server");
         this.shareHadoop = shareHadoop;
+        this.shareArrow = shareArrow;
     }
 
     /**
      * Tells whether a class comes from the server.
      *
      * @param className binary class name
-     * @return true for the SPI, slf4j and (when shared) Hadoop
+     * @return true for the SPI, slf4j and (when shared) Hadoop and Arrow
      */
     boolean isShared(String className) {
         for (String prefix : ALWAYS_SHARED) {
             if (className.startsWith(prefix)) {
                 return true;
             }
+        }
+        if (shareArrow && className.startsWith(ARROW)) {
+            return true;
         }
         return shareHadoop && className.startsWith(HADOOP) && !className.startsWith(HIVE);
     }

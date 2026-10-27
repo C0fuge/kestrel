@@ -16,6 +16,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (default `none`) sets the codec for calls without the header. Clients that do not ask get plain batches as
   before. Unknown values and `lz4` (Arrow Java's LZ4 codec is far too slow) are refused with INVALID_ARGUMENT.
   Metrics `arrowflight_flight_compress*`. New dependency `arrow-compression` (zstd-jni kept at parquet's version).
+- Plugin descriptors: `share` takes a comma separated list of `hadoop` and `arrow` (was empty or `hadoop`);
+  with `arrow` the plugin's class loader takes `org.apache.arrow.*` from the server (one Arrow memory and C data
+  library per JVM, so a plugin can hand Arrow streams to the server) and a jar of the plugin that carries Arrow
+  classes is refused. The load line logs `shareArrow=`. Existing descriptors are unchanged.
+- Hive plugin (P1 step 2 (a)): descriptor `share=hadoop,arrow` - the plugin now runs on the server's Hadoop and
+  Arrow classes (needed by the ORC reader); the metastore client is unchanged (Hive classes stay the plugin's).
 - Hive plugin, ORC step 1 (P1, no runtime change yet): `OrcArrowReader` reads one ORC file of a Hive table as Arrow
   batches through the server's stores (orc-core 2.1.3 over a one-file Hadoop file system wrapping the store's
   `ReadableFile`): columns by name (case-insensitive) or by position for Hive 1.x `_colN` files, missing columns
