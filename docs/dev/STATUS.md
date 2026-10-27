@@ -358,7 +358,19 @@
     c8 p50 31 -> 22 ms, c32 94 -> 58 ms. Server-side work left per query: describe ~0.4 ms, DoGet parse check +
     prepare + run ~1.8 ms (raw 1.5-1.7), Hazelcast ~0.05 ms; the rest is the 4 gRPC calls stock clients make (~1 ms
     each here). **Stand:** rerun small JDBC/ADBC c1/c8/c32 on the pre-release of this commit vs 27f583a.
-    **Step 2 candidates (not done):** (a) partial mode prepare costs ~17 ms locally: `resultSchema` misses its
+    **Step 2 (part) done 2026-10-27 (80ccac9, CI run 40459493162 green, pre-release `server-1.0.0-80ccac9d9de6`; see Log):**
+    the parse check of a text runs once per node (shared by describe and DoGet), DEBUG-only log arguments are no
+    longer built, the execution-path event reuses its regex/digest. Local (same test, noisy 4-core box, before ->
+    after in the same session): complete point total p50 12.8-13.3 -> 11.9 ms, DoGet 6.1-6.4 -> 5.4 ms, c32
+    74-82 -> 71 ms. What is left in a complete-mode DoGet (JFR): DuckDB prepare + execute of the new text
+    (~= plain DuckDB), Arrow C import + Flight schema/batch messages, the INFO `executionPath=` line ((b)
+    below). Local-profile artifacts that do *not* happen on the stand: GetFlightInfo's `allServerLoads` Hazelcast
+    `entrySet` (only for non-shared storage, i.e. local dirs; ~60 % of the local info phase) and the partial-mode
+    `sampleFile` listing forking `ls` for local-FS permissions. **Stand:** small JDBC/ADBC c1/c8/c32 on this
+    pre-release vs 775100b and 27f583a. c8/c32 vs 1.4.5 not explained yet: at c32 with `duckDbThreads=4` every
+    worker's DuckDB has 4 threads (128 on 4 cores locally); worth one stand round at `duckDbThreads=2` (c32) to see
+    whether the 1.5.6 regression is scheduler oversubscription (feeds item 19).
+    **Step 2 candidates left:** (a) partial mode prepare costs ~17 ms locally: `resultSchema` misses its
     cache for every new literal and lists the table's files for a sample file each time (`sampleFile` 3.4 ms on a
     local dir, an RPC on HDFS) - cache the sample file per table with the listing's TTL; (b) the INFO line
     `executionPath=...` per DoGet goes through slf4j-simple to stderr synchronously (contention at c32): consider
@@ -961,3 +973,14 @@
   UntilTheViewsChange`, `ClusterServiceTest.forgetParametersDoesNotWait`. CI run 40453394028 green; package run
   40454083694 green: pre-release `server-1.0.0-775100bf923f`. Next: stand rerun of the small-query rounds on it
   (item 15 Stand); step 2 candidates listed in item 15 (partial-mode sample-file listing first).
+- 2026-10-27 (cloud session): item 15 step 2 (part, 80ccac9). JFR of `PointQueryOverheadPerfTest`: every DoGet
+  repeated the single-query parse check (json_serialize_sql) the describe had already done, built DEBUG-only
+  arguments (`LogUtil.elapsedNanos` -> `String.format`) with DEBUG off, and compiled two regexes + looked up
+  SHA-256 for the execution-path event. Now: `DuckDbAdapter` remembers accepted texts with their function/table
+  names (1024 texts, metric label `parse_check`; refused names checked on every use, also ones plugins add
+  later), debug arguments guarded, regex/digest reused (same event output). Local: complete point p50 ~13.1 ->
+  11.9 ms (DoGet 6.2 -> 5.4), c32 ~78 -> 71 ms; partial unchanged apart from DoGet. No wire, setting, log-line or
+  answer change. Tests: `DuckDbAdapterTest.parseCheckIsRememberedAndRefusedNamesAreCheckedAgain`,
+  `ExecutionPathRecorderTest.digestIsStableAcrossRepeatedCalls`. CI run 40459493162 green; package run
+  40460140236: green, pre-release `server-1.0.0-80ccac9d9de6`. Next: stand rerun (item 15 Stand) on this pre-release; then the remaining step 2
+  candidates (a)-(b) or close item 15 on the stand numbers.
