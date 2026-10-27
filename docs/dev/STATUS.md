@@ -383,7 +383,7 @@
     (approved above). Local, same session: complete point p50 15.8 -> 15.1 ms, c32 90 -> 78 ms; partial c8 28 -> 24 ms.
     **Proposal to close item 15** after the stand round: the server-side work per query is now ~= plain DuckDB
     + ~1 ms; what remains is the 4 gRPC calls stock clients make (client side, not ours to cut).
-    **Step 3 done 2026-10-27 (e46f28d, package run 40467177476; see Log):** a complete-mode prepare of a query
+    **Step 3 done 2026-10-27 (e46f28d, package run 40467177476 green, pre-release `server-1.0.0-e46f28dfdf09`; see Log):** a complete-mode prepare of a query
     without `?` parameters returns the plain SQL handle, so GetFlightInfo skips the synchronous Hazelcast `get`
     of parameter values and close skips the delete (both remote on a multi-node cluster). Server-side TIMING of
     a complete point DoGet (local, c1): `execution.total` 3.6 ms, of which DuckDB prepare + run to the first batch
@@ -391,7 +391,7 @@
     **c8/c32 check (local, same session, `perf.threads` 4 / 2 / 1):** complete c32 p50 64-69 / 57 / 51 ms, c8
     22-23 / 22 / 20 ms; c1 point unchanged, c1 count 9.2 / 11.3 / 13.2 ms. So the concurrency loss is mostly DuckDB
     thread oversubscription (32 sessions x 4 threads on 4 cores), the item 19 question, not per-query overhead.
-    **Stand:** small JDBC/ADBC c1/c8/c32 on the pre-release of e46f28d vs 45fc0a9, plus one c32 round at
+    **Stand:** small JDBC/ADBC c1/c8/c32 on `server-1.0.0-e46f28dfdf09` vs 45fc0a9, plus one c32 round at
     `duckDbThreads=2`; then close item 15 (remaining time is client gRPC round trips and DuckDB itself) and take
     item 19 earlier if the c32 round confirms oversubscription.
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
@@ -1022,5 +1022,5 @@
   that sends values to a query without parameters and keeps its first handle now runs it without them instead of
   getting a count-mismatch error (CHANGELOG). Test `FlightSqlProducerTest.onlyAQueryWithParametersHasAStatementId`.
   c8/c32: c32 p50 64-69 ms at 4 DuckDB threads, 57 at 2, 51 at 1 (local 4 cores) -> oversubscription (item 19).
-  Package run 40467177476 (push run 40467155113 cancelled in its favour): running. Next: stand rerun (item 15 Stand),
+  Package run 40467177476 (push run 40467155113 cancelled in its favour): build + package green, pre-release `server-1.0.0-e46f28dfdf09`. Next: stand rerun (item 15 Stand),
   then close item 15.
