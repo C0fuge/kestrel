@@ -44,3 +44,20 @@ backlog, decisions, history pointers). The change record of earlier local work i
   Ask only for changes to existing behaviour, defaults, wire format or security.
 - Anything needing the maintainer's decision → "Open questions" in docs/dev/STATUS.md.
 - Docs and commit messages in English.
+
+## Second lane: plugins and integrations (maintainer, 2026-10-28)
+
+A second recurring session ("kestrel plugins") works in parallel with the core session. It follows the session routine
+above with these differences:
+- Lock file `docs/dev/LOCK-PLUGINS` (same 150-minute rule); the core session keeps `docs/dev/LOCK`. Each lane ignores the
+  other lane's lock.
+- Backlog, Log and Open questions of this lane live in `docs/dev/PLUGINS-STATUS.md` (take its first open item), not in
+  `STATUS.md`. Item ids there are `P1`, `P2`, ... .
+- Scope: plugin modules (`flight-plugin-*`, new `flight-plugin-*` / `flight-auth-*` modules), `flight-spark`, docs and
+  tests for them. Changes to `flight-spi` must be additive (new interfaces/methods with defaults, SPI version bump) and go
+  in their own commit; changes to `flight-server` core only where a plugin cannot work without them, small, in their
+  own commit, with a line in `STATUS.md` Log so the core lane knows. The core lane's stage-3 items (compression, the
+  small-query path, scans, distributed complete) are off limits for this lane.
+- Both lanes push to `main`: `git pull --rebase` before every push; resolve `CHANGELOG.md` / root `pom.xml` conflicts by
+  keeping both sides. Never rewrite the other lane's commits.
+- A `package=true` pre-release when a plugin changes runtime behaviour, as in the core lane.
