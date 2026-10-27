@@ -370,16 +370,16 @@
     pre-release vs 775100b and 27f583a. c8/c32 vs 1.4.5 not explained yet: at c32 with `duckDbThreads=4` every
     worker's DuckDB has 4 threads (128 on 4 cores locally); worth one stand round at `duckDbThreads=2` (c32) to see
     whether the 1.5.6 regression is scheduler oversubscription (feeds item 19).
-    **Step 2 (a) done 2026-10-27 (01cdd57, see Log):** partial-mode describes bind against a sample file remembered
+    **Step 2 (a) done 2026-10-27 (01cdd57, CI run 40462267120 green; pre-release `server-1.0.0-45fc0a9e6e02` with (b)):** partial-mode describes bind against a sample file remembered
     per table for 30 s (re-listed once when a describe cannot read it). Local, before -> after in one session:
     partial point prepare p50 28.5 -> 3.4 ms, total 38.4 -> 12.5 ms, c8 97 -> 28 ms, c32 73 -> 74 ms; complete
     mode unchanged (point 15.8 / 16.4 ms on this noisier box). **Stand:** partial-mode small queries (JDBC/ADBC
-    with `x-flight-result-mode: partial`) c1/c8 on this pre-release vs 80ccac9.
+    with `x-flight-result-mode: partial`) c1/c8 and complete c1/c8/c32 on `server-1.0.0-45fc0a9e6e02` vs 80ccac9.
     **Step 2 candidates left:** (b) the INFO line
     `executionPath=...` per DoGet goes through slf4j-simple to stderr synchronously (contention at c32): consider
     DEBUG or an async logger (log change -> ask); **Maintainer 2026-10-27: approved - make it asynchronous, keep the line at INFO.** (c) the DoGet parse check repeats the describe's (needed: DoGet can
     reach a node that did not describe).
-    **(b) done 2026-10-27 (see Log):** the `executionPath=` INFO line is written by a background thread
+    **(b) done 2026-10-27 (45fc0a9, package run 40463504538 green, pre-release `server-1.0.0-45fc0a9e6e02`):** the `executionPath=` INFO line is written by a background thread
     (approved above). Local, same session: complete point p50 15.8 -> 15.1 ms, c32 90 -> 78 ms; partial c8 28 -> 24 ms.
     **Proposal to close item 15** after the stand round: the server-side work per query is now ~= plain DuckDB
     + ~1 ms; what remains is the 4 gRPC calls stock clients make (client side, not ours to cut).
@@ -991,3 +991,14 @@
   `ExecutionPathRecorderTest.digestIsStableAcrossRepeatedCalls`. CI run 40459493162 green; package run
   40460140236: green, pre-release `server-1.0.0-80ccac9d9de6`. Next: stand rerun (item 15 Stand) on this pre-release; then the remaining step 2
   candidates (a)-(b) or close item 15 on the stand numbers.
+- 2026-10-27 (cloud session): item 15 step 2 (a) + (b). (a) 01cdd57: partial-mode describes bind against a sample
+  file remembered per table for 30 s (one re-list when a describe cannot read it) instead of listing the table on
+  every new query text. (b) 45fc0a9, approved by the maintainer in 10b6163: the per-DoGet `executionPath=` INFO line
+  and evidence file are written by one background thread (same level/text, caller writes itself when 8192 are
+  pending, drained at shutdown). Local `PointQueryOverheadPerfTest` (same session, noisy 4-core box): partial point
+  p50 38.4 -> 12.5 -> 11.1 ms (prepare 28.5 -> 3.1), partial c8 97 -> 28 -> 24 ms; complete point 15.8 -> 15.1 ms,
+  complete c32 90 -> 78 ms; plain DuckDB point 2.0 ms. No wire, setting, answer or log-text change. Tests:
+  `ParquetAdapterTest.sampleFileIsRememberedUntilForgotten`, `ExecutionServiceTest.describeRetriesWithAFreshSampleFileAfterAReadError`
+  / `describeDoesNotRetryAQueryError`, `ExecutionPathRecorderTest.eventsRecordedConcurrentlyAreAllWritten`. CI run
+  40462267120 green (01cdd57); package run 40463504538 green on 45fc0a9: pre-release `server-1.0.0-45fc0a9e6e02`.
+  Next: stand rerun (item 15 Stand) on this pre-release, then close item 15 and go on with stage 2 item 0g.
