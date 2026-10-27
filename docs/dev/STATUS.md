@@ -56,7 +56,7 @@
 >    `metadataCache=false` costs a HEAD + footer GETs per file and query (point 71 -> 179 ms at 8 threads). So no new
 >    read setting; the pattern is now pinned in CI (`S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed`).
 >    What is left of item 17 is the bounded data cache: Open questions, "S3 read cache with a memory bound".
->    *2026-10-27 (third cloud session): option A step 1 done (84fec77, see Log):* opt-in `arrowflight.s3.cacheMegabytes`
+>    *2026-10-27 (third cloud session): option A step 1 done (84fec77, pre-release `server-1.0.0-84fec772ec50`, see Log):* opt-in `arrowflight.s3.cacheMegabytes`
 >    (default 0 = off) + `cacheCheckSeconds` (default 10): node-wide heap LRU of 1 MiB blocks behind a 127.0.0.1
 >    endpoint, SigV4-checked random key per store, misses with `If-Match`. **Stand:** S3 SF10 JDBC and the 32-client
 >    small-query step with `arrowflight.s3.cacheMegabytes=1024` (and `-Xmx` >= 2.5g) vs off: timings, RSS, the
@@ -1158,5 +1158,6 @@
   10). Main and named stores; lakeFS not yet. Tests: `S3CacheEndpointTest` (SDK client signing in front, fake S3
   behind: hits, capacity, rewrites, refusals, ranges), `S3IntegrationTest.theReadCacheServesEveryConnectionOfTheNode`
   (DuckDB 1.5.6 httpfs through the cache: a second DuckDB instance reads 0 GETs from S3, answers right). FakeS3:
-  content ETags and If-Match. CI: push run 40480303237, package run 40480315297 (results below). Next: stand round
+  content ETags and If-Match. Local: s3 plugin verify + checkstyle + spotbugs green, `S3IntegrationTest` 10/10 with httpfs 1.5.6. Package run
+  40480315297 green (push run 40480303237 cancelled in its favour): pre-release `server-1.0.0-84fec772ec50`. Next: stand round
   (item 17 Stand), then 17 (a)-(d); Open question "S3 read cache follow-ups".
