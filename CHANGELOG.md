@@ -10,6 +10,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3 read cache (item 17, option A; opt-in): `arrowflight.s3.cacheMegabytes` (default 0 = off) starts one
+  node-wide, byte-bounded cache (JVM heap, at most half of it) that every DuckDB connection reads `s3://` through: a
+  127.0.0.1-only HTTP endpoint of the s3 plugin answers ranged GETs from 1 MiB blocks (least recently used dropped
+  first) and reads misses from S3 with the store's own client and `If-Match` on the object's ETag, so an answer never
+  mixes two versions of an object. DuckDB's secret then holds a random per-store key the endpoint checks as an AWS
+  SigV4 signature (the S3 credentials stay in Java); a key reads only its own data directory; listings are not
+  served. HEADs always reach S3; an object's version is trusted for `arrowflight.s3.cacheCheckSeconds` (default 10)
+  between checks, so a file rewritten in place under the same key may be read in its old version for that long.
+  Applies to the main store and named stores (`arrowflight.s3.stores`), not yet to lakeFS. Startup line
+  `s3=cacheOpen`, shutdown line `s3=cacheClosed` with hits/misses/evictions.
 - Distributed complete mode, step 1 (item 18): `CompleteAnswerMerge` decides whether a query's
   complete answer can be rebuilt from the answers its partial-mode endpoints give for their own
   files and renders the DuckDB merge (rows concatenated; counts and sums summed, min/max taken

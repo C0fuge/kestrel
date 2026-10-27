@@ -464,6 +464,57 @@ class S3IntegrationTest {
     }
 
     /**
+     * Verifies the node-wide read cache ({@code arrowflight.s3.cacheMegabytes}): DuckDB reads
+     * through the loopback endpoint, answers stay right, and a second DuckDB instance (another
+     * worker's connection) reads no data from S3 for what the first one read; its HEADs still
+     * reach S3.
+     */
+    @Test
+    void theReadCacheServesEveryConnectionOfTheNode() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 4;
+        int perFile = 40_000;
+        Path data = dir.resolve("cached.parquet");
+        StringBuilder list = new StringBuilder();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < files; i++) {
+                s.execute("COPY (SELECT " + i * perFile + " + range AS id, range % 1000 AS k,"
+                        + " md5(range::VARCHAR) AS pad FROM range(" + perFile + ")) TO '" + data
+                        + "' (FORMAT parquet, ROW_GROUP_SIZE 10000)");
+                s3.put(bucket, "flight-it/m/x" + i + ".parquet", Files.readAllBytes(data));
+                list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                        .append("/flight-it/m/x").append(i).append(".parquet'");
+            }
+        }
+        long rows = (long) files * perFile;
+        String scan = "SELECT count(*), count(DISTINCT pad) FROM read_parquet([" + list + "])";
+        String point = "SELECT count(*), sum(k) FROM read_parquet([" + list + "]) WHERE id = " + (rows / 2 + 3);
+        plugin.properties.put("arrowflight.s3.cacheMegabytes", "64");
+        threads = 4;
+        open(null);
+        long[] first = requestsOf(scan, rows);
+        assertTrue(first[0] > 0, "the first query reads the data from S3");
+        assertEquals(0, requestsOf(point, 1)[0], "the point query is answered from the cache");
+
+        DuckDbAdapter first1 = duckDb;
+        duckDb = new DuckDbAdapter(config(), ioPool, registry.duckDbSetup());
+        try {
+            long[] other = requestsOf(scan, rows);
+            assertEquals(0, other[0], "another connection reads no data from S3");
+            assertEquals(files, other[1], "its HEADs reach S3");
+            try (Statement s = duckDb.connection().createStatement();
+                    ResultSet rs = s.executeQuery(point)) {
+                assertTrue(rs.next());
+                assertEquals(1, rs.getLong(1));
+                assertEquals((rows / 2 + 3) % perFile % 1000, rs.getLong(2));
+            }
+        } finally {
+            first1.close();
+        }
+    }
+
+    /**
      * Runs a query and counts the object requests it sent to the {@code m/} files.
      *
      * @param sql query whose first column is a count

@@ -29,8 +29,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A small S3 server on the JDK's HTTP server, path style only: ListObjectsV2, HEAD and GET with
- * one byte range. It checks no signature but records every request, so tests can count calls
- * and look at the headers.
+ * one byte range (and If-Match on GET). It checks no signature but records every request, so tests
+ * can count calls and look at the headers.
  */
 public final class FakeS3 implements AutoCloseable {
 
@@ -233,8 +233,8 @@ public final class FakeS3 implements AutoCloseable {
                 break;
             }
             contents.append("<Contents><Key>").append(xml(key)).append("</Key><LastModified>")
-                    .append(e.getValue().lastModified()).append("</LastModified><ETag>\"e")
-                    .append(e.getValue().data().length).append("\"</ETag><Size>")
+                    .append(e.getValue().lastModified()).append("</LastModified><ETag>")
+                    .append(xml(etag(e.getValue().data()))).append("</ETag><Size>")
                     .append(e.getValue().data().length)
                     .append("</Size><StorageClass>STANDARD</StorageClass></Contents>");
             count++;
@@ -277,7 +277,14 @@ public final class FakeS3 implements AutoCloseable {
         }
         exchange.getResponseHeaders().set("Last-Modified",
                 DateTimeFormatter.RFC_1123_DATE_TIME.format(object.lastModified().atOffset(ZoneOffset.UTC)));
-        exchange.getResponseHeaders().set("ETag", "\"e" + data.length + "\"");
+        String etag = etag(data);
+        String ifMatch = exchange.getRequestHeaders().getFirst("If-Match");
+        if (ifMatch != null && !ifMatch.equals(etag)) {
+            exchange.getResponseHeaders().remove("Content-Range");
+            send(exchange, 412, "<Error><Code>PreconditionFailed</Code><Message>changed</Message></Error>");
+            return;
+        }
+        exchange.getResponseHeaders().set("ETag", etag);
         exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
         exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
         int length = end - start + 1;
@@ -313,6 +320,16 @@ public final class FakeS3 implements AutoCloseable {
             result.put(name, value);
         }
         return result;
+    }
+
+    /**
+     * Names an object version by its length and content, quoted as S3 sends it.
+     *
+     * @param data object content
+     * @return ETag
+     */
+    private static String etag(byte[] data) {
+        return "\"e" + data.length + "-" + Integer.toHexString(java.util.Arrays.hashCode(data)) + "\"";
     }
 
     private static String xml(String text) {

@@ -26,6 +26,12 @@ import pro.surpin.data.arrowflight.spi.storage.StoreUse;
  */
 public final class S3DataStoreProvider implements DataStoreProvider {
 
+    /** Size of the node-wide S3 read cache in MiB (main s3 namespace only); 0 = off. */
+    static final String CACHE_MEGABYTES_KEY = "cacheMegabytes";
+    /** Seconds the read cache trusts an object's version before it looks it up again. */
+    static final String CACHE_CHECK_SECONDS_KEY = "cacheCheckSeconds";
+    /** Default of {@link #CACHE_CHECK_SECONDS_KEY}. */
+    static final int DEFAULT_CACHE_CHECK_SECONDS = 10;
     /** Keys of the s3 namespace: the store settings and the names of further stores. */
     static final List<ConfigKey> CONFIG_KEYS = keys();
     private static final Logger LOGGER = LoggerFactory.getLogger(S3DataStoreProvider.class);
@@ -105,8 +111,43 @@ public final class S3DataStoreProvider implements DataStoreProvider {
                 settings.endpointUri(), settings.region(), settings.urlStyle(), settings.useSsl(),
                 settings.caFile(), settings.listingTtlSeconds(), settings.maxConnections(),
                 settings.connectionCaching());
+        S3CacheEndpoint.Route cacheRoute = null;
+        long cacheBytes = cacheBytes(context.config().getInt(CACHE_MEGABYTES_KEY, 0), Runtime.getRuntime().maxMemory());
+        if (cacheBytes > 0) {
+            try {
+                cacheRoute = S3CacheEndpoint.register(cacheBytes,
+                        context.config().getInt(CACHE_CHECK_SECONDS_KEY, DEFAULT_CACHE_CHECK_SECONDS), node,
+                        S3Uri.parse(storeRoot), client, settings);
+            } catch (IOException | RuntimeException e) {
+                client.close();
+                throw new IllegalStateException("Cannot start the S3 read cache: " + e.getMessage(), e);
+            }
+            context.redactor().add(cacheRoute.secret());
+        }
         return new S3DataStore(storeRoot, settings, client, System::nanoTime,
-                context.threadFactory("s3-listing"), node, true, configName);
+                context.threadFactory("s3-listing"), node, true, configName, cacheRoute);
+    }
+
+    /**
+     * Checks the size of the S3 read cache. Its blocks live on the JVM heap, so it may take at
+     * most half of the heap.
+     *
+     * @param megabytes {@code arrowflight.s3.cacheMegabytes}, 0 = off
+     * @param maxHeapBytes largest heap of the JVM
+     * @return cache size in bytes, 0 = off
+     * @throws IllegalArgumentException when the size is negative or above half the heap
+     */
+    static long cacheBytes(int megabytes, long maxHeapBytes) {
+        if (megabytes < 0) {
+            throw new IllegalArgumentException("arrowflight.s3." + CACHE_MEGABYTES_KEY + " must be >= 0: " + megabytes);
+        }
+        long bytes = (long) megabytes << 20;
+        if (bytes > maxHeapBytes / 2) {
+            throw new IllegalArgumentException("arrowflight.s3." + CACHE_MEGABYTES_KEY + "=" + megabytes
+                    + " is more than half the JVM heap (" + (maxHeapBytes >> 20) + " MiB): the cache lives on"
+                    + " the heap; raise -Xmx or lower the cache");
+        }
+        return bytes;
     }
 
     /**
@@ -116,6 +157,10 @@ public final class S3DataStoreProvider implements DataStoreProvider {
      */
     private static List<ConfigKey> keys() {
         List<ConfigKey> keys = new ArrayList<>(S3Settings.CONFIG_KEYS);
+        keys.add(ConfigKey.of(CACHE_MEGABYTES_KEY, "MiB of the node-wide S3 read cache DuckDB reads through"
+                + " (JVM heap, at most half of it); 0 = off, DuckDB reads S3 directly", "0"));
+        keys.add(ConfigKey.of(CACHE_CHECK_SECONDS_KEY, "Seconds the read cache trusts an object's version"
+                + " before it checks it on S3 again", Integer.toString(DEFAULT_CACHE_CHECK_SECONDS)));
         keys.add(ConfigKey.of(S3NamedStores.STORES_KEY, "Comma separated names of further S3"
                 + " stores for catalog roots, each configured below s3.<name>. (root, endpoint,"
                 + " credentials, ...)", null));

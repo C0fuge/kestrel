@@ -50,6 +50,13 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   net.ipv4.tcp_tw_reuse=1`) and widen `net.ipv4.ip_local_port_range` (e.g. `1024 65535`): httpfs then opens a new
   connection for most S3 range reads at 4+ threads and each closed one holds its local port 60 s, so many concurrent
   queries run out of ports ("Could not establish connection"); the server WARNs at startup in that case.
+- S3 read cache (opt-in, `arrowflight.s3.cacheMegabytes`, default 0 = off): one cache per node for every DuckDB
+  connection, in the JVM heap (at most half of `-Xmx`; the start fails above that). DuckDB then reads `s3://` through
+  a loopback endpoint of the s3 plugin (127.0.0.1, random port, random per-store key checked as an S3 signature;
+  credentials stay in Java), whole 1 MiB blocks, misses read from S3 with `If-Match` on the object's ETag. Startup
+  line `s3=cacheOpen ... capacityBytes=...`, at shutdown `s3=cacheClosed ... hits=... misses=...`. A file rewritten
+  in place under the same key can be answered in its old version for up to `arrowflight.s3.cacheCheckSeconds`
+  (default 10); never a mix of versions. Globs on `s3://` paths (listings) are refused while it is on.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
   Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`

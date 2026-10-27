@@ -101,6 +101,7 @@ public final class S3DataStore implements DataStore {
     private volatile Snapshot snapshot;
     private final boolean ownsClient;
     private final String configName;
+    private final S3CacheEndpoint.Route cacheRoute;
 
     /**
      * One complete listing of the data directory.
@@ -184,6 +185,27 @@ public final class S3DataStore implements DataStore {
     public S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
             LongSupplier nanoClock, ThreadFactory threads, String node, boolean ownsClient,
             String configName) {
+        this(dataDirectory, settings, client, nanoClock, threads, node, ownsClient, configName, null);
+    }
+
+    /**
+     * Creates a store whose DuckDB reads may go through the node's S3 read cache.
+     *
+     * @param dataDirectory data directory, {@code s3://bucket/prefix}
+     * @param settings S3 settings
+     * @param client S3 client
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param threads creates the thread of background listings
+     * @param node name of this server node, for logs
+     * @param ownsClient whether {@link #close()} closes the client
+     * @param configName store name, empty for the main configuration
+     * @param cacheRoute route of the read cache, or null to let DuckDB read S3 directly; the
+     *        store closes it
+     */
+    S3DataStore(String dataDirectory, S3Settings settings, S3Client client,
+            LongSupplier nanoClock, ThreadFactory threads, String node, boolean ownsClient,
+            String configName, S3CacheEndpoint.Route cacheRoute) {
+        this.cacheRoute = cacheRoute;
         this.ownsClient = ownsClient;
         this.configName = Objects.requireNonNull(configName, "configName");
         this.root = S3Uri.parse(dataDirectory);
@@ -428,7 +450,11 @@ public final class S3DataStore implements DataStore {
 
     @Override
     public void contributeDuckDb(DuckDbSetup setup) {
-        contribute(setup, settings, root, secretName(configName));
+        if (cacheRoute == null) {
+            contribute(setup, settings, root, secretName(configName));
+        } else {
+            contributeCached(setup, settings, root, secretName(configName), cacheRoute);
+        }
     }
 
     @Override
@@ -455,6 +481,9 @@ public final class S3DataStore implements DataStore {
     @Override
     public void close() {
         refresher.shutdownNow();
+        if (cacheRoute != null) {
+            cacheRoute.close();
+        }
         if (ownsClient) {
             client.close();
         }
@@ -486,27 +515,14 @@ public final class S3DataStore implements DataStore {
      * @param secretName name of the DuckDB secret
      */
     static void contribute(DuckDbSetup setup, S3Settings settings, S3Uri root, String secretName) {
-        setup.loadExtension("httpfs");
-        for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
-                "s3_session_token", "s3_endpoint", "s3_region")) {
-            setup.set(setting, "");
-        }
-        setup.set("s3_url_compatibility_mode", true);
-        setup.set("enable_http_logging", false);
-        setup.set("http_retries", (long) settings.httpRetries());
-        setup.set("http_retry_wait_ms", (long) settings.httpRetryWaitMs());
-        setup.set("http_retry_backoff", (long) settings.httpRetryBackoff());
-        setup.set("httpfs_connection_caching", settings.connectionCaching());
+        common(setup, settings);
         if (settings.useSsl()) {
             setup.set("enable_server_cert_verification", settings.verifyTls());
             if (settings.caFile() != null) {
                 setup.set("ca_cert_file", settings.caFile());
             }
         }
-        if (settings.metadataCache()) {
-            setup.set("parquet_metadata_cache", true);
-            setup.set("enable_http_metadata_cache", true);
-        }
+        metadataCaches(setup, settings);
         Map<String, SecretValue> options = new LinkedHashMap<>();
         if (settings.hasCredentials()) {
             options.put("KEY_ID", SecretValue.plain(settings.accessKey()));
@@ -521,6 +537,66 @@ public final class S3DataStore implements DataStore {
         options.put("USE_SSL", SecretValue.of(settings.useSsl()));
         options.put("URL_COMPATIBILITY_MODE", SecretValue.of(true));
         setup.createSecret(secretName, "s3", root.root(), options);
+    }
+
+    /**
+     * Describes the DuckDB setup of an S3 store read through the node's read cache: the same
+     * settings as {@link #contribute(DuckDbSetup, S3Settings, S3Uri, String)}, but the secret
+     * points at the cache's loopback endpoint (plain HTTP, path style) and holds the route's
+     * random key instead of the store's credentials.
+     *
+     * @param setup receives the extension, settings and secret, in this order
+     * @param settings S3 settings
+     * @param root data directory
+     * @param secretName name of the DuckDB secret
+     * @param route route of the read cache
+     */
+    static void contributeCached(DuckDbSetup setup, S3Settings settings, S3Uri root, String secretName,
+            S3CacheEndpoint.Route route) {
+        common(setup, settings);
+        metadataCaches(setup, settings);
+        Map<String, SecretValue> options = new LinkedHashMap<>();
+        options.put("KEY_ID", SecretValue.plain(route.keyId()));
+        options.put("SECRET", SecretValue.sensitive(route.secret()));
+        options.put("REGION", SecretValue.plain(settings.region()));
+        options.put("ENDPOINT", SecretValue.plain(route.duckDbEndpoint()));
+        options.put("URL_STYLE", SecretValue.plain("path"));
+        options.put("USE_SSL", SecretValue.of(false));
+        options.put("URL_COMPATIBILITY_MODE", SecretValue.of(true));
+        setup.createSecret(secretName, "s3", root.root(), options);
+    }
+
+    /**
+     * Describes the extension and settings every S3 store sets, wherever DuckDB reads it.
+     *
+     * @param setup receives the extension and settings
+     * @param settings S3 settings
+     */
+    private static void common(DuckDbSetup setup, S3Settings settings) {
+        setup.loadExtension("httpfs");
+        for (String setting : List.of("s3_access_key_id", "s3_secret_access_key",
+                "s3_session_token", "s3_endpoint", "s3_region")) {
+            setup.set(setting, "");
+        }
+        setup.set("s3_url_compatibility_mode", true);
+        setup.set("enable_http_logging", false);
+        setup.set("http_retries", (long) settings.httpRetries());
+        setup.set("http_retry_wait_ms", (long) settings.httpRetryWaitMs());
+        setup.set("http_retry_backoff", (long) settings.httpRetryBackoff());
+        setup.set("httpfs_connection_caching", settings.connectionCaching());
+    }
+
+    /**
+     * Describes DuckDB's metadata caches of S3 reads, when the settings turn them on.
+     *
+     * @param setup receives the settings
+     * @param settings S3 settings
+     */
+    private static void metadataCaches(DuckDbSetup setup, S3Settings settings) {
+        if (settings.metadataCache()) {
+            setup.set("parquet_metadata_cache", true);
+            setup.set("enable_http_metadata_cache", true);
+        }
     }
 
     /**
