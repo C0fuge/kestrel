@@ -1170,6 +1170,6 @@
   for each other; a refused If-Match fails every waiter, each looks the version up and the new version is read once
   again. `joined=` added to the `s3=cacheClosed` line. Tests (`S3CacheEndpointTest`, fake S3 with 300 ms latency,
   4 readers): one GET for 2 blocks (4 before the change), 2 GETs across a rewrite (8 before). Local s3 module 54/54 +
-  checkstyle + spotbugs green. Package run 40491054544 (running): pre-release `server-1.0.0-8625e28f08cd`. **Stand** (with
+  checkstyle + spotbugs green. Package run 40491054544 green: pre-release `server-1.0.0-8625e28f08cd`. **Stand** (with
   the item 17 round): note `joined=` at the 32-client step with `cacheMegabytes=1024`. Next: item 15 stand + close;
   17 (b) lakeFS through the cache or (d) metrics; then item 16 / 19.
