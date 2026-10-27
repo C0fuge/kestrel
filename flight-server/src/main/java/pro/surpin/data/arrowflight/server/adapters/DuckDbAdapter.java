@@ -345,6 +345,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.sessionReaper.scheduleWithFixedDelay(this::closeSessionsOfEndedThreads,
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
+        LOGGER.info("node={} duckdb=threads perConnection={} availableProcessors={}", LogUtil.node(),
+                appConfig.duckDbThreads(), Runtime.getRuntime().availableProcessors());
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);

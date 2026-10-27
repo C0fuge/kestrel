@@ -46,7 +46,8 @@ class ConfigAdapterTest {
         // so the value is core-count dependent: clamped to [minThreads=8, 64].
         assertTrue(cfg.ioParallelism() >= 8 && cfg.ioParallelism() <= 64,
                 "ioParallelism should be within the formula range, got " + cfg.ioParallelism());
-        assertEquals(4, cfg.duckDbThreads());
+        assertEquals(ConfigAdapter.defaultDuckDbThreads(Runtime.getRuntime().availableProcessors()),
+                cfg.duckDbThreads());
         assertTrue(cfg.duckDbStreamResults());
         assertFalse(cfg.duckDbExternalFileCache());
         assertEquals(64, cfg.duckDbStatementCacheSize());
@@ -117,10 +118,30 @@ class ConfigAdapterTest {
 
     /** The code default matches the bundled file: 4 threads without any setting (TUNING.md). */
     @Test
-    void duckDbThreadsDefaultsToFourWithoutAnySetting() {
+    void duckDbThreadsDefaultsToAQuarterOfTheCoresWithoutAnySetting() throws IOException {
+        int expected = ConfigAdapter.defaultDuckDbThreads(Runtime.getRuntime().availableProcessors());
         AppConfig cfg = ConfigAdapter.getConfig(
                 new ConfigSource(key -> null, new Properties(), Map.of(), null));
-        assertEquals(4, cfg.duckDbThreads());
+        assertEquals(expected, cfg.duckDbThreads());
+        assertEquals(expected, ConfigAdapter.getConfig(source(Map.of("duckDbThreads", "0"),
+                Map.of())).duckDbThreads());
+    }
+
+    @Test
+    void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndEight() {
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(1));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(11));
+        assertEquals(3, ConfigAdapter.defaultDuckDbThreads(12));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(16));
+        assertEquals(8, ConfigAdapter.defaultDuckDbThreads(32));
+        assertEquals(8, ConfigAdapter.defaultDuckDbThreads(128));
+    }
+
+    @Test
+    void negativeDuckDbThreadsIsRejected() {
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.getConfig(
+                source(Map.of("duckDbThreads", "-1"), Map.of())));
     }
 
     @Test

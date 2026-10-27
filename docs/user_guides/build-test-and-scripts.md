@@ -138,7 +138,7 @@ Key parameters:
 - `ioParallelismMultiplier` - core multiplier, `8` by default.
 - `duckDbWarmConnections` - number of DuckDB connections warmed up at startup.
 - `duckDbGroups` - number of groups used by older grouped helper paths.
-- `duckDbThreads` - `SET threads` value for each DuckDB connection (default 4).
+- `duckDbThreads` - `SET threads` value for each DuckDB connection (default: a quarter of the cores, between 2 and 8; 0 = the same).
 - `grpcMaxInboundMessageSize` - max inbound gRPC message size.
 - `flightBackpressureThresholdBytes` - max serialized outbound bytes queued before Flight applies backpressure.
 - `flightListenerReadyTimeoutMs` - timeout for waiting until the Flight listener is ready.

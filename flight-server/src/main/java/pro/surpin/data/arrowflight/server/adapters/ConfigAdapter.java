@@ -43,7 +43,13 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.warmConnections", Math.min(8, ioParallelism), props);
         int duckDbGroups = getInt("duckDbGroups",
                 "arrowflight.duckdb.groups", Math.min(8, ioParallelism), props);
-        int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 4, props);
+        int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
+        if (duckDbThreads < 0) {
+            throw new IllegalArgumentException("duckDbThreads must not be negative: " + duckDbThreads);
+        }
+        if (duckDbThreads == 0) {
+            duckDbThreads = defaultDuckDbThreads(Runtime.getRuntime().availableProcessors());
+        }
         String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
                 "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
         boolean duckDbAllowUnsignedExtensions = getBooleanWithEnv("duckDbAllowUnsignedExtensions",
@@ -174,6 +180,17 @@ public class ConfigAdapter {
                 duckDbHdfsConnectTimeoutMs, duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
                 Boolean.parseBoolean(preserveOrder), duckDbStreamingBufferSize,
                 endpointsPerServer, flightOutboundBudgetBytes);
+    }
+
+    /**
+     * Returns the DuckDB threads per connection used when duckDbThreads is unset or 0: a quarter
+     * of the cores, between 2 and 8.
+     *
+     * @param availableCores processors available to the JVM
+     * @return threads per DuckDB connection
+     */
+    static int defaultDuckDbThreads(int availableCores) {
+        return Math.min(8, Math.max(2, availableCores / 4));
     }
 
     /**

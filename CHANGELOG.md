@@ -165,6 +165,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- `duckDbThreads` default is size-aware (item 19, approved in stage 2): unset or 0 = a quarter of the cores the JVM
+  sees, between 2 and 8 (4 cores: 2, 16: 4, 32+: 8; was a fixed 4). Every DuckDB connection (one per busy worker
+  thread) runs that many threads, so 32 concurrent sessions at 4 threads on 4 cores oversubscribed the CPU (local
+  c32 point p50 64-69 ms at 4 threads vs 57 at 2). An explicit value is used as before; a negative one is refused
+  at startup. The bundled `arrowflight.properties` leaves it empty. New startup line `duckdb=threads perConnection=
+  availableProcessors=`.
 - Complete-answer mode: less work per query (item 15). The result and parameter schema of a query
   are described once per views snapshot and shared by the client's prepare and its GetFlightInfo
   (before: three DuckDB describes and four parse checks per JDBC/ADBC query); the describe

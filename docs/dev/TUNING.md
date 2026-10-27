@@ -135,8 +135,9 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
 
 ## Recommended defaults
 
-- `duckDbThreads=4` (was 2) — adopted as the build default 2026-10-26 (plain 4). A size-aware default (for example cores / 4,
-  between 2 and 8) would keep the balance on bigger hosts (proposal, not adopted).
+- `duckDbThreads=4` (was 2) — adopted as the build default 2026-10-26 (plain 4). Since 2026-10-27 (item 19) the default is
+  size-aware: cores / 4, between 2 and 8 (16 cores: 4 as measured above; 4 cores: 2, which a local c32 point run favoured:
+  p50 57 ms vs 64-69 ms at 4). An explicit value still wins.
 - `flightBackpressureThresholdBytes=16777216` (16 MiB, was 256 MiB): no loss measured, and per-stream buffering times the number of
   concurrent streams must fit `MaxDirectMemorySize`; with several endpoints per node the 256 MiB default fails.
 - Keep: `duckDbStreamResults=true`, `duckDbExternalFileCache=false`, `resultMode=complete`, `endpointsPerServer=1`,
