@@ -451,6 +451,7 @@
   (3) a peer failure mid-stream after the first batch fails the query (as today for a lost node), before the first
   batch the planning node falls back to the single-node path - ok?
 
+- **Maintainer 2026-10-27: option (A) chosen** for the S3 read cache below (node-wide byte-bounded range cache in the s3 plugin behind a 127.0.0.1-only loopback endpoint with a per-process token; note the security review in the Log). Do it as the next part of item 17.
 - **S3 read cache with a memory bound (item 17, 2026-10-27).** The stand measured DuckDB's external file cache ~40x
   faster for repeated S3 reads but it OOM-killed the server: DuckDB 1.5.6 has no size setting for it, it lives in each
   connection's buffer pool (one DuckDB per worker thread), so the only bound is `duckDbMemoryLimit` x live connections.
