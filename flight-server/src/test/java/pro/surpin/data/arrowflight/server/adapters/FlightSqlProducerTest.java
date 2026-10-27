@@ -908,7 +908,7 @@ class FlightSqlProducerTest {
         verify(queryPlanner, never()).tableStatistics(eq("sales"), eq("secret"), any());
     }
 
-    /** Lists the statistics action after the Flight SQL actions. */
+    /** Lists the statistics action after the Flight SQL and session actions. */
     @Test
     void listActionsIncludesTableStatistics() {
         FlightSqlProducer producer = statisticsProducer(mock(QueryPlanner.class),
@@ -935,6 +935,10 @@ class FlightSqlProducerTest {
 
         assertEquals(TableStatisticsService.ACTION, types.get(types.size() - 1));
         assertEquals(true, types.size() > 1);
+        assertEquals(true, types.containsAll(List.of(
+                org.apache.arrow.flight.FlightConstants.SET_SESSION_OPTIONS.getType(),
+                org.apache.arrow.flight.FlightConstants.GET_SESSION_OPTIONS.getType(),
+                org.apache.arrow.flight.FlightConstants.CLOSE_SESSION.getType())));
         assertEquals(true, completed[0]);
     }
 

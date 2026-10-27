@@ -7,14 +7,23 @@ import com.google.protobuf.ProtocolStringList;
 import org.apache.arrow.flight.Action;
 import org.apache.arrow.flight.ActionType;
 import org.apache.arrow.flight.CallStatus;
+import org.apache.arrow.flight.CloseSessionRequest;
+import org.apache.arrow.flight.CloseSessionResult;
+import org.apache.arrow.flight.FlightConstants;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.GetSessionOptionsRequest;
+import org.apache.arrow.flight.GetSessionOptionsResult;
 import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.NoOpSessionOptionValueVisitor;
 import org.apache.arrow.flight.Result;
 import org.apache.arrow.flight.SchemaResult;
+import org.apache.arrow.flight.SessionOptionValue;
+import org.apache.arrow.flight.SetSessionOptionsRequest;
+import org.apache.arrow.flight.SetSessionOptionsResult;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.sql.BasicFlightSqlProducer;
 import org.apache.arrow.flight.sql.SqlInfoBuilder;
@@ -302,6 +311,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
 
             @Override
             public void onCompleted() {
+                listener.onNext(FlightConstants.SET_SESSION_OPTIONS);
+                listener.onNext(FlightConstants.GET_SESSION_OPTIONS);
+                listener.onNext(FlightConstants.CLOSE_SESSION);
                 listener.onNext(new ActionType(TableStatisticsService.ACTION,
                         "Table statistics for an optimizer: JSON {schema, table, columns}"));
                 listener.onCompleted();
@@ -362,8 +374,132 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightProducer.ServerStreamListener listener) {
         StreamCompression compression = context.getMiddleware(StreamCompression.KEY);
         FlightProducer.ServerStreamListener sending =
-                compression == null ? listener : compression.wrap(listener);
+                compression == null ? listener : compression.wrap(listener, sessionCodec(context));
         super.getStream(context, ticket, EmptyListOffsets.guard(sending));
+    }
+
+    /**
+     * Returns the stream codec the call's Flight SQL session asked for.
+     *
+     * @param context call context
+     * @return codec, or null when the call has no session or its session sets none
+     */
+    private static StreamCompression.Codec sessionCodec(FlightProducer.CallContext context) {
+        FlightSessions.Call call = context.getMiddleware(FlightSessions.KEY);
+        FlightSessions.Session session = call == null ? null : call.session(context.peerIdentity());
+        SessionOptionValue value = session == null ? null : session.option(StreamCompression.HEADER);
+        return value == null ? null : StreamCompression.parse(stringOption(value));
+    }
+
+    /**
+     * Reads a string session option value.
+     *
+     * @param value option value
+     * @return the string, or null for any other type
+     */
+    private static String stringOption(SessionOptionValue value) {
+        return value.acceptVisitor(new NoOpSessionOptionValueVisitor<String>() {
+            @Override
+            public String visit(String text) {
+                return text;
+            }
+        });
+    }
+
+    /**
+     * Sets Flight SQL session options; the only option is {@code arrow-compression} (none, zstd
+     * or lz4: the stream codec of the session's DoGet calls without the header), an empty value
+     * unsets it. Sessions live on this node only (cookie {@code arrow_flight_session_id}).
+     *
+     * @param request options to set
+     * @param context call context
+     * @param listener receives the per-option errors (INVALID_NAME, INVALID_VALUE)
+     */
+    @Override
+    public void setSessionOptions(SetSessionOptionsRequest request, FlightProducer.CallContext context,
+            FlightProducer.StreamListener<SetSessionOptionsResult> listener) {
+        FlightSessions.Call call = context.getMiddleware(FlightSessions.KEY);
+        if (call == null) {
+            listener.onError(CallStatus.UNIMPLEMENTED.withDescription("Flight SQL sessions are off")
+                    .toRuntimeException());
+            return;
+        }
+        Map<String, SetSessionOptionsResult.Error> errors = new java.util.HashMap<>();
+        Map<String, SessionOptionValue> accepted = new java.util.HashMap<>();
+        for (Map.Entry<String, SessionOptionValue> option : request.getSessionOptions().entrySet()) {
+            if (!StreamCompression.HEADER.equals(option.getKey())) {
+                errors.put(option.getKey(),
+                        new SetSessionOptionsResult.Error(SetSessionOptionsResult.ErrorValue.INVALID_NAME));
+                continue;
+            }
+            SessionOptionValue value = option.getValue();
+            if (value.isEmpty()) {
+                accepted.put(option.getKey(), null);
+                continue;
+            }
+            String text = stringOption(value);
+            try {
+                if (text == null) {
+                    throw new IllegalArgumentException("not a string");
+                }
+                StreamCompression.parse(text);
+                accepted.put(option.getKey(), value);
+            } catch (IllegalArgumentException e) {
+                errors.put(option.getKey(),
+                        new SetSessionOptionsResult.Error(SetSessionOptionsResult.ErrorValue.INVALID_VALUE));
+            }
+        }
+        boolean setsValue = accepted.values().stream().anyMatch(java.util.Objects::nonNull);
+        FlightSessions.Session session = setsValue ? call.sessionOrCreate(context.peerIdentity())
+                : call.session(context.peerIdentity());
+        if (session != null) {
+            accepted.forEach(session::set);
+        }
+        LOGGER.info("node={} setSessionOptions set={} errors={}", LogUtil.node(), accepted.keySet(),
+                errors.keySet());
+        listener.onNext(new SetSessionOptionsResult(errors));
+        listener.onCompleted();
+    }
+
+    /**
+     * Returns the options of the call's Flight SQL session (none without a session).
+     *
+     * @param request request
+     * @param context call context
+     * @param listener receives the options
+     */
+    @Override
+    public void getSessionOptions(GetSessionOptionsRequest request, FlightProducer.CallContext context,
+            FlightProducer.StreamListener<GetSessionOptionsResult> listener) {
+        FlightSessions.Call call = context.getMiddleware(FlightSessions.KEY);
+        FlightSessions.Session session = call == null ? null : call.session(context.peerIdentity());
+        listener.onNext(new GetSessionOptionsResult(session == null ? Map.of() : session.options()));
+        listener.onCompleted();
+    }
+
+    /**
+     * Closes the call's Flight SQL session.
+     *
+     * @param request request
+     * @param context call context
+     * @param listener receives CLOSED, or NOT_FOUND when the call has no session
+     */
+    @Override
+    public void closeSession(CloseSessionRequest request, FlightProducer.CallContext context,
+            FlightProducer.StreamListener<CloseSessionResult> listener) {
+        FlightSessions.Call call = context.getMiddleware(FlightSessions.KEY);
+        try {
+            if (call == null) {
+                throw CallStatus.NOT_FOUND.withDescription("No Flight SQL session for this call")
+                        .toRuntimeException();
+            }
+            call.close(context.peerIdentity());
+        } catch (FlightRuntimeException e) {
+            listener.onError(e);
+            return;
+        }
+        listener.onNext(new CloseSessionResult(CloseSessionResult.Status.CLOSED));
+        listener.onCompleted();
     }
 
     /**

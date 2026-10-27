@@ -211,6 +211,29 @@ public class ConfigAdapter {
     }
 
     /**
+     * Creates the Flight SQL session store from the system configuration.
+     *
+     * @return session store
+     */
+    public static FlightSessions flightSessions() {
+        return flightSessions(ConfigSource.system());
+    }
+
+    /**
+     * Creates the Flight SQL session store: {@code flightSessionIdleSeconds} (default 3600, a
+     * session unused this long is dropped) and {@code flightSessionMax} (default 10000 sessions
+     * per node, the least recently used dropped first).
+     *
+     * @param props configuration source
+     * @return session store
+     */
+    public static FlightSessions flightSessions(ConfigSource props) {
+        long idle = getLong("flightSessionIdleSeconds", "arrowflight.flight.sessionIdleSeconds", 3600L, props);
+        int max = getInt("flightSessionMax", "arrowflight.flight.sessionMax", 10_000, props);
+        return new FlightSessions(idle, max);
+    }
+
+    /**
      * Returns the DuckDB threads per connection used when duckDbThreads is unset or 0: a quarter
      * of the cores, between 2 and 8.
      *

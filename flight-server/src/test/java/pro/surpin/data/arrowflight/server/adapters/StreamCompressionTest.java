@@ -80,6 +80,37 @@ class StreamCompressionTest {
     }
 
     /**
+     * Verifies a session's codec goes before the server default but after the call header.
+     */
+    @Test
+    void sessionCodecGoesBetweenHeaderAndDefault() {
+        StreamCompression.Factory zstd = new StreamCompression.Factory(
+                new StreamCompression.Settings(StreamCompression.Codec.ZSTD, 3, 0));
+        FlightProducer.ServerStreamListener listener = Mockito.mock(FlightProducer.ServerStreamListener.class);
+        assertSame(listener, call(zstd, null).wrap(listener, StreamCompression.Codec.NONE));
+        assertInstanceOf(CompressingStreamListener.class, call(zstd, null).wrap(listener, null));
+        StreamCompression.Factory plain = new StreamCompression.Factory(StreamCompression.Settings.DEFAULT);
+        assertInstanceOf(CompressingStreamListener.class,
+                call(plain, null).wrap(listener, StreamCompression.Codec.LZ4));
+        assertSame(listener, call(plain, "none").wrap(listener, StreamCompression.Codec.ZSTD));
+        assertInstanceOf(CompressingStreamListener.class,
+                call(plain, "zstd").wrap(listener, StreamCompression.Codec.NONE));
+    }
+
+    /**
+     * Verifies the session store settings are read and checked.
+     */
+    @Test
+    void readsSessionSettings() {
+        assertEquals(0, ConfigAdapter.flightSessions(source(Map.of())).size());
+        ConfigAdapter.flightSessions(source(Map.of("flightSessionIdleSeconds", "5", "flightSessionMax", "1")));
+        assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.flightSessions(source(Map.of("flightSessionMax", "0"))));
+        assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.flightSessions(source(Map.of("flightSessionIdleSeconds", "-1"))));
+    }
+
+    /**
      * Verifies the settings are read from the configuration and checked.
      */
     @Test

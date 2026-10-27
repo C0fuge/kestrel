@@ -2,12 +2,22 @@ package pro.surpin.data.arrowflight.server;
 
 import org.apache.arrow.flight.CallOption;
 import org.apache.arrow.flight.CallStatus;
+import org.apache.arrow.flight.CloseSessionRequest;
+import org.apache.arrow.flight.CloseSessionResult;
+import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.FlightStream;
+import org.apache.arrow.flight.GetSessionOptionsRequest;
 import org.apache.arrow.flight.HeaderCallOption;
+import org.apache.arrow.flight.SessionOptionValue;
+import org.apache.arrow.flight.SessionOptionValueFactory;
+import org.apache.arrow.flight.SetSessionOptionsRequest;
+import org.apache.arrow.flight.SetSessionOptionsResult;
+import org.apache.arrow.flight.client.ClientCookieMiddleware;
+import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.AfterAll;
@@ -28,6 +38,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -161,6 +172,72 @@ class StreamCompressionIntegrationTest {
     }
 
     /**
+     * Verifies the Flight SQL session option arrow-compression compresses the session's reads
+     * without the header, the header still wins, bad options are reported per option, and after
+     * CloseSession (or with an unknown cookie) reads are plain again.
+     *
+     * @throws Exception on query failure
+     */
+    @Test
+    void sessionOptionCompressesTheSessionsReads() throws Exception {
+        String sql = "SELECT * FROM " + TABLE;
+        List<String> plain = read(helper.sqlClient(), helper.flightClient(), sql, "complete", null);
+        try (FlightClient client = FlightClient.builder(helper.allocator, helper.location)
+                .intercept(new ClientCookieMiddleware.Factory()).build()) {
+            FlightSqlClient sql2 = new FlightSqlClient(client);
+            SetSessionOptionsResult result = sql2.setSessionOptions(new SetSessionOptionsRequest(Map.of(
+                    StreamCompression.HEADER, SessionOptionValueFactory.makeSessionOptionValue("zstd"),
+                    "catalog", SessionOptionValueFactory.makeSessionOptionValue("x"))));
+            assertEquals(Map.of("catalog",
+                    new SetSessionOptionsResult.Error(SetSessionOptionsResult.ErrorValue.INVALID_NAME)),
+                    result.getErrors());
+            Map<String, SessionOptionValue> options =
+                    sql2.getSessionOptions(new GetSessionOptionsRequest()).getSessionOptions();
+            assertEquals(Map.of(StreamCompression.HEADER,
+                    SessionOptionValueFactory.makeSessionOptionValue("zstd")), options);
+
+            for (String mode : List.of("partial", "complete")) {
+                long before = CompressionMetrics.compressedBatches();
+                assertEquals(plain, read(sql2, client, sql, mode, null), mode);
+                assertTrue(CompressionMetrics.compressedBatches() > before, mode);
+            }
+            long before = CompressionMetrics.compressedBatches();
+            assertEquals(plain, read(sql2, client, sql, "complete", "none"));
+            assertEquals(before, CompressionMetrics.compressedBatches(), "the header goes first");
+
+            result = sql2.setSessionOptions(new SetSessionOptionsRequest(Map.of(StreamCompression.HEADER,
+                    SessionOptionValueFactory.makeSessionOptionValue("gzip"))));
+            assertEquals(Map.of(StreamCompression.HEADER,
+                    new SetSessionOptionsResult.Error(SetSessionOptionsResult.ErrorValue.INVALID_VALUE)),
+                    result.getErrors());
+            assertEquals(options, sql2.getSessionOptions(new GetSessionOptionsRequest()).getSessionOptions(),
+                    "a refused value keeps the old one");
+
+            assertEquals(CloseSessionResult.Status.CLOSED,
+                    sql2.closeSession(new CloseSessionRequest()).getStatus());
+            assertEquals(Map.of(), sql2.getSessionOptions(new GetSessionOptionsRequest()).getSessionOptions());
+            before = CompressionMetrics.compressedBatches();
+            assertEquals(plain, read(sql2, client, sql, "complete", null));
+            assertEquals(before, CompressionMetrics.compressedBatches(), "closed session reads plain");
+        }
+
+        FlightCallHeaders stale = new FlightCallHeaders();
+        stale.insert("cookie", "arrow_flight_session_id=unknown-session");
+        long before = CompressionMetrics.compressedBatches();
+        List<String> rows = new ArrayList<>();
+        HeaderCallOption staleCookie = new HeaderCallOption(stale);
+        FlightInfo info = helper.sqlClient().execute(sql, staleCookie);
+        for (FlightEndpoint endpoint : info.getEndpoints()) {
+            try (FlightStream stream = helper.flightClient().getStream(endpoint.getTicket(), staleCookie)) {
+                collect(stream, rows);
+            }
+        }
+        Collections.sort(rows);
+        assertEquals(plain, rows, "an unknown session cookie does not fail the call");
+        assertEquals(before, CompressionMetrics.compressedBatches());
+    }
+
+    /**
      * Plans a query in a result mode.
      *
      * @param sql query
@@ -196,10 +273,28 @@ class StreamCompressionIntegrationTest {
      * @throws Exception on query failure
      */
     private static List<String> read(String sql, String mode, String codec) throws Exception {
+        return read(helper.sqlClient(), helper.flightClient(), sql, mode, codec);
+    }
+
+    /**
+     * Reads every endpoint of a query through given clients.
+     *
+     * @param sqlClient client that plans
+     * @param client client that reads
+     * @param sql query
+     * @param mode result mode
+     * @param codec compression header value, or null for none
+     * @return rows as text, sorted
+     * @throws Exception on query failure
+     */
+    private static List<String> read(FlightSqlClient sqlClient, FlightClient client, String sql, String mode,
+            String codec) throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(ResultModeMiddleware.HEADER, mode);
         List<String> rows = new ArrayList<>();
-        for (FlightEndpoint endpoint : info(sql, mode).getEndpoints()) {
+        for (FlightEndpoint endpoint : sqlClient.execute(sql, new HeaderCallOption(headers)).getEndpoints()) {
             CallOption[] options = codec == null ? new CallOption[0] : new CallOption[]{header(codec)};
-            try (FlightStream stream = helper.flightClient().getStream(endpoint.getTicket(), options)) {
+            try (FlightStream stream = client.getStream(endpoint.getTicket(), options)) {
                 collect(stream, rows);
             }
         }

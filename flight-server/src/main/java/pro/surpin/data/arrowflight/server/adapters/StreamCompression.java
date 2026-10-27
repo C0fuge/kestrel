@@ -11,7 +11,8 @@ import org.apache.arrow.flight.RequestContext;
 /**
  * Carries the Arrow IPC body compression of one call's streams: the codec a client asks for with
  * the {@code arrow-compression} header ({@code zstd}, {@code lz4} or {@code none}), else the
- * server's {@code flightCompression} setting (default none). Clients that neither ask nor run
+ * {@code arrow-compression} option of its Flight SQL session, else the server's
+ * {@code flightCompression} setting (default none). Clients that neither ask nor run
  * against a server set to compress get plain batches, as before.
  */
 public final class StreamCompression implements FlightServerMiddleware {
@@ -66,6 +67,7 @@ public final class StreamCompression implements FlightServerMiddleware {
     private final Settings settings;
     private final Codec codec;
     private final String refusal;
+    private final boolean fromHeader;
 
     /**
      * Remembers the codec of one call.
@@ -73,11 +75,13 @@ public final class StreamCompression implements FlightServerMiddleware {
      * @param settings server settings
      * @param codec resolved codec
      * @param refusal why the header names no usable codec, or null
+     * @param fromHeader whether the call sent the header
      */
-    private StreamCompression(Settings settings, Codec codec, String refusal) {
+    private StreamCompression(Settings settings, Codec codec, String refusal, boolean fromHeader) {
         this.settings = settings;
         this.codec = codec;
         this.refusal = refusal;
+        this.fromHeader = fromHeader;
     }
 
     /**
@@ -122,13 +126,28 @@ public final class StreamCompression implements FlightServerMiddleware {
      * @throws org.apache.arrow.flight.FlightRuntimeException INVALID_ARGUMENT for an unknown codec
      */
     public FlightProducer.ServerStreamListener wrap(FlightProducer.ServerStreamListener listener) {
+        return wrap(listener, null);
+    }
+
+    /**
+     * Wraps a stream listener so its batches are compressed as this call asks; the call header
+     * goes before the session's codec, which goes before the server default.
+     *
+     * @param listener Flight stream listener
+     * @param sessionCodec codec of the call's Flight SQL session, or null when it sets none
+     * @return the listener itself when no compression applies, else a compressing one
+     * @throws org.apache.arrow.flight.FlightRuntimeException INVALID_ARGUMENT for an unknown codec
+     */
+    public FlightProducer.ServerStreamListener wrap(FlightProducer.ServerStreamListener listener,
+            Codec sessionCodec) {
         if (refusal != null) {
             throw CallStatus.INVALID_ARGUMENT.withDescription(refusal).toRuntimeException();
         }
-        if (codec == Codec.NONE) {
+        Codec use = fromHeader || sessionCodec == null ? codec : sessionCodec;
+        if (use == Codec.NONE) {
             return listener;
         }
-        return new CompressingStreamListener(listener, codec, settings);
+        return new CompressingStreamListener(listener, use, settings);
     }
 
     @Override
@@ -165,12 +184,12 @@ public final class StreamCompression implements FlightServerMiddleware {
                 RequestContext context) {
             String requested = incomingHeaders.get(HEADER);
             if (requested == null) {
-                return new StreamCompression(settings, settings.defaultCodec(), null);
+                return new StreamCompression(settings, settings.defaultCodec(), null, false);
             }
             try {
-                return new StreamCompression(settings, parse(requested), null);
+                return new StreamCompression(settings, parse(requested), null, true);
             } catch (IllegalArgumentException e) {
-                return new StreamCompression(settings, Codec.NONE, e.getMessage());
+                return new StreamCompression(settings, Codec.NONE, e.getMessage(), true);
             }
         }
     }

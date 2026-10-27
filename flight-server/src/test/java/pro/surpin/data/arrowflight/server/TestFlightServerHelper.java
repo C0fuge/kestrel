@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server;
 
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.adapters.FlightSessions;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
@@ -115,6 +116,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         server = FlightServer.builder(allocator, location, flightSqlProducer)
                 .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                 .middleware(StreamCompression.KEY, new StreamCompression.Factory(b.compression))
+                .middleware(FlightSessions.KEY, new FlightSessions(3600, 1000).factory())
                 .build();
         server.start();
 

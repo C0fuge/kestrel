@@ -19,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.IntSupplier;
 
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
+import pro.surpin.data.arrowflight.server.adapters.FlightSessions;
 import pro.surpin.data.arrowflight.server.adapters.StreamCompression;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
@@ -208,6 +209,7 @@ public class HadoopArrowFlightServer {
                     .backpressureThreshold(config.flightBackpressureThresholdBytes())
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                     .middleware(StreamCompression.KEY, streamCompression())
+                    .middleware(FlightSessions.KEY, ConfigAdapter.flightSessions().factory())
                     .transportHint("grpc.builderConsumer", grpcOptions(outboundBudget)))
                     .build();
             LOGGER.info("Default result mode: {}; metadata endpoint location: {}; Flight security: {}",

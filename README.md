@@ -286,7 +286,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
-| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes` |
+| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `endpointBackupLocations`, `endpointsPerServer` |
@@ -310,6 +310,17 @@ the runtime libs set (`libs/`); without it `lz4` is refused. Batches with fewer 
 do not shrink by a tenth sends the rest plain. Any other header value is refused with INVALID_ARGUMENT. Counters
 `arrowflight_flight_compressed_batches_total`, `arrowflight_flight_compression_{input,output}_bytes_total`,
 `_plain_batches_total` and `_given_up_streams_total` are on `/metrics`.
+
+Instead of the header, a Flight SQL client can set the session option `arrow-compression` (`none`, `zstd`,
+`lz4`; an empty value unsets it) with SetSessionOptions: the server answers with the cookie
+`arrow_flight_session_id`, and the session's DoGet calls that carry the cookie and no header get that codec
+(header, then session option, then `flightCompression`). Other option names are answered INVALID_NAME, bad
+values INVALID_VALUE (the old value stays); GetSessionOptions and CloseSession work as in the specification.
+Sessions live on the node that created them: a cookie a node does not know (another node of the cluster, a
+restart, an expired or closed session, another user's session) is ignored instead of failing the call, so
+those reads use the header or the server default. A session unused for `flightSessionIdleSeconds` (default
+3600) is dropped, and a node keeps at most `flightSessionMax` (default 10000), dropping the least recently
+used. Before, the three session actions were UNIMPLEMENTED.
 
 ### Complete and partial answers
 
