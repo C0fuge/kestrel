@@ -33,7 +33,7 @@
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
 > changes runtime behaviour, so the coordinator can measure it on the stand):
 > 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
-> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - steps 1, 2, 2 (a) and (b) done 2026-10-27 (see item 15); stand measure pending, then close.
+> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - steps 1, 2, 2 (a), (b) and 3 done 2026-10-27 (see item 15); stand measure pending, then close.
 > 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
@@ -383,6 +383,17 @@
     (approved above). Local, same session: complete point p50 15.8 -> 15.1 ms, c32 90 -> 78 ms; partial c8 28 -> 24 ms.
     **Proposal to close item 15** after the stand round: the server-side work per query is now ~= plain DuckDB
     + ~1 ms; what remains is the 4 gRPC calls stock clients make (client side, not ours to cut).
+    **Step 3 done 2026-10-27 (e46f28d, package run 40467177476; see Log):** a complete-mode prepare of a query
+    without `?` parameters returns the plain SQL handle, so GetFlightInfo skips the synchronous Hazelcast `get`
+    of parameter values and close skips the delete (both remote on a multi-node cluster). Server-side TIMING of
+    a complete point DoGet (local, c1): `execution.total` 3.6 ms, of which DuckDB prepare + run to the first batch
+    2.5 ms (plain DuckDB over the same files 1.9 ms); client-side DoGet 4.9 ms (the rest = the gRPC call).
+    **c8/c32 check (local, same session, `perf.threads` 4 / 2 / 1):** complete c32 p50 64-69 / 57 / 51 ms, c8
+    22-23 / 22 / 20 ms; c1 point unchanged, c1 count 9.2 / 11.3 / 13.2 ms. So the concurrency loss is mostly DuckDB
+    thread oversubscription (32 sessions x 4 threads on 4 cores), the item 19 question, not per-query overhead.
+    **Stand:** small JDBC/ADBC c1/c8/c32 on the pre-release of e46f28d vs 45fc0a9, plus one c32 round at
+    `duckDbThreads=2`; then close item 15 (remaining time is client gRPC round trips and DuckDB itself) and take
+    item 19 earlier if the c32 round confirms oversubscription.
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
     `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
     for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
@@ -1002,3 +1013,14 @@
   / `describeDoesNotRetryAQueryError`, `ExecutionPathRecorderTest.eventsRecordedConcurrentlyAreAllWritten`. CI run
   40462267120 green (01cdd57); package run 40463504538 green on 45fc0a9: pre-release `server-1.0.0-45fc0a9e6e02`.
   Next: stand rerun (item 15 Stand) on this pre-release, then close item 15 and go on with stage 2 item 0g.
+- 2026-10-27 (cloud session): item 15 step 3 (e46f28d). Server TIMING log of `PointQueryOverheadPerfTest`
+  (complete point, c1): DoGet `execution.total` 3.6 ms (DuckDB to first batch 2.5 ms; plain DuckDB 1.9 ms),
+  client-side DoGet 4.9 ms. Every complete-mode prepare got a statement id, so GetFlightInfo did a synchronous
+  Hazelcast `get` for parameter values and close a delete even without parameters; now only a query with `?`
+  parameters gets the id handle (others: the SQL text, as in partial mode). Local: close p50 1.15 -> 1.05 ms,
+  info 2.4 -> 2.2 ms (one node; on a cluster the get is a network round trip). Only visible difference: a client
+  that sends values to a query without parameters and keeps its first handle now runs it without them instead of
+  getting a count-mismatch error (CHANGELOG). Test `FlightSqlProducerTest.onlyAQueryWithParametersHasAStatementId`.
+  c8/c32: c32 p50 64-69 ms at 4 DuckDB threads, 57 at 2, 51 at 1 (local 4 cores) -> oversubscription (item 19).
+  Package run 40467177476 (push run 40467155113 cancelled in its favour): running. Next: stand rerun (item 15 Stand),
+  then close item 15.
