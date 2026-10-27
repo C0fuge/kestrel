@@ -62,7 +62,8 @@
 >    small-query step with `arrowflight.s3.cacheMegabytes=1024` (and `-Xmx` >= 2.5g) vs off: timings, RSS, the
 >    `s3=cacheClosed` hit/miss line; expect repeated rounds near the HDFS numbers and no OOM. **Next steps of 17:**
 >    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
->    (b) lakeFS stores through the cache; ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
+>    ~~(b) lakeFS stores through the cache~~ (done 2026-10-27, 752e272: opt-in `arrowflight.lakefs.cacheMegabytes` /
+>    `cacheCheckSeconds`, own cache per plugin class loader, metrics `arrowflight_lakefs_cache_*`; see Log); ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
 >    8625e28, pre-release `server-1.0.0-8625e28f08cd`: one S3 read per missed block for all concurrent requests,
 >    `joined=` in the `s3=cacheClosed` line); ~~(d) metrics~~ (done 2026-10-27, b28fedf, pre-release `server-1.0.0-b28fedf9edbf`:
 >    `arrowflight_s3_cache_*` on `/metrics` through the new SPI 1.3 `StoreContext.metrics()`, see Log). **Stand
@@ -1190,4 +1191,19 @@
   `server-1.0.0-b28fedf9edbf`. **Stand** (with the item 17 round): scrape `/metrics` during the
   32-client step with `cacheMegabytes=1024`, compare hits/misses/`s3_reads_total` with the `s3=cacheClosed` line.
   Next: item 15 stand + close; 17 (b) lakeFS through the cache; then item 16 / 19.
-
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete), 18 for its node-to-node decision,
+  so item 17 (b) (752e272): lakeFS through the read cache. New public `S3ReadCache` in the s3 plugin (opens a route
+  from a namespace's `cacheMegabytes` / `cacheCheckSeconds`, contributes the cached secret); the s3 provider uses it,
+  the lakefs provider opens a route for `s3://<repository>` (the DuckDB secret's scope; pinned commits are immutable
+  keys). Plugins load in their own class loaders, so the lakefs cache is a separate instance: its log lines and
+  metrics carry `lakefs` (`lakefs=cacheOpen`, `arrowflight_lakefs_cache_*`; the same names would be dropped as
+  duplicates by `/metrics`); with both on, the two sizes together should stay below half of `-Xmx` (each is checked
+  alone; documented in START-NOTES). Fix in both caches: a miss GET whose answer carries another ETag than the
+  looked-up version is refused like a 412 (a gateway that ignores If-Match could otherwise mix versions within
+  `cacheCheckSeconds`; `S3CacheEndpointTest.aStoreThatIgnoresIfMatchIsNeverMixedEither` fails without it). lakefs
+  descriptor `spi=1.3`. Tests: `S3CacheEndpointTest` (+2), `LakeFsIntegrationTest.duckDbReadsThePinnedCommitThroughTheReadCache`
+  (second connection 0 GETs to the gateway, moved branch read at its new commit, lakefs metrics; needs httpfs: CI).
+  Local: s3 58 / lakefs 15 + checkstyle + spotbugs green, server LakeFs/S3/plugin/metrics tests 25 green. Package run
+  40525341020 (push run 40525325992 cancelled in its favour): RUNNING. **Stand** (optional, with the item 17 round):
+  lakeFS SF1 per commit with `arrowflight.lakefs.cacheMegabytes=1024` vs off. Next: item 15 stand + close; then item 16 / 19
+  (17 (a) waits for the local-disk question).
