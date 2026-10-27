@@ -81,7 +81,8 @@
 >    Then: step 2 = node-to-node DoGet of the partial endpoints + merge in a DuckDB of the planning node behind an
 >    opt-in setting (`distributedComplete`, default false), fallback to today's path on any refusal or peer error
 >    before the first batch; step 3 = cluster integration test (3 nodes, answers = single-node answers).
-> 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).
+> 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged). *Local check done 2026-10-27
+>    (see item 16): no default change - `false` is slower, 64 MiB within noise; the stand round decides.*
 > 7. ~~item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.~~
 >    Code done 2026-10-27 (04e5580, package run 40536373045 green, pre-release `server-1.0.0-04e558056068`; see Log): unset or 0 = cores / 4 between 2 and 8, explicit values
 >    unchanged, startup line `duckdb=threads perConnection= availableProcessors=`. **Stand:** check the startup line on the
@@ -454,6 +455,13 @@
     for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
     + `duckDbStreamingBufferSize=64MiB` on the stand (scan x1, Trino splits) before and after item 14; if answers are unchanged
     and x1 improves, propose them as defaults for plain scans without ORDER BY (default change -> Open questions first).
+    **Local check 2026-10-27 (DuckDB 1.5.6, new `ScanThroughputPerfTest`, numbers in `docs/dev/TUNING.md`):** answers equal
+    in all four variants, but `duckDbPreserveInsertionOrder=false` is *slower* (4 threads 334-349 vs 348-388 MB/s, 8 threads
+    234-246 vs 346-367; same 92 Flight batches, so inside DuckDB) and a 64 MiB buffer +5-15 % (4/16 MiB: noise). So no
+    default change from this box (client in the same JVM on 4 cores, CPU-bound). **Stand (decides):** scan x1 (JDBC/ADBC
+    full lineitem SF10, complete mode) at the default threads with `-DduckDbStreamingBufferSize=64MiB` vs unset and
+    `-DduckDbPreserveInsertionOrder=false` vs unset, 3 rounds; also RSS. Adopt the 64 MiB buffer as default only if x1 gains
+    clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
 

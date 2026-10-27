@@ -144,6 +144,22 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
   `duckDbStatementCacheSize=64`, `duckDbWarmConnections=8`, `ioParallelism` auto, `batchSize=65536`, memory limit unset, G1.
 - Deployment: enable HDFS short-circuit reads; parquet with ~128k-row groups and several files per table.
 
+## Single-stream scan opt-ins on DuckDB 1.5.6 (local, 2026-10-27, STATUS item 16)
+
+`ScanThroughputPerfTest` (6 M rows / 8 files / 7 columns, 122880-row groups, one client in the same JVM, 4 cores, complete
+mode, median of 9 scans, MB/s of Arrow buffers; variants run in both orders):
+
+| `duckDbThreads` | default | `PreserveInsertionOrder=false` | `StreamingBufferSize=64MiB` | both |
+|---|---|---|---|---|
+| 2 | 329 | 354 | 385 | 336 |
+| 4 | 348 / 388 | 334 / 349 | 405 / 424 | 338 / 298 |
+| 8 | 346 / 367 | 234 / 246 | 377 / 381 | 268 / 223 |
+
+4 / 16 MiB buffers: 357-388 MB/s (noise). Same 92 batches in every variant (the slowdown with `false` is inside DuckDB,
+not our batching); same rows and checksum. Verdict here: `preserve_insertion_order=false` does not help and costs up to
+a third at 8 threads; a 64 MiB buffer is +5-15 %, about the noise, and adds up to 64 MiB of buffered result per open
+stream (not checked whether DuckDB counts it against `memory_limit`). Defaults unchanged; the stand (native client, 16 cores, HDFS) decides.
+
 ## Open points
 
 - S3 with 8 threads and 32 concurrent small queries: ephemeral-port exhaustion toward the S3 endpoint (above, STATUS item 0g).

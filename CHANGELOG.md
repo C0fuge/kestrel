@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Perf test `ScanThroughputPerfTest` (tag `perf`, item 16): one client streams a full table scan over Flight SQL
+  (complete mode) per variant of `duckDbPreserveInsertionOrder` / `duckDbStreamingBufferSize` and prints MB/s and
+  batches (`-Dperf.variants=true:,true:64MiB`, `-Dperf.threads`, `-Dperf.rows`, `-Dperf.runs`). Defaults unchanged.
 - lakeFS read cache (item 17 (b); opt-in): `arrowflight.lakefs.cacheMegabytes` (default 0 = off) and
   `arrowflight.lakefs.cacheCheckSeconds` (default 10) let DuckDB read the lakeFS S3 gateway through a node-wide,
   byte-bounded cache like the s3 plugin's (`arrowflight.s3.cacheMegabytes`), scoped to the repository; separate
