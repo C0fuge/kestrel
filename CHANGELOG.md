@@ -236,6 +236,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- S3 read cache: concurrent requests for the same missing span now claim all its blocks under one lock, so the
+  span is read with one GET; before, two requests could each claim part of it and read it in two GETs (answers
+  were right). Suspected cause of the `S3CacheEndpointTest` count failures in CI runs 40586746160 and 40593759006.
 - S3 read cache: a miss read whose answer carries another ETag than the version looked up is refused like a failed
   `If-Match`, so a store or gateway that ignores `If-Match` cannot mix two versions of an object in one answer.
 - S3 (DuckDB 1.5.6): after an object was rewritten, the first query of every server connection

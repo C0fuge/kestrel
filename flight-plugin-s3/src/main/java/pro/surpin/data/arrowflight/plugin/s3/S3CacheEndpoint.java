@@ -87,6 +87,8 @@ final class S3CacheEndpoint {
     private final Map<String, Route> routes = new ConcurrentHashMap<>();
     private final Map<String, Version> versions = new ConcurrentHashMap<>();
     private final Map<S3BlockCache.BlockKey, CompletableFuture<byte[]>> reading = new ConcurrentHashMap<>();
+    /** Held while a request claims the missing blocks of its span, so a span is claimed whole. */
+    private final Object claiming = new Object();
     private final AtomicLong joined = new AtomicLong();
     private final AtomicLong s3Reads = new AtomicLong();
     private final AtomicLong s3ReadBytes = new AtomicLong();
@@ -542,27 +544,31 @@ final class S3CacheEndpoint {
         S3BlockCache.BlockKey[] keys = new S3BlockCache.BlockKey[count];
         List<CompletableFuture<byte[]>> reads = new ArrayList<>(Collections.nCopies(count, null));
         boolean[] mine = new boolean[count];
-        for (int i = 0; i < count; i++) {
-            keys[i] = new S3BlockCache.BlockKey(bucket, key, version.etag(), first + i);
-            blocks[i] = cache.get(keys[i]);
-            if (blocks[i] != null) {
-                continue;
+        // Claimed under one lock: two requests for the same blocks must not split them into two
+        // reads (one claiming the first block, the other the next before the first gets to it).
+        synchronized (claiming) {
+            for (int i = 0; i < count; i++) {
+                keys[i] = new S3BlockCache.BlockKey(bucket, key, version.etag(), first + i);
+                blocks[i] = cache.get(keys[i]);
+                if (blocks[i] != null) {
+                    continue;
+                }
+                CompletableFuture<byte[]> read = new CompletableFuture<>();
+                CompletableFuture<byte[]> other = reading.putIfAbsent(keys[i], read);
+                if (other != null) {
+                    reads.set(i, other);
+                    continue;
+                }
+                // A read that ended between the cache miss and the claim left its block in the cache.
+                blocks[i] = cache.peek(keys[i]);
+                if (blocks[i] != null) {
+                    reading.remove(keys[i], read);
+                    read.complete(blocks[i]);
+                    continue;
+                }
+                mine[i] = true;
+                reads.set(i, read);
             }
-            CompletableFuture<byte[]> read = new CompletableFuture<>();
-            CompletableFuture<byte[]> other = reading.putIfAbsent(keys[i], read);
-            if (other != null) {
-                reads.set(i, other);
-                continue;
-            }
-            // A read that ended between the cache miss and the claim left its block in the cache.
-            blocks[i] = cache.peek(keys[i]);
-            if (blocks[i] != null) {
-                reading.remove(keys[i], read);
-                read.complete(blocks[i]);
-                continue;
-            }
-            mine[i] = true;
-            reads.set(i, read);
         }
         try {
             readOwn(route, key, version, first, blocks, keys, reads, mine);

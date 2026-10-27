@@ -243,6 +243,53 @@ class S3CacheEndpointTest {
     }
 
     /**
+     * Verifies concurrent requests for the same missing span claim it whole: one request reads all
+     * its blocks with one GET, never one block each (regression: the blocks were claimed one by
+     * one, so a second request could claim the next block before the first got to it).
+     *
+     * @throws Exception when a reader fails
+     */
+    @Test
+    void concurrentMissesOfOneSpanAreReadWithOneGet() throws Exception {
+        int readers = 16;
+        long from = 0;
+        long to = 2L * S3CacheEndpoint.BLOCK_BYTES - 1;
+        ExecutorService pool = Executors.newFixedThreadPool(readers);
+        List<S3Client> clients = new ArrayList<>();
+        try {
+            for (int i = 0; i < readers; i++) {
+                clients.add(client(route.keyId(), route.secret()));
+            }
+            s3.latency(20);
+            for (int round = 0; round < 25; round++) {
+                byte[] content = bytes(SIZE, 10 + round);
+                s3.put(BUCKET, KEY, content);
+                clock.addAndGet(TimeUnit.SECONDS.toNanos(11));
+                assertEquals(SIZE, duckDb.headObject(r -> r.bucket(BUCKET).key(KEY)).contentLength());
+                s3.clearRequests();
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<byte[]>> answers = new ArrayList<>();
+                for (S3Client reader : clients) {
+                    answers.add(pool.submit(() -> {
+                        start.await();
+                        return reader.getObjectAsBytes(r -> r.bucket(BUCKET).key(KEY)
+                                .range("bytes=" + from + "-" + to)).asByteArray();
+                    }));
+                }
+                start.countDown();
+                for (Future<byte[]> answer : answers) {
+                    assertArrayEquals(Arrays.copyOfRange(content, (int) from, (int) to + 1),
+                            answer.get(30, TimeUnit.SECONDS));
+                }
+                assertEquals(1, gets(), "round " + round + ": " + endpoint.stats());
+            }
+        } finally {
+            pool.shutdownNow();
+            clients.forEach(S3Client::close);
+        }
+    }
+
+    /**
      * Verifies a read that finds the object changed fails every request waiting for it, and each
      * then reads the new version (again once for all), never the old one.
      *
