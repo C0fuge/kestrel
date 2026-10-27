@@ -38,6 +38,17 @@
 >    compression for small batches / when the ratio is poor; compress in parallel per batch without breaking the
 >    outbound budget (0f). Tests: same answers with and without compression for Java Flight, ADBC (C++/Go) and pyarrow;
 >    a CI perf test with `tc netem` delay 10 ms + rate 1 Gbit (MB/s, CPU, both codecs) - goal >= upstream's 264 MB/s.
+>    *Step 1 done 2026-10-27 (6ca7352, see Log):* opt-in ZSTD per call (`arrow-compression: zstd|none` header on
+>    DoGet) or server default `flightCompression` (none), `flightCompressionLevel` (1), `flightCompressionMinBytes`
+>    (64 KiB, smaller batches plain), a stream gives up after 4 batches that shrink < 10 %; metrics
+>    `arrowflight_flight_compress*`. Found: Arrow Java's LZ4_FRAME codec (commons-compress) cannot compress 8 MB in
+>    2 min, so `lz4` is refused for now; Java Flight clients decode ZSTD once `arrow-compression` + `zstd-jni` are on
+>    their class path (ServiceLoader), no driver code needed for that. ZSTD level 1 single-thread ~250-285 MB/s
+>    compress, ~450-600 MB/s decompress (8 MiB of small longs, ratio 2.9). **Next steps of 20:** (b) LZ4 via
+>    lz4-java (now `provided` for the libs set - make it a server dependency or bundle our own codec); (c)
+>    Flight SQL session option `arrow-compression`; (d) `arrow-compression` in our patched JDBC driver + START-NOTES;
+>    (e) pyarrow / ADBC C++/Go answer checks in CI; (f) parallel per-buffer compression within a batch and the
+>    `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
 > 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
 >    ~50 (both CPU-bound from 8 clients); c1 latency is already ours. So this is CPU per query, not waiting: profile one
 >    query end to end under 8-32 clients (async-profiler or JFR in a 2-CPU container), list where the CPU goes
@@ -1310,3 +1321,22 @@
   `server-1.0.0-b7be8d166498`. **Stand (optional):** one Trino/StarRocks read of an Iceberg table `FOR VERSION AS OF`
   in partial mode (expect one endpoint per node, same answer as complete mode).
   Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers; optional 3 (b)/(c).
+- 2026-10-27 (cloud session): stage 3 item 20 step 1 - opt-in ZSTD compression of result streams (6ca7352). New
+  middleware `StreamCompression` reads `arrow-compression` per call (none/zstd; unknown values and `lz4` are
+  INVALID_ARGUMENT, never ignored) or the server default `flightCompression=none`; `CompressingStreamListener` puts
+  a codec-aware unloader into Flight's stream listener after it started (Flight Java has no codec hook; the
+  protected `unloader` field is set by reflection, plain batches if that ever fails). Batches below
+  `flightCompressionMinBytes` (64 KiB) go plain; after 4 compressed batches shrinking less than 10 % the stream goes
+  plain. Arrow's codec already sends a buffer raw when it does not shrink. New dependency `arrow-compression`
+  (zstd-jni excluded, parquet's 1.5.7-15 kept; commons-compress 1.28.0 now compile scope). SpotBugs needed a
+  REC_CATCH_EXCEPTION exclusion on `HadoopArrowFlightServer.start` (flagged once the middleware joined the builder
+  chain; the catch-all log + exit is deliberate). Measured: commons-compress LZ4_FRAME is unusable (one 8 MiB buffer
+  did not finish in 2 min; the first IT run took 554 s because of it) - lz4 deferred to step (b). Tests:
+  `StreamCompressionTest` (codec names, header vs default, settings, large/small batches, IPC round trip, give-up)
+  and `StreamCompressionIntegrationTest` (120k rows of mixed types incl. list/struct/decimal/NULLs: zstd answers =
+  plain in partial and complete mode, compressed counter moves; no header / `none` stays plain; small answers plain;
+  `gzip` refused). Local: those + ConfigAdapter/MetricsService/HadoopArrowFlightServer/FlightSqlProducer tests (98)
+  + checkstyle + spotbugs green. CI: package run 40587941135 (push run 40587917568). No local throughput numbers yet
+  (no netem here): **Stand / screening:** with the pre-release, a pyarrow or ADBC client sending
+  `arrow-compression: zstd` at 10 ms / 1 Gbit vs plain (MB/s, server CPU); level 1 vs 3.
+  Next: item 20 (b)-(f), then item 21.
