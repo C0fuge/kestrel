@@ -25,6 +25,7 @@ import java.util.NavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A small S3 server on the JDK's HTTP server, path style only: ListObjectsV2, HEAD and GET with
@@ -46,12 +47,14 @@ public final class FakeS3 implements AutoCloseable {
     private final NavigableMap<String, StoredObject> objects = new ConcurrentSkipListMap<>();
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
     private final AtomicInteger pageSize = new AtomicInteger(1000);
+    private final AtomicLong latencyMillis = new AtomicLong();
 
     private FakeS3(HttpServer server, String scheme) {
         this.server = server;
         this.scheme = scheme;
         server.createContext("/", this::handle);
-        server.setExecutor(Executors.newFixedThreadPool(4, r -> {
+        // Enough handlers that an injected latency delays requests side by side, as on S3.
+        server.setExecutor(Executors.newFixedThreadPool(32, r -> {
             Thread t = new Thread(r, "fake-s3");
             t.setDaemon(true);
             return t;
@@ -126,6 +129,16 @@ public final class FakeS3 implements AutoCloseable {
     }
 
     /**
+     * Delays every later object request (HEAD, GET) before it is answered, as the round trip to
+     * a remote S3 endpoint does; listings are not delayed.
+     *
+     * @param millis delay per request, 0 for none
+     */
+    public void latency(long millis) {
+        latencyMillis.set(millis);
+    }
+
+    /**
      * Returns the requests received so far.
      *
      * @return requests in order
@@ -173,9 +186,21 @@ public final class FakeS3 implements AutoCloseable {
             if (key.isEmpty() && "GET".equals(method) && "2".equals(query.get("list-type"))) {
                 list(exchange, bucket, query);
             } else if ("HEAD".equals(method) || "GET".equals(method)) {
+                delay();
                 object(exchange, bucket + "/" + key, "GET".equals(method), headers.get("range"));
             } else {
                 exchange.sendResponseHeaders(405, -1);
+            }
+        }
+    }
+
+    private void delay() {
+        long millis = latencyMillis.get();
+        if (millis > 0) {
+            try {
+                Thread.sleep(millis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
         }
     }

@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Tests (S3 read path, item 17): `S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed`
+  pins the request pattern of the s3 plugin's defaults on DuckDB 1.5.6 (a repeated query: no HEAD,
+  no footer read, one GET per row group it reads; a pruned point query at most 2 GETs; with
+  `metadataCache=false` every query looks up and reads each footer again), so a DuckDB or setting
+  change that adds round trips fails CI. `S3ReadPathPerfTest` (tag `perf`) prints time and
+  requests per query for thread counts and read settings against the fake S3 with a latency per
+  request (`FakeS3.latency`). No runtime change.
 - S3: setting `arrowflight.s3.connectionCaching` (default true; named stores and lakeFS inherit it)
   turns on DuckDB 1.5's `httpfs_connection_caching`: DuckDB keeps its S3 connections and reads later
   ranges and queries over them. Without it httpfs opened a connection for about every range read

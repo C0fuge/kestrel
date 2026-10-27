@@ -47,6 +47,17 @@
 >    node-wide cache of our own below DuckDB - design question, next session. (iii) bug found and fixed (7562a5b): the
 >    per-connection metadata makes the first query after an S3 object is rewritten fail with httpfs's ETag-changed error on
 >    every connection that read it before; now retried once before the first batch (pre-release `server-1.0.0-7562a5bdb7b9`, see Log).
+>    *2026-10-27 (second cloud session):* (iv) listing: already cached on the Java side (snapshot per data directory,
+>    `listingTtlSeconds`, background refresh) and DuckDB gets explicit file URIs, so it never lists - nothing to add. (v) range
+>    reads (`S3ReadPathPerfTest`, fake S3 with 10 ms per request, 8 files x 4 row groups x 100k rows): with the plugin's
+>    defaults a repeated query sends no HEAD and no footer read, one GET per row group (all its columns together), a
+>    pruned point query 2 GETs (~70 ms vs ~48 ms at 0 ms latency, i.e. ~2 round trips); more threads read row groups side
+>    by side (scan 1346 / 503 / 448 ms at 1 / 4 / 8 threads). `prefetch_all_parquet_files` changes nothing on S3;
+>    `metadataCache=false` costs a HEAD + footer GETs per file and query (point 71 -> 179 ms at 8 threads). So no new
+>    read setting; the pattern is now pinned in CI (`S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed`).
+>    What is left of item 17 is the bounded data cache: Open questions, "S3 read cache with a memory bound". **Stand
+>    (optional):** one round of the S3 SF10 JDBC step at `duckDbThreads=8` vs 4 to see how much of the HDFS gap is
+>    round trips per thread (feeds item 19: a lower thread default may cost more on S3 than on HDFS).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
 >    compute its part (partial aggregates / filtered scans) in parallel and merge on the planning node, for queries where this is
 >    provably correct; fall back to today's path otherwise. Opt-in setting first; must keep the complete-mode wire contract.
@@ -417,6 +428,22 @@
     and x1 improves, propose them as defaults for plain scans without ORDER BY (default change -> Open questions first).
 
 ## Open questions
+
+- **S3 read cache with a memory bound (item 17, 2026-10-27).** The stand measured DuckDB's external file cache ~40x
+  faster for repeated S3 reads but it OOM-killed the server: DuckDB 1.5.6 has no size setting for it, it lives in each
+  connection's buffer pool (one DuckDB per worker thread), so the only bound is `duckDbMemoryLimit` x live connections.
+  The read pattern itself is already lean (item 17 (v)), so the remaining gain is caching data. Options:
+  (A) a node-wide range cache in the s3 plugin: DuckDB reads `s3://` through a loopback HTTP endpoint of the plugin
+  that answers GETs from a byte-bounded LRU (memory, or local disk with a size cap) keyed by bucket/key/ETag/range and
+  forwards misses to S3 with the plugin's own signed client; one cache for all DuckDB instances, bound in bytes,
+  invalidated by the listing's ETag/mtime. Costs: a hop and a copy per miss, credentials stay in Java (DuckDB would
+  send unsigned requests to the loopback port, so the port needs a per-process token header and must bind
+  127.0.0.1 only - security review), more code (~1-2 sessions). (B) the community `cache_httpfs` extension (in-memory /
+  on-disk block cache with a size cap below httpfs): needs a build for 1.5.6 in `ci-assets`, a community
+  extension under our startup lockdown, and its cache is per DuckDB instance unless on disk. (C) keep it off and
+  document `duckDbExternalFileCache=true` only with a `duckDbMemoryLimit` x `maxConnections` that fits the host.
+  Proposal: (A) with a local-disk cache, opt-in setting first (`arrowflight.s3.cacheBytes`, default 0 = off). Which
+  one, and is a local disk for it available on the production hosts?
 
 - ~~**S3 connection churn (item 0g, 2026-10-26).**~~ Resolved 2026-10-27 without a new mechanism: DuckDB 1.5.6 httpfs has
   `httpfs_connection_caching`; on by default through `arrowflight.s3.connectionCaching` (stage 2 item 0g approval), off

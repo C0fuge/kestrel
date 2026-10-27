@@ -415,6 +415,73 @@ class S3IntegrationTest {
         }
     }
 
+    /**
+     * Verifies that with the plugin's defaults a repeated query costs one GET per row group it
+     * reads and no HEAD or footer read, so the round trips to a remote endpoint stay few.
+     */
+    @Test
+    void repeatedQueriesReadOnlyTheRowGroupsTheyNeed() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 4;
+        int rowGroups = 4;
+        int perGroup = 20_000;
+        Path data = dir.resolve("wide.parquet");
+        StringBuilder list = new StringBuilder();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < files; i++) {
+                s.execute("COPY (SELECT " + i * rowGroups * perGroup + " + range AS id, range % 1000 AS k,"
+                        + " md5(range::VARCHAR) AS pad FROM range(" + rowGroups * perGroup + ")) TO '" + data
+                        + "' (FORMAT parquet, ROW_GROUP_SIZE " + perGroup + ")");
+                s3.put(bucket, "flight-it/m/x" + i + ".parquet", Files.readAllBytes(data));
+                list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                        .append("/flight-it/m/x").append(i).append(".parquet'");
+            }
+        }
+        long rows = (long) files * rowGroups * perGroup;
+        String scan = "SELECT count(*), count(DISTINCT pad) FROM read_parquet([" + list + "])";
+        String point = "SELECT count(*), sum(k) FROM read_parquet([" + list + "]) WHERE id = " + (rows / 2 + 3);
+        threads = 4;
+        open(null);
+        long[] first = requestsOf(scan, rows);
+        assertEquals(files, first[1], "the first query looks each file up once");
+
+        long[] again = requestsOf(scan, rows);
+        assertEquals(0, again[1], "no HEAD once the files are known");
+        assertEquals(files * rowGroups, again[0], "one GET per row group, all columns in it, no footer");
+        long[] lookup = requestsOf(point, 1);
+        assertEquals(0, lookup[1], "point query HEADs");
+        assertTrue(lookup[0] <= 2, "the statistics prune every other row group: " + lookup[0] + " GETs");
+
+        // Without the metadata caches every query looks up and reads each footer again.
+        reopen();
+        plugin.properties.put("arrowflight.s3.metadataCache", "false");
+        open(null);
+        requestsOf(scan, rows);
+        long[] uncached = requestsOf(point, 1);
+        assertEquals(files, uncached[1], "HEADs without the cache");
+        assertTrue(uncached[0] >= files + lookup[0], "footers read again: " + uncached[0] + " GETs");
+    }
+
+    /**
+     * Runs a query and counts the object requests it sent to the {@code m/} files.
+     *
+     * @param sql query whose first column is a count
+     * @param count expected count
+     * @return GET and HEAD requests
+     * @throws SQLException when the query fails
+     */
+    private long[] requestsOf(String sql, long count) throws SQLException {
+        s3.clearRequests();
+        try (Statement s = duckDb.connection().createStatement(); ResultSet rs = s.executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals(count, rs.getLong(1));
+        }
+        List<FakeS3.Request> sent = s3.requests().stream().filter(r -> r.path().contains("/m/")).toList();
+        return new long[] {sent.stream().filter(r -> r.method().equals("GET")).count(),
+            sent.stream().filter(r -> r.method().equals("HEAD")).count()};
+    }
+
     @Test
     void aQueryAfterAFileWasRewrittenReadsTheNewFile() throws Exception {
         Assumptions.assumeTrue(s3 != null, "fake S3 only");
