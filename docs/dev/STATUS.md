@@ -64,7 +64,8 @@
 >    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
 >    (b) lakeFS stores through the cache; ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
 >    8625e28, pre-release `server-1.0.0-8625e28f08cd`: one S3 read per missed block for all concurrent requests,
->    `joined=` in the `s3=cacheClosed` line); (d) metrics. **Stand
+>    `joined=` in the `s3=cacheClosed` line); ~~(d) metrics~~ (done 2026-10-27, b28fedf: `arrowflight_s3_cache_*` on
+>    `/metrics` through the new SPI 1.3 `StoreContext.metrics()`, see Log). **Stand
 >    (optional):** one round of the S3 SF10 JDBC step at `duckDbThreads=8` vs 4 to see how much of the HDFS gap is
 >    round trips per thread (feeds item 19: a lower thread default may cost more on S3 than on HDFS).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -1173,3 +1174,19 @@
   checkstyle + spotbugs green. Package run 40491054544 green: pre-release `server-1.0.0-8625e28f08cd`. **Stand** (with
   the item 17 round): note `joined=` at the 32-client step with `cacheMegabytes=1024`. Next: item 15 stand + close;
   17 (b) lakeFS through the cache or (d) metrics; then item 16 / 19.
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete; the priority note's two sessions have
+  passed), 18 for its node-to-node decision, so item 17 (d) (b28fedf): S3 read cache metrics. New SPI 1.3
+  (additive): `StoreContext.metrics()` returns `PluginMetrics` (default: publishes nothing); a plugin registers a
+  `MetricSource` of unlabelled `arrowflight_*` `MetricSample`s (counter names end in `_total`), read on every scrape of
+  `/metrics`; a name the server or another source already shows is left out, a throwing source is skipped. The shared
+  cache endpoint registers at start and unregisters with its last route: `arrowflight_s3_cache_capacity_bytes`,
+  `_used_bytes`, `_blocks`, `_hits_total`, `_misses_total`, `_evictions_total`, `_joined_total`, `_s3_reads_total`,
+  `_s3_read_bytes_total`, `_s3_lookups_total`. s3 plugin descriptor `spi=1.3`. Tests:
+  `MetricsServiceTest.exposesPluginMetricsWhileRegistered`, `S3CacheEndpointTest.metricsCountBlocksAndRequestsToS3` /
+  `theSharedEndpointPublishesItsMetricsWhileItRuns`, `S3IntegrationTest.theReadCacheServesEveryConnectionOfTheNode`
+  (hits on the endpoint), `SpiTest`. Local: spi + s3 module + server metrics/plugin/S3 tests, checkstyle, spotbugs
+  green (S3IntegrationTest needs the httpfs extension: CI only). Package run 40507196974 (push run 40507189613
+  superseded): running. **Stand** (with the item 17 round): scrape `/metrics` during the
+  32-client step with `cacheMegabytes=1024`, compare hits/misses/`s3_reads_total` with the `s3=cacheClosed` line.
+  Next: item 15 stand + close; 17 (b) lakeFS through the cache; then item 16 / 19.
+
