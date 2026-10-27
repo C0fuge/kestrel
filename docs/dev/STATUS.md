@@ -62,7 +62,9 @@
 >    small-query step with `arrowflight.s3.cacheMegabytes=1024` (and `-Xmx` >= 2.5g) vs off: timings, RSS, the
 >    `s3=cacheClosed` hit/miss line; expect repeated rounds near the HDFS numbers and no OOM. **Next steps of 17:**
 >    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
->    (b) lakeFS stores through the cache; (c) single-flight for concurrent misses of one block; (d) metrics. **Stand
+>    (b) lakeFS stores through the cache; ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
+>    8625e28, pre-release `server-1.0.0-8625e28f08cd`: one S3 read per missed block for all concurrent requests,
+>    `joined=` in the `s3=cacheClosed` line); (d) metrics. **Stand
 >    (optional):** one round of the S3 SF10 JDBC step at `duckDbThreads=8` vs 4 to see how much of the HDFS gap is
 >    round trips per thread (feeds item 19: a lower thread default may cost more on S3 than on HDFS).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -1161,3 +1163,13 @@
   content ETags and If-Match. Local: s3 plugin verify + checkstyle + spotbugs green, `S3IntegrationTest` 10/10 with httpfs 1.5.6. Package run
   40480315297 green (push run 40480303237 cancelled in its favour): pre-release `server-1.0.0-84fec772ec50`. Next: stand round
   (item 17 Stand), then 17 (a)-(d); Open question "S3 read cache follow-ups".
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete), 18 for its node-to-node decision,
+  so item 17 (c) (8625e28): single flight in the S3 read cache. Concurrent GETs that miss the same 1 MiB block read
+  it from S3 once; the others wait for that read (`S3CacheEndpoint.blocks`/`readOwn`, a per-block future map) and
+  take its bytes or its failure; a request reads its own claimed blocks before it waits, so two requests never wait
+  for each other; a refused If-Match fails every waiter, each looks the version up and the new version is read once
+  again. `joined=` added to the `s3=cacheClosed` line. Tests (`S3CacheEndpointTest`, fake S3 with 300 ms latency,
+  4 readers): one GET for 2 blocks (4 before the change), 2 GETs across a rewrite (8 before). Local s3 module 54/54 +
+  checkstyle + spotbugs green. Package run 40491054544 (running): pre-release `server-1.0.0-8625e28f08cd`. **Stand** (with
+  the item 17 round): note `joined=` at the 32-client step with `cacheMegabytes=1024`. Next: item 15 stand + close;
+  17 (b) lakeFS through the cache or (d) metrics; then item 16 / 19.
