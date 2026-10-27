@@ -374,7 +374,7 @@
     cache for every new literal and lists the table's files for a sample file each time (`sampleFile` 3.4 ms on a
     local dir, an RPC on HDFS) - cache the sample file per table with the listing's TTL; (b) the INFO line
     `executionPath=...` per DoGet goes through slf4j-simple to stderr synchronously (contention at c32): consider
-    DEBUG or an async logger (log change -> ask); (c) the DoGet parse check repeats the describe's (needed: DoGet can
+    DEBUG or an async logger (log change -> ask); **Maintainer 2026-10-27: approved - make it asynchronous, keep the line at INFO.** (c) the DoGet parse check repeats the describe's (needed: DoGet can
     reach a node that did not describe).
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
     `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
