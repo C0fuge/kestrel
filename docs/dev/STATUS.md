@@ -23,11 +23,36 @@
 
 ## Next steps (one per session)
 
-> **Maintainer, 2026-10-27 (priority, time-boxed): finish item 15 now** - the build is going to be presented today. Goal for this
-> and the next session: cut the remaining per-query overhead (DoGet path ~4.7 ms, close, describe connection) and check the
-> c8/c32 regression seen with DuckDB 1.5.6; keep answers identical; finish with CI green and a `package=true` pre-release
-> (say in the Log what changed and the local profile numbers). The coordinator measures it on the stand right after.
-> Do not start other items until item 15 is closed or two sessions have passed.
+> **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
+> fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
+> four-server comparison in the public CI screening repo (identical containers: 2 CPUs, 6 GB, `-Xmx3g`, direct 2g; reports
+> `COMPARE-SPEED/LOAD/ROBUSTNESS-2026-10-27.md`): ours wins TPC-H, memory, cancel, soak and cluster, upstream native wins
+> three places. Every item: code + tests + CI green + `package=true` pre-release with a Log line saying what changed and the
+> local numbers; the screening repo then measures each such pre-release against `7562a5bdb7b9` on the same runner.
+> Item 18 step 2 is unblocked (answers in Open questions).
+> 1. item 20 (new) - **response compression for slow links.** Upstream: ZSTD 264 MB/s vs ours 104 MB/s at 10 ms / 1 Gbit
+>    (S11 in `UPSTREAM-SYNC.md`; we have no compression). Arrow IPC body compression (LZ4_FRAME and ZSTD, level setting),
+>    off by default; enabled per connection when the client asks (call header and Flight SQL session option, e.g.
+>    `arrow-compression: zstd`) or for all streams by a server setting. Rules: never for clients that did not ask (the stock
+>    JDBC driver lacks the codec - add `arrow-compression` to our patched driver and say so in START-NOTES); skip
+>    compression for small batches / when the ratio is poor; compress in parallel per batch without breaking the
+>    outbound budget (0f). Tests: same answers with and without compression for Java Flight, ADBC (C++/Go) and pyarrow;
+>    a CI perf test with `tc netem` delay 10 ms + rate 1 Gbit (MB/s, CPU, both codecs) - goal >= upstream's 264 MB/s.
+> 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
+>    ~50 (both CPU-bound from 8 clients); c1 latency is already ours. So this is CPU per query, not waiting: profile one
+>    query end to end under 8-32 clients (async-profiler or JFR in a 2-CPU container), list where the CPU goes
+>    (GetFlightInfo + DoGet round trips, planning / views snapshot, statement cache, auth per call, metrics, logging,
+>    Hazelcast in single-node mode, thread hand-offs, Arrow allocation, DuckDB threads vs cores) and cut the top items;
+>    compare with upstream's path for the same query. Goal: >= upstream's queries/s at 8 and 32 clients on 2 CPUs with
+>    identical answers; c1 p50 must not get worse.
+> 3. item 22 (new) - **one scan in 4-8 parallel streams.** Upstream 807-823 MB/s vs ours 463-502 MB/s on 2 CPUs (at about
+>    twice our memory; one stream is a tie). Find why (per-stream DuckDB work, batch size, copies between DuckDB's Arrow
+>    output and the Flight stream, the per-stream budget of 0f, endpoint split of S6) and close the gap. Goal >= 750 MB/s
+>    with peak RSS at most +25 % over today's.
+> 4. item 18 step 2 - distributed complete mode (answers below; opt-in `distributedComplete`, default false).
+> 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
+>    whether production has a local disk is unknown, so it must stay optional).
+> 6. then the stand rounds of items 15, 16, 19 and the other open items as before.
 
 > **Stage 2, approved by the maintainer 2026-10-26 - take these in this order before the other open items** (basis: `docs/dev/TUNING.md`
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
@@ -464,6 +489,15 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Maintainer 2026-10-28, answers for item 18:** (1) identity: option (b) - an internal call signed with the ticket
+  secret carrying the user name, accepted only from live cluster members' addresses and only when
+  `distributedComplete=true` (default false); document that the ticket secret then allows impersonation and must be
+  protected like a keytab. (2) yes, reuse the server's TLS settings and trust store for node-to-node calls. (3) yes:
+  peer failure before the first batch -> fall back to the single-node path; after the first batch -> fail the query.
+- **Maintainer 2026-10-28, item 17 follow-ups:** (1) production local disk is unknown - build the disk tier as an
+  opt-in (path + size cap). (2) keep `cacheCheckSeconds=10` as the default and document it.
+
 
 - **Item 18: node-to-node calls for distributed complete mode (2026-10-27).** The merge is ready (step 1); what is
   left needs a server to call its peers, which it never does today (only clients call nodes). The planning node
