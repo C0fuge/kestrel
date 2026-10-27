@@ -47,8 +47,12 @@
 >    compress, ~450-600 MB/s decompress (8 MiB of small longs, ratio 2.9). *Step (b) done 2026-10-27 (d22cdac, see
 >    Log):* `arrow-compression: lz4` / `flightCompression=lz4` via our own `Lz4FrameCodec` on lz4-java (JNI, from the libs
 >    set; lz4 refused if missing), ~510 MB/s vs ZSTD ~330 MB/s single thread (`StreamCompressionPerfTest`, perf tag).
->    **Next steps of 20:** ~~(b) LZ4 via lz4-java~~; (c)
->    Flight SQL session option `arrow-compression`; (d) `arrow-compression` in our patched JDBC driver + START-NOTES;
+>    *Step (c) done 2026-10-27 (ba4139a, see Log):* Flight SQL session option `arrow-compression` via
+>    SetSessionOptions (node-local sessions, cookie `arrow_flight_session_id`, unknown cookies ignored,
+>    `flightSessionIdleSeconds` 3600 / `flightSessionMax` 10000); header > session > `flightCompression`.
+>    **Next steps of 20:** ~~(b) LZ4 via lz4-java~~; ~~(c)
+>    Flight SQL session option `arrow-compression`~~; (d) (the patched JDBC driver is in a client repo this lane
+>    must not touch: here only START-NOTES text + the driver change described for the coordinator); `arrow-compression` in our patched JDBC driver + START-NOTES;
 >    (e) pyarrow / ADBC C++/Go answer checks in CI; (f) parallel per-buffer compression within a batch and the
 >    `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
 > 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
@@ -1363,6 +1367,21 @@
   `LZ4FrameOutputStream` + byte arrays did ~320 MB/s. Push run 40596424406 cancelled in favour of package run
   40596456091 (green: build 8 min + package 2 min), pre-release `server-1.0.0-d22cdaccb4e1`. **Screening:** lz4 vs
   zstd vs plain at 10 ms / 1 Gbit with a pyarrow/ADBC client (MB/s, server CPU). Next: item 20 (c)-(f), then item 21.
+- 2026-10-27 (cloud session): item 20 step (c) done (ba4139a): Flight SQL session option `arrow-compression`.
+  SetSessionOptions / GetSessionOptions / CloseSession were UNIMPLEMENTED (additive change; ListActions now lists
+  them). New `FlightSessions` (own store, not Arrow's `ServerSessionMiddleware`: that one fails every call with
+  NOT_FOUND when the cookie is unknown - after a restart, or a cookie the JDBC driver forwards to another cluster
+  node - and never expires sessions). Ours: cookie `arrow_flight_session_id`, unknown/expired/other-identity
+  cookies ignored (call runs with header or server default; compression is never a correctness option),
+  sessions bound to `peerIdentity()`, `flightSessionIdleSeconds` (3600) and `flightSessionMax` (10000, LRU)
+  per node. Only option `arrow-compression` (none/zstd/lz4, empty = unset); others INVALID_NAME, bad values
+  INVALID_VALUE. Precedence: header > session > `flightCompression`. Sessions are node-local: a DoGet on another
+  node gets the header/default codec (documented in README). Tests: `FlightSessionsTest` (cookie parsing,
+  identity, expiry, LRU cap, close), `StreamCompressionTest` (precedence, settings),
+  `StreamCompressionIntegrationTest.sessionOptionCompressesTheSessionsReads` (Java FlightSqlClient with cookie
+  middleware: zstd answers = plain in both modes, header `none` wins, `gzip` INVALID_VALUE keeps zstd, `catalog`
+  INVALID_NAME, CloseSession -> plain, stale cookie does not fail). Push run 40603753406 superseded by package run
+  40603766088 (green), pre-release `server-1.0.0-ba4139a2eb93`. Next: item 20 (d)-(f), then item 21.
 - 2026-10-27 (plugins lane, FYI core lane): CI run 40587941135 (head 6ca7352) is red on one test only,
   `LibsSetTest.setHoldsOneVersionPerLibraryAtTheFloors` ("commons-io missing"): with 6ca7352's `arrow-compression`
   dependency the server's provided libs set (`dependency:list -DincludeScope=provided`) loses commons-io 2.16.1 (62 -> 61
