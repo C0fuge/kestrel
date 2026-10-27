@@ -123,6 +123,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shared parameter cache. Local measurement (`PointQueryOverheadPerfTest`, tag `perf`): point
   query p50 14.0 -> 10.2 ms, 8 clients 31 -> 22 ms, 32 clients 94 -> 58 ms. New metric label
   `describe` on the cache counters. Answers, wire format and settings unchanged.
+- Less work per DoGet (item 15 step 2): a query text is parsed for the single-query check once per
+  node (the describe at prepare and the DoGet shared none of it before; the refused function names
+  are still checked on every use, also names a plugin adds later); DEBUG-only log arguments
+  (durations formatted with `String.format`) are no longer built when DEBUG is off; the per-DoGet
+  execution-path event reuses its regular expressions and SHA-256 digest (same output). Local
+  measurement: complete-mode point query DoGet p50 6.2 -> 5.4 ms, total 13.1 -> 11.9 ms. New metric
+  label `parse_check` on the cache counters. Answers, wire format, log lines and settings unchanged.
 
 ### Fixed
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another

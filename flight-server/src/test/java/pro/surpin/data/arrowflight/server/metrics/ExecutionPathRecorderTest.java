@@ -99,4 +99,17 @@ class ExecutionPathRecorderTest {
         assertEquals(first, second);
         assertNotEquals(first, ExecutionPathRecorder.queryDigest("select id from t"));
     }
+
+    /**
+     * Verifies the digest is the SHA-256 of the normalized text, also when computed repeatedly on
+     * one thread (the digest object is reused).
+     */
+    @Test
+    void digestIsStableAcrossRepeatedCalls() {
+        for (int i = 0; i < 3; i++) {
+            assertEquals("42a1c8aae6f133e934d4bf0147491709a8812ea05ff8819ec522780fe657b772",
+                    ExecutionPathRecorder.queryDigest("SELECT *\n\tFROM T"));
+            assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", ExecutionPathRecorder.queryDigest(null));
+        }
+    }
 }

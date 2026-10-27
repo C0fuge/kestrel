@@ -1188,6 +1188,34 @@ class DuckDbAdapterTest {
         }
     }
 
+    /**
+     * Verifies a text that passed the parse check is not parsed again on this node, and that a
+     * name a plugin refuses afterwards is still refused for it.
+     */
+    @Test
+    void parseCheckIsRememberedAndRefusedNamesAreCheckedAgain() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            String sql = "WITH parse_check_probe AS (SELECT id FROM s.t) SELECT id FROM parse_check_probe";
+            assertFalse(adapter.parseCheckRemembered(sql));
+            adapter.describeComplete(allocator, sql, views());
+            assertTrue(adapter.parseCheckRemembered(sql));
+            assertFalse(adapter.parseCheckRemembered("SELECT 1; SELECT 2"));
+            assertThrows(Exception.class, () -> adapter.describeComplete(allocator, "SELECT 1; SELECT 2", views()));
+            assertFalse(adapter.parseCheckRemembered("SELECT 1; SELECT 2"));
+
+            pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.addAll(
+                    java.util.Set.of("parse_check_probe"));
+            // A new views snapshot: the description cache does not answer, the parse check does.
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> adapter.describeComplete(allocator, sql, views()));
+            assertTrue(e.getMessage().contains("parse_check_probe"), e.getMessage());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies only statements that read are run in complete-answer mode. */
     @Test
     void completeAnswerRefusesStatementsThatAreNotQueries() throws Exception {

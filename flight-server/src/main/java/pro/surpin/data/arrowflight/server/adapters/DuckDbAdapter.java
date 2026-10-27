@@ -106,6 +106,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private static final long DESCRIBE_TIMEOUT_SECONDS = 30;
     /** Most query texts whose description (result and parameter schema) is kept. */
     private static final int DESCRIBE_CACHE_CAPACITY = 1024;
+    /** Most query texts whose parse check result is kept. */
+    private static final int PARSE_CHECK_CACHE_CAPACITY = 1024;
 
     /**
      * What a query without values returns and takes, described over one views snapshot.
@@ -124,6 +126,14 @@ public final class DuckDbAdapter implements AutoCloseable {
      * over the same views; one description serves both (and repeated texts) until the views change.
      */
     private final Map<String, Description> describeCache = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true));
+    /**
+     * Function and table names of the texts that passed the single-query parse check, by text.
+     * The check only parses, so its outcome depends on the text alone: a client's prepare and its
+     * DoGet check the same text once per node. The names are checked against the refused ones on
+     * every use, because plugins may add refused names later.
+     */
+    private final Map<String, List<String>> parseCheckCache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(64, 0.75f, true));
     private final ThreadLocal<Session> threadSession;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
@@ -846,7 +856,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
         // Filters of the other mode reach DuckDB as the client wrote them.
-        requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
+        checkSingleQuery(session, duckSql);
         streamPrepared(allocator, duckSql, session.statement(duckSql), listener, startListener);
     }
 
@@ -868,8 +878,12 @@ public final class DuckDbAdapter implements AutoCloseable {
         String qid = LogUtil.qid();
         long t = LogUtil.mark();
         long streamStartNanos = System.nanoTime();
-        LOGGER.debug("qid={} node={} thread={} duckdb=start batchSize={} sql='{}'",
-                qid, LogUtil.node(), Thread.currentThread().getName(), batchSize, duckSql);
+        // Arguments of the debug lines below are formatted only when they are written.
+        boolean debug = LOGGER.isDebugEnabled();
+        if (debug) {
+            LOGGER.debug("qid={} node={} thread={} duckdb=start batchSize={} sql='{}'",
+                    qid, LogUtil.node(), Thread.currentThread().getName(), batchSize, duckSql);
+        }
         long firstBatchNanos = -1;
         long backpressureNanos = 0;
         // A client that goes away interrupts DuckDB at once; otherwise the query would run to its
@@ -892,8 +906,10 @@ public final class DuckDbAdapter implements AutoCloseable {
                 }
                 if (firstBatchNanos < 0) {
                     firstBatchNanos = System.nanoTime() - streamStartNanos;
-                    LogUtil.logTiming(t, "duckdb.firstBatch",
-                            "sql='" + duckSql.substring(0, Math.min(100, duckSql.length())) + "'");
+                    if (t >= 0) {
+                        LogUtil.logTiming(t, "duckdb.firstBatch",
+                                "sql='" + duckSql.substring(0, Math.min(100, duckSql.length())) + "'");
+                    }
                 }
 
                 long bpStart = System.nanoTime();
@@ -902,7 +918,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 listener.putNext();
                 batchesSent++;
                 rowsSent += rows;
-                if (batchesSent % 10 == 0) {
+                if (debug && batchesSent % 10 == 0) {
                     LOGGER.debug("qid={} node={} duckdb=progress batches={} rows={} elapsed={} throughput={}rows/s",
                             qid, LogUtil.node(), batchesSent, rowsSent,
                             LogUtil.elapsedNanos(streamStartNanos),
@@ -911,14 +927,18 @@ public final class DuckDbAdapter implements AutoCloseable {
                 }
             }
 
-            LogUtil.logTiming(t, "duckdb.streamSql",
-                    "batches=" + batchesSent + " rows=" + rowsSent
-                    + " backpressureMs=" + backpressureNanos / 1_000_000);
-            LOGGER.debug("qid={} node={} duckdb=completed batches={} rows={} ttfB={} backpressureMs={} elapsed={} cancelled={}",
-                    qid, LogUtil.node(), batchesSent, rowsSent,
-                    firstBatchNanos >= 0 ? formatDuration(firstBatchNanos) : "N/A",
-                    backpressureNanos / 1_000_000,
-                    LogUtil.elapsedNanos(streamStartNanos), listener.isCancelled());
+            if (t >= 0) {
+                LogUtil.logTiming(t, "duckdb.streamSql",
+                        "batches=" + batchesSent + " rows=" + rowsSent
+                        + " backpressureMs=" + backpressureNanos / 1_000_000);
+            }
+            if (debug) {
+                LOGGER.debug("qid={} node={} duckdb=completed batches={} rows={} ttfB={} backpressureMs={} elapsed={} cancelled={}",
+                        qid, LogUtil.node(), batchesSent, rowsSent,
+                        firstBatchNanos >= 0 ? formatDuration(firstBatchNanos) : "N/A",
+                        backpressureNanos / 1_000_000,
+                        LogUtil.elapsedNanos(streamStartNanos), listener.isCancelled());
+            }
         } catch (java.sql.SQLException e) {
             if (listener.isCancelled()) {
                 throw CallStatus.CANCELLED.withDescription("Flight client cancelled the query")
@@ -1389,7 +1409,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             session.viewsVersion = views.version();
         }
         // Parse first: preparing a text with several statements runs all but the last one.
-        requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql);
+        checkSingleQuery(session, sql);
         PreparedStatement ps = session.statement(sql);
         requireQuery(sql, ps);
         int expected = ps.getParameterMetaData().getParameterCount();
@@ -1640,7 +1660,7 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @return DuckDB connection
      * @throws Exception on refusal or when DuckDB cannot be opened
      */
-    private static Connection describeConnection(Session session, String sql,
+    private Connection describeConnection(Session session, String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
         if (session.describeConn == null) {
@@ -1652,11 +1672,75 @@ public final class DuckDbAdapter implements AutoCloseable {
                     views.emptyStatements(), views.dropStatements());
             session.describeVersion = views.version();
         }
-        if (session.describeCheck == null || session.describeCheck.isClosed()) {
-            session.describeCheck = conn.prepareStatement(PARSE_CHECK_SQL);
+        if (!acceptedBefore(sql)) {
+            if (session.describeCheck == null || session.describeCheck.isClosed()) {
+                session.describeCheck = conn.prepareStatement(PARSE_CHECK_SQL);
+            }
+            rememberAccepted(sql, requireSingleQuery(session.describeCheck, sql));
         }
-        requireSingleQuery(session.describeCheck, sql);
         return conn;
+    }
+
+    /**
+     * Refuses a text unless it is one query that reads, with the parse check of this thread's
+     * query connection, unless the text passed the check on this node before.
+     *
+     * @param session this thread's session
+     * @param sql     client SQL
+     * @throws IllegalArgumentException when the text is not one query
+     * @throws java.sql.SQLException when the check itself fails
+     */
+    private void checkSingleQuery(Session session, String sql) throws java.sql.SQLException {
+        if (!acceptedBefore(sql)) {
+            rememberAccepted(sql, requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
+        }
+    }
+
+    /**
+     * Tells whether a text passed the parse check on this node before, checking the names it uses
+     * against the refused ones again.
+     *
+     * @param sql client SQL
+     * @return true when the check need not run again
+     * @throws IllegalArgumentException when the text uses a name refused since
+     */
+    private boolean acceptedBefore(String sql) {
+        List<String> names = parseCheckCache.get(sql);
+        if (names == null) {
+            return false;
+        }
+        requireAllowedNames(names);
+        return true;
+    }
+
+    /**
+     * Tells whether a text's parse check result is kept, for tests.
+     *
+     * @param sql client SQL
+     * @return true when the text passed the check and is remembered
+     */
+    boolean parseCheckRemembered(String sql) {
+        return parseCheckCache.containsKey(sql);
+    }
+
+    /**
+     * Remembers a text that passed the parse check unless it is too long to be cached.
+     *
+     * @param sql   client SQL
+     * @param names function and table names the text uses
+     */
+    private void rememberAccepted(String sql, List<String> names) {
+        if (!QueryCacheLimits.cacheable(sql)) {
+            CacheMetrics.oversize(CacheMetrics.Cache.PARSE_CHECK);
+            return;
+        }
+        synchronized (parseCheckCache) {
+            parseCheckCache.put(sql, names);
+            if (parseCheckCache.size() > PARSE_CHECK_CACHE_CAPACITY) {
+                parseCheckCache.remove(parseCheckCache.keySet().iterator().next());
+                CacheMetrics.eviction(CacheMetrics.Cache.PARSE_CHECK);
+            }
+        }
     }
 
     /**
@@ -1664,10 +1748,11 @@ public final class DuckDbAdapter implements AutoCloseable {
      *
      * @param check the parse check statement ({@link #PARSE_CHECK_SQL}) of the connection
      * @param sql client SQL
+     * @return the function and table names the query uses, lower case
      * @throws IllegalArgumentException when the text is not one query
      * @throws java.sql.SQLException when the check itself fails
      */
-    static void requireSingleQuery(PreparedStatement check, String sql) throws java.sql.SQLException {
+    static List<String> requireSingleQuery(PreparedStatement check, String sql) throws java.sql.SQLException {
         check.setString(1, sql);
         boolean error;
         String type;
@@ -1696,22 +1781,40 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw new IllegalArgumentException("Only one query that reads data is allowed"
                     + " (SELECT, WITH, VALUES, FROM, TABLE, DESCRIBE, SHOW, SUMMARIZE), one statement per request");
         }
-        requireAllowedFunctions(serialized);
+        return requireAllowedFunctions(serialized);
     }
 
     /**
      * Refuses a parsed statement that names a function or system view of {@link #REFUSED_FUNCTIONS}.
      *
      * @param serialized DuckDB's JSON form of the statement
+     * @return the function and table names it uses, lower case
      * @throws IllegalArgumentException when such a name is used
      */
-    static void requireAllowedFunctions(String serialized) {
+    static List<String> requireAllowedFunctions(String serialized) {
         if (serialized == null) {
-            return;
+            return List.of();
         }
+        List<String> names = new ArrayList<>();
         java.util.regex.Matcher m = SERIALIZED_NAME.matcher(serialized);
         while (m.find()) {
             String name = m.group(1).toLowerCase(java.util.Locale.ROOT);
+            if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
+        requireAllowedNames(names);
+        return List.copyOf(names);
+    }
+
+    /**
+     * Refuses function or table names of {@link #REFUSED_FUNCTIONS} or refused by a plugin.
+     *
+     * @param names lower-case names a statement uses
+     * @throws IllegalArgumentException when such a name is used
+     */
+    private static void requireAllowedNames(List<String> names) {
+        for (String name : names) {
             if (REFUSED_FUNCTIONS.contains(name) || PluginRefusedFunctions.contains(name)) {
                 throw new IllegalArgumentException("Function or view " + name + " is not allowed");
             }

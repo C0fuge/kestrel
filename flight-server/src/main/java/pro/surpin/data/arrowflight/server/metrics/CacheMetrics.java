@@ -19,7 +19,9 @@ public final class CacheMetrics {
         /** Prepared DuckDB statements, per worker thread ({@code DuckDbAdapter}). */
         STATEMENT,
         /** Complete-mode result and parameter schemas of client queries ({@code DuckDbAdapter}). */
-        DESCRIBE
+        DESCRIBE,
+        /** Query texts that passed the single-query parse check ({@code DuckDbAdapter}). */
+        PARSE_CHECK
     }
 
     private static final AtomicLongArray OVERSIZE = new AtomicLongArray(Cache.values().length);

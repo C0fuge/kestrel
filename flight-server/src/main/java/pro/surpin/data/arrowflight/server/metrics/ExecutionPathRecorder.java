@@ -19,6 +19,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Emits structured runtime execution-path evidence for benchmark collection.
@@ -29,6 +30,16 @@ public final class ExecutionPathRecorder {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Object FILE_LOCK = new Object();
     private static final String OUTPUT_ENV = "BENCHMARK_EXECUTION_PATH_LOG";
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+    private static final Pattern LINE_BREAKS = Pattern.compile("[\\r\\n]+");
+    /** One SHA-256 digest per thread: looking up the provider costs more than the hash. */
+    private static final ThreadLocal<MessageDigest> SHA256 = ThreadLocal.withInitial(() -> {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    });
 
     private ExecutionPathRecorder() {
     }
@@ -101,16 +112,12 @@ public final class ExecutionPathRecorder {
      * @return lowercase SHA-256 digest
      */
     public static String queryDigest(String query) {
-        String normalized = query == null ? "" : query.strip()
-                .replaceAll("\\s+", " ")
+        String normalized = query == null ? "" : WHITESPACE.matcher(query.strip())
+                .replaceAll(" ")
                 .toLowerCase(Locale.ROOT);
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(
-                    digest.digest(normalized.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is unavailable", e);
-        }
+        MessageDigest digest = SHA256.get();
+        digest.reset();
+        return HexFormat.of().formatHex(digest.digest(normalized.getBytes(StandardCharsets.UTF_8)));
     }
 
     /**
@@ -138,7 +145,7 @@ public final class ExecutionPathRecorder {
         if (value == null) {
             return null;
         }
-        String sanitized = value.replaceAll("[\\r\\n]+", " ").strip();
+        String sanitized = LINE_BREAKS.matcher(value).replaceAll(" ").strip();
         return sanitized.length() <= 1024 ? sanitized : sanitized.substring(0, 1024);
     }
 
