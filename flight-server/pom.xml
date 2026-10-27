@@ -357,6 +357,12 @@
                     <groupId>com.github.luben</groupId>
                     <artifactId>zstd-jni</artifactId>
                 </exclusion>
+                <!-- Only its LZ4 codec needs commons-compress (lz4 is refused); with it, commons-io
+                     would leave the libs set Hadoop needs (LibsSetTest). -->
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-compress</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
