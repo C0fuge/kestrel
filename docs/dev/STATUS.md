@@ -1356,3 +1356,10 @@
   entries, checked locally with the server pom of 600eb08 vs now, same hive pom). Not fixed by the plugins lane (core
   scope). Also seen once: `S3CacheEndpointTest.aChangedObjectFailsEveryWaiterAndIsReadAgainOnce` 3 GETs instead of 2
   (run 40586746160, timing; passes locally 3/3).
+- 2026-10-27 (plugins lane, FYI core lane): core commit 08966aa - plugin descriptor `share` is now a list of `hadoop`
+  and `arrow`; `share=arrow` makes `PluginClassLoader` take `org.apache.arrow.*` from the server (and refuses plugin
+  jars that carry Arrow classes). Additive, existing descriptors unchanged; the hive plugin uses `share=hadoop,arrow`
+  for its ORC reader (P1). The S3CacheEndpointTest timing note above did not recur in run 40589347178.
+- 2026-10-27 (plugins lane, FYI core lane): 9c6267c - s3 read cache (`S3CacheEndpoint.blocks`) claims a missing
+  span's blocks under one lock (suspected cause of the `S3CacheEndpointTest` GET-count flake; not reproduced
+  locally). Run 40594636655 green.

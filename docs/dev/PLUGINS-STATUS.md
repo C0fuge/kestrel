@@ -20,18 +20,26 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     tests `OrcArrowReaderTest` (all types + nulls + nested, by name / by position, projection, SARG skipping).
     Dependencies: orc-core/orc-format `shaded-protobuf` (the test metastore needs protobuf 2.5), hive-storage-api 2.8.1
     (now compile; the test metastore runs on it), Arrow and Hadoop `provided`.
-    **Next step (step 2), design to settle first:** (a) class sharing: the reader's Arrow and Hadoop classes must be the
-    server's (Arrow's C data JNI library loads once per JVM): new descriptor value `share=hadoop,arrow` in
-    `PluginClassLoader` (small additive core commit; `org.apache.arrow.` from the server) and `share=hadoop,arrow` in the
-    hive descriptor - check the Hive/Kerberos tests still pass with the server's Hadoop; (b) SPI 1.4 (additive, own
-    commit): `ReadSpec.ArrowScan` + a catalog method that opens an `ArrowReader` for (file, projected columns, simple
-    predicates) - the server registers it on the DuckDB connection (`DuckDBConnection.registerArrowStream`) per file
-    group and builds the FROM source as for Parquet (partition constants, UNION ALL); projection from the query's column
-    list, predicates -> ORC `SearchArgument` (=, <, <=, >, >=, IN, IS NULL, BETWEEN on top-level primitive columns);
-    (c) `hive.orcTables` (default false) in `HiveSettings`/`HiveTable.classify` (ORC serde / input format), ACID ORC
-    refused with a clear reason; (d) end-to-end tests: ORC vs the same rows in Parquet through DuckDB (partial and
-    complete), partitioned table via the test metastore; then HDFS and the SF1 perf note. Risk to check: zstd-jni and
-    brotli4j native libraries in the plugin vs the server's copies.
+    *Step 2 (a) done 2026-10-27:* descriptor `share` is a list of `hadoop`/`arrow`; `share=arrow` takes
+    `org.apache.arrow.*` from the server and refuses plugin jars carrying Arrow classes (core commit 08966aa, test
+    `PluginSharingTest`); hive descriptor `share=hadoop,arrow` (df0328d) - `HiveCatalogIntegrationTest` passes with
+    the server's Hadoop and Arrow (locally with a UTF-8 locale: its partition path has non-ASCII characters).
+    **Next step (step 2 (b)), settle the server side before writing the SPI:** findings this session - (1) DuckDB's
+    `registerArrowStream` is a one-shot replacement scan per connection: a catalog table read twice in one query
+    (self-join, subquery) needs one stream per reference, and the complete-mode catalog views (`CatalogViews`,
+    `declaredColumnsSource`) cannot sit on top of a stream - so ORC needs per-query FROM sources, i.e. rewriting
+    each reference of an ORC table to its own registered name (`ExecutionService.catalogFilesSource` is the
+    partial-mode hook; complete mode reads views - check `CatalogViews.icebergSource`/`declaredColumnsSource` for the
+    equivalent hook). (2) The SPI has no Arrow dependency: proposal `Catalog.exportArrowScan(TableSnapshot,
+    List<TableFile>, ArrowScan request, long arrowArrayStreamAddress)` (default refuses) - the server allocates the
+    `ArrowArrayStream`, the plugin (sharing Arrow) fills it with `Data.exportArrayStream` from its own child
+    allocator; `ArrowScan` = projected columns + simple predicates (column, op, literal values) as SPI records; new
+    `ReadSpec.ArrowStream` (sealed interface gains a record: check every `instanceof ReadSpec.*` site in the server,
+    listed by `grep -rn "ReadSpec\." flight-server/src/main`). (3) Partial mode: `QueryPlanner` ships partition
+    values only for `ParquetFiles` (`shipValues`); `ExecutionService.ticketFiles` refuses other read specs - extend
+    both to the new spec. Then (c) `hive.orcTables` + ACID refusal and (d) end-to-end tests as planned above. Risk
+    still open: the plugin ships zstd-jni 1.5.6-10 next to the server's copy (separate class loaders extract their
+    own temp copy of the native library - expected to work, confirm in the end-to-end test).
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -72,3 +80,14 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   top of 9438f59): all plugin modules green incl. hive (OrcArrowReaderTest 5/5), server red only on `LibsSetTest`
   (commons-io dropped from the libs set by the core lane's `arrow-compression` dependency in 6ca7352, checked locally;
   noted in STATUS.md Log). Next session: confirm a green run once the core lane fixes LibsSetTest, then step 2.
+- 2026-10-27 (plugins session): P1 step 1 confirmed green (run 40589347178 on 85aaf46). P1 step 2 (a): `share=arrow`
+  in plugin descriptors (core commit 08966aa, additive; noted in STATUS.md Log) and `share=hadoop,arrow` for the hive
+  plugin (df0328d); tests `PluginSharingTest` 3/3, `PluginLoadingTest` 6/6, `HiveCatalogIntegrationTest` 6/6 (+1
+  iceberg skip) locally. CI: run 40593759006 (df0328d) red only on
+  `S3CacheEndpointTest.aChangedObjectFailsEveryWaiterAndIsReadAgainOnce` (3 GETs instead of 2, second time after
+  40586746160); fix 9c6267c - the s3 read cache claims a missing span's blocks under one lock (requests could split
+  a span into two GETs; the failure's stats fit that) + stress test `concurrentMissesOfOneSpanAreReadWithOneGet`.
+  Not reproduced locally (even pinned to one CPU), so the cause is suspected, not proven: if the count failure
+  recurs, look again (next suspect: a reader arriving between the 412 and the version being forgotten). Run
+  40594636655 (9c6267c, all modules) green. No package release: no runtime behaviour visible to
+  clients changes (ORC still skipped). Step 2 (b) findings and proposal in Next steps.
