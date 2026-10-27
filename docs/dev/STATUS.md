@@ -35,7 +35,7 @@
 > 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
 > 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - steps 1, 2, 2 (a), (b) and 3 done 2026-10-27 (see item 15); stand measure pending, then close.
 > 3. ~~item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).~~ - code done
->    2026-10-27 (`arrowflight.s3.connectionCaching`, default true = DuckDB 1.5 `httpfs_connection_caching`; see item 0g and Log); stand rerun pending.
+>    2026-10-27 (6acc9cc, pre-release `server-1.0.0-6acc9cce0b26`; `arrowflight.s3.connectionCaching`, default true = DuckDB 1.5 `httpfs_connection_caching`; see item 0g and Log); stand rerun pending.
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -46,8 +46,8 @@
 
 0g. ~~**Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
     ephemeral-port exhaustion.**~~ — **cause found, workaround + startup WARN done 2026-10-26 (9f7eb4f, see Log); the
-    server-side fix needs a decision (Open questions, "S3 connection churn").** **Server-side fix done 2026-10-27 (see
-    Log):** DuckDB 1.5.6's httpfs has `httpfs_connection_caching` (default off; churn measured unchanged on 1.5.6: 40 + 31
+    server-side fix needs a decision (Open questions, "S3 connection churn").** **Server-side fix done 2026-10-27 (6acc9cc, package run 40470316519 green, pre-release
+    `server-1.0.0-6acc9cce0b26`; see Log):** DuckDB 1.5.6's httpfs has `httpfs_connection_caching` (default off; churn measured unchanged on 1.5.6: 40 + 31
     connections for two queries, 8 files x 4 row groups, 8 threads); the s3 plugin now turns it on (new setting
     `arrowflight.s3.connectionCaching`, default true): 8 + 0 connections, later queries 0, a cut connection is reopened.
     **Stand:** rerun the 32-client small-query step at 8 threads on the pre-release *without* `tcp_tw_reuse=1` (expect 0
@@ -1033,3 +1033,16 @@
   c8/c32: c32 p50 64-69 ms at 4 DuckDB threads, 57 at 2, 51 at 1 (local 4 cores) -> oversubscription (item 19).
   Package run 40467177476 (push run 40467155113 cancelled in its favour): build + package green, pre-release `server-1.0.0-e46f28dfdf09`. Next: stand rerun (item 15 Stand),
   then close item 15.
+- 2026-10-27 (cloud session): item 15 waits for the stand (code complete; two sessions have passed since the priority
+  note), so stage 2 item 0g. Measured on DuckDB 1.5.6 (`S3IntegrationTest`, counting forwarder, 8 files x 4 row
+  groups, 8 threads): still 40 + 31 connections for two queries (80 requests). httpfs 1.5 has
+  `httpfs_connection_caching` (default off); on: 8 + 0, every later query 0, a connection the endpoint cut is
+  reopened and the answer stays right. 6acc9cc: new s3 setting `arrowflight.s3.connectionCaching` (default true,
+  named stores and lakeFS inherit it; false = old behaviour), allowed by the setup validator; the `tcp_tw_reuse`
+  startup WARN only with false; `s3=open` line names it. Tests: `S3IntegrationTest.connectionsPerQueryAreBoundedAnd
+  CachedReadsOpenNone` (off / file cache / on + cut), `S3SettingsTest.connectionCachingFromTheConfiguration`,
+  `S3DataStoreTest.duckDbConnectionCachingCanBeOff`, `S3DataStoreProviderTest.silentWhenConnectionsAreKept`, goldens.
+  Local full `clean verify checkstyle:check spotbugs:check -DexcludedGroups=perf,real-services` green (server 774 / 3
+  skipped). Package run 40470316519 (push run 40470310907 cancelled in its favour): build + package green,
+  pre-release `server-1.0.0-6acc9cce0b26`. Next: stand rerun of 0g (see item 0g Stand) and item 15 Stand on this
+  pre-release (it carries item 15 step 3 too); then item 17.
