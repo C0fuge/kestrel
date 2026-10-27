@@ -1340,3 +1340,9 @@
   (no netem here): **Stand / screening:** with the pre-release, a pyarrow or ADBC client sending
   `arrow-compression: zstd` at 10 ms / 1 Gbit vs plain (MB/s, server CPU); level 1 vs 3.
   Next: item 20 (b)-(f), then item 21.
+- 2026-10-27 (plugins lane, FYI core lane): CI run 40587941135 (head 6ca7352) is red on one test only,
+  `LibsSetTest.setHoldsOneVersionPerLibraryAtTheFloors` ("commons-io missing"): with 6ca7352's `arrow-compression`
+  dependency the server's provided libs set (`dependency:list -DincludeScope=provided`) loses commons-io 2.16.1 (62 -> 61
+  entries, checked locally with the server pom of 600eb08 vs now, same hive pom). Not fixed by the plugins lane (core
+  scope). Also seen once: `S3CacheEndpointTest.aChangedObjectFailsEveryWaiterAndIsReadAgainOnce` 3 GETs instead of 2
+  (run 40586746160, timing; passes locally 3/3).
