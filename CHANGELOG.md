@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Opt-in Zstandard compression of result streams (item 20, step 1): a client that sends `arrow-compression: zstd`
+  gets Arrow IPC batches with ZSTD body compression (level `flightCompressionLevel`, default 1); batches under
+  `flightCompressionMinBytes` (64 KiB) and streams whose batches do not shrink go plain; `flightCompression`
+  (default `none`) sets the codec for calls without the header. Clients that do not ask get plain batches as
+  before. Unknown values and `lz4` (Arrow Java's LZ4 codec is far too slow) are refused with INVALID_ARGUMENT.
+  Metrics `arrowflight_flight_compress*`. New dependency `arrow-compression` (zstd-jni kept at parquet's version).
 - Hive plugin, ORC step 1 (P1, no runtime change yet): `OrcArrowReader` reads one ORC file of a Hive table as Arrow
   batches through the server's stores (orc-core 2.1.3 over a one-file Hadoop file system wrapping the store's
   `ReadableFile`): columns by name (case-insensitive) or by position for Hive 1.x `_colN` files, missing columns

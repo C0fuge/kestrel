@@ -19,6 +19,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.IntSupplier;
 
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
+import pro.surpin.data.arrowflight.server.adapters.StreamCompression;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
 import pro.surpin.data.arrowflight.server.adapters.StackTraceTrimmer;
@@ -82,6 +83,20 @@ public class HadoopArrowFlightServer {
     private MetricsService metricsService;
     private FlightSecurity flightSecurity;
     private HdfsTicketCache hdfsTicketCache;
+
+    /**
+     * Reads the stream compression settings and logs them.
+     *
+     * @return middleware factory choosing each call's codec
+     * @throws IllegalArgumentException for an unknown codec or a value out of range
+     */
+    private static StreamCompression.Factory streamCompression() {
+        StreamCompression.Settings settings = ConfigAdapter.streamCompression();
+        LOGGER.info("Flight stream compression: default {} (clients choose with the {} header),"
+                + " zstd level {}, batches below {} bytes plain", settings.defaultCodec(),
+                StreamCompression.HEADER, settings.zstdLevel(), settings.minBatchBytes());
+        return new StreamCompression.Factory(settings);
+    }
 
     /**
      * Starts the server with command-line arguments.
@@ -192,6 +207,7 @@ public class HadoopArrowFlightServer {
                     .maxInboundMessageSize(config.grpcMaxInboundMessageSize())
                     .backpressureThreshold(config.flightBackpressureThresholdBytes())
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
+                    .middleware(StreamCompression.KEY, streamCompression())
                     .transportHint("grpc.builderConsumer", grpcOptions(outboundBudget)))
                     .build();
             LOGGER.info("Default result mode: {}; metadata endpoint location: {}; Flight security: {}",

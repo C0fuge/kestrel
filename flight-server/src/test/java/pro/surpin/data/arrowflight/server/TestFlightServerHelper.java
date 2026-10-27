@@ -6,6 +6,7 @@ import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
+import pro.surpin.data.arrowflight.server.adapters.StreamCompression;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
@@ -113,6 +114,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         // As HadoopArrowFlightServer does: the client's x-flight-result-mode header decides.
         server = FlightServer.builder(allocator, location, flightSqlProducer)
                 .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
+                .middleware(StreamCompression.KEY, new StreamCompression.Factory(b.compression))
                 .build();
         server.start();
 
@@ -170,6 +172,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         private int hazelcastPort;
         private int flightPort;
         private int threads = 1;
+        private StreamCompression.Settings compression = StreamCompression.Settings.DEFAULT;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
 
@@ -181,6 +184,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder hazelcastPort(int p) { this.hazelcastPort = p; return this; }
         public Builder flightPort(int p) { this.flightPort = p; return this; }
         public Builder threads(int t) { this.threads = t; return this; }
+        public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }
 
         public TestFlightServerHelper start() throws Exception {
             return new TestFlightServerHelper(this);

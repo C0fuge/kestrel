@@ -180,6 +180,7 @@ public final class MetricsService implements AutoCloseable {
                 "Currently executing Parquet queries", ACTIVE_QUERIES.get());
         appendQueryMetrics(metrics);
         appendCacheMetrics(metrics);
+        CompressionMetrics.append(metrics);
         appendPluginMetrics(metrics);
 
         return metrics.toString();

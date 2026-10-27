@@ -23,6 +23,17 @@
     </Match>
 
     <!--
+      REC_CATCH_EXCEPTION: start() deliberately logs any startup failure (checked or not, e.g. a
+      bad flightCompression setting) and exits; SpotBugs flags it since the stream compression
+      middleware was added to the builder chain, which throws only runtime exceptions.
+    -->
+    <Match>
+        <Bug pattern="REC_CATCH_EXCEPTION"/>
+        <Class name="pro.surpin.data.arrowflight.server.HadoopArrowFlightServer"/>
+        <Method name="start"/>
+    </Match>
+
+    <!--
       RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE: null guards on schema-query results
       are intentional — getQuerySchema may return null.
     -->

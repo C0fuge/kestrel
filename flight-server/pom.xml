@@ -346,6 +346,20 @@
             <version>${arrow.version}</version>
         </dependency>
 
+        <!-- LZ4_FRAME / ZSTD codecs for opt-in compressed Flight streams (arrow-compression). -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-compression</artifactId>
+            <version>${arrow.version}</version>
+            <exclusions>
+                <!-- Keep parquet-hadoop's newer zstd-jni. -->
+                <exclusion>
+                    <groupId>com.github.luben</groupId>
+                    <artifactId>zstd-jni</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- Arrow Vector (для Parquet чтения) -->
         <dependency>
             <groupId>org.apache.arrow</groupId>

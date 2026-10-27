@@ -183,6 +183,34 @@ public class ConfigAdapter {
     }
 
     /**
+     * Loads the stream compression settings.
+     *
+     * @return resolved settings
+     */
+    public static StreamCompression.Settings streamCompression() {
+        return streamCompression(ConfigSource.system());
+    }
+
+    /**
+     * Resolves the stream compression settings: {@code flightCompression} (none or zstd; codec
+     * for calls without the {@code arrow-compression} header), {@code flightCompressionLevel}
+     * (Zstandard level) and {@code flightCompressionMinBytes} (smaller batches go plain).
+     *
+     * @param props configuration source
+     * @return resolved settings
+     * @throws IllegalArgumentException for an unknown codec or a value out of range
+     */
+    public static StreamCompression.Settings streamCompression(ConfigSource props) {
+        StreamCompression.Settings defaults = StreamCompression.Settings.DEFAULT;
+        String codec = getString("flightCompression", "arrowflight.flight.compression", "none", props);
+        int level = getInt("flightCompressionLevel", "arrowflight.flight.compressionLevel",
+                defaults.zstdLevel(), props);
+        long minBytes = getLong("flightCompressionMinBytes", "arrowflight.flight.compressionMinBytes",
+                defaults.minBatchBytes(), props);
+        return new StreamCompression.Settings(StreamCompression.parse(codec), level, minBytes);
+    }
+
+    /**
      * Returns the DuckDB threads per connection used when duckDbThreads is unset or 0: a quarter
      * of the cores, between 2 and 8.
      *

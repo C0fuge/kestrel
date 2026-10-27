@@ -360,7 +360,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     @Override
     public void getStream(FlightProducer.CallContext context, Ticket ticket,
             FlightProducer.ServerStreamListener listener) {
-        super.getStream(context, ticket, EmptyListOffsets.guard(listener));
+        StreamCompression compression = context.getMiddleware(StreamCompression.KEY);
+        FlightProducer.ServerStreamListener sending =
+                compression == null ? listener : compression.wrap(listener);
+        super.getStream(context, ticket, EmptyListOffsets.guard(sending));
     }
 
     /**
