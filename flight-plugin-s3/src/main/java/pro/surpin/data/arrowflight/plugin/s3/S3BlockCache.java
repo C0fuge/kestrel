@@ -58,6 +58,17 @@ final class S3BlockCache {
     }
 
     /**
+     * Returns a block and marks it recently used, without counting a hit or miss; for a second
+     * look after a first {@link #get} missed.
+     *
+     * @param key block name
+     * @return its bytes, or null when not cached
+     */
+    synchronized byte[] peek(BlockKey key) {
+        return blocks.get(key);
+    }
+
+    /**
      * Adds a block, dropping the least recently used ones until the cache fits its capacity. A
      * block larger than the capacity is not kept.
      *

@@ -13,7 +13,13 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -31,6 +37,8 @@ class S3CacheEndpointTest {
     private static final String BUCKET = "lake";
     private static final String KEY = "data/t/x.parquet";
     private static final int SIZE = 3 * S3CacheEndpoint.BLOCK_BYTES + 12_345;
+    /** Concurrent readers; the backend client has 4 connections. */
+    private static final int READERS = 4;
 
     private final AtomicLong clock = new AtomicLong(1_000_000_000L);
     private FakeS3 s3;
@@ -121,6 +129,51 @@ class S3CacheEndpointTest {
         assertArrayEquals(Arrays.copyOfRange(data, 0, 100), range(0, 99), "checked again after the interval");
     }
 
+    /**
+     * Verifies concurrent requests for the same missing blocks read them from S3 once: the later
+     * requests take the first one's read (single flight).
+     *
+     * @throws Exception when a reader fails
+     */
+    @Test
+    void concurrentMissesOfOneBlockReadItOnce() throws Exception {
+        assertEquals(SIZE, duckDb.headObject(r -> r.bucket(BUCKET).key(KEY)).contentLength());
+        s3.clearRequests();
+        s3.latency(300);
+        long from = S3CacheEndpoint.BLOCK_BYTES - 10;
+        long to = S3CacheEndpoint.BLOCK_BYTES + 99;
+        for (byte[] answer : concurrently(READERS, from, to)) {
+            assertArrayEquals(Arrays.copyOfRange(data, (int) from, (int) to + 1), answer);
+        }
+        assertEquals(1, gets(), "two blocks, " + READERS + " readers, one GET: " + endpoint.stats());
+        assertTrue(endpoint.stats().contains("joined=" + 2 * (READERS - 1)), endpoint.stats());
+    }
+
+    /**
+     * Verifies a read that finds the object changed fails every request waiting for it, and each
+     * then reads the new version (again once for all), never the old one.
+     *
+     * @throws Exception when a reader fails
+     */
+    @Test
+    void aChangedObjectFailsEveryWaiterAndIsReadAgainOnce() throws Exception {
+        range(0, 99);
+        byte[] second = bytes(SIZE, 3);
+        s3.put(BUCKET, KEY, second, Instant.parse("2026-10-27T09:00:00Z"));
+        s3.clearRequests();
+        s3.latency(300);
+        long from = S3CacheEndpoint.BLOCK_BYTES;
+        long to = 2L * S3CacheEndpoint.BLOCK_BYTES + 9;
+        for (byte[] answer : concurrently(READERS, from, to)) {
+            assertArrayEquals(Arrays.copyOfRange(second, (int) from, (int) to + 1), answer);
+        }
+        assertEquals(2, gets(), "one GET refused (If-Match), one GET of the new version: " + endpoint.stats());
+        s3.latency(0);
+        s3.clearRequests();
+        assertArrayEquals(Arrays.copyOfRange(second, (int) from, (int) to + 1), range(from, to));
+        assertEquals(0, gets(), "nothing left waiting or claimed");
+    }
+
     /** Verifies HEADs always reach S3 and answer the current version. */
     @Test
     void headsAreAlwaysLookedUp() {
@@ -200,6 +253,33 @@ class S3CacheEndpointTest {
         assertEquals(512L << 20, S3DataStoreProvider.cacheBytes(512, 1L << 30));
         assertThrows(IllegalArgumentException.class, () -> S3DataStoreProvider.cacheBytes(513, 1L << 30));
         assertThrows(IllegalArgumentException.class, () -> S3DataStoreProvider.cacheBytes(-1, 1L << 30));
+    }
+
+    private List<byte[]> concurrently(int readers, long from, long to) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(readers);
+        List<S3Client> clients = new ArrayList<>();
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<byte[]>> answers = new ArrayList<>();
+            for (int i = 0; i < readers; i++) {
+                S3Client reader = client(route.keyId(), route.secret());
+                clients.add(reader);
+                answers.add(pool.submit(() -> {
+                    start.await();
+                    return reader.getObjectAsBytes(r -> r.bucket(BUCKET).key(KEY).range("bytes=" + from + "-" + to))
+                            .asByteArray();
+                }));
+            }
+            start.countDown();
+            List<byte[]> result = new ArrayList<>();
+            for (Future<byte[]> answer : answers) {
+                result.add(answer.get(30, TimeUnit.SECONDS));
+            }
+            return result;
+        } finally {
+            pool.shutdownNow();
+            clients.forEach(S3Client::close);
+        }
     }
 
     private byte[] range(long from, long to) {

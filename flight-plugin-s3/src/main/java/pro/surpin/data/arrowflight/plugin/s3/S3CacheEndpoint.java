@@ -24,16 +24,22 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -45,8 +51,10 @@ import java.util.function.LongSupplier;
  *
  * <p>Each object's version (ETag) is checked against S3 with a HEAD at most every
  * {@code checkSeconds}; a block missing from the cache is read with {@code If-Match} on that
- * version, so the bytes of one answer always come from one version of an object. HEADs from
- * DuckDB always go to S3. Listings and other requests with a query are not served.
+ * version, so the bytes of one answer always come from one version of an object. A block that
+ * one request is already reading from S3 is not read again by a concurrent one: that request
+ * waits for the first read (single flight). HEADs from DuckDB always go to S3. Listings and other
+ * requests with a query are not served.
  */
 final class S3CacheEndpoint {
 
@@ -70,6 +78,8 @@ final class S3CacheEndpoint {
     private final String node;
     private final Map<String, Route> routes = new ConcurrentHashMap<>();
     private final Map<String, Version> versions = new ConcurrentHashMap<>();
+    private final Map<S3BlockCache.BlockKey, CompletableFuture<byte[]>> reading = new ConcurrentHashMap<>();
+    private final AtomicLong joined = new AtomicLong();
 
     /**
      * What one data directory reads through the endpoint, and the key DuckDB signs with.
@@ -221,15 +231,16 @@ final class S3CacheEndpoint {
     /**
      * Describes the cache's use so far.
      *
-     * @return statistics line
+     * @return statistics line; {@code joined} counts blocks a request took from another request's
+     *         read instead of reading them from S3 itself
      */
     String stats() {
-        return cache.stats();
+        return cache.stats() + " joined=" + joined.get();
     }
 
     /** Stops the endpoint. */
     void close() {
-        LOGGER.info("node={} s3=cacheClosed {}", node, cache.stats());
+        LOGGER.info("node={} s3=cacheClosed {}", node, stats());
         server.stop(0);
         handlers.shutdownNow();
     }
@@ -419,7 +430,9 @@ final class S3CacheEndpoint {
     }
 
     /**
-     * Collects the blocks of a span, reading the missing ones from S3.
+     * Collects the blocks of a span, reading the missing ones from S3. A missing block another
+     * request is reading already is taken from that read; the blocks this request reads itself
+     * are read first, so two requests never wait for each other.
      *
      * @param route route of the request
      * @param key object key
@@ -438,33 +451,135 @@ final class S3CacheEndpoint {
         String bucket = route.root().bucket();
         long first = span[0] / BLOCK_BYTES;
         long last = span[1] / BLOCK_BYTES;
-        byte[][] blocks = new byte[(int) (last - first + 1)][];
-        for (int i = 0; i < blocks.length; i++) {
-            blocks[i] = cache.get(new S3BlockCache.BlockKey(bucket, key, version.etag(), first + i));
+        int count = (int) (last - first + 1);
+        byte[][] blocks = new byte[count][];
+        S3BlockCache.BlockKey[] keys = new S3BlockCache.BlockKey[count];
+        List<CompletableFuture<byte[]>> reads = new ArrayList<>(Collections.nCopies(count, null));
+        boolean[] mine = new boolean[count];
+        for (int i = 0; i < count; i++) {
+            keys[i] = new S3BlockCache.BlockKey(bucket, key, version.etag(), first + i);
+            blocks[i] = cache.get(keys[i]);
+            if (blocks[i] != null) {
+                continue;
+            }
+            CompletableFuture<byte[]> read = new CompletableFuture<>();
+            CompletableFuture<byte[]> other = reading.putIfAbsent(keys[i], read);
+            if (other != null) {
+                reads.set(i, other);
+                continue;
+            }
+            // A read that ended between the cache miss and the claim left its block in the cache.
+            blocks[i] = cache.peek(keys[i]);
+            if (blocks[i] != null) {
+                reading.remove(keys[i], read);
+                read.complete(blocks[i]);
+                continue;
+            }
+            mine[i] = true;
+            reads.set(i, read);
         }
+        try {
+            readOwn(route, key, version, first, blocks, keys, reads, mine);
+        } finally {
+            for (int i = 0; i < count; i++) {
+                if (mine[i]) {
+                    reads.get(i).completeExceptionally(new StorageException("read of " + key + " abandoned"));
+                    reading.remove(keys[i], reads.get(i));
+                }
+            }
+        }
+        for (int i = 0; i < count; i++) {
+            if (blocks[i] == null) {
+                blocks[i] = await(reads.get(i));
+                joined.incrementAndGet();
+            }
+        }
+        return blocks;
+    }
+
+    /**
+     * Reads the blocks this request claimed from S3, consecutive ones together, caching each and
+     * handing it to the requests waiting for it; a failure is handed to them too.
+     *
+     * @param route route of the request
+     * @param key object key
+     * @param version object version to read
+     * @param first number of the span's first block
+     * @param blocks blocks of the span, filled in
+     * @param keys names of the span's blocks
+     * @param reads reads of the span's blocks, own or another request's
+     * @param mine which blocks this request reads
+     * @throws ChangedException when the object is no longer that version
+     * @throws NoSuchFileException when the object does not exist
+     * @throws StorageException when S3 cannot be read
+     */
+    private void readOwn(Route route, String key, Version version, long first, byte[][] blocks,
+            S3BlockCache.BlockKey[] keys, List<CompletableFuture<byte[]>> reads, boolean[] mine)
+            throws ChangedException, NoSuchFileException, StorageException {
         int i = 0;
         while (i < blocks.length) {
-            if (blocks[i] != null) {
+            if (!mine[i]) {
                 i++;
                 continue;
             }
             int end = i;
-            while (end + 1 < blocks.length && blocks[end + 1] == null && end + 1 - i < MAX_BLOCKS_PER_READ) {
+            while (end + 1 < blocks.length && mine[end + 1] && end + 1 - i < MAX_BLOCKS_PER_READ) {
                 end++;
             }
             long from = (first + i) * BLOCK_BYTES;
             long to = Math.min(version.size(), (first + end + 1) * BLOCK_BYTES) - 1;
-            byte[] bytes = read(route, key, version, from, to);
+            byte[] bytes;
+            try {
+                bytes = read(route, key, version, from, to);
+            } catch (ChangedException | NoSuchFileException | StorageException | RuntimeException e) {
+                for (int b = i; b < blocks.length; b++) {
+                    if (mine[b]) {
+                        reads.get(b).completeExceptionally(e);
+                    }
+                }
+                throw e;
+            }
             for (int b = i; b <= end; b++) {
                 int offset = (int) ((first + b) * BLOCK_BYTES - from);
                 int length = (int) Math.min(BLOCK_BYTES, bytes.length - offset);
                 byte[] block = Arrays.copyOfRange(bytes, offset, offset + length);
-                cache.put(new S3BlockCache.BlockKey(bucket, key, version.etag(), first + b), block);
+                cache.put(keys[b], block);
                 blocks[b] = block;
+                reads.get(b).complete(block);
             }
             i = end + 1;
         }
-        return blocks;
+    }
+
+    /**
+     * Waits for another request's read of a block.
+     *
+     * @param read that read
+     * @return the block
+     * @throws ChangedException when that read found the object changed
+     * @throws NoSuchFileException when that read found the object missing
+     * @throws StorageException when that read failed otherwise, or the wait was interrupted
+     */
+    private static byte[] await(CompletableFuture<byte[]> read)
+            throws ChangedException, NoSuchFileException, StorageException {
+        try {
+            return read.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new StorageException("interrupted while waiting for a block read");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof ChangedException changed) {
+                throw changed;
+            }
+            if (cause instanceof NoSuchFileException missing) {
+                throw missing;
+            }
+            if (cause instanceof StorageException failed) {
+                throw new StorageException(failed.getMessage());
+            }
+            throw new StorageException("block read failed: " + cause.getClass().getSimpleName());
+        }
     }
 
     /**

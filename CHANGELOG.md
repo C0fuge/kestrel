@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3 read cache, single flight (item 17 (c)): concurrent requests that miss the same 1 MiB block read it from S3
+  once; the later ones wait for the first read and take its bytes (or its failure: a refused `If-Match` makes each of
+  them look the version up again and read the new one, again once for all). The `s3=cacheClosed` line counts these
+  blocks as `joined=`. Only active with `arrowflight.s3.cacheMegabytes` > 0.
 - S3 read cache (item 17, option A; opt-in): `arrowflight.s3.cacheMegabytes` (default 0 = off) starts one
   node-wide, byte-bounded cache (JVM heap, at most half of it) that every DuckDB connection reads `s3://` through: a
   127.0.0.1-only HTTP endpoint of the s3 plugin answers ranged GETs from 1 MiB blocks (least recently used dropped
