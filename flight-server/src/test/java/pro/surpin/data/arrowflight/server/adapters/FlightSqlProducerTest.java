@@ -32,6 +32,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -39,6 +41,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -233,6 +236,82 @@ class FlightSqlProducerTest {
 
         assertEquals(5L, info.getRecords());
         verify(queryPlanner).plan(query);
+    }
+
+    /**
+     * Verifies only a complete-mode query with parameters gets a statement id: a query without
+     * any is planned and closed without looking up values in the cluster.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void onlyAQueryWithParametersHasAStatementId() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        String plain = "select o_comment from s.orders where o_orderkey = 7";
+        String bound = "select o_comment from s.orders where o_orderkey = ?";
+        Schema schema = new Schema(List.of(Field.nullable("o_comment", ArrowType.Utf8.INSTANCE)));
+        Schema parameters = new Schema(List.of(Field.nullable("parameter_1", new ArrowType.Int(64, true))));
+        when(executionService.completeSchema(allocator, plain, null)).thenReturn(schema);
+        when(executionService.completeSchema(allocator, bound, null)).thenReturn(schema);
+        when(executionService.completeParameterSchema(plain)).thenReturn(new Schema(List.of()));
+        when(executionService.completeParameterSchema(bound)).thenReturn(parameters);
+        when(queryPlanner.planComplete(anyString(), any())).thenReturn(new QueryPlan(List.of(), -1L, -1L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService, clusterService, "complete");
+
+        ByteString plainHandle = prepare(producer, plain, context);
+        ByteString boundHandle = prepare(producer, bound, context);
+
+        assertEquals(plain, plainHandle.toStringUtf8());
+        assertNull(QueryParameters.parseHandle(plainHandle).statementId());
+        String id = QueryParameters.parseHandle(boundHandle).statementId();
+        assertNotNull(id);
+        assertEquals(bound, QueryParameters.parseHandle(boundHandle).sql());
+
+        for (ByteString handle : List.of(plainHandle, boundHandle)) {
+            producer.getFlightInfoPreparedStatement(FlightSql.CommandPreparedStatementQuery.newBuilder()
+                    .setPreparedStatementHandle(handle).build(), context, FlightDescriptor.command(new byte[]{1}));
+            @SuppressWarnings("unchecked")
+            FlightProducer.StreamListener<org.apache.arrow.flight.Result> closed =
+                    mock(FlightProducer.StreamListener.class);
+            producer.closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest.newBuilder()
+                    .setPreparedStatementHandle(handle).build(), context, closed);
+            verify(closed).onCompleted();
+        }
+
+        verify(clusterService).recallParameters(id);
+        verify(clusterService).forgetParameters(id);
+        verify(clusterService, times(1)).recallParameters(anyString());
+        verify(clusterService, times(1)).forgetParameters(anyString());
+    }
+
+    /**
+     * Prepares a query and returns the handle the server answers with.
+     *
+     * @param producer producer under test
+     * @param query client SQL
+     * @param context call context
+     * @return prepared statement handle
+     * @throws Exception on failure
+     */
+    private static ByteString prepare(FlightSqlProducer producer, String query,
+            FlightProducer.CallContext context) throws Exception {
+        @SuppressWarnings("unchecked")
+        FlightProducer.StreamListener<org.apache.arrow.flight.Result> listener =
+                mock(FlightProducer.StreamListener.class);
+        producer.createPreparedStatement(
+                FlightSql.ActionCreatePreparedStatementRequest.newBuilder().setQuery(query).build(),
+                context, listener);
+        ArgumentCaptor<org.apache.arrow.flight.Result> result =
+                ArgumentCaptor.forClass(org.apache.arrow.flight.Result.class);
+        verify(listener).onNext(result.capture());
+        return com.google.protobuf.Any.parseFrom(result.getValue().getBody())
+                .unpack(FlightSql.ActionCreatePreparedStatementResult.class).getPreparedStatementHandle();
     }
 
     /** Verifies metadata is read over the client's own connection, not a fixed address. */

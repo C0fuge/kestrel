@@ -140,6 +140,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   approved by the maintainer); same level, text and order per query; when 8192 events are pending
   the DoGet writes its own; pending events are written at shutdown. Local measurement: complete-mode
   32 clients p50 90 -> 78 ms, partial 8 clients 28 -> 24 ms.
+- Complete mode: a prepared query without `?` parameters gets the plain handle (its SQL text, as in
+  partial mode) instead of one with a statement id, so its GetFlightInfo no longer reads the
+  cluster map for parameter values and its close no longer deletes from it (item 15 step 3). A
+  query with parameters keeps the id handle. Answers and settings unchanged; the only visible
+  difference is for a client that sends values to a query without parameters and keeps using the
+  first handle: the query now runs without them instead of failing with a count mismatch.
+  Local: close p50 1.15 -> 1.05 ms, GetFlightInfo 2.4 -> 2.2 ms (one node; a remote partition
+  owner saves a network round trip per query).
 
 ### Fixed
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another

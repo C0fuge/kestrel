@@ -900,8 +900,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             Schema parameterSchema = complete ? completeParameterSchemaFor(query) : new Schema(List.of());
             FlightSql.ActionCreatePreparedStatementResult result =
                     FlightSql.ActionCreatePreparedStatementResult.newBuilder()
-                            .setPreparedStatementHandle(complete ? QueryParameters.statementHandle(query)
-                                    : ByteString.copyFromUtf8(query))
+                            .setPreparedStatementHandle(preparedHandle(query, parameterSchema))
                             .setDatasetSchema(copyFrom(arrowSchema.serializeAsMessage()))
                             .setParameterSchema(copyFrom(parameterSchema.serializeAsMessage()))
                             .build();
@@ -913,6 +912,20 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             listener.onError(CallStatus.INTERNAL
                     .withDescription(failureDescription(e)).withCause(e).toRuntimeException());
         }
+    }
+
+    /**
+     * Makes the handle of a new prepared statement. Only a query with parameters gets an id:
+     * values can be sent for it only, and without an id neither GetFlightInfo nor close has to
+     * look the statement up in the cluster.
+     *
+     * @param query client SQL
+     * @param parameterSchema the query's parameters; empty in partial mode
+     * @return statement handle
+     */
+    private static ByteString preparedHandle(String query, Schema parameterSchema) {
+        return parameterSchema.getFields().isEmpty() ? ByteString.copyFromUtf8(query)
+                : QueryParameters.statementHandle(query);
     }
 
     @Override
