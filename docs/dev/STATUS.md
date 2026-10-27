@@ -83,7 +83,7 @@
 >    before the first batch; step 3 = cluster integration test (3 nodes, answers = single-node answers).
 > 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).
 > 7. ~~item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.~~
->    Code done 2026-10-27 (04e5580, package run 40536373045; see Log): unset or 0 = cores / 4 between 2 and 8, explicit values
+>    Code done 2026-10-27 (04e5580, package run 40536373045 green, pre-release `server-1.0.0-04e558056068`; see Log): unset or 0 = cores / 4 between 2 and 8, explicit values
 >    unchanged, startup line `duckdb=threads perConnection= availableProcessors=`. **Stand:** check the startup line on the
 >    stand hosts (cores the JVM sees in the container) and rerun small JDBC/ADBC c1/c8/c32 + SF10 JDBC (HDFS and S3) with
 >    the default vs `-DduckDbThreads=4`; together with the item 15 round. If S3 heavy queries lose much at 2 threads on small
@@ -1222,5 +1222,5 @@
   item 15's local c32 run (4 cores: p50 64-69 ms at 4 threads, 57 at 2) and TUNING's 4 as balanced on the stand's
   host size. Tests: `ConfigAdapterTest` (formula 1/4/11/12/16/32/128 cores, unset and 0 = formula, negative refused,
   bundled defaults). Local: ConfigAdapterTest, DuckDbAdapterTest, GoldenDuckDbSetupTest + checkstyle + spotbugs green.
-  Package run 40536373045 (push run 40536363011 cancelled in its favour): running. **Stand:** see stage 2 item 19.
+  Package run 40536373045 (push run 40536363011 cancelled in its favour): build + package green, pre-release `server-1.0.0-04e558056068`. **Stand:** see stage 2 item 19.
   Next: item 15 stand + close; item 16 / 19 stand rounds; 17 (a) and 18 wait for answers.
