@@ -53,3 +53,65 @@ No merge base with upstream `main` (rewritten history); Spark-side changes on th
 ## Dependabot upstream
 
 hazelcast 5.7.0, netty 4.2.19, grpc 1.85.0 → folded into STATUS Next step 1b.
+
+## Speed comparison 2026-10-26
+
+Upstream `main` dbacd8d (our fork point) and `feat/starrocks-native-integration` 07631d7 (CI shaded jars) against ours
+57d252b, one node, same machine and conditions: 8 GB container, `-Xmx3g -XX:MaxDirectMemorySize=2g`, JDK 21, server
+co-located with the DataNode (short-circuit reads), metrics off, same TPC-H SF1/SF10 Parquet files on HDFS and on S3 (MinIO),
+same clients (Flight SQL JDBC 18, ADBC Flight SQL, raw Flight scan, Trino 455 with our connector), 3 interleaved rounds with a
+load gate. Variants: ours defaults (`duckDbThreads` 4) and 8 threads; upstream `main` defaults (2) and 8; upstream native
+defaults (2), 4, 8, and 4 + `flightCompression=zstd` (4 compression threads). S3 has 1 valid round (the object store went
+down during the run); upstream `main` has no S3 support.
+
+To make upstream run at all (applied to every build): a tpch-only data directory (upstream aborts its catalog load on a
+BINARY column), schema-qualified SQL (upstream has no default schema), its own DuckDB 1.5.6 extension set (it cannot load
+1.4.x extensions; hadoopfs built from our patched sources for v1.5.6 — upstream's own image pairs a v1.4.1 hadoopfs with
+DuckDB 1.5.6, which does not load), Hadoop 3.5.0 + hadoop-aws on its class path.
+
+**Correctness (a wrong answer disqualifies that workload):**
+
+| | upstream `main` | upstream native |
+|---|---|---|
+| JDBC | no prepared statements: every JDBC statement "Not implemented" | `AVG` not implemented (21/22 TPC-H fail); q06 wrong (DECIMAL(38,4) sum returned with scale 1) |
+| `LIMIT n` without ORDER BY | ignored: the whole table is returned | ignored |
+| parameterized prepared statement | — | not supported |
+| small-query load (8/32 clients) | OOM-killed (the LIMIT full scans) | OOM-killed |
+| full-table scan | OOM / stream errors (results not streamed) | correct |
+| TPC-H SF10 via Trino | 4-7/22 | 19-21/22 ("Server sendMessage() failed") |
+| TPC-H SF1 via Trino | 22/22 | 22/22 |
+| ZSTD batches | — | not readable by Java clients without `arrow-compression` (JDBC 18, Trino connector); ADBC reads them |
+
+**Speed (best variant per side; HDFS):**
+
+| workload | ours | upstream | winner |
+|---|---|---|---|
+| TPC-H SF10 / SF1 via JDBC | 7.67 s / 1.47 s (8 threads) | n/a (fails / wrong) | ours |
+| heavy4 (q01 q09 q18 q21 at once) | 2.79 s | n/a | ours |
+| TPC-H SF10 via Trino | 32.5 s | n/a (19-21/22) | ours |
+| TPC-H SF1 via Trino | 6.17 s | 5.14 s (native, 8 thr) | upstream (0.83x time) |
+| small queries, aggregate p50/p95 | 21.9 ms JDBC c1 p50 | disqualified (LIMIT) | ours |
+| point lookup c1 p50 JDBC / ADBC | 25.0 / 19.4 ms | 16.1 / 11.6 ms | upstream (~0.6x) |
+| filtered count c1 p50 JDBC / ADBC | 37.4 / 33.5 ms | 18.9 / 19.0 ms | upstream (~0.55x) |
+| metadata calls c1 p50 | 2.4-3.8 ms | 2.4-4.4 ms | tie / ours |
+| raw scan 1 stream | 954 MB/s | 1510 MB/s (native, 8 thr) | upstream (1.6x) |
+| raw scan 4 / 8 streams | 2963 / 3360 MB/s | 3100 / 3444 MB/s | tie |
+| server RSS peak | 3.8-4.2 GB | 6.9-7.7 GB (then OOM) | ours |
+| S3, 1 round: scan 1/4/8 streams | 746 / 2549 / 3203 MB/s | 729 / 3083 / 3324 MB/s | tie / upstream at 4 |
+
+Defaults vs defaults gives the same picture. The exception is the single-stream scan, where ours wins at upstream's
+2-thread default (954 vs 840 MB/s).
+
+**Why, and what to port:**
+
+- DuckDB 1.5.6 alone (same files, no server) answers the point lookup in 5.6 ms vs 10.6 ms and the filtered count in 9.6 vs
+  15.8 ms. That is about half of the small-query gap. → STATUS Next step 14 (upgrade to 1.5.6; the hadoopfs build for 1.5.6
+  works).
+- The rest of the gap, and the Trino SF1 gap, is our per-query server overhead. Upstream `main` keeps per-connection DuckDB
+  instances like ours and is still faster, so the shared database (S5) is not the reason. → Next step 15 (profile and trim the
+  point-query path).
+- Single-stream scan: upstream defaults to `preserve_insertion_order=false` and `streaming_buffer_size=64MiB` (our S4 opt-ins).
+  → Next step 16 (measure them on the stand; propose them as defaults for plain scans only if answers stay unchanged).
+- Not ported: ZSTD batches (S11 stays deferred: no Java client in our set reads them, and there is no network bottleneck),
+  the shared database (S5, correctness), `decimalWire` (S7, changes the types clients see). Upstream's LIMIT and decimal
+  behaviour are bugs, not features.

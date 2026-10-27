@@ -304,6 +304,23 @@
     `beginTransaction refused` WARN line in the server log; if one appears, note the ADBC version. Connector side (forward to the Trino
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
+14. **DuckDB 1.5.6** (upstream speed comparison 2026-10-27, `docs/dev/UPSTREAM-SYNC.md` "Speed comparison 2026-10-26"): both
+    upstream builds bundle DuckDB 1.5.6; on the same HDFS files, without a Flight server, 1.5.6 answers a point lookup in
+    5.6 ms vs 10.6 ms and a filtered count in 9.6 vs 15.8 ms (1.4.5). The hadoopfs extension from our patched sources builds and
+    loads for v1.5.6 (footer `51b7220-afc3` / `v1.5.6`). Upgrade `duckdb_jdbc` to 1.5.6.0 and the CI extension set (httpfs, iceberg,
+    avro, hadoopfs), run the full suite, then the stand rerun (P4 small + TPC-H SF1/SF10 + Trino). Expected: 5-6 ms less per
+    small query (25-45 % of the small-query p50).
+15. **Per-query overhead** (same comparison): a point query costs ~15-20 ms over Flight vs ~6-11 ms in plain DuckDB; upstream
+    (even its fork-point `main`, which keeps per-connection instances like ours) answers point/count queries 35-50 % faster
+    and TPC-H SF1 via Trino 17 % faster. Profile GetFlightInfo -> first batch for a point query (per-connection catalog view
+    refresh, inventory planning, load accounting) and cut what is not needed for a single-node plain query; target <= +3 ms
+    over raw DuckDB. Regression test with a latency budget is not reliable in CI: measure on the stand.
+16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
+    `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
+    for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
+    + `duckDbStreamingBufferSize=64MiB` on the stand (scan x1, Trino splits) before and after item 14; if answers are unchanged
+    and x1 improves, propose them as defaults for plain scans without ORDER BY (default change -> Open questions first).
+
 ## Open questions
 
 - **S3 connection churn (item 0g, 2026-10-26).** DuckDB's httpfs opens a new TCP connection for about every S3
@@ -861,3 +878,8 @@
   Next: 0h (stand recheck), stand reruns (0g with `tcp_tw_reuse=1`, secure HA (b) without `kinit`, B5 kill mode),
   optional: expose the extension's `hdfs_dead_node_ttl_ms` as a server setting; 3-node S3 (a) (S3 outage read
   latency) partly covered by 0e's retry settings.
+- 2026-10-27 (maintainer's local agent): speed comparison upstream `main` dbacd8d / `feat/starrocks-native-integration`
+  07631d7 vs ours 57d252b on the same single-node stand (3 rounds, same container/JVM/data/clients): results in
+  `docs/dev/UPSTREAM-SYNC.md` "Speed comparison 2026-10-26". Upstream wrong answers (LIMIT ignored, decimal scale lost in q06,
+  no AVG / prepared statements / parameters) disqualify it on JDBC TPC-H, heavy and small aggregates; upstream wins point/count
+  latency, TPC-H SF1 via Trino and single-stream scan. Next steps 14-16 added.
