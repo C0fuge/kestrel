@@ -19,10 +19,16 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
  * Emits structured runtime execution-path evidence for benchmark collection.
+ * The log line and the evidence file are written by one background thread, so a DoGet does not
+ * wait for the console; when the backlog is full the caller writes its event itself.
  */
 public final class ExecutionPathRecorder {
 
@@ -41,6 +47,17 @@ public final class ExecutionPathRecorder {
         }
     });
 
+    /** Events serialized but not yet written; one writer thread keeps their order. */
+    private static final BlockingQueue<Runnable> PENDING = new ArrayBlockingQueue<>(8192);
+
+    static {
+        Thread writer = new Thread(ExecutionPathRecorder::writeLoop, "execution-path-log");
+        writer.setDaemon(true);
+        writer.start();
+        Runtime.getRuntime().addShutdownHook(
+                new Thread(ExecutionPathRecorder::drain, "execution-path-log-drain"));
+    }
+
     private ExecutionPathRecorder() {
     }
 
@@ -55,21 +72,99 @@ public final class ExecutionPathRecorder {
      */
     public static void recordEvent(String qid, String query, ExecutionPathTracker tracker,
             boolean success, String failureReason) {
+        String output = System.getenv(OUTPUT_ENV);
+        recordEvent(qid, query, tracker, success, failureReason,
+                output == null || output.isBlank() ? null : Path.of(output));
+    }
+
+    /**
+     * Emits one execution-path event to logs and the given JSONL evidence file.
+     *
+     * @param qid endpoint query identifier
+     * @param query logical SQL query
+     * @param tracker runtime path tracker
+     * @param success whether execution completed successfully
+     * @param failureReason failure description or null
+     * @param output JSONL evidence file, or null for none
+     */
+    static void recordEvent(String qid, String query, ExecutionPathTracker tracker,
+            boolean success, String failureReason, Path output) {
+        if (!LOGGER.isInfoEnabled() && output == null) {
+            return;
+        }
         String event = toJson(qid, query, tracker, success, failureReason);
         ExecutionPath path = tracker.path();
-        LOGGER.info("qid={} node={} executionPath={} pushdownEvidence={} success={} event={}",
-                qid, LogUtil.node(), path.label(), path.isPushdownEvidence(), success, event);
+        String node = LogUtil.node();
+        Runnable write = () -> write(qid, node, path, success, event, output);
+        if (!PENDING.offer(write)) {
+            write.run();
+        }
+    }
 
-        String output = System.getenv(OUTPUT_ENV);
-        if (output == null || output.isBlank()) {
+    /**
+     * Writes one serialized event to the log and the optional evidence file.
+     *
+     * @param qid endpoint query identifier
+     * @param node node that ran the query
+     * @param path execution path taken
+     * @param success whether execution completed successfully
+     * @param event serialized event
+     * @param output JSONL evidence file, or null for none
+     */
+    private static void write(String qid, String node, ExecutionPath path, boolean success,
+            String event, Path output) {
+        LOGGER.info("qid={} node={} executionPath={} pushdownEvidence={} success={} event={}",
+                qid, node, path.label(), path.isPushdownEvidence(), success, event);
+        if (output == null) {
             return;
         }
         try {
-            append(Path.of(output), event);
+            append(output, event);
         } catch (IOException e) {
             LOGGER.warn("qid={} node={} Could not append execution-path evidence to {}",
-                    qid, LogUtil.node(), output, e);
+                    qid, node, output, e);
         }
+    }
+
+    /** Writes queued events until the process ends. */
+    private static void writeLoop() {
+        while (true) {
+            try {
+                PENDING.take().run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (RuntimeException e) {
+                LOGGER.warn("Could not write an execution-path event", e);
+            }
+        }
+    }
+
+    /** Writes the events still queued, at shutdown. */
+    private static void drain() {
+        Runnable write;
+        while ((write = PENDING.poll()) != null) {
+            try {
+                write.run();
+            } catch (RuntimeException e) {
+                LOGGER.warn("Could not write an execution-path event", e);
+            }
+        }
+    }
+
+    /**
+     * Waits until every event recorded before this call is written.
+     *
+     * @param timeoutMillis maximum wait
+     * @return true when written in time
+     * @throws InterruptedException when interrupted while waiting
+     */
+    static boolean flush(long timeoutMillis) throws InterruptedException {
+        CountDownLatch written = new CountDownLatch(1);
+        if (!PENDING.offer(written::countDown, timeoutMillis, TimeUnit.MILLISECONDS)) {
+            return false;
+        }
+        return written.await(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**

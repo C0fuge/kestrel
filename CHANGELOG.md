@@ -135,6 +135,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   metadata TTL); a describe that cannot read it (table rewritten) lists the table again once.
   Local measurement: partial point query prepare p50 28.5 -> 3.4 ms, total 38.4 -> 12.5 ms,
   8 clients 97 -> 28 ms. Answers, wire format and settings unchanged.
+- The per-DoGet INFO line `executionPath=...` (and the optional `BENCHMARK_EXECUTION_PATH_LOG`
+  evidence file) is written by one background thread instead of the DoGet thread (item 15 (b),
+  approved by the maintainer); same level, text and order per query; when 8192 events are pending
+  the DoGet writes its own; pending events are written at shutdown. Local measurement: complete-mode
+  32 clients p50 90 -> 78 ms, partial 8 clients 28 -> 24 ms.
 
 ### Fixed
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another

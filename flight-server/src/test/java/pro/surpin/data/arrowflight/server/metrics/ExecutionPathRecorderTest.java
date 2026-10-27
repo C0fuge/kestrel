@@ -6,8 +6,15 @@ import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -112,4 +119,49 @@ class ExecutionPathRecorderTest {
             assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", ExecutionPathRecorder.queryDigest(null));
         }
     }
+
+    /**
+     * Verifies events recorded concurrently are all written, in order per thread, by the
+     * background writer.
+     *
+     * @param dir temporary directory
+     * @throws Exception if writing or parsing fails
+     */
+    @Test
+    void eventsRecordedConcurrentlyAreAllWritten(@TempDir Path dir) throws Exception {
+        Path output = dir.resolve("events.jsonl");
+        int threads = 8;
+        int perThread = 200;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<?>> done = new ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                int thread = t;
+                done.add(pool.submit(() -> {
+                    for (int i = 0; i < perThread; i++) {
+                        ExecutionPathTracker tracker = new ExecutionPathTracker();
+                        tracker.select(ExecutionPath.DUCKDB_SCAN);
+                        ExecutionPathRecorder.recordEvent(thread + "-" + i, "SELECT 1",
+                                tracker, true, null, output);
+                    }
+                }));
+            }
+            for (Future<?> f : done) {
+                f.get();
+            }
+        } finally {
+            pool.shutdown();
+        }
+        assertTrue(ExecutionPathRecorder.flush(10_000));
+
+        List<String> lines = Files.readAllLines(output);
+        assertEquals(threads * perThread, lines.size());
+        int[] next = new int[threads];
+        for (String line : lines) {
+            String[] qid = JSON.readTree(line).path("qid").asText().split("-");
+            int thread = Integer.parseInt(qid[0]);
+            assertEquals(next[thread]++, Integer.parseInt(qid[1]));
+        }
+    }
 }
+
