@@ -60,6 +60,13 @@
 >    twice our memory; one stream is a tie). Find why (per-stream DuckDB work, batch size, copies between DuckDB's Arrow
 >    output and the Flight stream, the per-stream budget of 0f, endpoint split of S6) and close the gap. Goal >= 750 MB/s
 >    with peak RSS at most +25 % over today's.
+> 3b. item 17 (e) (new, from the CI screening's cache run 40569584228, `COMPARE-CACHE-2026-10-27.md`) - **S3 read cache
+>    memory and large scans.** With `arrowflight.s3.cacheMegabytes=1024` (`-Xmx3g`, direct 2g, 6 GB container) peak RSS
+>    was ~5.7 GB vs ~2.3 GB off (2.45x; ~300 MB from the container limit, no OOM kill yet) - find where the extra ~3.4 GB
+>    lives (heap LRU vs copies per request vs DuckDB buffers holding the same data) and bound the whole thing to the
+>    configured size; and TPC-H SF10 is ~8 % slower with the cache on (does not fit, the cache churns) - bypass the
+>    cache for large sequential reads (size-aware admission). Wins to keep: repeated small queries p95 8-20x faster,
+>    SF1 0.32-0.47x. Take it right after item 20.
 > 4. item 18 step 2 - distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).
