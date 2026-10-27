@@ -33,7 +33,7 @@
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
 > changes runtime behaviour, so the coordinator can measure it on the stand):
 > 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
-> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - step 1 done 2026-10-27 (describe cache, see item 15); stand measure pending, then decide on step 2.
+> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - steps 1, 2, 2 (a) and (b) done 2026-10-27 (see item 15); stand measure pending, then close.
 > 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
@@ -370,12 +370,19 @@
     pre-release vs 775100b and 27f583a. c8/c32 vs 1.4.5 not explained yet: at c32 with `duckDbThreads=4` every
     worker's DuckDB has 4 threads (128 on 4 cores locally); worth one stand round at `duckDbThreads=2` (c32) to see
     whether the 1.5.6 regression is scheduler oversubscription (feeds item 19).
-    **Step 2 candidates left:** (a) partial mode prepare costs ~17 ms locally: `resultSchema` misses its
-    cache for every new literal and lists the table's files for a sample file each time (`sampleFile` 3.4 ms on a
-    local dir, an RPC on HDFS) - cache the sample file per table with the listing's TTL; (b) the INFO line
+    **Step 2 (a) done 2026-10-27 (01cdd57, see Log):** partial-mode describes bind against a sample file remembered
+    per table for 30 s (re-listed once when a describe cannot read it). Local, before -> after in one session:
+    partial point prepare p50 28.5 -> 3.4 ms, total 38.4 -> 12.5 ms, c8 97 -> 28 ms, c32 73 -> 74 ms; complete
+    mode unchanged (point 15.8 / 16.4 ms on this noisier box). **Stand:** partial-mode small queries (JDBC/ADBC
+    with `x-flight-result-mode: partial`) c1/c8 on this pre-release vs 80ccac9.
+    **Step 2 candidates left:** (b) the INFO line
     `executionPath=...` per DoGet goes through slf4j-simple to stderr synchronously (contention at c32): consider
     DEBUG or an async logger (log change -> ask); **Maintainer 2026-10-27: approved - make it asynchronous, keep the line at INFO.** (c) the DoGet parse check repeats the describe's (needed: DoGet can
     reach a node that did not describe).
+    **(b) done 2026-10-27 (see Log):** the `executionPath=` INFO line is written by a background thread
+    (approved above). Local, same session: complete point p50 15.8 -> 15.1 ms, c32 90 -> 78 ms; partial c8 28 -> 24 ms.
+    **Proposal to close item 15** after the stand round: the server-side work per query is now ~= plain DuckDB
+    + ~1 ms; what remains is the 4 gRPC calls stock clients make (client side, not ours to cut).
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
     `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
     for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
