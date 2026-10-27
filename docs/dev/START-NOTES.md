@@ -51,5 +51,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `tcp_tw_reuse` is not 1. Where the same files are read again and again, `duckDbExternalFileCache=true` serves
   repeated reads from memory without a connection (costs up to `duckDbMemoryLimit` per connection).
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
+- A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
+  Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`
+  on every node; lower values also drop nodes that only pause, e.g. in GC). A stopped server leaves at once; a crashed
+  one whose address still refuses connections is dropped within a second.
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.

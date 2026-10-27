@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
@@ -30,6 +31,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Tag("integration")
 class ClusterMemberLossIntegrationTest {
+
+    private static final String MAX_NO_HEARTBEAT = "hazelcast.max.no.heartbeat.seconds";
+    private static final String LOCAL_ADDRESS = "hazelcast.local.localAddress";
 
     private final List<ClusterService> services = new ArrayList<>();
 
@@ -208,6 +212,142 @@ class ClusterMemberLossIntegrationTest {
         assertTrue(millis < 5000, "planning reads took " + millis + " ms");
         assertEquals(Set.of(uris[0], uris[2]), live);
         assertEquals(20, local.size(), "the inventories of the members that are left");
+    }
+
+    /**
+     * 3-node S3 stand finding (c): after kill tests the first plan waited 9-10 s on one stand and
+     * about 1 s on another. A crashed member whose address still answers (process gone, port
+     * refuses) is dropped as soon as a connection to it fails; one whose address went away with
+     * it (container removed, host down) answers nothing, and every map operation on its
+     * partitions waits until the failure detector gives up on it.
+     */
+    @Test
+    void crashedMemberWhosePortRefusesIsDroppedAtOnce() throws Exception {
+        List<ClusterService> cluster = crashCluster(null);
+        long millis = firstPlanMillisAfterCrash(cluster);
+        assertTrue(millis < 5000, "first plan took " + millis + " ms");
+    }
+
+    /**
+     * The other half of the finding above: a crashed member whose address vanished holds the
+     * first plan for hazelcast.max.no.heartbeat.seconds (10 s by default, -D overrides it). The
+     * doomed member listens on 127.0.0.2 and an iptables DROP makes that address silent, which
+     * needs root or password-less sudo (skipped otherwise).
+     */
+    @Test
+    void crashedMemberWhoseAddressVanishedHoldsThePlanForTheHeartbeatTimeout() throws Exception {
+        String iptables = iptablesCommand();
+        Assumptions.assumeTrue(iptables != null, "needs iptables as root or via sudo -n");
+        List<ClusterService> cluster = crashCluster("3");
+        String rules = "%1$s %2$s INPUT -s 127.0.0.2 -j DROP && %1$s %2$s INPUT -d 127.0.0.2 -j DROP";
+        long millis;
+        try {
+            assertTrue(run(rules.formatted(iptables, "-I")), "the DROP rules were not added");
+            millis = firstPlanMillisAfterCrash(cluster);
+        } finally {
+            run(rules.formatted(iptables, "-D"));
+        }
+        assertTrue(millis >= 2000, "first plan took " + millis + " ms, the address did not go silent");
+        assertTrue(millis < 8000, "first plan took " + millis + " ms with a 3 s heartbeat timeout");
+    }
+
+    /**
+     * Starts two members on 127.0.0.1 and a third, the one to crash, on 127.0.0.2.
+     *
+     * @param maxNoHeartbeatSeconds hazelcast.max.no.heartbeat.seconds for every member, or null
+     *        for the server's default
+     * @return the members, the one to crash last
+     * @throws Exception when the cluster does not form
+     */
+    private List<ClusterService> crashCluster(String maxNoHeartbeatSeconds) throws Exception {
+        int[] ports = {freePort(), freePort(), freePort()};
+        String[] hosts = {"127.0.0.1", "127.0.0.1", "127.0.0.2"};
+        String[] seeds = new String[ports.length];
+        for (int i = 0; i < ports.length; i++) {
+            seeds[i] = hosts[i] + ":" + ports[i];
+        }
+        List<ClusterService> cluster = new ArrayList<>();
+        try {
+            if (maxNoHeartbeatSeconds != null) {
+                System.setProperty(MAX_NO_HEARTBEAT, maxNoHeartbeatSeconds);
+            }
+            for (int i = 0; i < ports.length; i++) {
+                if (i == ports.length - 1) {
+                    System.setProperty(LOCAL_ADDRESS, hosts[i]);
+                }
+                cluster.add(start(ports[i], seeds, "grpc+tcp://n" + (i + 1) + ":32010",
+                        files("n" + (i + 1), 10)));
+            }
+        } finally {
+            System.clearProperty(LOCAL_ADDRESS);
+            System.clearProperty(MAX_NO_HEARTBEAT);
+        }
+        awaitMembers(cluster.get(0), ports.length);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (!cluster.get(0).getHazelcastInstance().getPartitionService().isClusterSafe()) {
+            assertTrue(System.nanoTime() < deadline, "the cluster did not settle");
+            Thread.sleep(50);
+        }
+        return cluster;
+    }
+
+    /**
+     * Crashes the last member (no goodbye) and times the planner's cluster reads and ticket
+     * reservations on the first one.
+     *
+     * @param cluster members from crashCluster
+     * @return milliseconds the first plan's cluster operations took
+     * @throws Exception when interrupted
+     */
+    private static long firstPlanMillisAfterCrash(List<ClusterService> cluster) throws Exception {
+        ClusterService survivor = cluster.get(0);
+        cluster.get(cluster.size() - 1).getHazelcastInstance().getLifecycleService().terminate();
+        long started = System.nanoTime();
+        Set<String> live = survivor.filterLiveServers(survivor.allServerLoads().keySet());
+        // Handles land on every partition, the crashed member's too.
+        for (int i = 0; i < 20; i++) {
+            survivor.createEndpointHandle(HandleState.forCompleteAnswer("SELECT " + i, null));
+        }
+        long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        assertEquals(Set.of("grpc+tcp://n1:32010", "grpc+tcp://n2:32010"), live);
+        return millis;
+    }
+
+    /**
+     * Finds how this process can change iptables rules.
+     *
+     * @return the command prefix, or null when it cannot
+     * @throws Exception when interrupted
+     */
+    private static String iptablesCommand() throws Exception {
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")) {
+            return null;
+        }
+        for (String command : List.of("iptables", "sudo -n iptables")) {
+            if (run(command + " -n -L INPUT")) {
+                return command;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Runs a shell command line and discards its output.
+     *
+     * @param commandLine command line for sh -c
+     * @return whether it exited with status 0
+     * @throws Exception when interrupted
+     */
+    private static boolean run(String commandLine) throws Exception {
+        try {
+            Process process = new ProcessBuilder("sh", "-c", commandLine)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            return process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0;
+        } catch (java.io.IOException e) {
+            return false;
+        }
     }
 
     /**

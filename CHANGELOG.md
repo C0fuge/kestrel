@@ -116,6 +116,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Fixed
+- Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another
+  (3-node S3 stand finding (c)): a crashed node whose address vanished with it holds every map
+  operation on its partitions until Hazelcast drops it (`hazelcast.max.no.heartbeat.seconds`,
+  default 10, `-D` overrides it); one whose port still refuses is dropped at once. Documented in
+  START-NOTES; `ClusterMemberLossIntegrationTest` covers both cases and the override (the
+  vanished-address case uses iptables as root or via `sudo -n`, skipped otherwise). No code change.
 - Concurrent DoGet streams could corrupt each other's batches: Arrow Java's `ListVector` /
   `LargeListVector` set the writer index of the process-wide empty buffer to 4 (8) when an empty
   list is written to IPC, so another stream serialized its empty buffers with the wrong length
