@@ -82,7 +82,12 @@
 >    opt-in setting (`distributedComplete`, default false), fallback to today's path on any refusal or peer error
 >    before the first batch; step 3 = cluster integration test (3 nodes, answers = single-node answers).
 > 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).
-> 7. item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.
+> 7. ~~item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.~~
+>    Code done 2026-10-27 (04e5580, package run 40536373045; see Log): unset or 0 = cores / 4 between 2 and 8, explicit values
+>    unchanged, startup line `duckdb=threads perConnection= availableProcessors=`. **Stand:** check the startup line on the
+>    stand hosts (cores the JVM sees in the container) and rerun small JDBC/ADBC c1/c8/c32 + SF10 JDBC (HDFS and S3) with
+>    the default vs `-DduckDbThreads=4`; together with the item 15 round. If S3 heavy queries lose much at 2 threads on small
+>    hosts, a per-store default is the next question.
 
 0g. ~~**Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
     ephemeral-port exhaustion.**~~ — **cause found, workaround + startup WARN done 2026-10-26 (9f7eb4f, see Log); the
@@ -1209,3 +1214,13 @@
   lakeFS IT ran), pre-release `server-1.0.0-752e272b3ab6`. **Stand** (optional, with the item 17 round):
   lakeFS SF1 per commit with `arrowflight.lakefs.cacheMegabytes=1024` vs off. Next: item 15 stand + close; then item 16 / 19
   (17 (a) waits for the local-disk question).
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete), 16 is a stand measurement (S4 open
+  question), 17 (a) waits for the local-disk question, 18 for node-to-node calls, so item 19 (04e5580): size-aware
+  `duckDbThreads` default (approved in stage 2). Unset or 0 = `availableProcessors / 4`, clamped to 2..8 (container
+  CPU limits count: Java 21 reads the cgroup quota); explicit values unchanged, negative refused at startup; bundled
+  `arrowflight.properties` leaves it empty; new INFO line `duckdb=threads perConnection= availableProcessors=`. Basis:
+  item 15's local c32 run (4 cores: p50 64-69 ms at 4 threads, 57 at 2) and TUNING's 4 as balanced on the stand's
+  host size. Tests: `ConfigAdapterTest` (formula 1/4/11/12/16/32/128 cores, unset and 0 = formula, negative refused,
+  bundled defaults). Local: ConfigAdapterTest, DuckDbAdapterTest, GoldenDuckDbSetupTest + checkstyle + spotbugs green.
+  Package run 40536373045 (push run 40536363011 cancelled in its favour): running. **Stand:** see stage 2 item 19.
+  Next: item 15 stand + close; item 16 / 19 stand rounds; 17 (a) and 18 wait for answers.
