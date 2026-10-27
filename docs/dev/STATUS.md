@@ -55,7 +55,14 @@
 >    by side (scan 1346 / 503 / 448 ms at 1 / 4 / 8 threads). `prefetch_all_parquet_files` changes nothing on S3;
 >    `metadataCache=false` costs a HEAD + footer GETs per file and query (point 71 -> 179 ms at 8 threads). So no new
 >    read setting; the pattern is now pinned in CI (`S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed`).
->    What is left of item 17 is the bounded data cache: Open questions, "S3 read cache with a memory bound". **Stand
+>    What is left of item 17 is the bounded data cache: Open questions, "S3 read cache with a memory bound".
+>    *2026-10-27 (third cloud session): option A step 1 done (84fec77, see Log):* opt-in `arrowflight.s3.cacheMegabytes`
+>    (default 0 = off) + `cacheCheckSeconds` (default 10): node-wide heap LRU of 1 MiB blocks behind a 127.0.0.1
+>    endpoint, SigV4-checked random key per store, misses with `If-Match`. **Stand:** S3 SF10 JDBC and the 32-client
+>    small-query step with `arrowflight.s3.cacheMegabytes=1024` (and `-Xmx` >= 2.5g) vs off: timings, RSS, the
+>    `s3=cacheClosed` hit/miss line; expect repeated rounds near the HDFS numbers and no OOM. **Next steps of 17:**
+>    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
+>    (b) lakeFS stores through the cache; (c) single-flight for concurrent misses of one block; (d) metrics. **Stand
 >    (optional):** one round of the S3 SF10 JDBC step at `duckDbThreads=8` vs 4 to see how much of the HDFS gap is
 >    round trips per thread (feeds item 19: a lower thread default may cost more on S3 than on HDFS).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -450,6 +457,12 @@
   (2) TLS between nodes: reuse the server's own TLS settings and trust store for the internal client - ok?
   (3) a peer failure mid-stream after the first batch fails the query (as today for a lost node), before the first
   batch the planning node falls back to the single-node path - ok?
+
+- **S3 read cache follow-ups (item 17, 2026-10-27).** Step 1 is on the heap (bounded at half of `-Xmx`). (1) Is a
+  local disk with a size cap available on the production hosts for a second, larger tier (the original proposal)?
+  (2) Default `cacheCheckSeconds=10`: a file rewritten in place under the same key may be answered in its old version
+  (never mixed) for up to that long while the cache is on; lake tables (Iceberg, lakeFS, Hive) never rewrite keys,
+  plain S3 directories might. Keep 10, or 0 (a HEAD per GET: saves bandwidth, not round trips)?
 
 - **Maintainer 2026-10-27: option (A) chosen** for the S3 read cache below (node-wide byte-bounded range cache in the s3 plugin behind a 127.0.0.1-only loopback endpoint with a per-process token; note the security review in the Log). Do it as the next part of item 17.
 - **S3 read cache with a memory bound (item 17, 2026-10-27).** The stand measured DuckDB's external file cache ~40x
@@ -1134,3 +1147,16 @@
   pre-release. CI run 40477705088 green. New Open question "Item 18: node-to-node calls" (peer identity under
   Ranger, inter-node TLS, failure rule) - step 2 waits for it. Next: item 15 stand + close; then, while 17 and 18
   wait for decisions, item 16 (single-stream scan opt-ins; stand measurement) or item 19.
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete), so stage 2 item 17, option A step 1
+  (84fec77, chosen by the maintainer in ab48098): opt-in node-wide S3 read cache. `arrowflight.s3.cacheMegabytes`
+  (default 0 = off; JVM heap, refused above half of it) starts one 127.0.0.1-only HTTP endpoint in the s3 plugin;
+  DuckDB's secret then points at it with a random per-store key (checked as SigV4, `S3SigV4`; the S3 credentials stay
+  in Java), a key reads only its own data directory, listings are refused (501). GETs are answered from an LRU of
+  1 MiB blocks keyed by bucket/key/ETag (`S3BlockCache`); misses read up to 64 blocks per GET with `If-Match`, so
+  one answer never mixes object versions (412 -> new version, DuckDB refuses the change and the server's
+  changedFileRetry runs the query again); HEADs always reach S3; versions are trusted `cacheCheckSeconds` (default
+  10). Main and named stores; lakeFS not yet. Tests: `S3CacheEndpointTest` (SDK client signing in front, fake S3
+  behind: hits, capacity, rewrites, refusals, ranges), `S3IntegrationTest.theReadCacheServesEveryConnectionOfTheNode`
+  (DuckDB 1.5.6 httpfs through the cache: a second DuckDB instance reads 0 GETs from S3, answers right). FakeS3:
+  content ETags and If-Match. CI: push run 40480303237, package run 40480315297 (results below). Next: stand round
+  (item 17 Stand), then 17 (a)-(d); Open question "S3 read cache follow-ups".
