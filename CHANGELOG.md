@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3 read cache metrics (item 17 (d)): while `arrowflight.s3.cacheMegabytes` > 0 the Prometheus endpoint shows
+  `arrowflight_s3_cache_capacity_bytes`, `_used_bytes`, `_blocks` (gauges) and `arrowflight_s3_cache_hits_total`,
+  `_misses_total`, `_evictions_total`, `_joined_total`, `_s3_reads_total`, `_s3_read_bytes_total`,
+  `_s3_lookups_total` (counters; the last three count the GETs, bytes and HEADs the cache sent to S3). New SPI 1.3:
+  `StoreContext.metrics()` (`PluginMetrics`, `MetricSource`, `MetricSample`) lets a plugin publish unlabelled
+  `arrowflight_*` samples on the server's endpoint; a name the server or another source already shows is left out.
+  The s3 plugin descriptor now says `spi=1.3` (it needs a server of this build).
 - S3 read cache, single flight (item 17 (c)): concurrent requests that miss the same 1 MiB block read it from S3
   once; the later ones wait for the first read and take its bytes (or its failure: a refused `If-Match` makes each of
   them look the version up again and read the new one, again once for all). The `s3=cacheClosed` line counts these

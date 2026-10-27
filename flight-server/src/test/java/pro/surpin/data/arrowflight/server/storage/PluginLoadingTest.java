@@ -120,13 +120,13 @@ class PluginLoadingTest {
 
     @Test
     void newerSpiVersionsAreRefused() throws Exception {
-        for (String spi : List.of("2.0", "1.3", "x")) {
+        for (String spi : List.of("2.0", "1.4", "x")) {
             rewriteDescriptor("name=fixture\nspi=" + spi + "\nprovides.storage=fixture\n");
             IllegalStateException e = assertThrows(IllegalStateException.class,
                     () -> open("fixture://bucket/data/", false, StoreRegistryTest.emptySource()));
             assertTrue(e.getMessage().contains("fixture"), e.getMessage());
             if (!"x".equals(spi)) {
-                assertTrue(e.getMessage().contains("needs SPI " + spi + ", server has 1.2"),
+                assertTrue(e.getMessage().contains("needs SPI " + spi + ", server has 1.3"),
                         e.getMessage());
             }
         }

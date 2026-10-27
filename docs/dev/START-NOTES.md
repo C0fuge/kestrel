@@ -57,6 +57,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   line `s3=cacheOpen ... capacityBytes=...`, at shutdown `s3=cacheClosed ... hits=... misses=...`. A file rewritten
   in place under the same key can be answered in its old version for up to `arrowflight.s3.cacheCheckSeconds`
   (default 10); never a mix of versions. Globs on `s3://` paths (listings) are refused while it is on.
+  While it runs, the Prometheus endpoint (`/metrics`) shows `arrowflight_s3_cache_*`: capacity/used bytes and
+  blocks (gauges), `hits_total`, `misses_total`, `evictions_total`, `joined_total` (blocks taken from another
+  request's read) and the requests it sent to S3 (`s3_reads_total`, `s3_read_bytes_total`, `s3_lookups_total` = HEADs).
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
   Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`

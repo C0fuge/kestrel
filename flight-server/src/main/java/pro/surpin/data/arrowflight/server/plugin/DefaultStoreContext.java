@@ -3,8 +3,10 @@ package pro.surpin.data.arrowflight.server.plugin;
 import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
 
+import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.spi.config.PluginConfig;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
 import pro.surpin.data.arrowflight.spi.storage.StoreContext;
 
 /**
@@ -39,5 +41,10 @@ public record DefaultStoreContext(PluginConfig config, String nodeName, String s
     @Override
     public ThreadFactory threadFactory(String name) {
         return new PluginThreadFactory(name, loader);
+    }
+
+    @Override
+    public PluginMetrics metrics() {
+        return MetricsService.pluginMetrics();
     }
 }

@@ -6,6 +6,9 @@ import com.sun.net.httpserver.HttpServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pro.surpin.data.arrowflight.spi.metrics.MetricSample;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
+
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -80,6 +83,10 @@ final class S3CacheEndpoint {
     private final Map<String, Version> versions = new ConcurrentHashMap<>();
     private final Map<S3BlockCache.BlockKey, CompletableFuture<byte[]>> reading = new ConcurrentHashMap<>();
     private final AtomicLong joined = new AtomicLong();
+    private final AtomicLong s3Reads = new AtomicLong();
+    private final AtomicLong s3ReadBytes = new AtomicLong();
+    private final AtomicLong s3Lookups = new AtomicLong();
+    private PluginMetrics.Registration metrics;
 
     /**
      * What one data directory reads through the endpoint, and the key DuckDB signs with.
@@ -173,13 +180,15 @@ final class S3CacheEndpoint {
      * @param root data directory
      * @param client S3 client of the store
      * @param settings store settings
+     * @param pluginMetrics where the endpoint publishes its metrics while it runs
      * @return route; closing it unregisters the data directory, the last close stops the endpoint
      * @throws IOException when the endpoint cannot be started
      */
     static synchronized Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
-            S3Client client, S3Settings settings) throws IOException {
+            S3Client client, S3Settings settings, PluginMetrics pluginMetrics) throws IOException {
         if (shared == null) {
             shared = new S3CacheEndpoint(capacityBytes, checkSeconds, node, System::nanoTime);
+            shared.metrics = pluginMetrics.register(shared::samples);
             LOGGER.info("node={} s3=cacheOpen endpoint=127.0.0.1:{} capacityBytes={} blockBytes={} checkSeconds={}",
                     node, shared.port(), capacityBytes, BLOCK_BYTES, checkSeconds);
         } else if (shared.cache.capacityBytes() != capacityBytes
@@ -238,8 +247,41 @@ final class S3CacheEndpoint {
         return cache.stats() + " joined=" + joined.get();
     }
 
+    /**
+     * Returns the endpoint's metrics for the server's Prometheus endpoint.
+     *
+     * @return cache size, block counts and the reads sent to S3
+     */
+    List<MetricSample> samples() {
+        S3BlockCache.Use use = cache.use();
+        return List.of(
+                MetricSample.gauge("arrowflight_s3_cache_capacity_bytes",
+                        "Most bytes the S3 read cache holds", cache.capacityBytes()),
+                MetricSample.gauge("arrowflight_s3_cache_used_bytes",
+                        "Bytes held by the S3 read cache", use.usedBytes()),
+                MetricSample.gauge("arrowflight_s3_cache_blocks",
+                        "Blocks held by the S3 read cache", use.blocks()),
+                MetricSample.counter("arrowflight_s3_cache_hits_total",
+                        "Blocks the S3 read cache answered from memory", use.hits()),
+                MetricSample.counter("arrowflight_s3_cache_misses_total",
+                        "Blocks the S3 read cache did not hold when asked", use.misses()),
+                MetricSample.counter("arrowflight_s3_cache_evictions_total",
+                        "Blocks dropped from the S3 read cache to make room", use.evictions()),
+                MetricSample.counter("arrowflight_s3_cache_joined_total",
+                        "Missed blocks taken from another request's S3 read", joined.get()),
+                MetricSample.counter("arrowflight_s3_cache_s3_reads_total",
+                        "GET requests the S3 read cache sent to S3", s3Reads.get()),
+                MetricSample.counter("arrowflight_s3_cache_s3_read_bytes_total",
+                        "Bytes the S3 read cache read from S3", s3ReadBytes.get()),
+                MetricSample.counter("arrowflight_s3_cache_s3_lookups_total",
+                        "HEAD requests the S3 read cache sent to S3", s3Lookups.get()));
+    }
+
     /** Stops the endpoint. */
     void close() {
+        if (metrics != null) {
+            metrics.close();
+        }
         LOGGER.info("node={} s3=cacheClosed {}", node, stats());
         server.stop(0);
         handlers.shutdownNow();
@@ -601,7 +643,9 @@ final class S3CacheEndpoint {
         try {
             GetObjectRequest request = GetObjectRequest.builder().bucket(route.root().bucket()).key(key)
                     .range("bytes=" + from + "-" + to).ifMatch(version.etag()).build();
+            s3Reads.incrementAndGet();
             byte[] bytes = route.client().getObjectAsBytes(request).asByteArray();
+            s3ReadBytes.addAndGet(bytes.length);
             if (bytes.length > count && bytes.length > to) {
                 // A store that ignores Range sends the whole object.
                 return Arrays.copyOfRange(bytes, (int) from, (int) from + count);
@@ -657,6 +701,7 @@ final class S3CacheEndpoint {
      */
     private Version lookUp(Route route, String key) throws NoSuchFileException, StorageException {
         try {
+            s3Lookups.incrementAndGet();
             HeadObjectResponse head = route.client().headObject(r -> r.bucket(route.root().bucket()).key(key));
             Instant modified = head.lastModified() == null ? Instant.EPOCH : head.lastModified();
             Version version = new Version(head.eTag() == null ? "\"\"" : head.eTag(), head.contentLength(),

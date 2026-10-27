@@ -35,9 +35,12 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
+import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.plugin.s3.TestTls;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
@@ -509,6 +512,11 @@ class S3IntegrationTest {
                 assertEquals(1, rs.getLong(1));
                 assertEquals((rows / 2 + 3) % perFile % 1000, rs.getLong(2));
             }
+            String metrics = MetricsService.render();
+            Matcher hits = Pattern.compile("\narrowflight_s3_cache_hits_total (\\S+)\n").matcher(metrics);
+            assertTrue(hits.find(), metrics);
+            assertTrue(Double.parseDouble(hits.group(1)) > 0, "cache hits on the Prometheus endpoint: " + metrics);
+            assertTrue(metrics.contains("\narrowflight_s3_cache_capacity_bytes " + (64 << 20) + ".0"), metrics);
         } finally {
             first1.close();
         }

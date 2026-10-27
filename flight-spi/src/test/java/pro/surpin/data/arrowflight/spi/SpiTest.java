@@ -15,6 +15,8 @@ import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.config.ConfigKey;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
+import pro.surpin.data.arrowflight.spi.metrics.MetricSample;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -28,11 +30,12 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.2", SpiVersion.current());
+        assertEquals("1.3", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
-        assertFalse(SpiVersion.supports("1.3"));
+        assertTrue(SpiVersion.supports("1.3"));
+        assertFalse(SpiVersion.supports("1.4"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -95,5 +98,19 @@ class SpiTest {
         assertFalse(SecretValue.sensitive("hunter2").toString().contains("hunter2"));
         assertEquals("true", SecretValue.of(true).value());
         assertFalse(SecretValue.plain("x").sensitive());
+    }
+
+    @Test
+    void metricSamplesCheckTheirNames() {
+        MetricSample counter = MetricSample.counter("arrowflight_s3_cache_hits_total", "hits", 3);
+        assertEquals(MetricSample.Kind.COUNTER, counter.kind());
+        assertEquals(3.0, counter.value());
+        assertEquals(MetricSample.Kind.GAUGE, MetricSample.gauge("arrowflight_x_bytes", "x", 1).kind());
+        assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("jvm_heap", "x", 1));
+        assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("arrowflight_X", "x", 1));
+        assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("arrowflight_a{b=\"c\"}", "x", 1));
+        assertThrows(IllegalArgumentException.class, () -> MetricSample.counter("arrowflight_hits", "x", 1));
+        assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("arrowflight_a", "x\ny", 1));
+        PluginMetrics.none().register(() -> List.of(counter)).close();
     }
 }

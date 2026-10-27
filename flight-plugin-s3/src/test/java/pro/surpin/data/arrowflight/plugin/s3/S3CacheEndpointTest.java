@@ -5,6 +5,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import pro.surpin.data.arrowflight.spi.metrics.MetricSample;
+import pro.surpin.data.arrowflight.spi.metrics.MetricSource;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
+
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
@@ -14,12 +18,15 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -89,6 +96,53 @@ class S3CacheEndpointTest {
         assertArrayEquals(data, whole.asByteArray());
         assertEquals("\"e" + SIZE + "-" + Integer.toHexString(Arrays.hashCode(data)) + "\"", whole.response().eTag());
         assertTrue(endpoint.stats().contains("evictions="), endpoint.stats());
+    }
+
+    /** Verifies the metrics count blocks, hits and misses and the requests sent to S3. */
+    @Test
+    void metricsCountBlocksAndRequestsToS3() {
+        int from = S3CacheEndpoint.BLOCK_BYTES - 10;
+        int to = S3CacheEndpoint.BLOCK_BYTES + 99;
+        range(from, to);
+        range(from, to);
+        Map<String, Double> values = values(endpoint.samples());
+        assertEquals(2L * S3CacheEndpoint.BLOCK_BYTES + 100, values.get("arrowflight_s3_cache_capacity_bytes"));
+        assertEquals(2.0 * S3CacheEndpoint.BLOCK_BYTES, values.get("arrowflight_s3_cache_used_bytes"));
+        assertEquals(2.0, values.get("arrowflight_s3_cache_blocks"));
+        assertEquals(2.0, values.get("arrowflight_s3_cache_hits_total"));
+        assertEquals(2.0, values.get("arrowflight_s3_cache_misses_total"));
+        assertEquals(0.0, values.get("arrowflight_s3_cache_evictions_total"));
+        assertEquals(0.0, values.get("arrowflight_s3_cache_joined_total"));
+        assertEquals((double) gets(), values.get("arrowflight_s3_cache_s3_reads_total"));
+        assertEquals(2.0 * S3CacheEndpoint.BLOCK_BYTES, values.get("arrowflight_s3_cache_s3_read_bytes_total"));
+        assertEquals((double) s3.count("HEAD"), values.get("arrowflight_s3_cache_s3_lookups_total"));
+        assertEquals(10, values.size());
+    }
+
+    /** Verifies the shared endpoint publishes its metrics from its start until its last route closes. */
+    @Test
+    void theSharedEndpointPublishesItsMetricsWhileItRuns() throws IOException {
+        List<MetricSource> sources = new CopyOnWriteArrayList<>();
+        PluginMetrics metrics = source -> {
+            sources.add(source);
+            return () -> sources.remove(source);
+        };
+        S3Settings settings = settings(s3.endpoint(), "AKIABACKEND", "backend-secret");
+        S3CacheEndpoint.Route first = S3CacheEndpoint.register(S3CacheEndpoint.BLOCK_BYTES, 10, "n1",
+                S3Uri.parse("s3://lake/data"), backend, settings, metrics);
+        S3CacheEndpoint.Route second = S3CacheEndpoint.register(S3CacheEndpoint.BLOCK_BYTES, 10, "n1",
+                S3Uri.parse("s3://lake/other"), backend, settings, metrics);
+        try {
+            assertEquals(1, sources.size(), "one source for the node-wide cache");
+            assertEquals(S3CacheEndpoint.BLOCK_BYTES,
+                    values(sources.get(0).samples()).get("arrowflight_s3_cache_capacity_bytes"));
+            first.close();
+            assertEquals(1, sources.size(), "a route is still open");
+        } finally {
+            first.close();
+            second.close();
+        }
+        assertEquals(List.of(), sources);
     }
 
     /** Verifies the cache keeps at most its capacity: the oldest blocks are read again. */
@@ -285,6 +339,12 @@ class S3CacheEndpointTest {
     private byte[] range(long from, long to) {
         return duckDb.getObjectAsBytes(r -> r.bucket(BUCKET).key(KEY).range("bytes=" + from + "-" + to))
                 .asByteArray();
+    }
+
+    private static Map<String, Double> values(List<MetricSample> samples) {
+        Map<String, Double> values = new HashMap<>();
+        samples.forEach(sample -> assertNull(values.put(sample.name(), sample.value()), sample.name()));
+        return values;
     }
 
     private long gets() {

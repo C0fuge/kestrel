@@ -4,6 +4,9 @@ import com.sun.management.UnixOperatingSystemMXBean;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
+import pro.surpin.data.arrowflight.spi.metrics.MetricSample;
+import pro.surpin.data.arrowflight.spi.metrics.MetricSource;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -12,9 +15,13 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.ThreadMXBean;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,6 +41,8 @@ public final class MetricsService implements AutoCloseable {
     private static final ConcurrentHashMap<String, QueryMetrics> QUERY_METRICS =
             new ConcurrentHashMap<>();
     private static final AtomicLong ACTIVE_QUERIES = new AtomicLong();
+    private static final List<MetricSource> PLUGIN_SOURCES = new CopyOnWriteArrayList<>();
+    private static final PluginMetrics PLUGIN_METRICS = MetricsService::register;
 
     private final HttpServer server;
     private final ExecutorService executor;
@@ -81,6 +90,32 @@ public final class MetricsService implements AutoCloseable {
     public static QueryObservation observeQuery(long logicalBytes) {
         ACTIVE_QUERIES.incrementAndGet();
         return new QueryObservation(Math.max(0L, logicalBytes));
+    }
+
+    /**
+     * Returns where plugins publish their metrics on this process's endpoint.
+     *
+     * @return plugin metrics
+     */
+    public static PluginMetrics pluginMetrics() {
+        return PLUGIN_METRICS;
+    }
+
+    /**
+     * Adds a plugin's metric source.
+     *
+     * @param source source read on every scrape
+     * @return handle removing the source once
+     */
+    private static PluginMetrics.Registration register(MetricSource source) {
+        Objects.requireNonNull(source, "source");
+        PLUGIN_SOURCES.add(source);
+        AtomicBoolean removed = new AtomicBoolean();
+        return () -> {
+            if (removed.compareAndSet(false, true)) {
+                PLUGIN_SOURCES.remove(source);
+            }
+        };
     }
 
     @Override
@@ -138,13 +173,14 @@ public final class MetricsService implements AutoCloseable {
      *
      * @return Prometheus text payload
      */
-    private static String render() {
+    public static String render() {
         StringBuilder metrics = new StringBuilder(8192);
         appendJvmMetrics(metrics);
         metric(metrics, "arrowflight_parquet_queries_active", METRIC_TYPE_GAUGE,
                 "Currently executing Parquet queries", ACTIVE_QUERIES.get());
         appendQueryMetrics(metrics);
         appendCacheMetrics(metrics);
+        appendPluginMetrics(metrics);
 
         return metrics.toString();
     }
@@ -239,6 +275,39 @@ public final class MetricsService implements AutoCloseable {
         for (CacheMetrics.Cache cache : CacheMetrics.Cache.values()) {
             sample(metrics, "arrowflight_query_cache_evictions_total{cache=\""
                     + CacheMetrics.label(cache) + "\"}", CacheMetrics.evictionCount(cache));
+        }
+    }
+
+    /**
+     * Appends the samples of the plugins' sources. A name already in the payload is left out, and
+     * so is every sample of a source that fails.
+     *
+     * @param metrics destination payload, holding the server's own metrics
+     */
+    private static void appendPluginMetrics(StringBuilder metrics) {
+        if (PLUGIN_SOURCES.isEmpty()) {
+            return;
+        }
+        Set<String> names = new HashSet<>();
+        int at = 0;
+        while ((at = metrics.indexOf("# TYPE ", at)) >= 0) {
+            int end = metrics.indexOf(" ", at + 7);
+            names.add(metrics.substring(at + 7, end));
+            at = end;
+        }
+        for (MetricSource source : PLUGIN_SOURCES) {
+            List<MetricSample> samples;
+            try {
+                samples = List.copyOf(source.samples());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            for (MetricSample sample : samples) {
+                if (names.add(sample.name())) {
+                    metric(metrics, sample.name(), sample.kind() == MetricSample.Kind.COUNTER
+                            ? METRIC_TYPE_COUNTER : METRIC_TYPE_GAUGE, sample.help(), sample.value());
+                }
+            }
         }
     }
 

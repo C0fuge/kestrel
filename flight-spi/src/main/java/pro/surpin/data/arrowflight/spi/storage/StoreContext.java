@@ -4,6 +4,7 @@ import java.util.concurrent.ThreadFactory;
 
 import pro.surpin.data.arrowflight.spi.config.PluginConfig;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.metrics.PluginMetrics;
 
 /**
  * What the server hands a storage provider when it opens a store.
@@ -52,4 +53,14 @@ public interface StoreContext {
      * @return thread factory
      */
     ThreadFactory threadFactory(String name);
+
+    /**
+     * Returns where the provider publishes metrics on the server's Prometheus endpoint.
+     *
+     * @return plugin metrics; by default they publish nothing
+     * @since SPI 1.3
+     */
+    default PluginMetrics metrics() {
+        return PluginMetrics.none();
+    }
 }

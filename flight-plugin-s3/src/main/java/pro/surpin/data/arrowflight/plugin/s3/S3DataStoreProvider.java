@@ -117,7 +117,7 @@ public final class S3DataStoreProvider implements DataStoreProvider {
             try {
                 cacheRoute = S3CacheEndpoint.register(cacheBytes,
                         context.config().getInt(CACHE_CHECK_SECONDS_KEY, DEFAULT_CACHE_CHECK_SECONDS), node,
-                        S3Uri.parse(storeRoot), client, settings);
+                        S3Uri.parse(storeRoot), client, settings, context.metrics());
             } catch (IOException | RuntimeException e) {
                 client.close();
                 throw new IllegalStateException("Cannot start the S3 read cache: " + e.getMessage(), e);

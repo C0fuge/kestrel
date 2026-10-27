@@ -22,6 +22,18 @@ final class S3BlockCache {
     record BlockKey(String bucket, String key, String etag, long index) {
     }
 
+    /**
+     * The cache's use at one moment.
+     *
+     * @param usedBytes bytes of all cached blocks
+     * @param blocks cached blocks
+     * @param hits blocks found
+     * @param misses blocks not found
+     * @param evictions blocks dropped to make room
+     */
+    record Use(long usedBytes, int blocks, long hits, long misses, long evictions) {
+    }
+
     private final long capacityBytes;
     private final LinkedHashMap<BlockKey, byte[]> blocks = new LinkedHashMap<>(256, 0.75f, true);
     private long usedBytes;
@@ -109,12 +121,22 @@ final class S3BlockCache {
     }
 
     /**
+     * Returns the cache's use so far.
+     *
+     * @return counts taken together
+     */
+    synchronized Use use() {
+        return new Use(usedBytes, blocks.size(), hits, misses, evictions);
+    }
+
+    /**
      * Describes the cache's use so far.
      *
      * @return {@code usedBytes=... blocks=... hits=... misses=... evictions=...}
      */
-    synchronized String stats() {
-        return "usedBytes=" + usedBytes + " blocks=" + blocks.size() + " hits=" + hits + " misses=" + misses
-                + " evictions=" + evictions;
+    String stats() {
+        Use use = use();
+        return "usedBytes=" + use.usedBytes() + " blocks=" + use.blocks() + " hits=" + use.hits()
+                + " misses=" + use.misses() + " evictions=" + use.evictions();
     }
 }
