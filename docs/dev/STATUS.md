@@ -1250,3 +1250,11 @@
   Package run 40544759257 (push run 40544741781 cancelled in its favour): build + package green, pre-release
   `server-1.0.0-4e77c6bda59a`. **Stand:** item 2 Stand.
   Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers.
+- 2026-10-27 (cloud session): item 15 still waits for the stand, so stage-2 item 16 (single-stream scan opt-ins as
+  defaults). New `ScanThroughputPerfTest` (tag `perf`, 166a093; numbers in `docs/dev/TUNING.md`): one client, full scan
+  over Flight SQL, complete mode, DuckDB 1.5.6, 6 M rows / 8 files, 4 cores, variants in both orders. Answers equal in
+  every variant; `duckDbPreserveInsertionOrder=false` is slower (8 threads 234-246 vs 346-367 MB/s, 4 threads -5..-10 %,
+  same 92 batches, so inside DuckDB); `duckDbStreamingBufferSize=64MiB` +5-15 % (4/16 MiB noise). No default change;
+  item 16 stays open for the stand round (see item 16). CI run 40565455791 green (no runtime change, no pre-release). Local Maven: the wrapper download got HTTP 429,
+  system `mvn` 3.9.11 works.
+  Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers.
