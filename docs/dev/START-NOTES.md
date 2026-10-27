@@ -44,12 +44,12 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN
   says when it is not the cache the extension reads (`KRB5CCNAME` / `hadoop.security.kerberos.ticket.cache.path`).
-- S3: set `net.ipv4.tcp_tw_reuse=1` in the server's network namespace (container: `--sysctl
-  net.ipv4.tcp_tw_reuse=1`) and widen `net.ipv4.ip_local_port_range` (e.g. `1024 65535`). DuckDB's httpfs opens a
-  new connection for most S3 range reads at 4+ threads and each closed one holds its local port 60 s, so many
-  concurrent queries run out of ports ("Could not establish connection"). The server logs a WARN at startup while
-  `tcp_tw_reuse` is not 1. Where the same files are read again and again, `duckDbExternalFileCache=true` serves
-  repeated reads from memory without a connection (costs up to `duckDbMemoryLimit` per connection).
+- S3: DuckDB keeps its S3 connections and reads later ranges and queries over them
+  (`arrowflight.s3.connectionCaching`, default true; startup line `s3=open ... connectionCaching=true`). Only with
+  `connectionCaching=false` set `net.ipv4.tcp_tw_reuse=1` in the server's network namespace (container: `--sysctl
+  net.ipv4.tcp_tw_reuse=1`) and widen `net.ipv4.ip_local_port_range` (e.g. `1024 65535`): httpfs then opens a new
+  connection for most S3 range reads at 4+ threads and each closed one holds its local port 60 s, so many concurrent
+  queries run out of ports ("Could not establish connection"); the server WARNs at startup in that case.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
   Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`

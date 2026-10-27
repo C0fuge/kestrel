@@ -327,10 +327,12 @@ class S3IntegrationTest {
     /**
      * Counts the TCP connections a query opens at 8 DuckDB threads (item 0g: on the stand 32
      * clients ran the host out of local ports, every closed connection holding its port 60 s in
-     * TIME_WAIT). httpfs keeps connections per open file only, and a thread opens a file anew for
-     * each row group it takes, so a scan opens about one connection per range read: bounded by
-     * the files and row groups, never more than the requests. With the external file cache a
-     * connection reads the same files again without opening a connection.
+     * TIME_WAIT). Without connection caching httpfs keeps connections per open file only, and a
+     * thread opens a file anew for each row group it takes, so a scan opens about one connection
+     * per range read: bounded by the files and row groups, never more than the requests; the
+     * external file cache reads the same files again without a connection. With connection
+     * caching (the default) a session's DuckDB opens at most a few connections per thread once
+     * and reads every later query over them.
      */
     @Test
     void connectionsPerQueryAreBoundedAndCachedReadsOpenNone() throws Exception {
@@ -360,28 +362,58 @@ class S3IntegrationTest {
         try (Forwarder forwarder = new Forwarder(s3.endpoint())) {
             endpoint = forwarder.endpoint();
             threads = 8;
-            int[] uncached = connectionsOfTwoQueries(forwarder, sql, files * rows, files * sum);
+            plugin.properties.put("arrowflight.s3.connectionCaching", "false");
+            int[] uncached = connectionsOfQueries(forwarder, sql, files * rows, files * sum, 2);
             long requests = s3.requests().stream().filter(r -> r.path().contains("/g/")).count();
 
             assertTrue(uncached[0] + uncached[1] <= requests,
                     uncached[0] + "+" + uncached[1] + " connections for " + requests + " requests");
             assertTrue(uncached[0] <= files * (rowGroups + 2), "first query: " + uncached[0]);
-            assertTrue(uncached[1] >= files, "without the cache each file is read again: " + uncached[1]);
+            assertTrue(uncached[1] >= files, "without any cache each file is read again: " + uncached[1]);
             assertTrue(uncached[1] <= files * (rowGroups + 2), "second query: " + uncached[1]);
 
-            duckDb.close();
-            registry.close();
+            reopen();
             externalFileCache = true;
-            int[] cached = connectionsOfTwoQueries(forwarder, sql, files * rows, files * sum);
+            int[] cached = connectionsOfQueries(forwarder, sql, files * rows, files * sum, 2);
             assertTrue(cached[0] <= files * (rowGroups + 2), "first query: " + cached[0]);
             assertEquals(0, cached[1], "the cached files are read without a connection");
+
+            reopen();
+            externalFileCache = false;
+            plugin.properties.remove("arrowflight.s3.connectionCaching");
+            int[] kept = connectionsOfQueries(forwarder, sql, files * rows, files * sum, 4);
+            assertTrue(kept[0] <= 2 * threads, "first query, connections kept: " + kept[0]);
+            assertTrue(kept[0] < uncached[0], kept[0] + " vs " + uncached[0] + " without caching");
+            for (int q = 1; q < kept.length; q++) {
+                assertEquals(0, kept[q], "query " + q + " reads over the kept connections");
+            }
+
+            // The endpoint closes the idle kept connections (idle timeout, restart): the next
+            // query opens new ones and still reads everything.
+            forwarder.cutConnections();
+            int before = forwarder.connections();
+            try (Statement s = duckDb.connection().createStatement();
+                    ResultSet rs = s.executeQuery(sql)) {
+                assertTrue(rs.next());
+                assertEquals(files * rows, rs.getLong(1));
+                assertEquals(files * sum, rs.getLong(2));
+            }
+            assertTrue(forwarder.connections() > before, "new connections after the cut");
         }
     }
 
-    private int[] connectionsOfTwoQueries(Forwarder forwarder, String sql, long rows, long sum) throws Exception {
+    private void reopen() {
+        duckDb.close();
+        duckDb = null;
+        registry.close();
+        registry = null;
+    }
+
+    private int[] connectionsOfQueries(Forwarder forwarder, String sql, long rows, long sum, int queries)
+            throws Exception {
         open(null);
-        int[] opened = new int[2];
-        for (int q = 0; q < 2; q++) {
+        int[] opened = new int[queries];
+        for (int q = 0; q < queries; q++) {
             int before = forwarder.connections();
             try (Statement s = duckDb.connection().createStatement();
                     ResultSet rs = s.executeQuery(sql)) {
@@ -467,6 +499,19 @@ class S3IntegrationTest {
          */
         int connections() {
             return accepted.get();
+        }
+
+        /**
+         * Cuts every open connection and keeps listening, as an endpoint closing idle
+         * connections does.
+         *
+         * @throws IOException when a socket cannot be closed
+         */
+        void cutConnections() throws IOException {
+            for (Socket socket : open) {
+                socket.close();
+            }
+            open.clear();
         }
 
         /**

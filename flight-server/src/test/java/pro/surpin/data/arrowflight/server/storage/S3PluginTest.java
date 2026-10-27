@@ -120,6 +120,7 @@ class S3PluginTest {
                 "SET http_retries = 6",
                 "SET http_retry_wait_ms = 200",
                 "SET http_retry_backoff = 2",
+                "SET httpfs_connection_caching = true",
                 "SET enable_server_cert_verification = true",
                 "SET ca_cert_file = '" + ca + "'",
                 "SET parquet_metadata_cache = true",
@@ -155,6 +156,7 @@ class S3PluginTest {
                 "SET http_retries = 6",
                 "SET http_retry_wait_ms = 200",
                 "SET http_retry_backoff = 2",
+                "SET httpfs_connection_caching = true",
                 "CREATE TEMPORARY SECRET flight_s3 (TYPE s3, KEY_ID 'AKIATEST',"
                 + " SECRET 'SECRETTEST', SESSION_TOKEN 'TOKEN', REGION 'us-east-1',"
                 + " ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false,"
@@ -179,6 +181,7 @@ class S3PluginTest {
                 "SET http_retries = 6",
                 "SET http_retry_wait_ms = 200",
                 "SET http_retry_backoff = 2",
+                "SET httpfs_connection_caching = true",
                 "SET enable_server_cert_verification = false",
                 "SET parquet_metadata_cache = true",
                 "SET enable_http_metadata_cache = true",

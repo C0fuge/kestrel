@@ -88,6 +88,19 @@ class S3SettingsTest {
                 () -> S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false));
     }
 
+    /** Verifies DuckDB keeps S3 connections by default and the setting can turn it off. */
+    @Test
+    void connectionCachingFromTheConfiguration() {
+        Map<String, String> values = new HashMap<>();
+        assertTrue(S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false).connectionCaching());
+
+        values.put("connectionCaching", "false");
+        S3Settings off = S3Settings.from(new MapPluginConfig(values, Map.of()), 4, false);
+        assertFalse(off.connectionCaching());
+        assertTrue(off.toString().contains("connectionCaching=false"), off.toString());
+        assertFalse(off.withCredentials(new S3Settings.Credentials("AK", "SK", null)).connectionCaching());
+    }
+
     /** Verifies toString shows neither the secret key nor the session token. */
     @Test
     void toStringRedactsSecrets() {

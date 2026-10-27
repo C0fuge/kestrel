@@ -94,15 +94,17 @@ public final class S3DataStoreProvider implements DataStoreProvider {
                     + " is accepted)", node, settings.endpointUri());
         }
         if (PORTS_CHECKED.compareAndSet(false, true)) {
-            ephemeralPortWarning(readSetting(TCP_TW_REUSE), readSetting(PORT_RANGE))
+            ephemeralPortWarning(settings.connectionCaching(), readSetting(TCP_TW_REUSE),
+                    readSetting(PORT_RANGE))
                     .ifPresent(warning -> LOGGER.warn("node={} s3=ephemeralPorts {}", node, warning));
         }
         S3Client client = S3DataStore.createClient(settings);
         LOGGER.info("node={} s3=open store={} dataDir={} endpoint={} region={} urlStyle={} tls={}"
-                + " caFile={} listingTtlSeconds={} maxConnections={}", node,
+                + " caFile={} listingTtlSeconds={} maxConnections={} connectionCaching={}", node,
                 configName.isEmpty() ? "main" : configName, S3Uri.parse(storeRoot).uri(),
                 settings.endpointUri(), settings.region(), settings.urlStyle(), settings.useSsl(),
-                settings.caFile(), settings.listingTtlSeconds(), settings.maxConnections());
+                settings.caFile(), settings.listingTtlSeconds(), settings.maxConnections(),
+                settings.connectionCaching());
         return new S3DataStore(storeRoot, settings, client, System::nanoTime,
                 context.threadFactory("s3-listing"), node, true, configName);
     }
@@ -121,17 +123,21 @@ public final class S3DataStoreProvider implements DataStoreProvider {
     }
 
     /**
-     * Describes the limit the host's port settings put on DuckDB's S3 reads. At 4 or more
-     * DuckDB threads httpfs opens a new connection for about every range read and closes it
-     * afterwards; each closed connection keeps its local port for 60 s, so without
-     * {@code tcp_tw_reuse=1} the port range caps the reads per second (item 0g).
+     * Describes the limit the host's port settings put on DuckDB's S3 reads. Without connection
+     * caching, at 4 or more DuckDB threads httpfs opens a new connection for about every range
+     * read and closes it afterwards; each closed connection keeps its local port for 60 s, so
+     * without {@code tcp_tw_reuse=1} the port range caps the reads per second (item 0g). Only
+     * checked when {@code connectionCaching=false}.
      *
+     * @param connectionCaching whether DuckDB keeps its S3 connections
      * @param twReuse value of net.ipv4.tcp_tw_reuse, or null when it cannot be read
      * @param portRange value of net.ipv4.ip_local_port_range, or null when it cannot be read
-     * @return the warning, or empty when ports are reused or the settings are unknown
+     * @return the warning, or empty when connections are kept, ports are reused or the settings
+     *         are unknown
      */
-    static Optional<String> ephemeralPortWarning(String twReuse, String portRange) {
-        if (twReuse == null || "1".equals(twReuse.trim())) {
+    static Optional<String> ephemeralPortWarning(boolean connectionCaching, String twReuse,
+            String portRange) {
+        if (connectionCaching || twReuse == null || "1".equals(twReuse.trim())) {
             return Optional.empty();
         }
         String ports = "the local port range";
@@ -146,13 +152,13 @@ public final class S3DataStoreProvider implements DataStoreProvider {
                 // Unusual format: the warning goes without the numbers.
             }
         }
-        return Optional.of("net.ipv4.tcp_tw_reuse=" + twReuse.trim() + ": DuckDB opens a new S3"
-                + " connection for most range reads at 4+ threads and each closed one holds its port"
+        return Optional.of("net.ipv4.tcp_tw_reuse=" + twReuse.trim() + ": with s3 connectionCaching=false DuckDB opens a"
+                + " new S3 connection for most range reads at 4+ threads and each closed one holds its port"
                 + " " + TIME_WAIT_SECONDS + " s, so " + ports + " bound the reads per endpoint" + rate
                 + "; beyond that queries fail \"Could not establish connection\". Set"
+                + " arrowflight.s3.connectionCaching=true (the default), or"
                 + " net.ipv4.tcp_tw_reuse=1 in the server's network namespace (and widen"
-                + " ip_local_port_range), or duckDbExternalFileCache=true when the same files are"
-                + " read again and again.");
+                + " ip_local_port_range).");
     }
 
     /**

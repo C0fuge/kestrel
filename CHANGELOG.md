@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3: setting `arrowflight.s3.connectionCaching` (default true; named stores and lakeFS inherit it)
+  turns on DuckDB 1.5's `httpfs_connection_caching`: DuckDB keeps its S3 connections and reads later
+  ranges and queries over them. Without it httpfs opened a connection for about every range read
+  at 2+ threads (8 files x 4 row groups at 8 threads: 40 then 31 connections for two queries; now
+  8 then 0), and the closed ones ran a host out of local ports under 32 concurrent clients (item
+  0g). The startup `tcp_tw_reuse` WARN now appears only with `connectionCaching=false`; the
+  `s3=open` line names the setting. Answers unchanged.
 - HDFS with Kerberos: optional settings `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_*`, optional `hdfsKerberosTicketCache`) make the server log in from the keytab,
   write the ticket-granting ticket as a MIT file ticket cache for the hadoopfs extension (libhdfs3

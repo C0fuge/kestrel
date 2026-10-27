@@ -27,7 +27,7 @@ final class S3NamedStores {
     /** Keys a named store takes from the main store when it does not set them. */
     private static final Set<String> INHERITED = Set.of("caFile", "verifyTls", "metadataCache",
             "listingTtlSeconds", "maxConnections", "httpRetries", "httpRetryWaitMs",
-            "httpRetryBackoff");
+            "httpRetryBackoff", "connectionCaching");
 
     private S3NamedStores() {
     }

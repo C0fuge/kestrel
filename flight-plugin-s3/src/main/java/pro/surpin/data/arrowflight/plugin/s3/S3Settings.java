@@ -40,11 +40,13 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param httpRetries times DuckDB retries a failed HTTP request, connect errors included
  * @param httpRetryWaitMs DuckDB's wait before the first retry, in milliseconds
  * @param httpRetryBackoff factor by which each further wait grows
+ * @param connectionCaching whether DuckDB keeps S3 connections open for later reads
+ *                          ({@code httpfs_connection_caching})
  */
 public record S3Settings(String endpoint, String region, String urlStyle, String caFile,
         boolean verifyTls, String accessKey, String secretKey, String sessionToken,
         int listingTtlSeconds, int maxConnections, boolean metadataCache, int httpRetries,
-        int httpRetryWaitMs, int httpRetryBackoff) {
+        int httpRetryWaitMs, int httpRetryBackoff, boolean connectionCaching) {
 
     /** Region when none is configured. */
     public static final String DEFAULT_REGION = "us-east-1";
@@ -60,6 +62,12 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
     public static final int DEFAULT_HTTP_RETRY_WAIT_MS = 200;
     /** Growth factor of DuckDB's retry waits. */
     public static final int DEFAULT_HTTP_RETRY_BACKOFF = 2;
+    /**
+     * Whether DuckDB keeps S3 connections for later reads. Without it httpfs opens a connection
+     * for about every range read at 2+ threads, and each closed one holds a local port 60 s
+     * (item 0g: 32 clients at 8 threads ran a host out of ports).
+     */
+    public static final boolean DEFAULT_CONNECTION_CACHING = true;
     /** Most retries accepted. */
     private static final int MAX_HTTP_RETRIES = 20;
     /** Longest first wait accepted, in milliseconds. */
@@ -100,6 +108,8 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                     Integer.toString(DEFAULT_HTTP_RETRY_WAIT_MS)),
             ConfigKey.of("httpRetryBackoff", "Factor by which each further retry wait grows (1-"
                     + MAX_HTTP_RETRY_BACKOFF + ")", Integer.toString(DEFAULT_HTTP_RETRY_BACKOFF)),
+            ConfigKey.of("connectionCaching", "DuckDB keeps S3 connections open for later reads"
+                    + " instead of one per range read", Boolean.toString(DEFAULT_CONNECTION_CACHING)),
             ConfigKey.secret("accessKey", "Access key ID", "s3AccessKey"),
             ConfigKey.secret("secretKey", "Secret access key", "s3SecretKey"),
             ConfigKey.secret("sessionToken", "Session token of temporary credentials",
@@ -130,6 +140,7 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
      * @param httpRetries DuckDB retries of a failed request
      * @param httpRetryWaitMs DuckDB's first retry wait in milliseconds
      * @param httpRetryBackoff growth factor of the retry waits
+     * @param connectionCaching whether DuckDB keeps S3 connections
      */
     public S3Settings {
         endpoint = blankToNull(endpoint);
@@ -164,7 +175,34 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
     }
 
     /**
-     * Creates settings with the default DuckDB retries.
+     * Creates settings with the default DuckDB connection caching.
+     *
+     * @param endpoint endpoint URL, or null for AWS
+     * @param region signing region
+     * @param urlStyle "path" or "vhost"
+     * @param caFile PEM file of trusted certificates, or null
+     * @param verifyTls whether certificates are checked
+     * @param accessKey access key ID, or null
+     * @param secretKey secret access key, or null
+     * @param sessionToken session token, or null
+     * @param listingTtlSeconds listing lifetime in seconds
+     * @param maxConnections HTTP connections of the Java client
+     * @param metadataCache whether DuckDB caches metadata
+     * @param httpRetries DuckDB retries of a failed request
+     * @param httpRetryWaitMs DuckDB's first retry wait in milliseconds
+     * @param httpRetryBackoff growth factor of the retry waits
+     */
+    public S3Settings(String endpoint, String region, String urlStyle, String caFile,
+            boolean verifyTls, String accessKey, String secretKey, String sessionToken,
+            int listingTtlSeconds, int maxConnections, boolean metadataCache, int httpRetries,
+            int httpRetryWaitMs, int httpRetryBackoff) {
+        this(endpoint, region, urlStyle, caFile, verifyTls, accessKey, secretKey, sessionToken,
+                listingTtlSeconds, maxConnections, metadataCache, httpRetries, httpRetryWaitMs,
+                httpRetryBackoff, DEFAULT_CONNECTION_CACHING);
+    }
+
+    /**
+     * Creates settings with the default DuckDB retries and connection caching.
      *
      * @param endpoint endpoint URL, or null for AWS
      * @param region signing region
@@ -243,7 +281,7 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
         return new S3Settings(endpoint, region, urlStyle, caFile, verifyTls,
                 credentials.accessKey(), credentials.secretKey(), credentials.sessionToken(),
                 listingTtlSeconds, maxConnections, metadataCache, httpRetries, httpRetryWaitMs,
-                httpRetryBackoff);
+                httpRetryBackoff, connectionCaching);
     }
 
     /**
@@ -268,7 +306,8 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                 config.getBoolean("metadataCache", true),
                 config.getInt("httpRetries", DEFAULT_HTTP_RETRIES),
                 config.getInt("httpRetryWaitMs", DEFAULT_HTTP_RETRY_WAIT_MS),
-                config.getInt("httpRetryBackoff", DEFAULT_HTTP_RETRY_BACKOFF));
+                config.getInt("httpRetryBackoff", DEFAULT_HTTP_RETRY_BACKOFF),
+                config.getBoolean("connectionCaching", DEFAULT_CONNECTION_CACHING));
         if (!withCredentials) {
             return settings;
         }
@@ -327,7 +366,7 @@ public record S3Settings(String endpoint, String region, String urlStyle, String
                 + ", listingTtlSeconds=" + listingTtlSeconds + ", maxConnections=" + maxConnections
                 + ", metadataCache=" + metadataCache + ", httpRetries=" + httpRetries
                 + ", httpRetryWaitMs=" + httpRetryWaitMs + ", httpRetryBackoff=" + httpRetryBackoff
-                + "]";
+                + ", connectionCaching=" + connectionCaching + "]";
     }
 
     /**

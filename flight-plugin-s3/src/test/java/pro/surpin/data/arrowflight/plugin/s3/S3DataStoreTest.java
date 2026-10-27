@@ -275,6 +275,7 @@ class S3DataStoreTest {
                 "SET http_retries = 6",
                 "SET http_retry_wait_ms = 200",
                 "SET http_retry_backoff = 2",
+                "SET httpfs_connection_caching = true",
                 "SET enable_server_cert_verification = true",
                 "SET ca_cert_file = '/etc/ca.pem'",
                 "SET parquet_metadata_cache = true",
@@ -310,6 +311,17 @@ class S3DataStoreTest {
 
         assertTrue(calls.containsAll(List.of("SET http_retries = 0", "SET http_retry_wait_ms = 1000",
                 "SET http_retry_backoff = 1")), calls.toString());
+    }
+
+    /** Verifies connection caching can be turned off (item 0g: on by default). */
+    @Test
+    void duckDbConnectionCachingCanBeOff() {
+        S3Settings settings = new S3Settings("http://minio:9000", null, null, null, true,
+                "AKIATEST", "SECRETTEST", null, 30, 4, true, 6, 200, 2, false);
+
+        List<String> calls = contribution(settings, "s3://lake");
+
+        assertTrue(calls.contains("SET httpfs_connection_caching = false"), calls.toString());
     }
 
     private static List<String> contribution(S3Settings settings, String dataDirectory) {

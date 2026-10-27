@@ -34,7 +34,8 @@
 > changes runtime behaviour, so the coordinator can measure it on the stand):
 > 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
 > 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - steps 1, 2, 2 (a), (b) and 3 done 2026-10-27 (see item 15); stand measure pending, then close.
-> 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
+> 3. ~~item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).~~ - code done
+>    2026-10-27 (`arrowflight.s3.connectionCaching`, default true = DuckDB 1.5 `httpfs_connection_caching`; see item 0g and Log); stand rerun pending.
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -45,7 +46,13 @@
 
 0g. ~~**Bug (stand, 2026-10-26, build 57d252b1437f): S3 + `duckDbThreads=8`, 32 concurrent small queries fail with
     ephemeral-port exhaustion.**~~ — **cause found, workaround + startup WARN done 2026-10-26 (9f7eb4f, see Log); the
-    server-side fix needs a decision (Open questions, "S3 connection churn").** DuckDB 1.4.5 httpfs keeps HTTP
+    server-side fix needs a decision (Open questions, "S3 connection churn").** **Server-side fix done 2026-10-27 (see
+    Log):** DuckDB 1.5.6's httpfs has `httpfs_connection_caching` (default off; churn measured unchanged on 1.5.6: 40 + 31
+    connections for two queries, 8 files x 4 row groups, 8 threads); the s3 plugin now turns it on (new setting
+    `arrowflight.s3.connectionCaching`, default true): 8 + 0 connections, later queries 0, a cut connection is reopened.
+    **Stand:** rerun the 32-client small-query step at 8 threads on the pre-release *without* `tcp_tw_reuse=1` (expect 0
+    failures, TIME_WAIT toward S3 near 0, startup line `s3=open ... connectionCaching=true`, no `s3=ephemeralPorts` WARN)
+    and the SF10 JDBC S3 round (timings vs 45fc0a9/e46f28d; expect equal or faster). DuckDB 1.4.5 httpfs keeps HTTP
     clients per open file handle only, and at 2+ threads a thread opens a file anew for each row group it takes, so
     about every range read opens a new connection (`http_keep_alive`, the curl client and the prefetch settings change
     nothing; measured 78 connections / 96 requests per query at 4-16 threads vs 32 at 1 thread, 16 files x 4 row
@@ -402,7 +409,9 @@
 
 ## Open questions
 
-- **S3 connection churn (item 0g, 2026-10-26).** DuckDB's httpfs opens a new TCP connection for about every S3
+- ~~**S3 connection churn (item 0g, 2026-10-26).**~~ Resolved 2026-10-27 without a new mechanism: DuckDB 1.5.6 httpfs has
+  `httpfs_connection_caching`; on by default through `arrowflight.s3.connectionCaching` (stage 2 item 0g approval), off
+  restores the old behaviour. Original text: DuckDB's httpfs opens a new TCP connection for about every S3
   range read at 2+ threads (per-file-handle client cache, a new handle per row group and thread); each closed one
   holds a local port 60 s. Today: startup WARN + documented host workaround (`tcp_tw_reuse=1`, wider port range).
   Options needing your call: (1) turn `duckDbExternalFileCache` on by default for S3 data stores only (repeated

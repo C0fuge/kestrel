@@ -99,7 +99,8 @@ public final class DuckDbSetupValidator {
             Map.entry("http_timeout", Rule.NON_NEGATIVE),
             Map.entry("http_retries", Rule.NON_NEGATIVE),
             Map.entry("http_retry_wait_ms", Rule.NON_NEGATIVE),
-            Map.entry("http_retry_backoff", Rule.NON_NEGATIVE));
+            Map.entry("http_retry_backoff", Rule.NON_NEGATIVE),
+            Map.entry("httpfs_connection_caching", Rule.BOOLEAN));
 
     private final UnaryOperator<String> extensionResolver;
     private final SecretRedactor redactor;

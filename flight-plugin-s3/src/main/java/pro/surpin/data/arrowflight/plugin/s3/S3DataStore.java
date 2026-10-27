@@ -496,6 +496,7 @@ public final class S3DataStore implements DataStore {
         setup.set("http_retries", (long) settings.httpRetries());
         setup.set("http_retry_wait_ms", (long) settings.httpRetryWaitMs());
         setup.set("http_retry_backoff", (long) settings.httpRetryBackoff());
+        setup.set("httpfs_connection_caching", settings.connectionCaching());
         if (settings.useSsl()) {
             setup.set("enable_server_cert_verification", settings.verifyTls());
             if (settings.caFile() != null) {
