@@ -64,8 +64,8 @@
 >    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
 >    (b) lakeFS stores through the cache; ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
 >    8625e28, pre-release `server-1.0.0-8625e28f08cd`: one S3 read per missed block for all concurrent requests,
->    `joined=` in the `s3=cacheClosed` line); ~~(d) metrics~~ (done 2026-10-27, b28fedf: `arrowflight_s3_cache_*` on
->    `/metrics` through the new SPI 1.3 `StoreContext.metrics()`, see Log). **Stand
+>    `joined=` in the `s3=cacheClosed` line); ~~(d) metrics~~ (done 2026-10-27, b28fedf, pre-release `server-1.0.0-b28fedf9edbf`:
+>    `arrowflight_s3_cache_*` on `/metrics` through the new SPI 1.3 `StoreContext.metrics()`, see Log). **Stand
 >    (optional):** one round of the S3 SF10 JDBC step at `duckDbThreads=8` vs 4 to see how much of the HDFS gap is
 >    round trips per thread (feeds item 19: a lower thread default may cost more on S3 than on HDFS).
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
@@ -1186,7 +1186,8 @@
   `theSharedEndpointPublishesItsMetricsWhileItRuns`, `S3IntegrationTest.theReadCacheServesEveryConnectionOfTheNode`
   (hits on the endpoint), `SpiTest`. Local: spi + s3 module + server metrics/plugin/S3 tests, checkstyle, spotbugs
   green (S3IntegrationTest needs the httpfs extension: CI only). Package run 40507196974 (push run 40507189613
-  superseded): running. **Stand** (with the item 17 round): scrape `/metrics` during the
+  superseded): build + package green (server 783 / 2 skipped), pre-release
+  `server-1.0.0-b28fedf9edbf`. **Stand** (with the item 17 round): scrape `/metrics` during the
   32-client step with `cacheMegabytes=1024`, compare hits/misses/`s3_reads_total` with the `s3=cacheClosed` line.
   Next: item 15 stand + close; 17 (b) lakeFS through the cache; then item 16 / 19.
 
