@@ -130,6 +130,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   execution-path event reuses its regular expressions and SHA-256 digest (same output). Local
   measurement: complete-mode point query DoGet p50 6.2 -> 5.4 ms, total 13.1 -> 11.9 ms. New metric
   label `parse_check` on the cache counters. Answers, wire format, log lines and settings unchanged.
+- Partial-result mode: a new query text no longer lists the table's files to describe it (item 15
+  step 2 (a)). The file a table's queries are bound against is remembered per table for 30 s (the
+  metadata TTL); a describe that cannot read it (table rewritten) lists the table again once.
+  Local measurement: partial point query prepare p50 28.5 -> 3.4 ms, total 38.4 -> 12.5 ms,
+  8 clients 97 -> 28 ms. Answers, wire format and settings unchanged.
 
 ### Fixed
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another

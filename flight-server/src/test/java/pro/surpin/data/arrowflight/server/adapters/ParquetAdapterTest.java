@@ -3,6 +3,7 @@ package pro.surpin.data.arrowflight.server.adapters;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -167,6 +168,37 @@ class ParquetAdapterTest {
             verify(fileSystem, times(1)).listFiles(tableDirectory, true);
             parquetReader.verify(() -> ParquetFileReader.open(any()), times(1));
         }
+    }
+
+    /** Verifies the sample file of a table is listed once per TTL and again after it is forgotten. */
+    @Test
+    void sampleFileIsRememberedUntilForgotten() throws IOException {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DataFile first = new DataFile("s/t/a.parquet", "/data/s/t/a.parquet", 1L, 1L, Set.of());
+        DataFile second = new DataFile("s/t/b.parquet", "/data/s/t/b.parquet", 1L, 2L, Set.of());
+        when(store.tableFiles("s", "t")).thenReturn(List.of(first), List.of(second));
+        when(store.tableFiles("s", "empty")).thenReturn(List.of());
+        AppConfig config = new AppConfig(
+                3, 4096, 4, 65536, 2, 2, 2, null, false,
+                null, null, null, null, null, false, 2_147_483_648L, 67108864, 67108864, 30000L,
+                "/data", null, 31001, 5701, 120, 3, 500, 0, true, false, 64, null, null, "complete", true, true);
+        ParquetAdapter adapter = new ParquetAdapter(config, store) {
+            @Override
+            public boolean isCatalogSchema(String schema) {
+                return false;
+            }
+        };
+
+        assertEquals(java.util.Optional.of(first), adapter.sampleFile("s", "t"));
+        assertEquals(java.util.Optional.of(first), adapter.sampleFile("s", "t"));
+        verify(store, times(1)).tableFiles("s", "t");
+        adapter.forgetSampleFile("s", "t");
+        assertEquals(java.util.Optional.of(second), adapter.sampleFile("s", "t"));
+        verify(store, times(2)).tableFiles("s", "t");
+        assertTrue(adapter.sampleFile("s", "empty").isEmpty());
+        assertTrue(adapter.sampleFile("s", "empty").isEmpty());
+        verify(store, times(2)).tableFiles("s", "empty");
     }
 
     /**

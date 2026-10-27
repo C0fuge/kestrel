@@ -18,14 +18,18 @@ import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -413,5 +417,59 @@ class ExecutionServiceTest {
         verify(metadata, times(1)).getQuerySchema(small);
         verify(metadata, times(2)).getQuerySchema(huge);
         assertEquals(skipped + 2, CacheMetrics.oversizeCount(CacheMetrics.Cache.SCHEMA));
+    }
+
+    /** Verifies a describe that fails to read the remembered sample file lists the table again once. */
+    @Test
+    void describeRetriesWithAFreshSampleFileAfterAReadError() throws Exception {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile gone = new DataFile("s/t/old.parquet", "/data/s/t/old.parquet", 1L, 1L, Set.of());
+        DataFile fresh = new DataFile("s/t/new.parquet", "/data/s/t/new.parquet", 1L, 2L, Set.of());
+        when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(gone), Optional.of(fresh));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        when(store.duckDbUri(any(DataFile.class)))
+                .thenAnswer(inv -> inv.<DataFile>getArgument(0).location());
+        Schema schema = new Schema(List.of(
+                Field.nullable("a", new ArrowType.Int(64, true))));
+        when(duckDb.describeSql(any(), contains("old.parquet")))
+                .thenThrow(new java.sql.SQLException("IO Error: No files found that match the pattern"));
+        when(duckDb.describeSql(any(), contains("new.parquet"))).thenReturn(schema);
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+
+        try (RootAllocator allocator = new RootAllocator()) {
+            assertEquals(schema, service.resultSchema(allocator, "SELECT a FROM s.t WHERE a = 1"));
+        }
+        verify(parquet, times(1)).forgetSampleFile("s", "t");
+        verify(parquet, times(2)).sampleFile("s", "t");
+    }
+
+    /** Verifies a query DuckDB rejects is reported without listing the table again. */
+    @Test
+    void describeDoesNotRetryAQueryError() throws Exception {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile file = new DataFile("s/t/a.parquet", "/data/s/t/a.parquet", 1L, 1L, Set.of());
+        when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(file));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        when(store.duckDbUri(any(DataFile.class))).thenReturn("/data/s/t/a.parquet");
+        when(duckDb.describeSql(any(), anyString()))
+                .thenThrow(new java.sql.SQLException("Binder Error: column b not found"));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+
+        try (RootAllocator allocator = new RootAllocator()) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.resultSchema(allocator, "SELECT b FROM s.t"));
+        }
+        verify(parquet, times(0)).forgetSampleFile(anyString(), anyString());
+        verify(parquet, times(1)).sampleFile("s", "t");
     }
 }

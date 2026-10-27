@@ -50,6 +50,7 @@ public class ParquetAdapter {
             new ConcurrentHashMap<>();
     private final Map<String, CachedParquetMetadata> parquetMetadataCache =
             new ConcurrentHashMap<>();
+    private final Map<TableKey, CachedSampleFile> sampleFileCache = new ConcurrentHashMap<>();
 
     /**
      * Identifies one table in the Arrow schema cache.
@@ -58,6 +59,15 @@ public class ParquetAdapter {
      * @param table table name
      */
     private record TableKey(String schema, String table) {
+    }
+
+    /**
+     * Stores the file a table's queries are described against and its refresh deadline.
+     *
+     * @param file first Parquet file of the table
+     * @param expiresAtNanos monotonic refresh deadline
+     */
+    private record CachedSampleFile(DataFile file, long expiresAtNanos) {
     }
 
     /**
@@ -321,13 +331,35 @@ public class ParquetAdapter {
      *
      * @param schema schema name
      * @param table  table name
-     * @return first Parquet file in path order, or empty when the table has none
+     * @return first Parquet file in path order (remembered for the metadata TTL), or empty when
+     *         the table has none
      * @throws IOException on storage access failure
      */
     public java.util.Optional<DataFile> sampleFile(String schema, String table) throws IOException {
+        TableKey key = new TableKey(schema, table);
+        long now = System.nanoTime();
+        CachedSampleFile cached = sampleFileCache.get(key);
+        if (cached != null && cached.expiresAtNanos() > now) {
+            return java.util.Optional.of(cached.file());
+        }
         List<DataFile> files = tableFiles(schema, table);
-        return files.isEmpty()
-                ? java.util.Optional.empty() : java.util.Optional.of(files.get(0));
+        if (files.isEmpty()) {
+            sampleFileCache.remove(key);
+            return java.util.Optional.empty();
+        }
+        DataFile first = files.get(0);
+        sampleFileCache.put(key, new CachedSampleFile(first, now + METADATA_TTL_NANOS));
+        return java.util.Optional.of(first);
+    }
+
+    /**
+     * Drops the remembered sample file of a table, so the next lookup lists the table again.
+     *
+     * @param schema schema name
+     * @param table  table name
+     */
+    public void forgetSampleFile(String schema, String table) {
+        sampleFileCache.remove(new TableKey(schema, table));
     }
 
     /**

@@ -327,9 +327,7 @@ public final class ExecutionService {
             schema = describe(allocator, pq);
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
-            if (message.startsWith("Binder Error") || message.startsWith("Parser Error")
-                    || message.startsWith("Catalog Error")
-                    || message.startsWith("Conversion Error")) {
+            if (isBindError(message)) {
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
             }
             if (e instanceof IOException io && !(io instanceof java.io.FileNotFoundException)
@@ -399,6 +397,29 @@ public final class ExecutionService {
                     : DuckDbAdapter.buildSelectSql(pq, from);
             return duckDbAdapter.describeSql(allocator, duckSql);
         }
+        try {
+            return describeAgainstSample(allocator, pq);
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            if (isQueryError(message) || message.startsWith("No Parquet files for table")) {
+                throw e;
+            }
+            // The remembered sample file may be gone (rewritten table): list the table again.
+            parquetAdapter.forgetSampleFile(pq.schema, pq.table);
+            return describeAgainstSample(allocator, pq);
+        }
+    }
+
+    /**
+     * Asks DuckDB for the result schema of a plain table query, bound against the table's sample file.
+     *
+     * @param allocator Arrow buffer allocator
+     * @param pq        parsed query
+     * @return result schema
+     * @throws Exception if the table has no files or DuckDB cannot bind the query
+     */
+    private Schema describeAgainstSample(BufferAllocator allocator, ParquetQueryParser pq)
+            throws Exception {
         DataFile sample = parquetAdapter.sampleFile(pq.schema, pq.table)
                 .orElseThrow(() -> new IOException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
@@ -409,6 +430,18 @@ public final class ExecutionService {
                 ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
                 : DuckDbAdapter.buildSelectSql(pq, from);
         return duckDbAdapter.describeSql(allocator, duckSql);
+    }
+
+    /**
+     * Tells whether a DuckDB error message from a describe rejects the query's text.
+     *
+     * @param message DuckDB error message
+     * @return true for binder, parser, catalog and conversion errors
+     */
+    private static boolean isBindError(String message) {
+        return message.startsWith("Binder Error") || message.startsWith("Parser Error")
+                || message.startsWith("Catalog Error")
+                || message.startsWith("Conversion Error");
     }
 
     /**
