@@ -23,6 +23,12 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-10-27 (priority, time-boxed): finish item 15 now** - the build is going to be presented today. Goal for this
+> and the next session: cut the remaining per-query overhead (DoGet path ~4.7 ms, close, describe connection) and check the
+> c8/c32 regression seen with DuckDB 1.5.6; keep answers identical; finish with CI green and a `package=true` pre-release
+> (say in the Log what changed and the local profile numbers). The coordinator measures it on the stand right after.
+> Do not start other items until item 15 is closed or two sessions have passed.
+
 > **Stage 2, approved by the maintainer 2026-10-26 - take these in this order before the other open items** (basis: `docs/dev/TUNING.md`
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
 > changes runtime behaviour, so the coordinator can measure it on the stand):
