@@ -340,6 +340,9 @@
     and TPC-H SF1 via Trino 17 % faster. Profile GetFlightInfo -> first batch for a point query (per-connection catalog view
     refresh, inventory planning, load accounting) and cut what is not needed for a single-node plain query; target <= +3 ms
     over raw DuckDB. Regression test with a latency budget is not reliable in CI: measure on the stand.
+    *Stand 2026-10-27 (p156, DuckDB 1.5.6 build 27f583adccd7 vs 57d252b1437f):* single-client latency improved ~17 %, but
+    under concurrency it got worse: JDBC c8 p95 +18 %, c32 p50 +13-15 % (JDBC and ADBC), consistent over 3 rounds. Check whether
+    1.5.6 needs different per-connection settings (threads / scheduler / connection reuse) and include c8/c32 in the target.
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
     `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
     for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
