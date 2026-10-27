@@ -111,7 +111,7 @@
 
 0a. ~~**hadoopfs timeout defaults 3 s / 10 s**~~ — done 2026-10-24 (732e238, CI run 40140133221 green).
 
-> **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) ~~plans that are never read keep their node load reservation up to 10 min~~ — partly fixed 2026-10-26 (9168a44, see Log): `CancelFlightInfo` / `CancelQuery` release a plan's reservations at once; clients that abandon a plan without cancelling still hold them 10 min (shorter TTL = default change, Open questions). Original: skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why.
+> **Stand, 3-node S3 cluster on int7 (2026-10-25)** (unnumbered; sessions keep taking the numbered items, see Open questions): all correct (JDBC 22/22, Trino 22/22, B2, B5, mid-stream kill, ticket matrix, MinIO outage + recovery without restart). Server follow-ups, none give wrong results: (a) during an S3 outage each read needs 20–40 s to fail (DuckDB httpfs retries + DNS); make S3 retry/timeout settings explicit and shorter when the endpoint is unreachable; (b) ~~plans that are never read keep their node load reservation up to 10 min~~ — partly fixed 2026-10-26 (9168a44, see Log): `CancelFlightInfo` / `CancelQuery` release a plan's reservations at once; clients that abandon a plan without cancelling still hold them 10 min (shorter TTL = default change, Open questions). Original: skewing later plans (one node got no endpoints ~5 min) — release reservations on ticket expiry/cancel or shorten the TTL; (c) ~~after B5 the first plan on S3 waits 9–10 s while dead members are dropped (HDFS cluster: ~1 s) — find why~~ — cause found 2026-10-27 (9934d3b, see Log): a crashed node whose *address* vanished (container removed) holds every map operation on its partitions until `hazelcast.max.no.heartbeat.seconds` (10 s); one whose port still refuses is dropped in ~0.35 s — so the two stands most likely differed in how the nodes died. Same mechanism as the 0d crash Open question (faster detection = maintainer's call); `-D` override documented in START-NOTES. **Stand:** note how B5 kills the nodes on both stands (process vs container/host); optionally rerun B5 on S3 with `-Dhazelcast.max.no.heartbeat.seconds=5`.
 
 > **Stand regression, single node, build 4eaab052deaf with the new runtime libs set (2026-10-25)** (unnumbered): the
 > release jar + `flight-server-libs` (60 jars, Hadoop 3.5.0) instead of the old 335-jar libs dir, against int7 on the
@@ -322,7 +322,9 @@
   with an iptables DROP: first plan 10.4 s, then ~10 ms. Side effect seen: a survivor's own heartbeat put can block
   as long, so other nodes briefly drop that live node as stale (back within 3 s; no wrong answers). Options: lower
   it to 5 s (risk: members dropped on GC pauses / busy runners), or plan from a local cluster snapshot refreshed by
-  the heartbeat thread. Both change existing behaviour — maintainer's call.
+  the heartbeat thread. Both change existing behaviour — maintainer's call. (2026-10-27: this is also 3-node S3 finding (c); only a
+  vanished address waits — a refused port is detected in < 1 s. A deployment can already set
+  `-Dhazelcast.max.no.heartbeat.seconds` on every node, now documented in START-NOTES.)
 
 - **Item 9 (per-user identity): design proposal 2026-10-26 — please answer the questions at the end.** Today the
   embedded Ranger gate (`FLIGHT_AUTHORIZATION_PROVIDER=ranger`, service type `arrowflight`, schema/table policies)
@@ -847,3 +849,14 @@
   krb5-user so that case runs there too). CI run 40415521254 on 2b2cac8 green. Next: 0h (stand recheck), stand
   reruns (0g with `tcp_tw_reuse=1`, secure HA (b) without `kinit`), then 3-node S3 (c) (first plan after B5 waits
   9-10 s), optional: expose the extension's `hdfs_dead_node_ttl_ms` as a server setting.
+- 2026-10-27 (cloud session): 3-node S3 stand finding (c) (first plan after B5 waits 9-10 s on S3, ~1 s on HDFS)
+  explained, no code change. Measured in one JVM (doomed member on 127.0.0.2): crash with its port refusing ->
+  member dropped and first plan's cluster ops done in ~0.35 s; crash with the address made silent (iptables DROP)
+  -> 9.96 s = `hazelcast.max.no.heartbeat.seconds`. S3 and HDFS stores are both `shared` and plan through the same
+  key lookups since 0d, so the storage is not the difference; how the nodes died is. Tests in
+  `ClusterMemberLossIntegrationTest` (refused port < 5 s; vanished address with the timeout at 3 s via `-D` takes
+  2-8 s — needs iptables as root or `sudo -n`, skipped otherwise); START-NOTES documents the window and the `-D`
+  override. Decision on faster detection stays in Open questions (0d follow-up). CI run 40428800760 on 9934d3b.
+  Next: 0h (stand recheck), stand reruns (0g with `tcp_tw_reuse=1`, secure HA (b) without `kinit`, B5 kill mode),
+  optional: expose the extension's `hdfs_dead_node_ttl_ms` as a server setting; 3-node S3 (a) (S3 outage read
+  latency) partly covered by 0e's retry settings.
