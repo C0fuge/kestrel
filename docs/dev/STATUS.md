@@ -319,7 +319,7 @@
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 14. ~~**DuckDB 1.5.6**~~ — **code done 2026-10-27 (a442867 + 27f583a, CI run 40441645851 green, pre-release `server-1.0.0-27f583adccd7`); stand rerun
-    pending.** **Coordinator:** put `duckdb-extensions-v1.5.6.tar.zst` (httpfs, iceberg, avro, hadoopfs `51b7220-afc3` /
+    pending.** **Coordinator (done 2026-10-27: both files are in `ci-assets`, sha256 in its SHA256SUMS; build distributed to the client repos):** put `duckdb-extensions-v1.5.6.tar.zst` (httpfs, iceberg, avro, hadoopfs `51b7220-afc3` /
     v1.5.6 under `v1.5.6/linux_amd64/`) and `hadoopfs-v1.5.6-afc3.duckdb_extension` into `ci-assets` (Dev CI uses it
     when present, else the official httpfs/iceberg/avro builds); the stand needs the v1.5.6 extension set, the
     startup check refuses the 1.4.5 files. **Stand:** P4 small + TPC-H SF1/SF10 (checksums 9e2af63e8711 / 05bc0dc2713a)
