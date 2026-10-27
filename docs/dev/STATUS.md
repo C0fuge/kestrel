@@ -305,8 +305,11 @@
    `CatalogSources.deletesApplicable` covers; the executing node re-derives each ticket file's delete files from
    the pinned snapshot (tickets unchanged) and reads them with `deletesAppliedSource`. **Remaining:** (ii) stand: time the int7 eq-delete
    queries (was 25–90 s) on the new source and check answers vs the old ones, in complete mode (JDBC) and partial
-   mode (Trino, StarRocks: these tables now get one endpoint per node instead of one complete endpoint); (iii) many data files with position
-   deletes become one UNION ALL branch each — measure planning time on a table after a large MERGE. Original
+   mode (Trino, StarRocks: these tables now get one endpoint per node instead of one complete endpoint); ~~(iii) many data files with position
+   deletes become one UNION ALL branch each — measure planning time on a table after a large MERGE.~~ Done
+   2026-10-27 (4e77c6b, package run 40544759257 green, pre-release `server-1.0.0-4e77c6bda59a`, see Log): files sharing their delete files are one branch; 500 files with one shared
+   position delete file: prepare ~750 -> ~20 ms, run ~1200 -> ~50 ms. **Stand (with (ii)):** a table after a
+   large MERGE (position deletes over many files): planning + query time and answers vs the previous build. Original
    text: Iceberg equality deletes are correct but slow (full scan of all columns per query, 25–90 s; DuckDB 1.4.5's
    iceberg extension refuses or mis-applies eq deletes when filters/projections are pushed). Make them fast and
    correct: e.g. read data files + equality delete files yourself (anti-join on the equality columns with sequence-
@@ -1224,3 +1227,18 @@
   bundled defaults). Local: ConfigAdapterTest, DuckDbAdapterTest, GoldenDuckDbSetupTest + checkstyle + spotbugs green.
   Package run 40536373045 (push run 40536363011 cancelled in its favour): build + package green, pre-release `server-1.0.0-04e558056068`. **Stand:** see stage 2 item 19.
   Next: item 15 stand + close; item 16 / 19 stand rounds; 17 (a) and 18 wait for answers.
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete; the priority note's two sessions
+  have passed), 16/0h are stand measurements, 17 (a) and 18 wait for answers, so item 2 (iii) (4e77c6b): position
+  deletes over many data files. `CatalogSources.deletesAppliedSource` wrote one UNION ALL branch per data file with
+  position deletes, each re-reading all its position delete files; after a MERGE (one delete file over many data
+  files) that is O(files) branches and reads. Now data files with the same delete files are one `read_parquet`
+  (`file_row_number = true`), anti-joined to the position deletes read once and mapped to the list index by a
+  `VALUES (normalised location, i)` join on DuckDB 1.5's `file_index` virtual column; a single file (the partial-mode
+  ticket read) and tables with a column named `file_index` keep the per-file SQL. Local (DuckDB 1.5.6, 500 files x
+  2000 rows, one shared position delete file, `count/sum WHERE v = 3`): prepare 700-800 -> 17-21 ms, run 1200-1240 ->
+  49-53 ms, same answer. Test: `CatalogSourcesDeletesTest.manyFilesSharingTheirDeletesReadInOneBranch` (40 files,
+  `file:` and bare paths, deletes naming a file outside the plan, an equality delete, a subset, the `file_index`
+  fallback; ids vs Java-computed). Local: CatalogSources/Catalog/Iceberg tests 44 green + checkstyle + spotbugs.
+  Package run 40544759257 (push run 40544741781 cancelled in its favour): build + package green, pre-release
+  `server-1.0.0-4e77c6bda59a`. **Stand:** item 2 Stand.
+  Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers.
