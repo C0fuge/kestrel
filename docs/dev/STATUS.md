@@ -319,8 +319,8 @@
 3. ~~**Iceberg time travel**~~ — done 2026-10-25 (see Log): `FOR VERSION AS OF <id | 'tag'>` / `FOR TIMESTAMP AS OF
    TIMESTAMP '<time> <zone>'` after an iceberg-hadoop / iceberg-rest table name, complete mode (rewritten to a read of
    the snapshot's own files, deletes and columns); partial mode answers such queries completely. Follow-ups (optional):
-   (a) partial mode in parts (plan the travelled snapshot's files; the executor already pins any snapshot ID via
-   `pinned`, but describe and the `fileUris == null` path read `current`); (b) Iceberg tables registered in a Hive
+   ~~(a) partial mode in parts~~ - done 2026-10-27 (b7be8d1, see Log): a partial query of one table with one clause
+   and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; (b) Iceberg tables registered in a Hive
    Metastore (`TableFormat` needs an `asOf`); (c) snapshots that cannot be read file by file (deletion vectors,
    renamed nested fields) are refused — `iceberg_scan(..., snapshot_from_id => )` could read them if DuckDB 1.4.5 picks
    the snapshot's schema (check first). For the coordinator: Trino plugin / StarRocks connector may forward the clause.
