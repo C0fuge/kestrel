@@ -26,7 +26,7 @@
 > **Stage 2, approved by the maintainer 2026-10-26 - take these in this order before the other open items** (basis: `docs/dev/TUNING.md`
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
 > changes runtime behaviour, so the coordinator can measure it on the stand):
-> 1. item 14 - DuckDB 1.5.6 (hadoopfs for 1.5.6 already builds in the hadoopfs repo; keep answers identical, TPC-H checksums).
+> 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
 > 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query).
 > 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
@@ -318,7 +318,16 @@
     `beginTransaction refused` WARN line in the server log; if one appears, note the ADBC version. Connector side (forward to the Trino
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
-14. **DuckDB 1.5.6** (upstream speed comparison 2026-10-27, `docs/dev/UPSTREAM-SYNC.md` "Speed comparison 2026-10-26"): both
+14. ~~**DuckDB 1.5.6**~~ — **code done 2026-10-27 (a442867 + 27f583a, CI run 40441645851 green, pre-release `server-1.0.0-27f583adccd7`); stand rerun
+    pending.** **Coordinator:** put `duckdb-extensions-v1.5.6.tar.zst` (httpfs, iceberg, avro, hadoopfs `51b7220-afc3` /
+    v1.5.6 under `v1.5.6/linux_amd64/`) and `hadoopfs-v1.5.6-afc3.duckdb_extension` into `ci-assets` (Dev CI uses it
+    when present, else the official httpfs/iceberg/avro builds); the stand needs the v1.5.6 extension set, the
+    startup check refuses the 1.4.5 files. **Stand:** P4 small + TPC-H SF1/SF10 (checksums 9e2af63e8711 / 05bc0dc2713a)
+    + Trino, HDFS and S3, Hive/Iceberg reference queries; check the startup lockdown passes with hdfs:// and s3:// roots
+    (1.5.6 stores a URI root whose scheme no loaded extension registers as a local path — fails closed at startup).
+    Note for 0g/17: httpfs 1.5.6 uses a curl client by default and has `httpfs_connection_caching` (default false):
+    measure connections per query with it on before building a pool of our own.
+    Original: (upstream speed comparison 2026-10-27, `docs/dev/UPSTREAM-SYNC.md` "Speed comparison 2026-10-26"): both
     upstream builds bundle DuckDB 1.5.6; on the same HDFS files, without a Flight server, 1.5.6 answers a point lookup in
     5.6 ms vs 10.6 ms and a filtered count in 9.6 vs 15.8 ms (1.4.5). The hadoopfs extension from our patched sources builds and
     loads for v1.5.6 (footer `51b7220-afc3` / `v1.5.6`). Upgrade `duckdb_jdbc` to 1.5.6.0 and the CI extension set (httpfs, iceberg,
@@ -897,3 +906,13 @@
   `docs/dev/UPSTREAM-SYNC.md` "Speed comparison 2026-10-26". Upstream wrong answers (LIMIT ignored, decimal scale lost in q06,
   no AVG / prepared statements / parameters) disqualify it on JDBC TPC-H, heavy and small aggregates; upstream wins point/count
   latency, TPC-H SF1 via Trino and single-stream scan. Next steps 14-16 added.
+- 2026-10-27 (cloud session): item 14, DuckDB 1.5.6 (`duckdb_jdbc` 1.5.6.0 in server, iceberg and hive modules;
+  a442867, 27f583a). Behaviour differences found and handled: 1.5.6 shows a `file:///d/` root in allowed_directories
+  as `/d/` (lockdown check's comparable form now drops `file:`; Iceberg/Hive ITs failed on it in CI run 40440676383),
+  and stores a URI root whose scheme no loaded extension registers as a local path below the working directory
+  (the check refuses it: fails closed; the server loads httpfs/hadoopfs before the lockdown, and the S3 ITs with
+  httpfs pass); connect errors now read "Could not connect to server" (test wording). New test
+  `LockdownCheckTest.acceptsFileUriRoots`. Dev CI takes `duckdb-extensions-v1.5.6.tar.zst` from ci-assets when
+  present, else downloads httpfs/iceberg/avro v1.5.6 from extensions.duckdb.org (hadoopfs IT stays skipped). CI run
+  40441645851 on 27f583a green; package run 40442729111 green: pre-release `server-1.0.0-27f583adccd7`. Next: coordinator adds
+  the v1.5.6 extension set (with hadoopfs) to ci-assets and reruns the stand (item 14 Stand); then item 15.
