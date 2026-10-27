@@ -1094,3 +1094,12 @@
   favour): build + package green, pre-release `server-1.0.0-7562a5bdb7b9`. **Stand:** rewrite one S3 data file while the 32-client small-query step runs; expect no ETag
   errors at the clients and `duckdb=changedFileRetry` lines in the server log. Next: item 15 stand + close; item 17
   memory-bound design (Open questions candidate), listing cache, parallel range reads.
+- 2026-10-27 (cloud session): item 15 still waits for the stand; item 17 continued (findings (iv)-(v) in the stage 2
+  list). Listing: already cached in Java, DuckDB never lists. Range reads measured with a latency per request in the
+  fake S3 (`FakeS3.latency`, new perf probe `S3ReadPathPerfTest`, 10 ms): with the plugin defaults a repeated query
+  sends no HEAD and no footer read and one GET per row group (all columns), a pruned point query 2 GETs;
+  `prefetch_all_parquet_files` changes nothing; `metadataCache=false` costs a HEAD + footer per file and query. No new
+  setting; the pattern is pinned in CI by `S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed` (cfe406b,
+  test-only, no pre-release needed). CI run 40475972551 green (server 777 / 2 skipped). New Open question "S3 read cache
+  with a memory bound" (options A loopback range cache in the plugin / B `cache_httpfs` / C document only). Next: item
+  15 stand + close; item 17 waits for that decision, so item 18 (distributed complete mode) is the next stage 2 item.
