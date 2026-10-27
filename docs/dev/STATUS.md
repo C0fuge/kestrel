@@ -1352,6 +1352,17 @@
   (no netem here): **Stand / screening:** with the pre-release, a pyarrow or ADBC client sending
   `arrow-compression: zstd` at 10 ms / 1 Gbit vs plain (MB/s, server CPU); level 1 vs 3.
   Next: item 20 (b)-(f), then item 21.
+- 2026-10-27 (cloud session): item 20 step (b) done (d22cdac): LZ4 stream compression. `arrow-compression: lz4`
+  (`lz4_frame`, `lz4-frame`) and `flightCompression=lz4` were refused; new `Lz4FrameCodec` (Arrow LZ4_FRAME) writes
+  standard LZ4 frames (independent 4 MiB blocks, no checksums) with lz4-java's JNI compressor straight between
+  direct Arrow buffers; lz4-java comes from the runtime libs set (still `provided`, LibsSetTest unchanged), `lz4` is
+  refused if it is missing. Frames checked both ways against commons-compress (what Java Flight clients decode
+  with; it is already on the server's compile class path) and in `StreamCompressionIntegrationTest` (partial +
+  complete). Local (4 cores, opt-in `StreamCompressionPerfTest`, 8 MiB of random longs 0..999, one thread): LZ4
+  ~510 MB/s compress (ratio 2.6) vs ZSTD level 1 ~330 MB/s (ratio 5.0); a first version through
+  `LZ4FrameOutputStream` + byte arrays did ~320 MB/s. Push run 40596424406 cancelled in favour of package run
+  40596456091 (green: build 8 min + package 2 min), pre-release `server-1.0.0-d22cdaccb4e1`. **Screening:** lz4 vs
+  zstd vs plain at 10 ms / 1 Gbit with a pyarrow/ADBC client (MB/s, server CPU). Next: item 20 (c)-(f), then item 21.
 - 2026-10-27 (plugins lane, FYI core lane): CI run 40587941135 (head 6ca7352) is red on one test only,
   `LibsSetTest.setHoldsOneVersionPerLibraryAtTheFloors` ("commons-io missing"): with 6ca7352's `arrow-compression`
   dependency the server's provided libs set (`dependency:list -DincludeScope=provided`) loses commons-io 2.16.1 (62 -> 61
