@@ -44,8 +44,10 @@
 >    `arrowflight_flight_compress*`. Found: Arrow Java's LZ4_FRAME codec (commons-compress) cannot compress 8 MB in
 >    2 min, so `lz4` is refused for now; Java Flight clients decode ZSTD once `arrow-compression` + `zstd-jni` are on
 >    their class path (ServiceLoader), no driver code needed for that. ZSTD level 1 single-thread ~250-285 MB/s
->    compress, ~450-600 MB/s decompress (8 MiB of small longs, ratio 2.9). **Next steps of 20:** (b) LZ4 via
->    lz4-java (now `provided` for the libs set - make it a server dependency or bundle our own codec); (c)
+>    compress, ~450-600 MB/s decompress (8 MiB of small longs, ratio 2.9). *Step (b) done 2026-10-27 (d22cdac, see
+>    Log):* `arrow-compression: lz4` / `flightCompression=lz4` via our own `Lz4FrameCodec` on lz4-java (JNI, from the libs
+>    set; lz4 refused if missing), ~510 MB/s vs ZSTD ~330 MB/s single thread (`StreamCompressionPerfTest`, perf tag).
+>    **Next steps of 20:** ~~(b) LZ4 via lz4-java~~; (c)
 >    Flight SQL session option `arrow-compression`; (d) `arrow-compression` in our patched JDBC driver + START-NOTES;
 >    (e) pyarrow / ADBC C++/Go answer checks in CI; (f) parallel per-buffer compression within a batch and the
 >    `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
