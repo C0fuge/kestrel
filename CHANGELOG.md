@@ -157,6 +157,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- S3 (DuckDB 1.5.6): after an object was rewritten, the first query of every server connection
+  that had read it before failed "HTTP Error: ETag on reading file ... was initially ... this likely
+  means the remote file has changed" (DuckDB keeps a file's metadata per connection; the next query
+  reads the new file). A query refused this way before anything was sent now runs once more and
+  returns the new file's rows (INFO `duckdb=changedFileRetry`); a refusal after the first batch
+  still fails the stream. Test `S3IntegrationTest.aQueryAfterAFileWasRewrittenReadsTheNewFile`.
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another
   (3-node S3 stand finding (c)): a crashed node whose address vanished with it holds every map
   operation on its partitions until Hazelcast drops it (`hazelcast.max.no.heartbeat.seconds`,

@@ -654,6 +654,18 @@ class DuckDbAdapterTest {
         assertFalse(DuckDbAdapter.invalidatesDatabase(new java.sql.SQLException((String) null)));
     }
 
+    /** Verifies which DuckDB error means a remote file was rewritten since the connection read it. */
+    @Test
+    void recognisesARewrittenRemoteFile() {
+        assertTrue(DuckDbAdapter.remoteFileChanged(new java.sql.SQLException(
+                "HTTP Error: ETag on reading file \"s3://lake/t/x0.parquet\" was initially \"e1\" and now it"
+                        + " returned \"e2\", this likely means the remote file has changed.\nFor parquet or"
+                        + " similar single table sources, consider retrying the query")));
+        assertFalse(DuckDbAdapter.remoteFileChanged(new java.sql.SQLException(
+                "IO Error: Could not establish connection error for HTTP GET to 's3://lake/t/x0.parquet'")));
+        assertFalse(DuckDbAdapter.remoteFileChanged(new java.sql.SQLException((String) null)));
+    }
+
     /**
      * Verifies a thread whose DuckDB reported an error that invalidates the database gets a fresh
      * DuckDB for its next query, while an ordinary error keeps the session. The invalidating error

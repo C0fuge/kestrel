@@ -1,5 +1,10 @@
 package pro.surpin.data.arrowflight.server.storage;
 
+import org.apache.arrow.flight.FlightProducer;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -29,6 +34,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -38,10 +44,17 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * DuckDB reading S3 through the httpfs extension, locked down the way the server locks it down.
@@ -400,6 +413,72 @@ class S3IntegrationTest {
             }
             assertTrue(forwarder.connections() > before, "new connections after the cut");
         }
+    }
+
+    @Test
+    void aQueryAfterAFileWasRewrittenReadsTheNewFile() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 4;
+        long rows = 30_000L;
+        byte[] first = parquet(dir.resolve("first.parquet"), 0);
+        StringBuilder list = new StringBuilder();
+        for (int i = 0; i < files; i++) {
+            s3.put(bucket, "flight-it/m/x" + i + ".parquet", first);
+            list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                    .append("/flight-it/m/x").append(i).append(".parquet'");
+        }
+        String sql = "SELECT count(*) AS n, sum(id) AS s FROM read_parquet([" + list + "])";
+        long sum = rows * (rows - 1) / 2;
+        open(null);
+        try (BufferAllocator allocator = new RootAllocator()) {
+            assertArrayEquals(new long[] {files * rows, files * sum}, streamed(allocator, sql));
+            assertArrayEquals(new long[] {files * rows, files * sum}, streamed(allocator, sql));
+
+            // DuckDB keeps the file's metadata per connection and refuses the rewritten object
+            // once ("ETag ... was initially ..."); the server runs the query again.
+            s3.put(bucket, "flight-it/m/x0.parquet", parquet(dir.resolve("second.parquet"), 1_000_000),
+                    java.time.Instant.parse("2026-10-27T09:00:00Z"));
+            assertArrayEquals(new long[] {files * rows, files * sum + rows * 1_000_000L},
+                    streamed(allocator, sql));
+
+            // The refusal the retry covers is still DuckDB's behaviour.
+            s3.put(bucket, "flight-it/m/x0.parquet", first, java.time.Instant.parse("2026-10-27T10:00:00Z"));
+            SQLException refused = assertThrows(SQLException.class, () -> {
+                try (Statement s = duckDb.connection().createStatement()) {
+                    s.executeQuery(sql).close();
+                }
+            });
+            assertTrue(DuckDbAdapter.remoteFileChanged(refused), refused.getMessage());
+            assertArrayEquals(new long[] {files * rows, files * sum}, streamed(allocator, sql));
+        }
+    }
+
+    private static byte[] parquet(Path file, long offset) throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT range + " + offset + " AS id, md5(range::VARCHAR) AS pad FROM range(30000))"
+                    + " TO '" + file + "' (FORMAT parquet, ROW_GROUP_SIZE 10000)");
+        }
+        return Files.readAllBytes(file);
+    }
+
+    private long[] streamed(BufferAllocator allocator, String sql) throws Exception {
+        FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+        AtomicReference<VectorSchemaRoot> root = new AtomicReference<>();
+        long[] answer = new long[2];
+        doAnswer(invocation -> {
+            root.set(invocation.getArgument(0));
+            return null;
+        }).when(listener).start(any(VectorSchemaRoot.class));
+        when(listener.isReady()).thenReturn(true);
+        doAnswer(invocation -> {
+            answer[0] = ((BigIntVector) root.get().getVector("n")).get(0);
+            answer[1] = ((Number) root.get().getVector("s").getObject(0)).longValue();
+            return null;
+        }).when(listener).putNext();
+        duckDb.streamSql(allocator, sql, listener, true);
+        verify(listener, times(1)).start(any(VectorSchemaRoot.class));
+        return answer;
     }
 
     private void reopen() {

@@ -835,7 +835,14 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = threadSession.get();
         try {
-            streamSql(session, allocator, duckSql, listener, startListener);
+            try {
+                streamSql(session, allocator, duckSql, listener, startListener);
+            } catch (ChangedFileBeforeStart e) {
+                logChangedFileRetry(e);
+                streamSql(session, allocator, duckSql, listener, startListener);
+            }
+        } catch (ChangedFileBeforeStart e) {
+            throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
             throw e;
@@ -890,9 +897,11 @@ public final class DuckDbAdapter implements AutoCloseable {
         // first batch (all of it, for an aggregation) before anybody noticed.
         ListenerReadiness listenerReadiness = new ListenerReadiness(
                 listener, appConfig.flightListenerReadyTimeoutMillis(), ps, sessionReaper);
+        boolean started = false;
         try (org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
+            started = true;
             if (startListener) {
                 listener.start(duckRoot);
             }
@@ -944,10 +953,57 @@ public final class DuckDbAdapter implements AutoCloseable {
                 throw CallStatus.CANCELLED.withDescription("Flight client cancelled the query")
                         .withCause(e).toRuntimeException();
             }
+            if (!started && remoteFileChanged(e)) {
+                throw new ChangedFileBeforeStart(e);
+            }
             throw e;
         } finally {
             listenerReadiness.disarm();
         }
+    }
+
+    /**
+     * A query failed before anything was sent because a remote file changed since this
+     * connection last read it; running it again reads the new file.
+     */
+    private static final class ChangedFileBeforeStart extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        /** DuckDB's error, thrown when the second run fails the same way. */
+        private final transient java.sql.SQLException error;
+
+        /**
+         * Wraps DuckDB's error.
+         *
+         * @param error DuckDB's error
+         */
+        ChangedFileBeforeStart(java.sql.SQLException error) {
+            super(error.getMessage(), error, false, false);
+            this.error = error;
+        }
+    }
+
+    /**
+     * Tells whether DuckDB refused a remote file because its ETag differs from the one this
+     * connection saw before (the object was rewritten). DuckDB keeps a file's metadata per
+     * connection, so the first query after a rewrite fails and the next one reads the new file.
+     *
+     * @param e DuckDB's error
+     * @return true for httpfs's "ETag ... was initially ... and now it returned ..." error
+     */
+    public static boolean remoteFileChanged(java.sql.SQLException e) {
+        String message = e.getMessage();
+        return message != null && message.contains("ETag on reading file")
+                && message.contains("was initially") && message.contains("remote file has changed");
+    }
+
+    /**
+     * Logs that a query runs again after a changed remote file was refused.
+     *
+     * @param e the refusal
+     */
+    private static void logChangedFileRetry(ChangedFileBeforeStart e) {
+        LOGGER.info("qid={} node={} duckdb=changedFileRetry error={}", LogUtil.qid(), LogUtil.node(),
+                firstLine(String.valueOf(e.error.getMessage())));
     }
 
     /**
@@ -1378,7 +1434,14 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = threadSession.get();
         try {
-            streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+            try {
+                streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+            } catch (ChangedFileBeforeStart e) {
+                logChangedFileRetry(e);
+                streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+            }
+        } catch (ChangedFileBeforeStart e) {
+            throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
             throw e;
