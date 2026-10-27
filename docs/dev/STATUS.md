@@ -27,7 +27,7 @@
 > and the speed comparison in `docs/dev/UPSTREAM-SYNC.md`; each one: code + tests + CI green + a `package=true` pre-release when it
 > changes runtime behaviour, so the coordinator can measure it on the stand):
 > 1. ~~item 14 - DuckDB 1.5.6~~ - code done 2026-10-27 (see item 14 and Log); stand rerun pending.
-> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query).
+> 2. item 15 - per-query overhead (target <= 3 ms over plain DuckDB for a point query) - step 1 done 2026-10-27 (describe cache, see item 15); stand measure pending, then decide on step 2.
 > 3. item 0g - S3 connections: reuse/pool connections so 32 clients x 8 threads do not exhaust local ports (TIME_WAIT).
 > 4. item 17 (new) - S3 read path: a memory-bounded DuckDB external file cache (unbounded it was ~40x faster on S3 but OOM-killed
 >    the server), parallel range reads / prefetch, metadata (footer, listing) cache. Goal: close the 2-3x gap to HDFS.
@@ -343,6 +343,21 @@
     *Stand 2026-10-27 (p156, DuckDB 1.5.6 build 27f583adccd7 vs 57d252b1437f):* single-client latency improved ~17 %, but
     under concurrency it got worse: JDBC c8 p95 +18 %, c32 p50 +13-15 % (JDBC and ADBC), consistent over 3 rounds. Check whether
     1.5.6 needs different per-connection settings (threads / scheduler / connection reuse) and include c8/c32 in the target.
+    **Step 1 done 2026-10-27 (775100b, CI run 40453394028 green, pre-release `server-1.0.0-775100bf923f`; see Log).** Local profile (`PointQueryOverheadPerfTest`, tag `perf`, 4 cores,
+    client in the same JVM, 400k rows / 4 files, varying literal per query): plain DuckDB point 1.7 ms; over Flight in
+    complete mode (default) 14.0 ms = prepare 3.6 + GetFlightInfo 3.7 + DoGet 5.0 + close 1.2. Cause: three DuckDB
+    describes and four parse checks of the same text per query (prepare: result + parameter schema; GetFlightInfo:
+    result again). Now one description per (text, views snapshot) serves both, the describe connection keeps its
+    parse-check statement, close does not wait for Hazelcast: 10.2 ms (prepare 1.9, info 2.2, DoGet 4.7, close 1.0),
+    c8 p50 31 -> 22 ms, c32 94 -> 58 ms. Server-side work left per query: describe ~0.4 ms, DoGet parse check +
+    prepare + run ~1.8 ms (raw 1.5-1.7), Hazelcast ~0.05 ms; the rest is the 4 gRPC calls stock clients make (~1 ms
+    each here). **Stand:** rerun small JDBC/ADBC c1/c8/c32 on the pre-release of this commit vs 27f583a.
+    **Step 2 candidates (not done):** (a) partial mode prepare costs ~17 ms locally: `resultSchema` misses its
+    cache for every new literal and lists the table's files for a sample file each time (`sampleFile` 3.4 ms on a
+    local dir, an RPC on HDFS) - cache the sample file per table with the listing's TTL; (b) the INFO line
+    `executionPath=...` per DoGet goes through slf4j-simple to stderr synchronously (contention at c32): consider
+    DEBUG or an async logger (log change -> ask); (c) the DoGet parse check repeats the describe's (needed: DoGet can
+    reach a node that did not describe).
 16. **Single-stream scan throughput** (same comparison): upstream native (defaults `preserve_insertion_order=false`,
     `streaming_buffer_size=64MiB`, DuckDB 1.5.6) streams one full `lineitem` scan at 1510 MB/s with 8 threads vs ~950 MB/s
     for ours at any thread count (4 and 8 concurrent scans: equal). Measure our opt-ins `duckDbPreserveInsertionOrder=false`
@@ -931,3 +946,12 @@
   11.5/14.7/18.7 ms; JDBC 18.9/23.9/32.7 vs 24.5/30.5/37.3, upstream 22.0/22.8/18.9 ms. DuckDB 1.5.6 closes ~59 % of the
   small-query gap to upstream (sum of these classes, both clients): point lookups nearly closed, count_filter 25-37 %
   (rest = item 15). Upstream again ran out of memory under c8/c32 and returned wrong LIMIT / TPC-H answers.
+- 2026-10-27 (cloud session): item 15 step 1 (775100b). Profiled a point query phase by phase with the new
+  `PointQueryOverheadPerfTest` (tag `perf`, not in CI): complete mode did three DuckDB describes and four parse checks
+  of the same text per JDBC/ADBC query. `DuckDbAdapter` now keeps one description (result + parameter schema) per
+  (text, views snapshot identity), bounded to 1024 texts (metric label `describe`); the describe connection keeps its
+  parse-check statement; `forgetParameters` uses `deleteAsync`. Local: point p50 14.0 -> 10.2 ms, c8 31 -> 22, c32 94
+  -> 58 ms (plain DuckDB 1.7 ms); no wire, setting or answer change. Tests: `DuckDbAdapterTest.describeCompleteIsReused
+  UntilTheViewsChange`, `ClusterServiceTest.forgetParametersDoesNotWait`. CI run 40453394028 green; package run
+  40454083694 green: pre-release `server-1.0.0-775100bf923f`. Next: stand rerun of the small-query rounds on it
+  (item 15 Stand); step 2 candidates listed in item 15 (partial-mode sample-file listing first).
