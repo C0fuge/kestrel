@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests that a client asking for {@code arrow-compression: zstd} gets compressed
+ * Tests that a client asking for {@code arrow-compression: zstd} or {@code lz4} gets compressed
  * batches with the same answer as a plain read, in both result modes, and that clients that do
  * not ask keep getting plain batches.
  */
@@ -85,7 +85,7 @@ class StreamCompressionIntegrationTest {
     }
 
     /**
-     * Verifies zstd reads return the plain answer in both result modes and the batches
+     * Verifies zstd and lz4 reads (lz4 decoded by commons-compress) return the plain answer in both result modes and the batches
      * really were compressed.
      *
      * @throws Exception on query failure
@@ -96,7 +96,7 @@ class StreamCompressionIntegrationTest {
         for (String mode : List.of("partial", "complete")) {
             List<String> plain = read(sql, mode, null);
             assertEquals(ROWS, plain.size(), mode);
-            for (String codec : List.of("zstd")) {
+            for (String codec : List.of("zstd", "lz4")) {
                 long before = CompressionMetrics.compressedBatches();
                 assertEquals(plain, read(sql, mode, codec), mode + " " + codec);
                 assertTrue(CompressionMetrics.compressedBatches() > before, mode + " " + codec);

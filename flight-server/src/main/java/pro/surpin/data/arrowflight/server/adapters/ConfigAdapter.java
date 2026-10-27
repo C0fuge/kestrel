@@ -192,7 +192,7 @@ public class ConfigAdapter {
     }
 
     /**
-     * Resolves the stream compression settings: {@code flightCompression} (none or zstd; codec
+     * Resolves the stream compression settings: {@code flightCompression} (none, zstd or lz4; codec
      * for calls without the {@code arrow-compression} header), {@code flightCompressionLevel}
      * (Zstandard level) and {@code flightCompressionMinBytes} (smaller batches go plain).
      *

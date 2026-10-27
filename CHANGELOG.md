@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- LZ4 compression of result streams (item 20, step (b)): `arrow-compression: lz4` (also `lz4_frame`) and
+  `flightCompression=lz4` send Arrow LZ4_FRAME batches, compressed by our own codec on lz4-java (JNI) from the
+  runtime libs set straight between Arrow buffers (~510 MB/s single thread vs ZSTD level 1 ~330 MB/s, at half
+  ZSTD's ratio on small longs). Was refused before; refused still when lz4-java is not on the class path. Java
+  Flight clients decode it with `arrow-compression` + `commons-compress`.
 - Opt-in Zstandard compression of result streams (item 20, step 1): a client that sends `arrow-compression: zstd`
   gets Arrow IPC batches with ZSTD body compression (level `flightCompressionLevel`, default 1); batches under
   `flightCompressionMinBytes` (64 KiB) and streams whose batches do not shrink go plain; `flightCompression`

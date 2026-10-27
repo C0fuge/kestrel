@@ -298,14 +298,16 @@ each stream gets budget / open streams (at least 1 MiB, at most the per-stream t
 for its client beyond that. Many concurrent scans then slow down instead of running the node out of
 direct memory (streams CANCELLED "Server sendMessage() failed with Error", container killed).
 
-Result streams can be sent with Arrow IPC body compression (Zstandard) for slow links. It is off unless
-asked: a client sends the call header `arrow-compression: zstd` (or `none`) on its DoGet calls, and must be
-able to decode compressed batches (pyarrow, ADBC C++/Go; Java Flight with `arrow-compression` and `zstd-jni`
-on its class path; the stock Flight SQL JDBC driver cannot). `flightCompression=zstd` makes it the default
-for calls without the header, which breaks clients without the codec. `flightCompressionLevel` (default 1)
-is the Zstandard level; batches with fewer than `flightCompressionMinBytes` body bytes (default 65536) go
-plain, and a stream whose first 4 compressed batches do not shrink by a tenth sends the rest plain. Any
-other header value (`lz4` included, not available yet) is refused with INVALID_ARGUMENT. Counters
+Result streams can be sent with Arrow IPC body compression (Zstandard or LZ4 frames) for slow links. It is
+off unless asked: a client sends the call header `arrow-compression: zstd` or `lz4` (or `none`) on its DoGet
+calls, and must be able to decode compressed batches (pyarrow, ADBC C++/Go; Java Flight with
+`arrow-compression` and `zstd-jni` for zstd, or `commons-compress` for lz4, on its class path; the stock Flight
+SQL JDBC driver cannot). `flightCompression=zstd` (or `lz4`) makes it the default for calls without the
+header, which breaks clients without the codec. `flightCompressionLevel` (default 1) is the Zstandard level;
+LZ4 has no level and costs less CPU per byte for a lower ratio. The server compresses LZ4 with lz4-java from
+the runtime libs set (`libs/`); without it `lz4` is refused. Batches with fewer than
+`flightCompressionMinBytes` body bytes (default 65536) go plain, and a stream whose first 4 compressed batches
+do not shrink by a tenth sends the rest plain. Any other header value is refused with INVALID_ARGUMENT. Counters
 `arrowflight_flight_compressed_batches_total`, `arrowflight_flight_compression_{input,output}_bytes_total`,
 `_plain_batches_total` and `_given_up_streams_total` are on `/metrics`.
 

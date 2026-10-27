@@ -49,7 +49,9 @@ class StreamCompressionTest {
     @Test
     void parsesCodecNames() {
         assertEquals(StreamCompression.Codec.ZSTD, StreamCompression.parse(" ZSTD "));
-        assertThrows(IllegalArgumentException.class, () -> StreamCompression.parse("lz4"));
+        assertEquals(StreamCompression.Codec.LZ4, StreamCompression.parse("lz4"));
+        assertEquals(StreamCompression.Codec.LZ4, StreamCompression.parse("LZ4_FRAME"));
+        assertEquals(StreamCompression.Codec.LZ4, StreamCompression.parse("lz4-frame"));
         assertEquals(StreamCompression.Codec.NONE, StreamCompression.parse("none"));
         assertThrows(IllegalArgumentException.class, () -> StreamCompression.parse("gzip"));
     }
@@ -73,9 +75,8 @@ class StreamCompressionTest {
         FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
                 () -> call(plain, "brotli").wrap(listener));
         assertEquals(CallStatus.INVALID_ARGUMENT.code(), e.status().code());
-        FlightRuntimeException lz4 = assertThrows(FlightRuntimeException.class,
-                () -> call(plain, "lz4").wrap(listener));
-        assertTrue(lz4.getMessage().contains("lz4 is not available"), lz4.getMessage());
+        assertEquals(StreamCompression.Codec.LZ4, call(zstd, "lz4").codec());
+        assertInstanceOf(CompressingStreamListener.class, call(plain, "lz4").wrap(listener));
     }
 
     /**
@@ -89,6 +90,8 @@ class StreamCompressionTest {
                 "flightCompression", "zstd", "arrowflight.flight.compressionLevel", "5",
                 "flightCompressionMinBytes", "0")));
         assertEquals(new StreamCompression.Settings(StreamCompression.Codec.ZSTD, 5, 0), set);
+        assertEquals(StreamCompression.Codec.LZ4, ConfigAdapter.streamCompression(
+                source(Map.of("flightCompression", "lz4"))).defaultCodec());
         assertThrows(IllegalArgumentException.class,
                 () -> ConfigAdapter.streamCompression(source(Map.of("flightCompression", "snappy"))));
         assertThrows(IllegalArgumentException.class,
@@ -106,7 +109,8 @@ class StreamCompressionTest {
         try (BufferAllocator allocator = new RootAllocator();
                 VectorSchemaRoot root = VectorSchemaRoot.of(new BigIntVector("id", allocator));
                 VectorSchemaRoot copy = VectorSchemaRoot.create(root.getSchema(), allocator)) {
-            for (StreamCompression.Codec codec : new StreamCompression.Codec[]{StreamCompression.Codec.ZSTD}) {
+            for (StreamCompression.Codec codec : new StreamCompression.Codec[]{
+                    StreamCompression.Codec.ZSTD, StreamCompression.Codec.LZ4}) {
                 CompressingStreamListener.Unloader unloader = new CompressingStreamListener.Unloader(root,
                         CompressingStreamListener.arrowCodec(codec, 1), 64 * 1024);
                 fill(root, 50_000);

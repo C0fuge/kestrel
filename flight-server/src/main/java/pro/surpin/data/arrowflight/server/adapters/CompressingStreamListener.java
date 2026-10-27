@@ -68,13 +68,14 @@ final class CompressingStreamListener implements FlightProducer.ServerStreamList
      * Creates the Arrow codec of a setting.
      *
      * @param codec codec
-     * @param zstdLevel Zstandard level
+     * @param zstdLevel Zstandard level, unused for LZ4
      * @return Arrow codec
      */
     static CompressionCodec arrowCodec(StreamCompression.Codec codec, int zstdLevel) {
         return switch (codec) {
             case ZSTD -> CommonsCompressionFactory.INSTANCE.createCodec(
                     CompressionUtil.CodecType.ZSTD, zstdLevel);
+            case LZ4 -> new Lz4FrameCodec();
             case NONE -> throw new IllegalArgumentException("No codec for NONE");
         };
     }

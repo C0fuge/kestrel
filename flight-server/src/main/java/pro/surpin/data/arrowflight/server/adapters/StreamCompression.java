@@ -10,7 +10,7 @@ import org.apache.arrow.flight.RequestContext;
 
 /**
  * Carries the Arrow IPC body compression of one call's streams: the codec a client asks for with
- * the {@code arrow-compression} header ({@code zstd} or {@code none}), else the
+ * the {@code arrow-compression} header ({@code zstd}, {@code lz4} or {@code none}), else the
  * server's {@code flightCompression} setting (default none). Clients that neither ask nor run
  * against a server set to compress get plain batches, as before.
  */
@@ -27,14 +27,16 @@ public final class StreamCompression implements FlightServerMiddleware {
         /** Plain batches. */
         NONE,
         /** Zstandard. */
-        ZSTD
+        ZSTD,
+        /** LZ4 frames (Arrow's LZ4_FRAME). */
+        LZ4
     }
 
     /**
      * Server settings of stream compression.
      *
      * @param defaultCodec codec for calls without the header
-     * @param zstdLevel Zstandard level
+     * @param zstdLevel Zstandard level (LZ4 has none)
      * @param minBatchBytes batches with fewer body bytes are sent plain
      */
     public record Settings(Codec defaultCodec, int zstdLevel, long minBatchBytes) {
@@ -81,20 +83,25 @@ public final class StreamCompression implements FlightServerMiddleware {
     /**
      * Reads a codec name.
      *
-     * @param value name, case-insensitive: none or zstd
+     * @param value name, case-insensitive: none, zstd or lz4 (also lz4_frame, lz4-frame)
      * @return codec
-     * @throws IllegalArgumentException if the name is unknown or lz4 (Arrow Java's LZ4 codec,
-     *     pure-Java commons-compress, compresses at well under 1 MB/s)
+     * @throws IllegalArgumentException if the name is unknown, or lz4 while lz4-java is not on
+     *     the class path
      */
     public static Codec parse(String value) {
         String name = value.trim().toLowerCase(Locale.ROOT);
         return switch (name) {
             case "", "none" -> Codec.NONE;
             case "zstd" -> Codec.ZSTD;
-            case "lz4", "lz4_frame", "lz4-frame" -> throw new IllegalArgumentException(
-                    "Unsupported " + HEADER + ": " + value + " (lz4 is not available yet, use zstd)");
+            case "lz4", "lz4_frame", "lz4-frame" -> {
+                if (!Lz4FrameCodec.available()) {
+                    throw new IllegalArgumentException("Unsupported " + HEADER + ": " + value
+                            + " (lz4 needs lz4-java of the runtime libs set on the class path, use zstd)");
+                }
+                yield Codec.LZ4;
+            }
             default -> throw new IllegalArgumentException("Unknown " + HEADER + ": " + value
-                    + " (expected none or zstd)");
+                    + " (expected none, zstd or lz4)");
         };
     }
 
