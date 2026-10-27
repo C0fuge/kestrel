@@ -10,6 +10,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Distributed complete mode, step 1 (item 18): `CompleteAnswerMerge` decides whether a query's
+  complete answer can be rebuilt from the answers its partial-mode endpoints give for their own
+  files and renders the DuckDB merge (rows concatenated; counts and sums summed, min/max taken
+  again per selected group; DISTINCT, ORDER BY over output columns and LIMIT applied again).
+  Refused, so answered as today: joins, OFFSET, HAVING, DISTINCT aggregates, avg and other
+  expressions, LIMIT on an aggregate, GROUP BY columns that are not selected, ORDER BY over
+  anything but an output column. Checked against DuckDB's own answer over all rows
+  (`CompleteAnswerMergeTest`). Not wired into query execution yet: no runtime change.
 - Tests (S3 read path, item 17): `S3IntegrationTest.repeatedQueriesReadOnlyTheRowGroupsTheyNeed`
   pins the request pattern of the s3 plugin's defaults on DuckDB 1.5.6 (a repeated query: no HEAD,
   no footer read, one GET per row group it reads; a pruned point query at most 2 GETs; with
