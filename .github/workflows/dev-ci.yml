@@ -44,22 +44,33 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: DuckDB extensions from ci-assets
+      - name: DuckDB extensions (ci-assets, else extensions.duckdb.org)
         env:
           GH_TOKEN: ${{ github.token }}
+          DUCKDB_VERSION: v1.5.6
         run: |
           set -euo pipefail
           ext="$RUNNER_TEMP/duckdb-ext"
           mkdir -p "$ext"
-          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
-            --pattern duckdb-extensions-v1.4.5.tar.zst --dir "$RUNNER_TEMP"
-          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-v1.4.5.tar.zst" -C "$ext"
+          # Prefer the ci-assets set (it also holds our hadoopfs build); until it has one for this
+          # DuckDB version, take the official httpfs/iceberg/avro builds.
+          if gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+              --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"; then
+            tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$ext"
+          else
+            dir="$ext/${DUCKDB_VERSION}/linux_amd64"
+            mkdir -p "$dir"
+            for name in httpfs iceberg avro; do
+              curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz" \
+                | gunzip > "$dir/${name}.duckdb_extension"
+            done
+          fi
           find "$ext" -name '*.duckdb_extension' | sort
-          # The tests want the directory that holds v1.4.5/linux_amd64/<name>.duckdb_extension.
-          iceberg=$(find "$ext" -path '*v1.4.5/linux_amd64/iceberg.duckdb_extension' | head -n 1)
-          httpfs=$(find "$ext" -path '*v1.4.5/linux_amd64/httpfs.duckdb_extension' | head -n 1)
-          test -n "$iceberg" || { echo "no v1.4.5/linux_amd64/iceberg.duckdb_extension in the asset"; exit 1; }
-          test -n "$httpfs" || { echo "no v1.4.5/linux_amd64/httpfs.duckdb_extension in the asset"; exit 1; }
+          # The tests want the directory that holds <version>/linux_amd64/<name>.duckdb_extension.
+          iceberg=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/iceberg.duckdb_extension" | head -n 1)
+          httpfs=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension" | head -n 1)
+          test -n "$iceberg" || { echo "no ${DUCKDB_VERSION}/linux_amd64/iceberg.duckdb_extension"; exit 1; }
+          test -n "$httpfs" || { echo "no ${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension"; exit 1; }
           echo "ICEBERG_EXT_DIR=$(dirname "$(dirname "$(dirname "$iceberg")")")" >> "$GITHUB_ENV"
           echo "DUCKDB_HTTPFS_EXTENSION=$httpfs" >> "$GITHUB_ENV"
 

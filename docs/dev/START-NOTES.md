@@ -32,7 +32,7 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
     --data-dir <dir or s3://bucket/prefix> --localhost <this host> --port 32010 --hosts <host1,host2,...>
 ```
 
-- DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.4.5 must be installed as on the stand; the server
+- DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
   checks the extension versions at startup.
 - DuckDB runs 4 threads per connection by default (`duckDbThreads`, was 2); set `-DduckDbThreads=1` /
   `FLIGHT_DUCKDB_THREADS=1` where compute workers share the node.

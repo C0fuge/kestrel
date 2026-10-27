@@ -28,7 +28,7 @@
         <jackson.version>2.22.3</jackson.version>
         <!-- Same as flight-server. -->
         <hadoop.version>3.5.0</hadoop.version>
-        <duckdb.version>1.4.5.0</duckdb.version>
+        <duckdb.version>1.5.6.0</duckdb.version>
         <!-- Directory with v<duckdb>/<platform>/{iceberg,avro}.duckdb_extension; tests that need
              DuckDB's iceberg extension are skipped without it. -->
         <iceberg.it.extensionDir></iceberg.it.extensionDir>

@@ -50,7 +50,7 @@ class CatalogRegistryTest {
         sys = new HashMap<>();
         sys.put("arrowflight.iceberg-hadoop.warehouse", warehouse.toString());
         // Any file will do: the extensions are only named here, never loaded.
-        Path ext = Files.createDirectories(dir.resolve("ext/v1.4.5/linux_amd64"));
+        Path ext = Files.createDirectories(dir.resolve("ext/v1.5.6/linux_amd64"));
         Files.writeString(ext.resolve("iceberg.duckdb_extension"), "x");
         Files.writeString(ext.resolve("avro.duckdb_extension"), "x");
         sys.put("duckDbIcebergExtension", ext.resolve("iceberg.duckdb_extension").toString());

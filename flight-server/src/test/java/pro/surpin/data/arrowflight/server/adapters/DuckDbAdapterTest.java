@@ -1580,7 +1580,7 @@ class DuckDbAdapterTest {
         }
     }
 
-    /** Verifies the bundled DuckDB is 1.4.5: 1.4.1-1.4.3 have the q04 hash-aggregate bug (fixed in 1.4.4). */
+    /** Verifies the bundled DuckDB is 1.5.6: 1.4.1-1.4.3 have the q04 hash-aggregate bug (fixed in 1.4.4). */
     @Test
     void bundledDuckDbHasTheHashAggregateFix() throws Exception {
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
@@ -1588,7 +1588,7 @@ class DuckDbAdapterTest {
                 ResultSet rs = s.executeQuery("SELECT library_version FROM pragma_version()")) {
             assertTrue(rs.next());
             // The extension files (hadoopfs, httpfs) are built for exactly this version.
-            assertEquals("v1.4.5", rs.getString(1));
+            assertEquals("v1.5.6", rs.getString(1));
         }
     }
 
@@ -1698,7 +1698,7 @@ class DuckDbAdapterTest {
      * Verifies the startup check of the lockdown (LockdownCheck) passes with the real hadoopfs
      * extension and an hdfs:// root on the bundled DuckDB, which shows that root as
      * {@code hdfs:/...} in allowed_directories, and that HDFS paths outside it stay refused.
-     * Runs only with {@code -Dhadoopfs.it.extension=<hadoopfs.duckdb_extension of v1.4.5>}.
+     * Runs only with {@code -Dhadoopfs.it.extension=<hadoopfs.duckdb_extension of v1.5.6>}.
      */
     @Test
     void hadoopfsUnderTheLockdownPassesTheStartupCheck(

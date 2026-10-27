@@ -369,6 +369,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Package renamed from `net.surpin` to `pro.surpin`
 
 ### Changed
+- DuckDB 1.5.6 (was 1.4.5; `duckdb_jdbc` 1.5.6.0): plain DuckDB answers a point lookup ~2x faster
+  on the stand files. Deployments need the httpfs, iceberg, avro and hadoopfs extension files of
+  v1.5.6 (the startup check refuses other versions); Dev CI takes them from `ci-assets` or, until a
+  v1.5.6 set is there, the official httpfs/iceberg/avro builds.
 - `duckDbThreads` defaults to 4 (was 2 in the bundled `arrowflight.properties`, 1 in code): SF10 1.8x and SF1
   1.3x faster on the stand for +2.6 ms on a point lookup (docs/dev/TUNING.md). Set 1 where compute shares the node.
 - Partial results of Iceberg tables with delete files: a snapshot with position and/or equality

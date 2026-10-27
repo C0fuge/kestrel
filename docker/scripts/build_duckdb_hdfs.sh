@@ -3,8 +3,9 @@ set -e
 
 # DuckDB core the extension is built against: must equal duckdb.version in flight-server/pom.xml
 # (DuckDB loads only extensions of its exact version).
-DUCKDB_HDFS_VERSION=${DUCKDB_HDFS_VERSION:-1.4.5}
-# Extension source tag (vincent-chang/duckdb-hdfs has no v1.4.5 tag; v1.4.1 builds against 1.4.5).
+DUCKDB_HDFS_VERSION=${DUCKDB_HDFS_VERSION:-1.5.6}
+# Extension source tag (vincent-chang/duckdb-hdfs has no v1.4.5 / v1.5.6 tag; v1.4.1 builds against
+# 1.4.5; for 1.5.6 the patched build (51b7220-afc3 / v1.5.6) is made outside this repository).
 # This upstream source has no hdfs_connect_timeout_ms / hdfs_read_timeout_ms settings and no
 # HDFS read error handling: the server then logs one warning and libhdfs3's timeouts apply. The
 # patched build (51b7220-afc2) is made from the same source plus patches outside this repository.

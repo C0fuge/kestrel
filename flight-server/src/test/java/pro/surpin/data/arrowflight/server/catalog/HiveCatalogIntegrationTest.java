@@ -399,7 +399,7 @@ class HiveCatalogIntegrationTest {
     }
 
     private static String directIceberg(String metadataLocation) throws Exception {
-        Path ext = Path.of(extensionDir, "v1.4.5", "linux_amd64");
+        Path ext = Path.of(extensionDir, "v1.5.6", "linux_amd64");
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = conn.createStatement()) {
             s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");

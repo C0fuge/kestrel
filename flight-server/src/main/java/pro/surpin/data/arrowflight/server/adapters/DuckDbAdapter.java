@@ -289,7 +289,7 @@ public final class DuckDbAdapter implements AutoCloseable {
 
         this.tempRoot = createTempRoot(appConfig.duckDbTempDirectory());
         if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null) {
-            // An extension file of another DuckDB version (hadoopfs v1.4.1 next to DuckDB 1.4.5)
+            // An extension file of another DuckDB version (hadoopfs v1.4.5 next to DuckDB 1.5.6)
             // stops the server here instead of failing every query.
             verifyStorageSetup();
         }

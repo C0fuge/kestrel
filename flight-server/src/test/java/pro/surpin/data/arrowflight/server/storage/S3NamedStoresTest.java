@@ -41,7 +41,7 @@ class S3NamedStoresTest {
         support = new S3PluginSupport(dir);
         IcebergTestTables.installPlugin(support.plugins);
         s3 = FakeS3.start();
-        Path ext = Files.createDirectories(dir.resolve("ext/v1.4.5/linux_amd64"));
+        Path ext = Files.createDirectories(dir.resolve("ext/v1.5.6/linux_amd64"));
         for (String name : List.of("httpfs", "iceberg", "avro")) {
             Path file = Files.writeString(ext.resolve(name + ".duckdb_extension"), "x");
             support.properties.put("duckDb" + Character.toUpperCase(name.charAt(0))

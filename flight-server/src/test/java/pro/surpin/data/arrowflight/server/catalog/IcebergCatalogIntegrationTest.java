@@ -53,7 +53,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
  * Runs the server with the iceberg plugin over Iceberg tables written by Iceberg Java: an
  * iceberg-hadoop catalog (warehouse directory) and an iceberg-rest catalog (fake REST server over
  * a second warehouse), next to a Parquet directory table, under the DuckDB lockdown with the real
- * iceberg/avro extensions v1.4.5 ({@code -Diceberg.it.extensionDir}; skipped without it).
+ * iceberg/avro extensions v1.5.6 ({@code -Diceberg.it.extensionDir}; skipped without it).
  * Complete answers are compared with DuckDB reading the same metadata directly; partial answers
  * with complete ones (also on a snapshot with deletes, file by file); snapshots with nested
  * changes, and joins, are answered completely; a planned snapshot stays pinned after a commit;
@@ -79,7 +79,7 @@ class IcebergCatalogIntegrationTest {
     static void start() throws Exception {
         extensionDir = IcebergTestTables.extensionDir();
         Assumptions.assumeTrue(extensionDir != null,
-                "needs -Diceberg.it.extensionDir with v1.4.5/linux_amd64/{iceberg,avro}.duckdb_extension");
+                "needs -Diceberg.it.extensionDir with v1.5.6/linux_amd64/{iceberg,avro}.duckdb_extension");
         Assumptions.assumeTrue(IcebergTestTables.available(), "flight-plugin-iceberg is not built");
         warehouse = dir.resolve("wh").toString();
         restWarehouse = dir.resolve("wh-rest").toString();
@@ -487,7 +487,7 @@ class IcebergCatalogIntegrationTest {
     }
 
     private static String direct(String metadataLocation) throws Exception {
-        Path ext = Path.of(extensionDir, "v1.4.5", "linux_amd64");
+        Path ext = Path.of(extensionDir, "v1.5.6", "linux_amd64");
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = conn.createStatement()) {
             s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");
@@ -511,7 +511,7 @@ class IcebergCatalogIntegrationTest {
      * @return snapshot ID and commit time in epoch milliseconds
      */
     private static long[] snapshot(String metadataLocation, String order) throws Exception {
-        Path ext = Path.of(extensionDir, "v1.4.5", "linux_amd64");
+        Path ext = Path.of(extensionDir, "v1.5.6", "linux_amd64");
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = conn.createStatement()) {
             s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");

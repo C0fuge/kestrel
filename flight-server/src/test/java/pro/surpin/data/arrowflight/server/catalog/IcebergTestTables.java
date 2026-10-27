@@ -33,7 +33,7 @@ public final class IcebergTestTables {
 
     /**
      * Returns the directory with v&lt;version&gt;/&lt;platform&gt;/{iceberg,avro}.duckdb_extension
-     * ({@code -Diceberg.it.extensionDir}), when it has the files for DuckDB 1.4.5 on linux_amd64.
+     * ({@code -Diceberg.it.extensionDir}), when it has the files for DuckDB 1.5.6 on linux_amd64.
      *
      * @return directory, or null to skip the tests that need DuckDB's iceberg extension
      */
@@ -42,7 +42,7 @@ public final class IcebergTestTables {
         if (dir.isBlank()) {
             return null;
         }
-        Path files = Path.of(dir, "v1.4.5", "linux_amd64");
+        Path files = Path.of(dir, "v1.5.6", "linux_amd64");
         return Files.isRegularFile(files.resolve("iceberg.duckdb_extension"))
                 && Files.isRegularFile(files.resolve("avro.duckdb_extension")) ? dir : null;
     }
