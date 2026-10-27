@@ -237,6 +237,96 @@ class CatalogSourcesDeletesTest {
         assertEquals(expectedCount(r -> !"l9".equals(r.label())), counted);
     }
 
+    /**
+     * Verifies many data files that share their delete files (as after a MERGE: one position
+     * delete file naming rows of every file, and of a file the plan does not give them) are read
+     * in one branch that reads the delete files once, with the right rows dropped from each
+     * file; a subset reads its files only, and a column named {@code file_index} keeps one
+     * branch per file.
+     *
+     * @throws Exception on DuckDB errors
+     */
+    @Test
+    void manyFilesSharingTheirDeletesReadInOneBranch() throws Exception {
+        int fileCount = 40;
+        int rowsPerFile = 100;
+        Path merged = dir.resolve("merged");
+        merged.toFile().mkdirs();
+        List<TableFile> files = new ArrayList<>();
+        StringBuilder positions = new StringBuilder();
+        Set<Long> deleted = new java.util.HashSet<>();
+        String eq = merged.resolve("eq.parquet").toString();
+        try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = c.createStatement()) {
+            for (int f = 0; f <= fileCount; f++) {
+                String location = merged.resolve("d" + f + ".parquet").toString();
+                s.execute("COPY (SELECT range AS id, 'l' || (range % 50) AS label,"
+                        + " CAST(range % 7 AS DOUBLE) AS v, CAST(range % 5 AS INTEGER) AS grp FROM range("
+                        + (long) f * rowsPerFile + ", " + (long) (f + 1) * rowsPerFile + ")) TO '"
+                        + location + "' (FORMAT parquet, FIELD_IDS {id: 1, label: 2, v: 3, grp: 4})");
+                for (long pos = f % 3; pos < rowsPerFile; pos += 7 + f % 5) {
+                    positions.append(positions.isEmpty() ? "" : ", ").append("('")
+                            .append(f % 2 == 0 ? "file:" : "").append(location).append("', ")
+                            .append(pos).append(')');
+                    if (f < fileCount) {
+                        deleted.add((long) f * rowsPerFile + pos);
+                    }
+                }
+            }
+            s.execute("COPY (SELECT * FROM (VALUES " + positions + ") t(file_path, pos)) TO '"
+                    + merged.resolve("pos.parquet") + "' (FORMAT parquet,"
+                    + " FIELD_IDS {file_path: 2147483546, pos: 2147483545})");
+            s.execute("COPY (SELECT * FROM (VALUES ('l3')) t(lbl)) TO '" + eq
+                    + "' (FORMAT parquet, FIELD_IDS {lbl: 2})");
+        }
+        List<DeleteFile> deletes = List.of(
+                new DeleteFile(merged.resolve("pos.parquet").toString(), 2, DeleteFile.Kind.POSITION,
+                        List.of()),
+                new DeleteFile(eq, 2, DeleteFile.Kind.EQUALITY, List.of(2)));
+        // The last file is not in the plan: its position deletes must not touch the others.
+        for (int f = 0; f < fileCount; f++) {
+            files.add(new TableFile(merged.resolve("d" + f + ".parquet").toString(), 1, 0, Set.of(),
+                    Map.of(), rowsPerFile, deletes));
+        }
+        TableSnapshot merge = new TableSnapshot(new TableName("ice", "m"), "1.0", "f", columns(),
+                List.of(), files, snapshot.read());
+        List<Long> expectedIds = new ArrayList<>();
+        for (long id = 0; id < (long) fileCount * rowsPerFile; id++) {
+            if (!deleted.contains(id) && id % 50 != 3) {
+                expectedIds.add(id);
+            }
+        }
+        String t = CatalogSources.deletesAppliedSource(merge, files);
+        assertFalse(t.contains("UNION ALL"), t);
+        assertEquals(3, t.split("read_parquet", -1).length - 1, t);
+        assertEquals(expectedIds, ids("SELECT id FROM " + t + " ORDER BY id"));
+        assertEquals(expectedIds.stream().filter(id -> id % 2 == 0).count(),
+                count("SELECT count(*) FROM " + t + " WHERE id % 2 = 0"));
+        List<TableFile> some = List.of(files.get(7), files.get(3));
+        assertEquals(expectedIds.stream().filter(id -> id / rowsPerFile == 3 || id / rowsPerFile == 7)
+                .toList(), ids("SELECT id FROM " + CatalogSources.deletesAppliedSource(merge, some)
+                        + " ORDER BY id"));
+        List<ColumnSpec> shadowing = new ArrayList<>(columns());
+        shadowing.add(new ColumnSpec("File_Index", "INTEGER", true, 5));
+        TableSnapshot shadowed = new TableSnapshot(merge.name(), "1.0", "f", shadowing, List.of(),
+                some, merge.read());
+        String perFile = CatalogSources.deletesAppliedSource(shadowed, some);
+        assertTrue(perFile.contains("UNION ALL"), perFile);
+        assertEquals(expectedIds.stream().filter(id -> id / rowsPerFile == 3 || id / rowsPerFile == 7)
+                .toList(), ids("SELECT id FROM " + perFile + " ORDER BY id"));
+    }
+
+    private static List<Long> ids(String sql) throws Exception {
+        List<Long> ids = new ArrayList<>();
+        try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = c.createStatement(); ResultSet rs = s.executeQuery(sql)) {
+            while (rs.next()) {
+                ids.add(rs.getLong(1));
+            }
+        }
+        return ids;
+    }
+
     /** Verifies the cases the source does not cover are left to iceberg_scan. */
     @Test
     void unsupportedDeletesAreRefused() {

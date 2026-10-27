@@ -24,6 +24,7 @@ public final class CatalogSources {
 
     /** Row number column read_parquet adds for position deletes. */
     private static final String ROW_NUMBER = "file_row_number";
+    private static final String FILE_INDEX = "file_index";
 
     private CatalogSources() {
     }
@@ -93,8 +94,9 @@ public final class CatalogSources {
      * file and row number, or when an equality delete row has the same values (null matching
      * null) in that delete's equality columns (anti hash joins). Which delete files apply to which data file
      * (sequence numbers, partitions) is the catalog's plan, as in {@link TableFile#deletes()}.
-     * Files with the same delete files share one read_parquet; a file with position deletes is
-     * read alone, with its row numbers. Unlike DuckDB 1.4.5's iceberg_scan this reads only the
+     * Files with the same delete files share one read_parquet; their position delete files are
+     * read once and matched by file index and row number (a file reads alone when a column is
+     * named {@code file_index}). Unlike DuckDB 1.4.5's iceberg_scan this reads only the
      * columns a query uses (plus the equality columns), and a query's filters may go into the
      * scans.
      *
@@ -109,39 +111,84 @@ public final class CatalogSources {
         if (byFieldId == null) {
             return null;
         }
-        // Data files grouped by their delete files; a file with position deletes on its own.
+        // Data files grouped by their delete files: one read_parquet per group.
         Map<List<DeleteFile>, List<String>> groups = new LinkedHashMap<>();
-        List<TableFile> positional = new ArrayList<>();
         for (TableFile file : files) {
-            boolean positions = file.deletes().stream()
-                    .anyMatch(delete -> delete.kind() == DeleteFile.Kind.POSITION);
-            if (positions) {
-                positional.add(file);
-            } else {
-                groups.computeIfAbsent(file.deletes(), d -> new ArrayList<>()).add(file.location());
-            }
+            groups.computeIfAbsent(file.deletes(), d -> new ArrayList<>()).add(file.location());
         }
+        boolean indexShadowed = snapshot.columns().stream()
+                .anyMatch(column -> FILE_INDEX.equalsIgnoreCase(column.name()));
         List<String> branches = new ArrayList<>();
         for (Map.Entry<List<DeleteFile>, List<String>> group : groups.entrySet()) {
-            branches.add("SELECT del_d.* FROM " + fieldIdRead(snapshot.columns(), group.getValue(), "")
-                    + " AS del_d" + equalityJoins(group.getKey(), byFieldId));
-        }
-        for (TableFile file : positional) {
             List<String> positionFiles = new ArrayList<>();
-            for (DeleteFile delete : file.deletes()) {
+            for (DeleteFile delete : group.getKey()) {
                 if (delete.kind() == DeleteFile.Kind.POSITION) {
                     positionFiles.add(delete.location());
                 }
             }
-            String location = CatalogLocations.normalize(file.location());
-            branches.add("SELECT del_d.* EXCLUDE (" + ROW_NUMBER + ") FROM "
-                    + fieldIdRead(snapshot.columns(), List.of(location), ", " + ROW_NUMBER + " = true")
-                    + " AS del_d ANTI JOIN (SELECT pos FROM " + fileList(positionFiles) + ") WHERE "
-                    + normalizedLocation("file_path") + " = " + DuckDbAdapter.sqlStringLiteral(location)
-                    + ") AS del_p ON del_p.pos = del_d." + ROW_NUMBER
-                    + equalityJoins(file.deletes(), byFieldId));
+            if (positionFiles.isEmpty()) {
+                branches.add("SELECT del_d.* FROM " + fieldIdRead(snapshot.columns(), group.getValue(), "")
+                        + " AS del_d" + equalityJoins(group.getKey(), byFieldId));
+            } else if (group.getValue().size() == 1 || indexShadowed) {
+                for (String file : group.getValue()) {
+                    branches.add(positionBranch(snapshot, file, positionFiles, group.getKey(), byFieldId));
+                }
+            } else {
+                branches.add(positionGroupBranch(snapshot, group.getValue(), positionFiles,
+                        group.getKey(), byFieldId));
+            }
         }
         return "(" + String.join(" UNION ALL ", branches) + ")";
+    }
+
+    /**
+     * Reads one data file without the rows its position delete files name.
+     *
+     * @param snapshot snapshot with its columns
+     * @param file data file
+     * @param positionFiles position delete files of the data file
+     * @param deletes all delete files of the data file
+     * @param byFieldId the snapshot's columns by field ID
+     * @return SELECT of the declared columns
+     */
+    private static String positionBranch(TableSnapshot snapshot, String file,
+            List<String> positionFiles, List<DeleteFile> deletes, Map<Integer, ColumnSpec> byFieldId) {
+        String location = CatalogLocations.normalize(file);
+        return "SELECT del_d.* EXCLUDE (" + ROW_NUMBER + ") FROM "
+                + fieldIdRead(snapshot.columns(), List.of(location), ", " + ROW_NUMBER + " = true")
+                + " AS del_d ANTI JOIN (SELECT pos FROM " + fileList(positionFiles) + ") WHERE "
+                + normalizedLocation("file_path") + " = " + DuckDbAdapter.sqlStringLiteral(location)
+                + ") AS del_p ON del_p.pos = del_d." + ROW_NUMBER
+                + equalityJoins(deletes, byFieldId);
+    }
+
+    /**
+     * Reads data files that share their delete files in one read_parquet, without the rows the
+     * position delete files name: the delete files are read once and matched to a data file by
+     * its index in the file list (DuckDB's {@code file_index}) and row number.
+     *
+     * @param snapshot snapshot with its columns
+     * @param files data files with the same delete files
+     * @param positionFiles their position delete files
+     * @param deletes all their delete files
+     * @param byFieldId the snapshot's columns by field ID
+     * @return SELECT of the declared columns
+     */
+    private static String positionGroupBranch(TableSnapshot snapshot, List<String> files,
+            List<String> positionFiles, List<DeleteFile> deletes, Map<Integer, ColumnSpec> byFieldId) {
+        StringBuilder indexes = new StringBuilder();
+        for (int i = 0; i < files.size(); i++) {
+            indexes.append(i > 0 ? ", " : "").append('(')
+                    .append(DuckDbAdapter.sqlStringLiteral(CatalogLocations.normalize(files.get(i))))
+                    .append(", ").append(i).append(')');
+        }
+        return "SELECT del_d.* EXCLUDE (" + ROW_NUMBER + ") FROM "
+                + fieldIdRead(snapshot.columns(), files, ", " + ROW_NUMBER + " = true")
+                + " AS del_d ANTI JOIN (SELECT del_m.i, del_q.pos FROM " + fileList(positionFiles)
+                + ") AS del_q JOIN (VALUES " + indexes + ") AS del_m(loc, i) ON "
+                + normalizedLocation("del_q.file_path") + " = del_m.loc) AS del_p ON del_p.i = del_d."
+                + FILE_INDEX + " AND del_p.pos = del_d." + ROW_NUMBER
+                + equalityJoins(deletes, byFieldId);
     }
 
     /**

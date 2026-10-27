@@ -165,6 +165,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Iceberg position deletes (item 2 (iii)): data files that share their delete files (as after a MERGE) are now read
+  in one `read_parquet` whose position delete files are read once and matched by DuckDB's `file_index` and the row
+  number, instead of one UNION ALL branch per data file that re-read every delete file. Local, 500 files x 2000 rows
+  with one shared position delete file: prepare ~750 -> ~20 ms, run ~1200 -> ~50 ms, same answer. A single file, and
+  any table with a column named `file_index`, keep the per-file form.
 - `duckDbThreads` default is size-aware (item 19, approved in stage 2): unset or 0 = a quarter of the cores the JVM
   sees, between 2 and 8 (4 cores: 2, 16: 4, 32+: 8; was a fixed 4). Every DuckDB connection (one per busy worker
   thread) runs that many threads, so 32 concurrent sessions at 4 threads on 4 cores oversubscribed the CPU (local
