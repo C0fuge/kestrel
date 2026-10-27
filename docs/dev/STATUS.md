@@ -38,7 +38,7 @@
 >    compression for small batches / when the ratio is poor; compress in parallel per batch without breaking the
 >    outbound budget (0f). Tests: same answers with and without compression for Java Flight, ADBC (C++/Go) and pyarrow;
 >    a CI perf test with `tc netem` delay 10 ms + rate 1 Gbit (MB/s, CPU, both codecs) - goal >= upstream's 264 MB/s.
->    *Step 1 done 2026-10-27 (6ca7352, see Log):* opt-in ZSTD per call (`arrow-compression: zstd|none` header on
+>    *Step 1 done 2026-10-27 (6ca7352 + 85aaf46, pre-release `server-1.0.0-85aaf4604d9a`, see Log):* opt-in ZSTD per call (`arrow-compression: zstd|none` header on
 >    DoGet) or server default `flightCompression` (none), `flightCompressionLevel` (1), `flightCompressionMinBytes`
 >    (64 KiB, smaller batches plain), a stream gives up after 4 batches that shrink < 10 %; metrics
 >    `arrowflight_flight_compress*`. Found: Arrow Java's LZ4_FRAME codec (commons-compress) cannot compress 8 MB in
@@ -1336,7 +1336,10 @@
   and `StreamCompressionIntegrationTest` (120k rows of mixed types incl. list/struct/decimal/NULLs: zstd answers =
   plain in partial and complete mode, compressed counter moves; no header / `none` stays plain; small answers plain;
   `gzip` refused). Local: those + ConfigAdapter/MetricsService/HadoopArrowFlightServer/FlightSqlProducer tests (98)
-  + checkstyle + spotbugs green. CI: package run 40587941135 (push run 40587917568). No local throughput numbers yet
+  + checkstyle + spotbugs green. CI: package run 40587941135 failed (`LibsSetTest`: arrow-compression's
+  commons-compress pulled commons-io out of the provided libs set into the jar); fixed in 85aaf46 by excluding
+  commons-compress (only Arrow's LZ4 codec needs it); package run 40589347178 green, pre-release
+  `server-1.0.0-85aaf4604d9a`. No local throughput numbers yet
   (no netem here): **Stand / screening:** with the pre-release, a pyarrow or ADBC client sending
   `arrow-compression: zstd` at 10 ms / 1 Gbit vs plain (MB/s, server CPU); level 1 vs 3.
   Next: item 20 (b)-(f), then item 21.
