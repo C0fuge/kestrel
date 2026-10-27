@@ -63,7 +63,8 @@
 >    `s3=cacheClosed` hit/miss line; expect repeated rounds near the HDFS numbers and no OOM. **Next steps of 17:**
 >    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
 >    ~~(b) lakeFS stores through the cache~~ (done 2026-10-27, 752e272: opt-in `arrowflight.lakefs.cacheMegabytes` /
->    `cacheCheckSeconds`, own cache per plugin class loader, metrics `arrowflight_lakefs_cache_*`; see Log); ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
+>    `cacheCheckSeconds`, own cache per plugin class loader, metrics `arrowflight_lakefs_cache_*`, pre-release
+>    `server-1.0.0-752e272b3ab6`; see Log); ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
 >    8625e28, pre-release `server-1.0.0-8625e28f08cd`: one S3 read per missed block for all concurrent requests,
 >    `joined=` in the `s3=cacheClosed` line); ~~(d) metrics~~ (done 2026-10-27, b28fedf, pre-release `server-1.0.0-b28fedf9edbf`:
 >    `arrowflight_s3_cache_*` on `/metrics` through the new SPI 1.3 `StoreContext.metrics()`, see Log). **Stand
@@ -1204,6 +1205,7 @@
   descriptor `spi=1.3`. Tests: `S3CacheEndpointTest` (+2), `LakeFsIntegrationTest.duckDbReadsThePinnedCommitThroughTheReadCache`
   (second connection 0 GETs to the gateway, moved branch read at its new commit, lakefs metrics; needs httpfs: CI).
   Local: s3 58 / lakefs 15 + checkstyle + spotbugs green, server LakeFs/S3/plugin/metrics tests 25 green. Package run
-  40525341020 (push run 40525325992 cancelled in its favour): RUNNING. **Stand** (optional, with the item 17 round):
+  40525341020 (push run 40525325992 cancelled in its favour): build + package green (server 784 / 2 skipped, the new
+  lakeFS IT ran), pre-release `server-1.0.0-752e272b3ab6`. **Stand** (optional, with the item 17 round):
   lakeFS SF1 per commit with `arrowflight.lakefs.cacheMegabytes=1024` vs off. Next: item 15 stand + close; then item 16 / 19
   (17 (a) waits for the local-disk question).
