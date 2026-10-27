@@ -856,7 +856,8 @@
   key lookups since 0d, so the storage is not the difference; how the nodes died is. Tests in
   `ClusterMemberLossIntegrationTest` (refused port < 5 s; vanished address with the timeout at 3 s via `-D` takes
   2-8 s — needs iptables as root or `sudo -n`, skipped otherwise); START-NOTES documents the window and the `-D`
-  override. Decision on faster detection stays in Open questions (0d follow-up). CI run 40428800760 on 9934d3b.
+  override. Decision on faster detection stays in Open questions (0d follow-up). CI run 40428800760 on 9934d3b
+  green (server 764 tests / 2 skipped = the usual two; the iptables case runs on the runner via sudo -n).
   Next: 0h (stand recheck), stand reruns (0g with `tcp_tw_reuse=1`, secure HA (b) without `kinit`, B5 kill mode),
   optional: expose the extension's `hdfs_dead_node_ttl_ms` as a server setting; 3-node S3 (a) (S3 outage read
   latency) partly covered by 0e's retry settings.
