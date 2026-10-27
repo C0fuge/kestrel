@@ -35,11 +35,17 @@ public final class CatalogSources {
      * @param snapshot snapshot with its columns
      * @param files files of the snapshot, with their partition values
      * @return FROM source
-     * @throws IllegalArgumentException when no file is given
+     * @throws IllegalArgumentException when no file is given, or the snapshot is read as Arrow
+     *         streams ({@link ArrowStreamScans})
      */
     public static String filesSource(TableSnapshot snapshot, List<TableFile> files) {
         if (files.isEmpty()) {
             throw new IllegalArgumentException("No data files of " + snapshot.name() + " to read");
+        }
+        if (snapshot.read() instanceof ReadSpec.ArrowStream stream) {
+            throw new IllegalArgumentException("The " + stream.format() + " files of "
+                    + snapshot.name() + " are read by their catalog as Arrow streams, not with"
+                    + " read_parquet");
         }
         if (snapshot.read() instanceof ReadSpec.IcebergMetadata) {
             List<String> locations = new ArrayList<>();

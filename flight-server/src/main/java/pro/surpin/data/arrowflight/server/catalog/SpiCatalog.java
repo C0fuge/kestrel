@@ -6,8 +6,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 import pro.surpin.data.arrowflight.server.plugin.ThreadContext;
+import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.AsOf;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
@@ -69,6 +71,14 @@ public final class SpiCatalog implements Catalog {
     public Optional<TableSnapshot> pinned(TableName table, String snapshotId) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.pinned(table, snapshotId);
+        }
+    }
+
+    @Override
+    public void exportArrowScan(TableSnapshot snapshot, List<TableFile> files, ArrowScan scan,
+            long streamAddress, Object allocator) throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            delegate.exportArrowScan(snapshot, files, scan, streamAddress, allocator);
         }
     }
 
