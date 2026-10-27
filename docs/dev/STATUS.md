@@ -319,7 +319,9 @@
     connector repo): Trino q18 fails "Java heap space" (6 GB heap) as soon as `endpointsPerServer` > 1.
 
 14. ~~**DuckDB 1.5.6**~~ — **code done 2026-10-27 (a442867 + 27f583a, CI run 40441645851 green, pre-release `server-1.0.0-27f583adccd7`); stand rerun
-    pending.** **Coordinator (done 2026-10-27: both files are in `ci-assets`, sha256 in its SHA256SUMS; build distributed to the client repos):** put `duckdb-extensions-v1.5.6.tar.zst` (httpfs, iceberg, avro, hadoopfs `51b7220-afc3` /
+    done 2026-10-27 (short check, single node HDFS: small JDBC/ADBC c1/c8/c32, JDBC TPC-H SF1/SF10, 3 rounds vs 57d252b and
+    upstream native; all checksums match; numbers in the Log). Not covered by this check: Trino, S3, Hive/Iceberg reference
+    queries, 3 nodes.** **Coordinator (done 2026-10-27: both files are in `ci-assets`, sha256 in its SHA256SUMS; build distributed to the client repos):** put `duckdb-extensions-v1.5.6.tar.zst` (httpfs, iceberg, avro, hadoopfs `51b7220-afc3` /
     v1.5.6 under `v1.5.6/linux_amd64/`) and `hadoopfs-v1.5.6-afc3.duckdb_extension` into `ci-assets` (Dev CI uses it
     when present, else the official httpfs/iceberg/avro builds); the stand needs the v1.5.6 extension set, the
     startup check refuses the 1.4.5 files. **Stand:** P4 small + TPC-H SF1/SF10 (checksums 9e2af63e8711 / 05bc0dc2713a)
@@ -916,3 +918,13 @@
   present, else downloads httpfs/iceberg/avro v1.5.6 from extensions.duckdb.org (hadoopfs IT stays skipped). CI run
   40441645851 on 27f583a green; package run 40442729111 green: pre-release `server-1.0.0-27f583adccd7`. Next: coordinator adds
   the v1.5.6 extension set (with hadoopfs) to ci-assets and reruns the stand (item 14 Stand); then item 15.
+- 2026-10-27 (maintainer's local agent): item 14 stand rerun (short): `server-1.0.0-27f583adccd7` (DuckDB 1.5.6, v1.5.6
+  extension set, hadoopfs 51b7220-afc3 loads) vs 57d252b (1.4.5) vs upstream native 07631d7 (duckDbThreads 8), single-node
+  HDFS stand, same tpch-only files and schema-qualified queries, 3 interleaved rounds, none discarded. TPC-H JDBC 22/22 PASS on
+  27f583a and 57d252b (SF10 9e2af63e8711, SF1 de713f9eea2f). 27f583a vs 57d252b, default 4 threads: small JDBC p50/p95 c1
+  18.1/33.4 vs 21.7/38.6 ms, c8 26.3/82.1 vs 27.0/69.6, c32 86.1/328 vs 76.0/354; ADBC c1 13.9/28.7 vs 16.5/34.6, c8 23.3/70.6
+  vs 23.7/67.4, c32 77.7/298 vs 67.5/302; TPC-H SF1 1.66 vs 1.82 s, SF10 11.42 vs 11.96 s. c1 p50 of the classes upstream
+  answers correctly (point_orders / point_lineitem / count_filter): ADBC 14.1/16.2/28.3 vs 19.6/24.5/33.9, upstream
+  11.5/14.7/18.7 ms; JDBC 18.9/23.9/32.7 vs 24.5/30.5/37.3, upstream 22.0/22.8/18.9 ms. DuckDB 1.5.6 closes ~59 % of the
+  small-query gap to upstream (sum of these classes, both clients): point lookups nearly closed, count_filter 25-37 %
+  (rest = item 15). Upstream again ran out of memory under c8/c32 and returned wrong LIMIT / TPC-H answers.
