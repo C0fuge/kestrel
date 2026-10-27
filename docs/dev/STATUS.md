@@ -344,7 +344,8 @@
 3. ~~**Iceberg time travel**~~ — done 2026-10-25 (see Log): `FOR VERSION AS OF <id | 'tag'>` / `FOR TIMESTAMP AS OF
    TIMESTAMP '<time> <zone>'` after an iceberg-hadoop / iceberg-rest table name, complete mode (rewritten to a read of
    the snapshot's own files, deletes and columns); partial mode answers such queries completely. Follow-ups (optional):
-   ~~(a) partial mode in parts~~ - done 2026-10-27 (b7be8d1, see Log): a partial query of one table with one clause
+   ~~(a) partial mode in parts~~ - done 2026-10-27 (b7be8d1, package run 40582448194 green, pre-release
+   `server-1.0.0-b7be8d166498`, see Log): a partial query of one table with one clause
    and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; (b) Iceberg tables registered in a Hive
    Metastore (`TableFormat` needs an `asOf`); (c) snapshots that cannot be read file by file (deletion vectors,
    renamed nested fields) are refused — `iceberg_scan(..., snapshot_from_id => )` could read them if DuckDB 1.4.5 picks
@@ -1292,3 +1293,20 @@
   item 16 stays open for the stand round (see item 16). CI run 40565455791 green (no runtime change, no pre-release). Local Maven: the wrapper download got HTTP 429,
   system `mvn` 3.9.11 works.
   Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers.
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete), 16/19/2/0h are stand rounds, 17 (a) and
+  18 wait for answers, so optional item 3 (a) (b7be8d1): Iceberg time travel in partial mode in parts. A partial query
+  that reads one catalog table with one `FOR VERSION/TIMESTAMP AS OF` clause and nothing else (no join, subquery, CTE,
+  set operation: exactly one SELECT) is planned like a current-snapshot query: tickets carry the query without its
+  clause and file entries of the travelled snapshot (its plan ID pins that snapshot's schema; executors already
+  accepted any snapshot ID, so ticket format and older executors are unaffected); the partial describe binds against
+  that snapshot (`ExecutionService.travelledSchema`), so the stream schema equals the FlightInfo schema (it did not
+  before for an unaliased `count(*)`: complete describe says `count_star()`). Anything else, refused points and
+  snapshots not readable file by file keep the complete answer and its errors. Test:
+  `IcebergCatalogIntegrationTest.timeTravelInPartialModeIsReadInParts` (hadoop + REST: located endpoints, answers and
+  columns = complete, deletes of the old snapshot applied file by file, joins/subquery/UNION/two clauses complete).
+  Local: Iceberg IT + QueryPlanner/FlightSqlProducer/ExecutionService/TimeTravel tests (145) + checkstyle + spotbugs
+  green (extensions from `ci-assets`; unpack the .tar.zst with python3.13 `zstandard`, no `zstd` binary here).
+  Package run 40582448194 (push run 40582437183 cancelled in its favour): build + package green, pre-release
+  `server-1.0.0-b7be8d166498`. **Stand (optional):** one Trino/StarRocks read of an Iceberg table `FOR VERSION AS OF`
+  in partial mode (expect one endpoint per node, same answer as complete mode).
+  Next: item 15 stand + close; stand rounds of 16 / 19 / 2; 17 (a) and 18 wait for answers; optional 3 (b)/(c).
