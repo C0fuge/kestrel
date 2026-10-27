@@ -61,6 +61,14 @@
 > 5. item 18 (new) - distributed complete mode: in a cluster the planning node computes a complete answer alone; let each node
 >    compute its part (partial aggregates / filtered scans) in parallel and merge on the planning node, for queries where this is
 >    provably correct; fall back to today's path otherwise. Opt-in setting first; must keep the complete-mode wire contract.
+>    *Step 1 done 2026-10-27 (895dc20, no runtime change):* `CompleteAnswerMerge` - which query shapes merge provably
+>    (single table; plain columns, count/sum/min/max, GROUP BY of selected columns, DISTINCT, ORDER BY over output
+>    columns, LIMIT except on aggregates) and the DuckDB merge SQL over the union of endpoint answers; checked against
+>    DuckDB over all rows incl. an empty endpoint, names and types (`CompleteAnswerMergeTest`). **Step 2 is blocked on
+>    Open questions "Item 18: node-to-node calls"** (how the planning node calls its peers, under whose identity).
+>    Then: step 2 = node-to-node DoGet of the partial endpoints + merge in a DuckDB of the planning node behind an
+>    opt-in setting (`distributedComplete`, default false), fallback to today's path on any refusal or peer error
+>    before the first batch; step 3 = cluster integration test (3 nodes, answers = single-node answers).
 > 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).
 > 7. item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.
 
@@ -428,6 +436,20 @@
     and x1 improves, propose them as defaults for plain scans without ORDER BY (default change -> Open questions first).
 
 ## Open questions
+
+- **Item 18: node-to-node calls for distributed complete mode (2026-10-27).** The merge is ready (step 1); what is
+  left needs a server to call its peers, which it never does today (only clients call nodes). The planning node
+  would plan the query in parts as in partial mode, read each part with a Flight DoGet from its node (its own parts
+  locally), merge in DuckDB and stream the complete answer. Questions: (1) identity on the peer: with Ranger
+  authorization every peer must check the *client's* user. Options: (a) forward the client's bearer token / basic
+  credentials as received (no Kerberos: a service ticket cannot be forwarded without delegation); (b) a cluster-
+  internal call signed with the existing ticket secret, carrying the user name, which the peer trusts and authorizes
+  as that user (works for every auth provider; makes the ticket secret a credential for any user - a leak of it
+  then means full impersonation, today it means forged tickets); (c) only for `AllowAllAuthorization` setups.
+  Proposal: (b), off unless `distributedComplete=true`, peers accept it only from live cluster members' addresses.
+  (2) TLS between nodes: reuse the server's own TLS settings and trust store for the internal client - ok?
+  (3) a peer failure mid-stream after the first batch fails the query (as today for a lost node), before the first
+  batch the planning node falls back to the single-node path - ok?
 
 - **S3 read cache with a memory bound (item 17, 2026-10-27).** The stand measured DuckDB's external file cache ~40x
   faster for repeated S3 reads but it OOM-killed the server: DuckDB 1.5.6 has no size setting for it, it lives in each
@@ -1103,3 +1125,11 @@
   test-only, no pre-release needed). CI run 40475972551 green (server 777 / 2 skipped). New Open question "S3 read cache
   with a memory bound" (options A loopback range cache in the plugin / B `cache_httpfs` / C document only). Next: item
   15 stand + close; item 17 waits for that decision, so item 18 (distributed complete mode) is the next stage 2 item.
+- 2026-10-27 (cloud session): item 15 still waits for the stand (code complete, two sessions passed since the
+  priority note); item 17 waits for the cache decision, so stage 2 item 18 (distributed complete mode), step 1
+  (895dc20): `CompleteAnswerMerge` (which shapes merge provably + DuckDB merge SQL) with `CompleteAnswerMergeTest`
+  (17 shapes merged = DuckDB over all rows, names and types; refusals for LIMIT on aggregates, unselected GROUP BY
+  columns, ORDER BY over inputs, HAVING/OFFSET/DISTINCT aggregates/avg/joins). Not wired in: no runtime change, no
+  pre-release. CI run 40477705088 green. New Open question "Item 18: node-to-node calls" (peer identity under
+  Ranger, inter-node TLS, failure rule) - step 2 waits for it. Next: item 15 stand + close; then, while 17 and 18
+  wait for decisions, item 16 (single-stream scan opt-ins; stand measurement) or item 19.
