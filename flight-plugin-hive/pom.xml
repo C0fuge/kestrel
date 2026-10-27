@@ -32,6 +32,8 @@
         <!-- Same as flight-server. -->
         <hadoop.version>3.5.0</hadoop.version>
         <duckdb.version>1.5.6.0</duckdb.version>
+        <orc.version>2.1.3</orc.version>
+        <storage-api.version>2.8.1</storage-api.version>
     </properties>
 
     <dependencies>
@@ -46,6 +48,72 @@
             <artifactId>slf4j-api</artifactId>
             <version>2.0.17</version>
             <scope>provided</scope>
+        </dependency>
+        <!-- ORC tables (hive.orcTables): orc-core reads the files through the server's stores
+             and the plugin hands Arrow batches to the server. Hadoop is the server's. -->
+        <dependency>
+            <groupId>org.apache.orc</groupId>
+            <artifactId>orc-core</artifactId>
+            <version>${orc.version}</version>
+            <!-- Protobuf shaded in: the test metastore needs protobuf 2.5 on the class path. -->
+            <classifier>shaded-protobuf</classifier>
+            <scope>compile</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.orc</groupId>
+                    <artifactId>orc-format</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hive</groupId>
+                    <artifactId>hive-storage-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.orc</groupId>
+            <artifactId>orc-format</artifactId>
+            <version>1.1.0</version>
+            <classifier>shaded-protobuf</classifier>
+            <scope>compile</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- ORC's writer (the tests write their ORC files) touches HDFS client classes. -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs-client</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>test</scope>
         </dependency>
         <!-- The metastore's Thrift API (ThriftHiveMetastore and its structs) only: everything the
              metastore server needs (Hadoop, DataNucleus, Derby, ...) is left out. -->
@@ -292,11 +360,13 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- ORC's vectorized column batches (orc-core's version); the in-process test metastore
+             runs on it too. -->
         <dependency>
             <groupId>org.apache.hive</groupId>
             <artifactId>hive-storage-api</artifactId>
-            <version>2.7.0</version>
-            <scope>test</scope>
+            <version>${storage-api.version}</version>
+            <scope>compile</scope>
             <exclusions>
                 <exclusion>
                     <groupId>*</groupId>
@@ -382,11 +452,13 @@
             <version>3.2.2</version>
             <scope>test</scope>
         </dependency>
+        <!-- Provided: the ORC reader runs on the server's Hadoop (share=hadoop); the test
+             metastore needs it too. -->
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
             <version>${hadoop.version}</version>
-            <scope>test</scope>
+            <scope>provided</scope>
             <exclusions>
                 <exclusion>
                     <groupId>io.netty</groupId>
@@ -539,6 +611,8 @@
                 <version>3.0.0</version>
                 <configuration>
                     <excludedGroups>${excludedGroups}</excludedGroups>
+                    <!-- Arrow's memory needs java.nio open (the ORC reader tests). -->
+                    <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
             <!-- The test jar carries HmsFixture (an in-process metastore) for the server's catalog

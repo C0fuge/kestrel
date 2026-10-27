@@ -15,6 +15,23 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     date, char/varchar, binary, list/map/struct), answers equal to the same data in Parquet; partitioned table; HDFS
     mini-cluster or the existing CI HDFS container. Check both partial and complete result modes. Perf: SF1 lineitem in
     ORC vs Parquet (note it in the Log).
+    *Step 1 done 2026-10-27:* `OrcArrowReader` (hive plugin) - one ORC file -> Arrow batches (an `ArrowReader`, so
+    `Data.exportArrayStream` can hand it to DuckDB), read through the store's `ReadableFile` via `ReadableFileSystem`;
+    tests `OrcArrowReaderTest` (all types + nulls + nested, by name / by position, projection, SARG skipping).
+    Dependencies: orc-core/orc-format `shaded-protobuf` (the test metastore needs protobuf 2.5), hive-storage-api 2.8.1
+    (now compile; the test metastore runs on it), Arrow and Hadoop `provided`.
+    **Next step (step 2), design to settle first:** (a) class sharing: the reader's Arrow and Hadoop classes must be the
+    server's (Arrow's C data JNI library loads once per JVM): new descriptor value `share=hadoop,arrow` in
+    `PluginClassLoader` (small additive core commit; `org.apache.arrow.` from the server) and `share=hadoop,arrow` in the
+    hive descriptor - check the Hive/Kerberos tests still pass with the server's Hadoop; (b) SPI 1.4 (additive, own
+    commit): `ReadSpec.ArrowScan` + a catalog method that opens an `ArrowReader` for (file, projected columns, simple
+    predicates) - the server registers it on the DuckDB connection (`DuckDBConnection.registerArrowStream`) per file
+    group and builds the FROM source as for Parquet (partition constants, UNION ALL); projection from the query's column
+    list, predicates -> ORC `SearchArgument` (=, <, <=, >, >=, IN, IS NULL, BETWEEN on top-level primitive columns);
+    (c) `hive.orcTables` (default false) in `HiveSettings`/`HiveTable.classify` (ORC serde / input format), ACID ORC
+    refused with a clear reason; (d) end-to-end tests: ORC vs the same rows in Parquet through DuckDB (partial and
+    complete), partitioned table via the test metastore; then HDFS and the SF1 perf note. Risk to check: zstd-jni and
+    brotli4j native libraries in the plugin vs the server's copies.
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -48,3 +65,5 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
 ## Log
 
 - 2026-10-28 (maintainer): lane created; P1-P6 from the integration research.
+- 2026-10-27 (plugins session): P1 step 1 - ORC file reader to Arrow in the hive plugin (`OrcArrowReader`,
+  `ReadableFileSystem`, 5 unit tests); no catalog/runtime change, no core or SPI change. CI: see the next line.

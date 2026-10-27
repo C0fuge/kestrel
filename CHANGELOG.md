@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Hive plugin, ORC step 1 (P1, no runtime change yet): `OrcArrowReader` reads one ORC file of a Hive table as Arrow
+  batches through the server's stores (orc-core 2.1.3 over a one-file Hadoop file system wrapping the store's
+  `ReadableFile`): columns by name (case-insensitive) or by position for Hive 1.x `_colN` files, missing columns
+  NULL, ORC schema evolution for changed types, projection, stripe/row-group skipping by search argument,
+  timestamps as wall clock, CHAR without trailing spaces; all Hive types incl. decimal, date, timestamp, binary,
+  list/map/struct. ORC tables are still skipped by the catalog; the plugin directory gains orc-core and its libraries.
 - Iceberg time travel in partial mode (item 3 (a)): a query that reads one iceberg-hadoop / iceberg-rest table
   `FOR VERSION AS OF` / `FOR TIMESTAMP AS OF` and nothing else is planned in parts like a query of the current
   snapshot (endpoints with locations; each ticket names files of the earlier snapshot, read with that snapshot's
