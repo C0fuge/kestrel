@@ -17,7 +17,9 @@ public final class CacheMetrics {
         /** Result schemas of client queries ({@code ExecutionService}). */
         SCHEMA,
         /** Prepared DuckDB statements, per worker thread ({@code DuckDbAdapter}). */
-        STATEMENT
+        STATEMENT,
+        /** Complete-mode result and parameter schemas of client queries ({@code DuckDbAdapter}). */
+        DESCRIBE
     }
 
     private static final AtomicLongArray OVERSIZE = new AtomicLongArray(Cache.values().length);

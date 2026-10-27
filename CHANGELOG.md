@@ -115,6 +115,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   at 16 MB. The test metastore (Hive 3.1.3 server, which fails on libthrift 0.14+) now runs on 0.9.3 in its own
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
+### Changed
+- Complete-answer mode: less work per query (item 15). The result and parameter schema of a query
+  are described once per views snapshot and shared by the client's prepare and its GetFlightInfo
+  (before: three DuckDB describes and four parse checks per JDBC/ADBC query); the describe
+  connection keeps its parse-check statement; closing a prepared statement no longer waits for the
+  shared parameter cache. Local measurement (`PointQueryOverheadPerfTest`, tag `perf`): point
+  query p50 14.0 -> 10.2 ms, 8 clients 31 -> 22 ms, 32 clients 94 -> 58 ms. New metric label
+  `describe` on the cache counters. Answers, wire format and settings unchanged.
+
 ### Fixed
 - Cluster: why the first plan after a kill test waited 9-10 s on one stand and ~1 s on another
   (3-node S3 stand finding (c)): a crashed node whose address vanished with it holds every map

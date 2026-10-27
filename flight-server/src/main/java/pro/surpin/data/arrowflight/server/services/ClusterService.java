@@ -374,12 +374,13 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
-     * Drops the parameter values of a closed prepared statement.
+     * Drops the parameter values of a closed prepared statement. The client does not wait for
+     * it: nothing reads a closed statement's values, and values left behind expire.
      *
      * @param statementId id in the statement's handle
      */
     public void forgetParameters(String statementId) {
-        hazelcast.statementCache().remove(PARAMETERS_PREFIX + statementId);
+        hazelcast.statementCache().deleteAsync(PARAMETERS_PREFIX + statementId);
     }
 
     /**

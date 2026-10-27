@@ -1149,6 +1149,45 @@ class DuckDbAdapterTest {
         }
     }
 
+    /**
+     * Verifies a description is reused for the same text over the same views snapshot (a
+     * client's prepare and its GetFlightInfo), serves the parameter schema too, and is not used
+     * once the views change.
+     */
+    @Test
+    void describeCompleteIsReusedUntilTheViewsChange() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views = views();
+            String sql = "SELECT id, price FROM s.t WHERE id = ?";
+            org.apache.arrow.vector.types.pojo.Schema first = adapter.describeComplete(allocator, sql, views);
+            assertSame(first, adapter.describeComplete(allocator, sql, views));
+            assertEquals(List.of("parameter_1"), adapter.describeParameters(sql, views).getFields()
+                    .stream().map(f -> f.getName()).toList());
+            assertEquals(new org.apache.arrow.vector.types.pojo.ArrowType.Decimal(3, 1, 128),
+                    first.getFields().get(1).getType());
+
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot changed =
+                    new pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot(2L,
+                            views.dataStatements(),
+                            List.of("CREATE SCHEMA IF NOT EXISTS s",
+                                    "CREATE OR REPLACE VIEW s.t AS SELECT CAST(NULL AS INTEGER) AS id,"
+                                            + " CAST(NULL AS DOUBLE) AS price WHERE false",
+                                    "CREATE OR REPLACE VIEW main.t AS SELECT * FROM s.t"),
+                            views.dropStatements());
+            org.apache.arrow.vector.types.pojo.Schema after = adapter.describeComplete(allocator, sql, changed);
+            assertEquals(new org.apache.arrow.vector.types.pojo.ArrowType.FloatingPoint(
+                    org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE),
+                    after.getFields().get(1).getType());
+            // Refusals are not remembered.
+            assertThrows(Exception.class, () -> adapter.describeComplete(allocator, "DROP VIEW s.t", changed));
+            assertThrows(Exception.class, () -> adapter.describeParameters("DROP VIEW s.t", changed));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies only statements that read are run in complete-answer mode. */
     @Test
     void completeAnswerRefusesStatementsThatAreNotQueries() throws Exception {

@@ -67,7 +67,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         System.setProperty("hazelcastPort", String.valueOf(hazelcastPort));
         System.setProperty("duckDbWarmConnections", "1");
         System.setProperty("duckDbGroups", "1");
-        System.setProperty("duckDbThreads", "1");
+        System.setProperty("duckDbThreads", String.valueOf(b.threads));
         System.setProperty("ioParallelism", "2");
         AppConfig appConfig = ConfigAdapter.getConfig();
 
@@ -169,6 +169,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         private String resultMode = "partial";
         private int hazelcastPort;
         private int flightPort;
+        private int threads = 1;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
 
@@ -179,6 +180,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder resultMode(String m) { this.resultMode = m; return this; }
         public Builder hazelcastPort(int p) { this.hazelcastPort = p; return this; }
         public Builder flightPort(int p) { this.flightPort = p; return this; }
+        public Builder threads(int t) { this.threads = t; return this; }
 
         public TestFlightServerHelper start() throws Exception {
             return new TestFlightServerHelper(this);

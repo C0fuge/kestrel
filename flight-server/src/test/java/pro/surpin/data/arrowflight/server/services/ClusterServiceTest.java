@@ -651,4 +651,16 @@ class ClusterServiceTest {
         assertNull(cs.recallParameters("other"));
         cs.close();
     }
+
+    /** Verifies closing a statement drops its values without waiting for the shared cache. */
+    @Test
+    void forgetParametersDoesNotWait() {
+        ClusterService cs = createService("s1");
+
+        cs.forgetParameters("abc");
+
+        verify(statementCache).deleteAsync("parameters:abc");
+        verify(statementCache, never()).remove("parameters:abc");
+        cs.close();
+    }
 }

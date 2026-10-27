@@ -104,6 +104,27 @@ public final class DuckDbAdapter implements AutoCloseable {
     private static final long CANCEL_POLL_MILLIS = 200;
     /** Longest time a query may take to describe; it runs over views without rows. */
     private static final long DESCRIBE_TIMEOUT_SECONDS = 30;
+    /** Most query texts whose description (result and parameter schema) is kept. */
+    private static final int DESCRIBE_CACHE_CAPACITY = 1024;
+
+    /**
+     * What a query without values returns and takes, described over one views snapshot.
+     *
+     * @param views snapshot the query was described over, compared by identity
+     * @param result schema of the complete answer
+     * @param parameters one field per parameter
+     */
+    private record Description(pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
+            org.apache.arrow.vector.types.pojo.Schema result,
+            org.apache.arrow.vector.types.pojo.Schema parameters) {
+    }
+
+    /**
+     * Descriptions by query text. A client's prepare and its GetFlightInfo describe the same text
+     * over the same views; one description serves both (and repeated texts) until the views change.
+     */
+    private final Map<String, Description> describeCache = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true));
     private final ThreadLocal<Session> threadSession;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     /** hadoopfs settings the loaded extension does not know, warned about once. */
@@ -1418,6 +1439,12 @@ public final class DuckDbAdapter implements AutoCloseable {
             String sql, List<Object> parameters,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
+        if (parameters.isEmpty()) {
+            Description cached = cachedDescription(sql, views);
+            if (cached != null) {
+                return cached.result();
+            }
+        }
         Session session = threadSession.get();
         try {
             return describeComplete(session, allocator, sql, parameters, views);
@@ -1446,38 +1473,100 @@ public final class DuckDbAdapter implements AutoCloseable {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             requireQuery(sql, ps);
             java.sql.ParameterMetaData parameterMetaData = ps.getParameterMetaData();
-            int parameterCount = parameterMetaData.getParameterCount();
-            boolean withValues = parameters.size() == parameterCount;
-            boolean textProbe = false;
-            for (int i = 1; i <= parameterCount; i++) {
-                if (withValues) {
-                    ps.setObject(i, parameters.get(i - 1));
-                } else if (QueryParameters.arrowType(parameterMetaData.getParameterType(i),
-                        parameterMetaData.getParameterTypeName(i)) instanceof
-                        org.apache.arrow.vector.types.pojo.ArrowType.Utf8) {
-                    // A parameter of no known type is sent as text: describe it as text, or
-                    // the answer's columns could differ from those announced (SELECT ?).
-                    ps.setObject(i, "");
-                    textProbe = true;
-                } else {
-                    ps.setObject(i, null);
-                }
+            if (!parameters.isEmpty()) {
+                return describeBound(allocator, conn, sql, ps, parameterMetaData, parameters);
             }
-            try {
-                return describeRun(allocator, ps);
-            } catch (java.sql.SQLException e) {
-                if (!textProbe) {
-                    throw e;
+            // Read before the run: DuckDB closes a statement whose run failed.
+            org.apache.arrow.vector.types.pojo.Schema parameterSchema =
+                    QueryParameters.schema(parameterMetaData);
+            org.apache.arrow.vector.types.pojo.Schema result =
+                    describeBound(allocator, conn, sql, ps, parameterMetaData, parameters);
+            cacheDescription(sql, new Description(views, result, parameterSchema));
+            return result;
+        }
+    }
+
+    /**
+     * Binds the given values, or probes for each parameter without them, and describes the run.
+     *
+     * @param allocator         Arrow buffer allocator
+     * @param conn              describe connection
+     * @param sql               client SQL
+     * @param ps                the query prepared on that connection
+     * @param parameterMetaData its parameters
+     * @param parameters        values of the query's parameters, or an empty list
+     * @return schema of the complete answer
+     * @throws Exception when DuckDB rejects the query
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    private org.apache.arrow.vector.types.pojo.Schema describeBound(BufferAllocator allocator,
+            Connection conn, String sql, PreparedStatement ps,
+            java.sql.ParameterMetaData parameterMetaData, List<Object> parameters) throws Exception {
+        int parameterCount = parameterMetaData.getParameterCount();
+        boolean withValues = parameters.size() == parameterCount;
+        boolean textProbe = false;
+        for (int i = 1; i <= parameterCount; i++) {
+            if (withValues) {
+                ps.setObject(i, parameters.get(i - 1));
+            } else if (QueryParameters.arrowType(parameterMetaData.getParameterType(i),
+                    parameterMetaData.getParameterTypeName(i)) instanceof
+                    org.apache.arrow.vector.types.pojo.ArrowType.Utf8) {
+                // A parameter of no known type is sent as text: describe it as text, or
+                // the answer's columns could differ from those announced (SELECT ?).
+                ps.setObject(i, "");
+                textProbe = true;
+            } else {
+                ps.setObject(i, null);
+            }
+        }
+        try {
+            return describeRun(allocator, ps);
+        } catch (java.sql.SQLException e) {
+            if (!textProbe) {
+                throw e;
+            }
+            // The empty text did not fit the query (? + 1, CAST(? AS INTEGER)): describe with
+            // NULL, which fits any type, as the values are not known yet. DuckDB closes a
+            // statement that failed, so prepare it again.
+            try (PreparedStatement retry = conn.prepareStatement(sql)) {
+                for (int i = 1; i <= parameterCount; i++) {
+                    retry.setObject(i, null);
                 }
-                // The empty text did not fit the query (? + 1, CAST(? AS INTEGER)): describe with
-                // NULL, which fits any type, as the values are not known yet. DuckDB closes a
-                // statement that failed, so prepare it again.
-                try (PreparedStatement retry = conn.prepareStatement(sql)) {
-                    for (int i = 1; i <= parameterCount; i++) {
-                        retry.setObject(i, null);
-                    }
-                    return describeRun(allocator, retry);
-                }
+                return describeRun(allocator, retry);
+            }
+        }
+    }
+
+    /**
+     * Returns the cached description of a query text over the given views.
+     *
+     * @param sql   client SQL
+     * @param views current view definitions
+     * @return description, or null when the text was not described over these views
+     */
+    private Description cachedDescription(String sql,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views) {
+        Description cached = describeCache.get(sql);
+        // Identity: a new snapshot is made whenever any view changes.
+        return cached != null && cached.views() == views ? cached : null;
+    }
+
+    /**
+     * Remembers the description of a query text unless the text is too long to be cached.
+     *
+     * @param sql         client SQL
+     * @param description its description
+     */
+    private void cacheDescription(String sql, Description description) {
+        if (!QueryCacheLimits.cacheable(sql)) {
+            CacheMetrics.oversize(CacheMetrics.Cache.DESCRIBE);
+            return;
+        }
+        synchronized (describeCache) {
+            describeCache.put(sql, description);
+            if (describeCache.size() > DESCRIBE_CACHE_CAPACITY) {
+                describeCache.remove(describeCache.keySet().iterator().next());
+                CacheMetrics.eviction(CacheMetrics.Cache.DESCRIBE);
             }
         }
     }
@@ -1524,6 +1613,10 @@ public final class DuckDbAdapter implements AutoCloseable {
     public org.apache.arrow.vector.types.pojo.Schema describeParameters(String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
+        Description cached = cachedDescription(sql, views);
+        if (cached != null) {
+            return cached.parameters();
+        }
         Session session = threadSession.get();
         try {
             Connection conn = describeConnection(session, sql, views);
@@ -1559,9 +1652,10 @@ public final class DuckDbAdapter implements AutoCloseable {
                     views.emptyStatements(), views.dropStatements());
             session.describeVersion = views.version();
         }
-        try (PreparedStatement check = conn.prepareStatement(PARSE_CHECK_SQL)) {
-            requireSingleQuery(check, sql);
+        if (session.describeCheck == null || session.describeCheck.isClosed()) {
+            session.describeCheck = conn.prepareStatement(PARSE_CHECK_SQL);
         }
+        requireSingleQuery(session.describeCheck, sql);
         return conn;
     }
 
@@ -1723,6 +1817,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         private Connection describeConn;
         private long describeVersion = Long.MIN_VALUE;
         private List<String> describeDrops = List.of();
+        /** Parse check ({@link #PARSE_CHECK_SQL}) prepared on the describe connection. */
+        private PreparedStatement describeCheck;
         private final StatementCache statements;
 
         /**
@@ -1757,6 +1853,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         private void close() {
             statements.closeAll();
             closeQuietly(conn);
+            if (describeCheck != null) {
+                closeQuietly(describeCheck);
+            }
             if (describeConn != null) {
                 closeQuietly(describeConn);
             }
