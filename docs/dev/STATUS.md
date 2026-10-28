@@ -23,7 +23,14 @@
 
 ## Next steps (one per session)
 
-> **Bug first (maintainer, 2026-10-28, from the CI screening's build tracking, `results/BUILDS.md` /
+> **Bug first (maintainer, 2026-10-28 11:30, CI build tracking `track-4bb6441569be`): small local ADBC tail at 8 clients.**
+> `4bb6441569be` vs `7562a5bdb7b9`, same runner, 3/3 rounds: ADBC c8 p95 1.07 (1.10 1.06 1.12), p99 1.15 (1.14 1.16 1.15)
+> while p50 is 0.75; JDBC and 32 clients not affected. Small, but in every round. Look at it together with item 21 (same
+> path): reproduce with `SmallQueryThroughputPerfTest` (ADBC-like prepare/execute, 8 clients, 2 CPUs), check whether a
+> stage-3 change (item 21 step 1 per-DoGet event, item 22 thread/stream caps, compression code path when not asked)
+> adds a stall for some queries; keep the p50 gain. Then continue with the open stage-3 item.
+
+> ~~**Bug (fixed in 4bb6441569be, confirmed by CI tracking)**~~ **Bug first (maintainer, 2026-10-28, from the CI screening's build tracking, `results/BUILDS.md` /
 > `track-d22cdaccb4e1`): S3 small queries got slower in the tail.** `d22cdaccb4e1` vs `7562a5bdb7b9`, same runner, 4 vCPU,
 > 3/3 rounds: p95 at 8 and 32 clients +12-21 % (JDBC c32 p95 1.21, JDBC c8 p95 1.12, ADBC c8 p95 1.20) while p50 is
 > 0.65-0.91 and local disk is not affected. Prime suspect: the size-aware `duckDbThreads` default (item 19: 4 vCPU -> 2
