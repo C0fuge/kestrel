@@ -167,14 +167,30 @@ P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** J
     `LdapSettingsTest` 6; `LdapFlightLoginTest` 4 incl. groups through `FlightSecurity` + `union`), core
     `RangerAuthorizationTest` 6 (union, provider failure denies, LDAP name `alice` = Kerberos `alice@EXAMPLE.COM`
     decision). Docs: `docs/security/providers.md`, START-NOTES, CHANGELOG.
-    *Next (step 3):* JWT provider (`flight-auth-jwt`, nimbus-jose-jwt; JWKS URL with cache and refresh on unknown
-    `kid`, issuer/audience/expiry/nbf with skew, allowed algorithms (no `none`, no HS* with a JWKS), user claim
-    (default `sub`, e.g. `preferred_username`/`upn`) and groups claim -> `groups(identity)` cached per identity like
-    `LdapGroupCache` (or carried in each call's token - tokens are sent on every call, so groups can come from the
-    token itself: map identity -> groups of the last verified token); local JWKS over HTTPS in the test; negative
-    cases expired / wrong audience / wrong issuer / unknown key / alg none). Bearer pass-through: each call carries
-    the JWT (no session token needed). Optional: an OpenLDAP container test in CI (`real-services`) if the
-    maintainer wants it.
+    *Step 3 done 2026-10-28 (JWT, 1b3a7bb):* module `flight-auth-jwt` (same layout as `flight-auth-ldap`: server
+    `provided` + BOM import, `auth/jwt/*` on the server class path, dev-ci `package` adds `auth/jwt/` to the
+    `flight-auth-...tar.zst` asset). `FLIGHT_AUTH_PROVIDER=jwt`: every call's `Bearer` JWT is verified with
+    nimbus-jose-jwt 10.10 (only runtime jar; its deps are optional) - `JwtVerifier`: key set from
+    `FLIGHT_JWT_JWKS_URL` (https only, `JWKSourceBuilder` cache `FLIGHT_JWT_JWKS_CACHE_MINUTES` default 15,
+    re-fetch on unknown `kid` rate limited by `FLIGHT_JWT_JWKS_REFRESH_LIMIT_SECONDS` default 30, own trust store,
+    512 KiB limit) or `FLIGHT_JWT_JWKS_FILE` (public parts only); `typ` absent/`JWT`/`at+jwt`; algorithms RS/PS/ES
+    256-512 only (`FLIGHT_JWT_ALGORITHMS` subset; HS*/none/EdDSA refused at start); required `iss` (exact
+    `FLIGHT_JWT_ISSUER`), `aud` (one of `FLIGHT_JWT_AUDIENCE`), `exp`, user claim; skew
+    `FLIGHT_JWT_CLOCK_SKEW_SECONDS` default 60. Identity = `FLIGHT_JWT_USER_CLAIM` (default `sub`; same character
+    rule as LDAP; a numeric `sub` is read as text by nimbus, other non-string claims refused). Groups =
+    `FLIGHT_JWT_GROUPS_CLAIM` (dotted path, array or one string, > 1000 or other shapes refuse the token) stored per
+    identity until that token's expiry (`JwtGroups`, max 10000) -> `groups(identity)`; unseen/expired identity
+    throws -> Ranger denies. Known limit (documented): two tokens of one user with different groups at the same
+    moment may see each other's groups (never another user's). Opt-in `FLIGHT_JWT_BASIC_PASSWORD`: Basic password =
+    token, reply carries it as bearer. Bad token UNAUTHENTICATED, key fetch failure UNAVAILABLE. Tests 16 (unit):
+    `JwtVerifierTest` 6 (RS256/ES256/at+jwt, claim choice, audiences; groups shapes/nesting/limits; expiry with
+    and beyond skew, nbf, iss, aud, missing exp, bad identities; plain/HS256 with a kid/tampered/unknown kid/wrong
+    key under a known kid/`typ` JOSE/garbage/algorithm subset; HTTPS JWKS with trust store, cache = 1 fetch, key
+    rotation -> 1 more fetch, old key then refused; untrusted cert and unreachable URL -> unavailable),
+    `JwtSettingsTest` 3, `JwtGroupsTest` 3, `JwtFlightLoginTest` 4 (real TLS FlightServer through `FlightSecurity`:
+    identity + per-token groups, `RangerAuthorization.union`, Basic password, expired/foreign/forged/missing,
+    TLS requirement, no mixing with `FLIGHT_BEARER_TOKEN`). Docs: `docs/security/providers.md`, START-NOTES,
+    CHANGELOG. **P2 closed** (optional OpenLDAP container test: see Open questions).
 P3. **Spark connector for production (`flight-spark`).** (a) Kerberos on YARN executors: a Spark
     `HadoopDelegationTokenProvider` that gets a server session on the driver and ships it in the job credentials (today
     every executor does its own SPNEGO and fails without a TGT); (b) build profiles for Spark 3.3/3.4 (check what Hadoop
@@ -194,6 +210,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
     credentials; Postgres/MySQL federation; Ozone S3 gateway test; Delta via Delta Kernel Java.
 
 ## Open questions
+
+- (P2, optional) JWT: only one issuer per server and keys as JWKS (URL or file); Knox without a JWKS endpoint would
+  need a PEM public key setting, and several issuers (e.g. Keycloak + Entra) a list - add if production needs them.
+  An OpenLDAP container test in CI (`real-services`) for the LDAP provider - only if wanted (UnboundID in-memory
+  directory covers the protocol paths today).
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
