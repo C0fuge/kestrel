@@ -10,6 +10,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- OIDC / Knox JWT bearer tokens (P2 step 3), new optional module `flight-auth-jwt`, `FLIGHT_AUTH_PROVIDER=jwt`
+  (existing providers unchanged; release asset `flight-auth-...` now also holds `auth/jwt/`): every call's bearer JWT
+  is verified with nimbus-jose-jwt 10.10 against the issuer's JWKS (`FLIGHT_JWT_JWKS_URL`, HTTPS only, cached and
+  re-fetched on an unknown key id, rate limited; or `FLIGHT_JWT_JWKS_FILE`), `FLIGHT_JWT_ISSUER`,
+  `FLIGHT_JWT_AUDIENCE`, expiry / not-before with `FLIGHT_JWT_CLOCK_SKEW_SECONDS` (default 60); asymmetric
+  algorithms only (no HS*, no `none`). Identity from `FLIGHT_JWT_USER_CLAIM` (default `sub`), optional Ranger groups
+  from `FLIGHT_JWT_GROUPS_CLAIM` (dotted path, e.g. `realm_access.roles`), opt-in `FLIGHT_JWT_BASIC_PASSWORD` for
+  tools with only user/password fields. Bad tokens `UNAUTHENTICATED`, unreachable keys `UNAVAILABLE`. No core or SPI
+  change.
 - Small-query perf tooling (maintainer's ADBC c8 tail bug): `SmallQueryThroughputPerfTest` prints p99 and max and
   takes `-Dperf.server=host:port` / `-Dperf.dataDir` to measure a separately started server; new manual workflow
   `small-query-perf.yml` runs a baseline build and the current ref, each alone in a container with 2 CPUs by quota

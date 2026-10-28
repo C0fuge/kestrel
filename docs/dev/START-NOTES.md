@@ -12,7 +12,9 @@ test suite passed on the same commit. Linux x86-64 / ARM64 only (`-Plinux-only`)
   libraries so none repeats one of it; `libs/DEPENDENCIES.txt` lists the coordinates, `libs/SHA256SUMS` the jars.
   It replaces any older libs directory: do not mix it with other Hadoop, Netty, Jackson or BouncyCastle jars.
 - `flight-auth-@VERSION@-@SHA@.tar.zst`: `auth/ldap/` - the optional LDAP / Active Directory login provider
-  (`FLIGHT_AUTH_PROVIDER=ldap`, its jar + the UnboundID LDAP SDK + a `SHA256SUMS`); on the class path only when used.
+  (`FLIGHT_AUTH_PROVIDER=ldap`, its jar + the UnboundID LDAP SDK + a `SHA256SUMS`) and `auth/jwt/` - the optional
+  OIDC / Knox JWT provider (`FLIGHT_AUTH_PROVIDER=jwt`, its jar + nimbus-jose-jwt + a `SHA256SUMS`); each on the
+  class path only when used.
 - `SHA256SUMS`: checksums of the files above.
 
 ## Start
@@ -53,6 +55,13 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   The login name is the Flight identity Ranger checks (groups: Hadoop's group mapping, as for Kerberos users; with
   `FLIGHT_LDAP_GROUP_SEARCH_BASE` also the user's directory groups - on a cluster set `FLIGHT_LDAP_BIND_DN` for it).
   All settings: `docs/security/providers.md` in the repository.
+- OIDC / Knox JWT bearer tokens (Keycloak, Azure AD / Entra, Okta, Knox; the Flight SQL JDBC driver's `token=`,
+  ADBC's `authorization` header): add `:/opt/flight/auth/jwt/*` to `-cp` and set `FLIGHT_AUTH_PROVIDER=jwt`, TLS,
+  `FLIGHT_JWT_JWKS_URL=https://idp.corp/realms/data/protocol/openid-connect/certs` (or `FLIGHT_JWT_JWKS_FILE`),
+  `FLIGHT_JWT_ISSUER` (exact `iss`), `FLIGHT_JWT_AUDIENCE`; optional `FLIGHT_JWT_USER_CLAIM` (default `sub`, e.g.
+  `preferred_username` / `upn`) and `FLIGHT_JWT_GROUPS_CLAIM` (e.g. `groups`, `realm_access.roles`) for Ranger
+  groups. No shared secret or session state between nodes: every call carries the token. Tools that can send only
+  a user name and password: `FLIGHT_JWT_BASIC_PASSWORD=true` and the token as password.
 - Kerberos HDFS without an external `kinit`: set `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN

@@ -54,6 +54,37 @@ they cannot be read (directory down, the identity's entry not found, more than 1
 A custom provider can supply groups the same way: `FlightAuthenticationProvider.groups(identity)` (default none) is
 added to the Hadoop group mapping for Ranger checks; an exception from it makes the check deny.
 
+## OIDC / Knox JWT bearer tokens (`jwt`)
+
+Optional module `flight-auth-jwt` (same release asset, directory `auth/jwt/`): put `auth/jwt/*` on the server class
+path and set `FLIGHT_AUTH_PROVIDER=jwt`. Every call carries a JWT issued by an OIDC provider (Keycloak, Azure AD /
+Entra ID, Okta, ...) or Apache Knox as `authorization: Bearer <token>` (Flight SQL JDBC `token=`, ADBC headers); the
+provider checks its signature against the issuer's public keys (JWKS) and its issuer, audience, expiry and
+not-before, and takes the identity from a claim. Nodes share nothing: no session secret, no login round trip.
+
+| Setting | Meaning |
+| --- | --- |
+| `FLIGHT_JWT_JWKS_URL` | The issuer's key set, `https://` only (e.g. Keycloak `.../realms/<r>/protocol/openid-connect/certs`, Entra `https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys`). Fetched at the first call, cached, fetched again after `FLIGHT_JWT_JWKS_CACHE_MINUTES` (1-1440, default 15) or when a token names an unknown key id (key rotation), at most once per `FLIGHT_JWT_JWKS_REFRESH_LIMIT_SECONDS` (1-3600, default 30). |
+| `FLIGHT_JWT_JWKS_FILE` | Instead of the URL: a local JWK set file read at start (private parts ignored). |
+| `FLIGHT_JWT_TRUSTSTORE`, `_TYPE`, `_PASSWORD` (or `_PASSWORD_FILE`) | Trust store for the key set URL's certificate (default type PKCS12); default the JVM's trust. |
+| `FLIGHT_JWT_ISSUER` | Required. The exact `iss` value tokens must carry. |
+| `FLIGHT_JWT_AUDIENCE` | Required. Accepted audiences, comma- or space-separated; a token's `aud` must contain one. |
+| `FLIGHT_JWT_ALGORITHMS` | Accepted signature algorithms; default all of RS256/384/512, PS256/384/512, ES256/384/512. HMAC (`HS*`) and unsigned (`none`) tokens are never accepted. |
+| `FLIGHT_JWT_USER_CLAIM` | Claim holding the identity; default `sub`. Use e.g. `preferred_username` (Keycloak), `upn` (AD FS / Entra), whatever matches the user names Ranger knows. |
+| `FLIGHT_JWT_GROUPS_CLAIM` | Optional claim listing groups (array of strings or one string); a dotted path reaches into objects, e.g. `realm_access.roles`. Added to the groups Ranger sees (next to Hadoop's group mapping). Keycloak's group mapper: turn off "Full group path" so groups are `analysts`, not `/analysts`. |
+| `FLIGHT_JWT_CLOCK_SKEW_SECONDS` | Tolerated clock difference for `exp` / `nbf`, 0-600, default 60. |
+| `FLIGHT_JWT_BASIC_PASSWORD` | `true`: also accept a Basic credential whose password is a token (any user name; for tools that only have user name + password fields); the reply carries the token as bearer for the following calls. Default `false`. |
+| `FLIGHT_JWT_CONNECT_TIMEOUT_MS`, `FLIGHT_JWT_READ_TIMEOUT_MS` | Key set fetch timeouts (default 5000 / 10000). |
+
+Tokens must carry `iss`, `aud`, `exp` and the user claim; header `typ` may be absent, `JWT` or `at+jwt`. Identities
+may contain letters, digits and `. _ - @` only (at most 256). An invalid, expired or foreign token is
+`UNAUTHENTICATED`; a key set that cannot be fetched (unreachable, TLS failure, timeout) is `UNAVAILABLE`.
+
+Groups are those of the token: each verified call stores its token's groups for its identity until that token
+expires, and policy checks of the identity use them. Two valid tokens of one user with different groups in flight
+at the same moment (during a group change at the identity provider) may see each other's groups; a call never runs
+with the groups of another user. A group claim of another shape, or with more than 1000 entries, refuses the token.
+
 ## Add an authentication provider
 
 Implement `pro.surpin.data.arrowflight.server.FlightAuthenticationProviderFactory` with a unique `name()`. Its `create(Map<String, String>)` method returns a `FlightAuthenticationProvider`. The provider can initialize credentials before Hadoop services start and must return an Arrow `CallHeaderAuthenticator` that supplies an authenticated peer identity for each request. Package the factory class in a JAR with this service descriptor:
