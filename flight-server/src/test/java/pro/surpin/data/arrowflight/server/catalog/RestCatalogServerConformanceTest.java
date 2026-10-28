@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightEndpoint;
@@ -44,16 +45,22 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * warehouse with the same tables, both written by Iceberg Java, under the DuckDB lockdown.
  * Complete answers of every REST table equal the reference's; partial answers equal complete
  * ones; a snapshot with deletes is planned in located parts. Skipped unless
- * {@code ICEBERG_REST_IT_URI} names the catalog and {@code ICEBERG_REST_IT_ROOT} its local
- * warehouse directory (S3 warehouses: not yet); optional {@code ICEBERG_REST_IT_WAREHOUSE},
- * {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2 id:secret), {@code ICEBERG_REST_IT_SCOPE}. Needs
- * {@code -Diceberg.it.extensionDir} and the iceberg plugin built.
+ * {@code ICEBERG_REST_IT_URI} names the catalog and {@code ICEBERG_REST_IT_ROOT} its warehouse:
+ * a local directory, or an S3 location ({@code s3://bucket/path}, written with Iceberg's
+ * S3FileIO and read through the real s3 plugin) with {@code ICEBERG_REST_IT_S3_ENDPOINT},
+ * {@code ICEBERG_REST_IT_S3_ACCESS_KEY} and {@code ICEBERG_REST_IT_S3_SECRET_KEY} (path-style
+ * URLs). Optional {@code ICEBERG_REST_IT_WAREHOUSE}, {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2
+ * id:secret), {@code ICEBERG_REST_IT_SCOPE}. Needs {@code -Diceberg.it.extensionDir} (with
+ * httpfs for S3) and the iceberg plugin built (and the s3 plugin for S3).
  */
 @Tag("rest-catalogs")
 class RestCatalogServerConformanceTest {
 
     private static final List<String> TABLES = List.of("deletes", "empty", "evolved", "nested",
             "parted", "types");
+
+    /** The built plugins/s3 directory, for S3 warehouses. */
+    private static final Path S3_PLUGIN = Path.of("../flight-plugin-s3/target/plugin/s3");
 
     @TempDir
     static Path dir;
@@ -64,25 +71,43 @@ class RestCatalogServerConformanceTest {
         String uri = env("ICEBERG_REST_IT_URI").orElse(null);
         Assumptions.assumeTrue(uri != null, "no real REST catalog (ICEBERG_REST_IT_URI)");
         String root = env("ICEBERG_REST_IT_ROOT").orElse("");
-        Assumptions.assumeTrue(Files.isDirectory(Path.of(root)),
-                "ICEBERG_REST_IT_ROOT must be the catalog's local warehouse directory");
+        boolean s3 = root.startsWith("s3://");
+        Assumptions.assumeTrue(s3 || Files.isDirectory(Path.of(root)),
+                "ICEBERG_REST_IT_ROOT must be the catalog's local warehouse directory or s3://...");
         String extensionDir = IcebergTestTables.extensionDir();
         Assumptions.assumeTrue(extensionDir != null,
                 "needs -Diceberg.it.extensionDir with v1.5.6/linux_amd64/{iceberg,avro}.duckdb_extension");
         Assumptions.assumeTrue(IcebergTestTables.available(), "flight-plugin-iceberg is not built");
+        Assumptions.assumeTrue(!s3 || Files.isDirectory(S3_PLUGIN), "flight-plugin-s3 is not built");
 
         String reference = dir.resolve("wh").toString();
         IcebergTestTables.write(reference);
-        Map<String, String> writer = new HashMap<>(Map.of("uri", uri,
-                "io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"));
+        Map<String, String> writer = new HashMap<>(Map.of("uri", uri));
         Map<String, String> sys = new HashMap<>();
+        Map<String, String> envs = new HashMap<>();
+        if (s3) {
+            String endpoint = env("ICEBERG_REST_IT_S3_ENDPOINT").orElseThrow();
+            String accessKey = env("ICEBERG_REST_IT_S3_ACCESS_KEY").orElseThrow();
+            String secretKey = env("ICEBERG_REST_IT_S3_SECRET_KEY").orElseThrow();
+            writer.putAll(Map.of("io-impl", "org.apache.iceberg.aws.s3.S3FileIO",
+                    "s3.endpoint", endpoint, "s3.path-style-access", "true",
+                    "s3.access-key-id", accessKey, "s3.secret-access-key", secretKey,
+                    "client.region", "us-east-1",
+                    // Iceberg's "apache" client is the SDK's Apache 5 client, absent from our SDK.
+                    "http-client.type", "urlconnection"));
+            sys.putAll(Map.of("arrowflight.s3.endpoint", endpoint, "arrowflight.s3.urlStyle", "path",
+                    "arrowflight.s3.region", "us-east-1"));
+            envs.put("FLIGHT_S3_ACCESS_KEY", accessKey);
+            envs.put("FLIGHT_S3_SECRET_KEY", secretKey);
+        } else {
+            writer.put("io-impl", "org.apache.iceberg.hadoop.HadoopFileIO");
+        }
         sys.put("arrowflight.duckdb.extensionDir", extensionDir);
         sys.put("arrowflight.iceberg-hadoop.warehouse", reference);
         sys.put("arrowflight.iceberg-rest.uri", uri);
         sys.put("arrowflight.iceberg-rest.roots", root);
         sys.put("arrowflight.iceberg-rest.schemaPrefix", "rest_");
         sys.put("arrowflight.iceberg-rest.metadataTtlMillis", "0");
-        Map<String, String> envs = new HashMap<>();
         env("ICEBERG_REST_IT_WAREHOUSE").ifPresent(v -> {
             writer.put("warehouse", v);
             sys.put("arrowflight.iceberg-rest.warehouse", v);
@@ -99,6 +124,14 @@ class RestCatalogServerConformanceTest {
 
         Path plugins = dir.resolve("plugins");
         IcebergTestTables.installPlugin(plugins);
+        if (s3) {
+            Path target = Files.createDirectories(plugins.resolve("s3"));
+            try (Stream<Path> jars = Files.list(S3_PLUGIN)) {
+                for (Path jar : jars.toList()) {
+                    Files.copy(jar, target.resolve(jar.getFileName().toString()));
+                }
+            }
+        }
         Files.createDirectories(dir.resolve("data"));
         ConfigSource source = new ConfigSource(sys::get, new Properties(), envs, null);
         PluginSettings settings = new PluginSettings(plugins, null, "iceberg-hadoop,iceberg-rest", false);

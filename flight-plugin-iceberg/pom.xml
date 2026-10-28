@@ -350,7 +350,8 @@
                         </configuration>
                     </execution>
                     <!-- target/fixture-libs: Iceberg Java with its Parquet writer (Parquet 1.17,
-                         never on the server's flat test class path), for the server's tests.
+                         never on the server's flat test class path) and S3FileIO with the AWS
+                         SDK (url-connection client), for the server's tests.
                          Hadoop and slf4j come from the server's own test class path. -->
                     <execution>
                         <id>fixture-libs</id>
@@ -360,7 +361,7 @@
                         </goals>
                         <configuration>
                             <includeScope>test</includeScope>
-                            <includeGroupIds>org.apache.iceberg,org.apache.parquet,org.apache.avro,com.fasterxml.jackson.core,com.github.ben-manes.caffeine,org.roaringbitmap,io.airlift,org.xerial.snappy,com.github.luben,org.apache.commons,commons-codec,commons-io,org.locationtech.jts,org.jspecify,com.google.errorprone,org.apache.httpcomponents.client5,org.apache.httpcomponents.core5</includeGroupIds>
+                            <includeGroupIds>org.apache.iceberg,org.apache.parquet,org.apache.avro,com.fasterxml.jackson.core,com.github.ben-manes.caffeine,org.roaringbitmap,io.airlift,org.xerial.snappy,com.github.luben,org.apache.commons,commons-codec,commons-io,org.locationtech.jts,org.jspecify,com.google.errorprone,org.apache.httpcomponents.client5,org.apache.httpcomponents.core5,software.amazon.awssdk,software.amazon.eventstream,org.reactivestreams,dev.failsafe</includeGroupIds>
                             <outputDirectory>${project.build.directory}/fixture-libs</outputDirectory>
                         </configuration>
                     </execution>
