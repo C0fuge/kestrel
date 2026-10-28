@@ -10,6 +10,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Queries of catalog views (Hive views with the opt-in `hive.views`; nothing changes without it): a view named with
+  its schema (`FROM h_db.my_view`, also in joins, subqueries and other views) reads its translated query over the
+  tables; such queries are always answered completely, also when parts are asked for (one endpoint). Access needs the
+  view and every table and view it reads (invoker rights, stricter than Hive's definer rights - see Open questions in
+  `docs/dev/PLUGINS-STATUS.md`). GetTables lists views as `VIEW` (only those the caller may read with their sources),
+  GetTableTypes adds `VIEW` when a catalog shows views. Refused: a view read `FOR VERSION/TIMESTAMP AS OF`, views
+  nested deeper than 16; a view named like a table of its schema is not shown (the table wins); an unqualified view
+  name is a missing table (P4 views part 3).
 - Setting `flightLoadReservationSeconds` (`FLIGHT_LOAD_RESERVATION_SECONDS`, default 600 = unchanged): how long a
   planned endpoint's bytes count as load on its node when the client neither reads it to the end nor sends
   `CancelFlightInfo`; a shorter value frees nodes sooner from plans clients abandon (3-node S3 stand finding (b),
