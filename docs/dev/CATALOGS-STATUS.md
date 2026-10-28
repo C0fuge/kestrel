@@ -295,4 +295,6 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   layouts refused) + metastore snapshot + listing; `InsertOnlyDirectoriesTest` (9), `HiveInsertOnlyTableTest` (4,
   in-process HMS with txn tables). Module `flight-plugin-hive` (plugins lane's module; C4 is lane 4's item):
   100 tests, checkstyle, spotbugs clean locally (`HiveCatalogTest` needs a UTF-8 locale for its path test).
-  CI: Dev CI 40787036947, Catalogs CI 40787036921 (head 9b231bf) running. Next: C4 step 3.
+  CI green: Dev CI 40787036947 and Catalogs CI 40787036921 (head 9b231bf). Pre-release: dispatch 40788225372
+  (package=true) was cancelled by the plugins lane's push 5e9ac98 (same concurrency group); the next package=true
+  run on main carries C4 - dispatch one next session if none exists by then. Next: C4 step 3.
