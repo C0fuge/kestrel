@@ -34,6 +34,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.server.AllowAllAuthorization;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
@@ -1400,7 +1401,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     @Override
     public void getStreamTableTypes(FlightProducer.CallContext context,
             FlightProducer.ServerStreamListener listener) {
-        try (VectorSchemaRoot root = metadataService.getTableTypesRoot(allocator)) {
+        boolean withViews;
+        try {
+            withViews = !catalogViewList().isEmpty();
+        } catch (RuntimeException e) {
+            LOGGER.warn("node={} getTableTypes=viewsUnknown error='{}'", LogUtil.node(),
+                    e.getMessage());
+            withViews = false;
+        }
+        try (VectorSchemaRoot root = metadataService.getTableTypesRoot(allocator, withViews)) {
             listener.start(root);
             listener.putNext();
             listener.completed();
@@ -1431,13 +1440,20 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         // JDBC tools ask for several table types at once ("TABLE", "VIEW", ...) and for
         // catalogs they made up; a request that cannot match anything gets an empty answer.
         final ProtocolStringList tableTypesList = command.getTableTypesList();
-        boolean canMatch = (catalog == null || catalog.isEmpty()
-                        || MetadataService.CATALOG_NAME.equalsIgnoreCase(catalog))
-                && (tableTypesList.isEmpty() || tableTypesList.stream().anyMatch(
-                        MetadataService.TABLE_TYPE::equalsIgnoreCase));
+        boolean knownCatalog = catalog == null || catalog.isEmpty()
+                || MetadataService.CATALOG_NAME.equalsIgnoreCase(catalog);
+        boolean tablesWanted = knownCatalog && (tableTypesList.isEmpty() || tableTypesList
+                .stream().anyMatch(MetadataService.TABLE_TYPE::equalsIgnoreCase));
+        boolean viewsWanted = knownCatalog && (tableTypesList.isEmpty() || tableTypesList
+                .stream().anyMatch(MetadataService.VIEW_TYPE::equalsIgnoreCase));
+        String principal = context == null ? null : context.peerIdentity();
 
         Map<String, Map<String, Schema>> tables = new java.util.LinkedHashMap<>();
+        java.util.Set<String> views = new java.util.HashSet<>();
         try {
+            Map<String, List<CatalogView>> catalogViews = viewsWanted ? catalogViewList()
+                    : Map.of();
+            boolean canMatch = tablesWanted || !catalogViews.isEmpty();
             for (Map.Entry<String, String> schemaEntry : !canMatch
                     ? java.util.Set.<Map.Entry<String, String>>of()
                     : metadataService.getSchemas(schemaFilterPattern).entrySet()) {
@@ -1447,8 +1463,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 }
                 Map<String, Schema> tablesForSchema = new java.util.LinkedHashMap<>();
                 tables.put(schemaEntry.getKey(), tablesForSchema);
-                for (Map.Entry<String, String> tableEntry :
-                        metadataService.getTables(schemaEntry.getKey(), tableFilterPattern)
+                for (Map.Entry<String, String> tableEntry : !tablesWanted
+                        ? java.util.Set.<Map.Entry<String, String>>of()
+                        : metadataService.getTables(schemaEntry.getKey(), tableFilterPattern)
                                 .entrySet()) {
                     if (!authorization.canReadTable(
                             context == null ? null : context.peerIdentity(),
@@ -1459,6 +1476,22 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                             ? tableSchema(schemaEntry.getKey(), tableEntry.getKey())
                             : null;
                     tablesForSchema.put(tableEntry.getKey(), schema);
+                }
+                java.util.function.Predicate<String> nameMatches =
+                        MetadataService.createLikePredicate(tableFilterPattern);
+                for (CatalogView view : catalogViews.getOrDefault(schemaEntry.getKey(),
+                        List.of())) {
+                    if (!nameMatches.test(view.name())
+                            || tablesForSchema.containsKey(view.name())) {
+                        continue;
+                    }
+                    Schema schema = listedView(principal, schemaEntry.getKey(), view.name(),
+                            command.getIncludeSchema());
+                    if (schema != null) {
+                        tablesForSchema.put(view.name(), command.getIncludeSchema() ? schema
+                                : null);
+                        views.add(schemaEntry.getKey() + "\u0000" + view.name());
+                    }
                 }
             }
         } catch (IOException e) {
@@ -1476,7 +1509,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
 
         boolean errored = false;
         try (VectorSchemaRoot root = metadataService.getTablesRoot(
-                tables, allocator, command.getIncludeSchema(),
+                tables, views, allocator, command.getIncludeSchema(),
                 schemaFilterPattern, tableFilterPattern)) {
             listener.start(root);
             listener.putNext();
@@ -1506,6 +1539,48 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             listener.start(root);
             listener.putNext();
             listener.completed();
+        }
+    }
+
+    /**
+     * Lists the views of every catalog schema.
+     *
+     * @return schema name to its views; empty without catalogs
+     */
+    private Map<String, List<CatalogView>> catalogViewList() {
+        Map<String, List<CatalogView>> views = executionService.catalogViewList();
+        return views == null ? Map.of() : views;
+    }
+
+    /**
+     * Checks that a caller may read a view, the view and every table it reads, and describes it.
+     *
+     * @param principal caller identity, or null
+     * @param schema schema name
+     * @param view view name
+     * @param describe whether to describe its columns
+     * @return the view's columns (an empty schema when not described), or null when the caller
+     *         may not read it or it cannot be read now (logged)
+     */
+    private Schema listedView(String principal, String schema, String view, boolean describe) {
+        String selectAll = "SELECT * FROM " + DuckDbAdapter.quoteIdentifier(schema) + "."
+                + DuckDbAdapter.quoteIdentifier(view);
+        try {
+            if (!authorization.canReadTable(principal, schema, view)) {
+                return null;
+            }
+            CatalogViews.Expanded expanded = executionService.catalogViews(selectAll);
+            for (TableName source : expanded.sources()) {
+                if (!authorization.canReadTable(principal, source.schema(), source.table())) {
+                    return null;
+                }
+            }
+            return describe ? executionService.completeSchema(allocator, selectAll)
+                    : new Schema(List.of());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            LOGGER.info("node={} getTables=viewSkipped view={}.{} reason='{}'", LogUtil.node(),
+                    schema, view, e.getMessage());
+            return null;
         }
     }
 

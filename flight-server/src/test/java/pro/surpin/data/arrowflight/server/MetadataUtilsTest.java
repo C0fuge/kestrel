@@ -226,6 +226,26 @@ class MetadataUtilsTest {
     }
 
     @Test
+    void getTablesRootMarksViews() {
+        Schema dummySchema = new Schema(List.of(), null);
+        Map<String, Map<String, Schema>> tables = Map.of(
+                "s", new java.util.TreeMap<>(Map.of("a", dummySchema, "v", dummySchema)));
+
+        try (BufferAllocator allocator = new RootAllocator();
+             VectorSchemaRoot root = metadataService().getTablesRoot(
+                     tables, java.util.Set.of("s\u0000v"), allocator, false, null, null)) {
+            assertEquals(2, root.getRowCount());
+            assertEquals("TABLE", root.getVector("table_type").getObject(0).toString());
+            assertEquals("VIEW", root.getVector("table_type").getObject(1).toString());
+        }
+        try (BufferAllocator allocator = new RootAllocator();
+             VectorSchemaRoot root = metadataService().getTableTypesRoot(allocator, true)) {
+            assertEquals(2, root.getRowCount());
+            assertEquals("VIEW", root.getVector("table_type").getObject(1).toString());
+        }
+    }
+
+    @Test
     void getTablesRootEmptyInput() {
         try (BufferAllocator allocator = new RootAllocator();
              VectorSchemaRoot root = metadataService().getTablesRoot(

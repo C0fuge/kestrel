@@ -190,6 +190,70 @@ class FlightSqlProducerTest {
         verify(queryPlanner, never()).plan(anyString());
     }
 
+    /** Lists catalog views as VIEW when the caller may read them and every table they read. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void catalogViewsAreListedAsViews() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        MetadataService metadataService = mock(MetadataService.class);
+        when(metadataService.getSchemas(null)).thenReturn(Map.of("h", "catalog:hive"));
+        when(metadataService.getTables("h", null)).thenReturn(Map.of("people", ""));
+        ExecutionService executionService = mock(ExecutionService.class);
+        pro.surpin.data.arrowflight.spi.catalog.CatalogView open = view("open", "people");
+        pro.surpin.data.arrowflight.spi.catalog.CatalogView closed = view("closed", "secret");
+        when(executionService.catalogViewList()).thenReturn(Map.of("h", List.of(closed, open)));
+        when(executionService.catalogViews("SELECT * FROM \"h\".\"open\"")).thenReturn(
+                new CatalogViews.Expanded("x", List.of(new TableName("h", "people"))));
+        when(executionService.catalogViews("SELECT * FROM \"h\".\"closed\"")).thenReturn(
+                new CatalogViews.Expanded("y", List.of(new TableName("h", "secret"))));
+        FlightAuthorization authorization = mock(FlightAuthorization.class);
+        when(authorization.canSeeSchema("bob", "h")).thenReturn(true);
+        when(authorization.canReadTable("bob", "h", "people")).thenReturn(true);
+        when(authorization.canReadTable("bob", "h", "open")).thenReturn(true);
+        when(authorization.canReadTable("bob", "h", "closed")).thenReturn(true);
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        when(context.peerIdentity()).thenReturn("bob");
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator, metadataService,
+                mock(QueryPlanner.class), executionService, mock(ClusterService.class),
+                authorization, "complete");
+        ArgumentCaptor<Map<String, Map<String, Schema>>> listed = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<java.util.Set<String>> views = ArgumentCaptor.forClass(java.util.Set.class);
+
+        producer.getStreamTables(FlightSql.CommandGetTables.getDefaultInstance(), context,
+                mock(FlightProducer.ServerStreamListener.class));
+        verify(metadataService).getTablesRoot(listed.capture(), views.capture(), eq(allocator),
+                eq(false), any(), any());
+        // The view over a table bob may not read is not listed.
+        assertEquals(java.util.Set.of("people", "open"), listed.getValue().get("h").keySet());
+        assertEquals(java.util.Set.of("h\u0000open"), views.getValue());
+
+        producer.getStreamTables(FlightSql.CommandGetTables.newBuilder().addTableTypes("VIEW")
+                .build(), context, mock(FlightProducer.ServerStreamListener.class));
+        verify(metadataService, times(2)).getTablesRoot(listed.capture(), views.capture(),
+                eq(allocator), eq(false), any(), any());
+        assertEquals(java.util.Set.of("open"), listed.getValue().get("h").keySet());
+
+        producer.getStreamTables(FlightSql.CommandGetTables.newBuilder().addTableTypes("TABLE")
+                .build(), context, mock(FlightProducer.ServerStreamListener.class));
+        verify(metadataService, times(3)).getTablesRoot(listed.capture(), views.capture(),
+                eq(allocator), eq(false), any(), any());
+        assertEquals(java.util.Set.of("people"), listed.getValue().get("h").keySet());
+        assertEquals(java.util.Set.of(), views.getValue());
+        verify(executionService, times(2)).catalogViewList();
+
+        producer.getStreamTableTypes(context, mock(FlightProducer.ServerStreamListener.class));
+        verify(metadataService).getTableTypesRoot(allocator, true);
+    }
+
+    private static pro.surpin.data.arrowflight.spi.catalog.CatalogView view(String name,
+            String table) {
+        return new pro.surpin.data.arrowflight.spi.catalog.CatalogView(name,
+                "SELECT * FROM \"h\".\"" + table + "\"", List.of(new TableName("h", table)),
+                List.of(new pro.surpin.data.arrowflight.spi.catalog.ColumnSpec("id", "BIGINT",
+                        true, null)), name);
+    }
+
     /** Omits schemas denied by Ranger from metadata discovery. */
     @Test
     void rangerFiltersSchemaListing() throws Exception {

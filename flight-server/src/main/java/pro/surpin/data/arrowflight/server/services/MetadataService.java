@@ -58,6 +58,8 @@ public final class MetadataService {
 
     public static final String CATALOG_NAME = "PARQUET_ARROW_FLIGHT_CATALOG";
     public static final String TABLE_TYPE = "TABLE";
+    /** Table type of the views of a catalog. */
+    public static final String VIEW_TYPE = "VIEW";
     private static final String COLUMN_TABLE_CATALOG = "TABLE_CATALOG";
     private static final String VECTOR_CATALOG_NAME = "catalog_name";
     private static final String COLUMN_TABLE_SCHEMA = "TABLE_SCHEM";
@@ -204,8 +206,20 @@ public final class MetadataService {
      * @return table types VSR
      */
     public VectorSchemaRoot getTableTypesRoot(BufferAllocator allocator) {
-        List<Map<String, Object>> data = List.of(
-                Map.of(COLUMN_TABLE_TYPE, TABLE_TYPE));
+        return getTableTypesRoot(allocator, false);
+    }
+
+    /**
+     * Builds a VectorSchemaRoot for GetTableTypes response, with views when a catalog shows any.
+     *
+     * @param allocator Arrow allocator
+     * @param withViews whether to list the view type too
+     * @return table types VSR
+     */
+    public VectorSchemaRoot getTableTypesRoot(BufferAllocator allocator, boolean withViews) {
+        List<Map<String, Object>> data = withViews
+                ? List.of(Map.of(COLUMN_TABLE_TYPE, TABLE_TYPE), Map.of(COLUMN_TABLE_TYPE, VIEW_TYPE))
+                : List.of(Map.of(COLUMN_TABLE_TYPE, TABLE_TYPE));
         return getRoot(data, allocator, "table_type", COLUMN_TABLE_TYPE);
     }
 
@@ -221,6 +235,28 @@ public final class MetadataService {
      */
     public VectorSchemaRoot getTablesRoot(
             Map<String, Map<String, Schema>> tables,
+            BufferAllocator allocator,
+            boolean includeSchema,
+            String schemaFilterPattern,
+            String tableFilterPattern) {
+        return getTablesRoot(tables, Set.of(), allocator, includeSchema, schemaFilterPattern,
+                tableFilterPattern);
+    }
+
+    /**
+     * Builds a VectorSchemaRoot for GetTables response with tables and views.
+     *
+     * @param tables             map of schema to table or view name to Arrow schema
+     * @param views              entries of {@code tables} that are views, as "schema\0name"
+     * @param allocator          Arrow allocator
+     * @param includeSchema      whether to include serialized Arrow schema
+     * @param schemaFilterPattern optional schema LIKE filter
+     * @param tableFilterPattern  optional table LIKE filter
+     * @return tables VSR
+     */
+    public VectorSchemaRoot getTablesRoot(
+            Map<String, Map<String, Schema>> tables,
+            Set<String> views,
             BufferAllocator allocator,
             boolean includeSchema,
             String schemaFilterPattern,
@@ -272,7 +308,8 @@ public final class MetadataService {
                         "TABLE_CAT", CATALOG_NAME,
                         COLUMN_TABLE_SCHEMA, schemaName,
                         "TABLE_NAME", tableName,
-                        COLUMN_TABLE_TYPE, TABLE_TYPE));
+                        COLUMN_TABLE_TYPE, views.contains(schemaName + "\u0000" + tableName)
+                                ? VIEW_TYPE : TABLE_TYPE));
                 if (tableSchemaVector != null) {
                     // Flight SQL wants the schema as a complete IPC message; stock drivers
                     // cannot read the bare flatbuffer.

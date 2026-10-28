@@ -278,6 +278,20 @@ public final class ExecutionService {
     }
 
     /**
+     * Lists the views of every catalog schema.
+     *
+     * @return schema name to its views sorted by name; empty without catalogs
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public Map<String, List<pro.surpin.data.arrowflight.spi.catalog.CatalogView>> catalogViewList() {
+        try {
+            return catalogViews.listedViews();
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    /**
      * Streams the result of one statement over Arrow batches read on this node (the endpoint
      * answers of a distributed complete answer): the batches are registered on this thread's
      * DuckDB connection under a view name, read once by the statement, and dropped afterwards.

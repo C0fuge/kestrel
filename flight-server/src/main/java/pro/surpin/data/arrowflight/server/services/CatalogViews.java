@@ -716,6 +716,26 @@ public final class CatalogViews {
     }
 
     /**
+     * Lists the views of every catalog schema, as queries may name them.
+     *
+     * @return schema name to its views sorted by name; empty without catalogs
+     * @throws IOException when the schemas cannot be listed
+     */
+    public Map<String, List<CatalogView>> listedViews() throws IOException {
+        CatalogTables catalogs = parquetAdapter.catalogTables();
+        if (catalogs == null || catalogs.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, List<CatalogView>> result = new TreeMap<>();
+        for (ShownView shown : shownViews().values()) {
+            result.computeIfAbsent(shown.schema(), k -> new ArrayList<>()).add(shown.view());
+        }
+        result.values().forEach(views -> views.sort(java.util.Comparator.comparing(
+                CatalogView::name)));
+        return result;
+    }
+
+    /**
      * Returns the views of every catalog schema, listed again at most once a minute. A view whose
      * name is also a table of its schema is left out (the table wins), as is one whose query names
      * a table it does not declare as a source. A catalog that cannot be read keeps the views
