@@ -43,7 +43,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
  */
 class ArrowStreamScansTest {
 
-    private static final TableSnapshot SNAPSHOT = new TableSnapshot(new TableName("s", "t"), "1",
+    static final TableSnapshot SNAPSHOT = new TableSnapshot(new TableName("s", "t"), "1",
             "f", List.of(new ColumnSpec("id", "BIGINT", true, null), new ColumnSpec("p", "INTEGER", true, null),
                     new ColumnSpec("label", "VARCHAR", true, null)),
             List.of("p"), List.of(file("a", "1"), file("b", null)), new ReadSpec.ArrowStream("orc"));
@@ -55,7 +55,7 @@ class ArrowStreamScansTest {
     }
 
     /** Catalog whose files hold rows id 0..2, label "l<id>", partition value from the file. */
-    private static final class StreamingCatalog implements Catalog {
+    static final class StreamingCatalog implements Catalog {
         final List<ArrowScan> scans = new ArrayList<>();
         boolean fail;
 
@@ -93,7 +93,7 @@ class ArrowStreamScansTest {
     }
 
     /** One batch per file with the requested columns. */
-    private static final class FilesReader extends ArrowReader {
+    static final class FilesReader extends ArrowReader {
         private final List<TableFile> files;
         private final List<String> columns;
         private int next;

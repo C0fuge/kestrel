@@ -32,7 +32,6 @@ import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.catalog.CatalogFileKey;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.catalog.PartitionPruner;
-import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
@@ -424,7 +423,7 @@ public final class QueryPlanner {
         // Parquet files of other catalogs (Hive) travel with their partition values, read once
         // here: executing nodes never list partitions again. Partitions the WHERE clause rules
         // out are left out (one file stays, so that every query has an endpoint).
-        boolean shipValues = snapshot.read() instanceof ReadSpec.ParquetFiles;
+        boolean shipValues = ExecutionService.shipsPartitionValues(snapshot);
         List<TableFile> planned = snapshot.files();
         if (shipValues && !snapshot.partitionColumns().isEmpty()) {
             planned = PartitionPruner.prune(snapshot, parsed.filter);

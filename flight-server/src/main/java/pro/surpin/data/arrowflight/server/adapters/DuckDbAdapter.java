@@ -852,6 +852,34 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Streams the results of a query that can run only once, because it reads Arrow streams
+     * registered on this thread's connection: the statement is prepared for this run alone
+     * (never cached), its parse check is not remembered, and a failure is not retried.
+     *
+     * @param allocator    Arrow buffer allocator
+     * @param duckSql      DuckDB SQL query
+     * @param listener     Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on query or stream failure
+     */
+    public void streamSqlOnce(BufferAllocator allocator, String duckSql,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            boolean startListener) throws Exception {
+        Session session = threadSession.get();
+        try {
+            requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
+            try (PreparedStatement ps = session.conn.prepareStatement(duckSql)) {
+                streamPrepared(allocator, duckSql, ps, listener, startListener);
+            }
+        } catch (ChangedFileBeforeStart e) {
+            throw e.error;
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
      * Streams DuckDB SQL query results of one thread's session to a Flight listener.
      *
      * @param session      this thread's session

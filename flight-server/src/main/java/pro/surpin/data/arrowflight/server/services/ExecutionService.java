@@ -46,10 +46,13 @@ import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.catalog.ArrowScanRequests;
+import pro.surpin.data.arrowflight.server.catalog.ArrowStreamScans;
 import pro.surpin.data.arrowflight.server.catalog.CatalogFileKey;
 import pro.surpin.data.arrowflight.server.catalog.CatalogLocations;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -65,6 +68,8 @@ public final class ExecutionService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExecutionService.class);
     private static final String FILES_TIMING_PREFIX = "files=";
+    /** Stands for an Arrow stream's source while the columns a query names are collected. */
+    private static final String ARROW_SOURCE_PLACEHOLDER = "__kestrel_arrow_source";
     private static final long SCHEMA_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private static final int SCHEMA_CACHE_CAPACITY = 1024;
 
@@ -755,7 +760,7 @@ public final class ExecutionService {
             }
         }
         // Files from the ticket (Hive) stand for the snapshot; Iceberg is checked as a whole.
-        boolean shipped = resolved.snapshot().read() instanceof ReadSpec.ParquetFiles;
+        boolean shipped = shipsPartitionValues(resolved.snapshot());
         String reason = CatalogTables.completeReason(shipped ? withFiles(resolved, files) : resolved);
         if (reason != null) {
             throw new IllegalStateException("The files of " + pq.schema + "." + pq.table
@@ -765,20 +770,69 @@ public final class ExecutionService {
             pathTracker.unknown("no-parquet-files");
             return;
         }
-        String source = catalogFilesSource(resolved.snapshot(), files);
-        String duckSql;
-        if (pq.hasAggregation) {
-            pathTracker.select(ExecutionPath.DUCKDB_AGGREGATION);
-            duckSql = DuckDbAdapter.buildDuckSqlWithFilter(pq, source, false);
-        } else {
-            pathTracker.select(ExecutionPath.DUCKDB_SCAN);
-            duckSql = DuckDbAdapter.buildSelectSql(pq, source);
-        }
+        pathTracker.select(pq.hasAggregation ? ExecutionPath.DUCKDB_AGGREGATION
+                : ExecutionPath.DUCKDB_SCAN);
         LOGGER.debug("qid={} node={} execution=engine engine=DuckDB(catalog) table={} snapshot={}"
                 + " files={}", LogUtil.qid(), LogUtil.node(), resolved.snapshot().name(),
                 resolved.snapshot().snapshotId(), files.size());
         LogUtil.logTiming(t, "catalog.resolveFiles", FILES_TIMING_PREFIX + files.size());
-        duckDbAdapter.streamSql(allocator, duckSql, listener, startListener);
+        if (resolved.snapshot().read() instanceof ReadSpec.ArrowStream) {
+            streamArrowScan(allocator, pq, resolved, files, listener, startListener);
+            return;
+        }
+        String source = catalogFilesSource(resolved.snapshot(), files);
+        duckDbAdapter.streamSql(allocator, partialSql(pq, source), listener, startListener);
+    }
+
+    /**
+     * Writes the SQL one endpoint of a partial query runs over its part of a table.
+     *
+     * @param pq parsed query of one table
+     * @param source FROM source of the part
+     * @return DuckDB SQL
+     */
+    static String partialSql(ParquetQueryParser pq, String source) {
+        return pq.hasAggregation
+                ? DuckDbAdapter.buildDuckSqlWithFilter(pq, source, false)
+                : DuckDbAdapter.buildSelectSql(pq, source);
+    }
+
+    /**
+     * Answers a partial query of a catalog table read as Arrow streams: the catalog streams the
+     * files with the columns the query names (filters as hints), DuckDB runs the query over the
+     * one-shot stream, and the stream is dropped afterwards whatever happened.
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param pq            parsed query of one table
+     * @param resolved      the snapshot with its catalog
+     * @param files         files of this endpoint
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on catalog, query or stream failure
+     */
+    private void streamArrowScan(BufferAllocator allocator, ParquetQueryParser pq,
+            CatalogTables.Resolved resolved, List<TableFile> files,
+            FlightProducer.ServerStreamListener listener, boolean startListener) throws Exception {
+        TableSnapshot snapshot = resolved.snapshot();
+        ArrowScan scan = ArrowScanRequests.of(snapshot,
+                partialSql(pq, ARROW_SOURCE_PLACEHOLDER), pq.filter);
+        try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(), allocator)) {
+            String source = scans.source(resolved.entry().catalog(), snapshot, files, scan);
+            duckDbAdapter.streamSqlOnce(allocator, partialSql(pq, source), listener,
+                    startListener);
+        }
+    }
+
+    /**
+     * Tells whether a snapshot's files travel in tickets with their partition values (files the
+     * server reads one by one without the catalog's metadata: Parquet files, Arrow streams).
+     *
+     * @param snapshot snapshot
+     * @return true when ticket entries carry partition values
+     */
+    public static boolean shipsPartitionValues(TableSnapshot snapshot) {
+        return snapshot.read() instanceof ReadSpec.ParquetFiles
+                || snapshot.read() instanceof ReadSpec.ArrowStream;
     }
 
     /**
@@ -816,9 +870,9 @@ public final class ExecutionService {
      */
     static List<TableFile> ticketFiles(CatalogTables.Resolved resolved, List<CatalogFileKey> keys) {
         TableSnapshot snapshot = resolved.snapshot();
-        if (!(snapshot.read() instanceof ReadSpec.ParquetFiles)) {
+        if (!shipsPartitionValues(snapshot)) {
             throw new IllegalArgumentException("Snapshot " + snapshot.snapshotId() + " of "
-                    + snapshot.name() + " is not read as Parquet files");
+                    + snapshot.name() + " is not read file by file");
         }
         Set<String> partitions = new java.util.LinkedHashSet<>(snapshot.partitionColumns());
         List<TableFile> result = new ArrayList<>(keys.size());
@@ -865,6 +919,9 @@ public final class ExecutionService {
      */
     private static String catalogDescribeSource(CatalogTables.Resolved resolved) {
         TableSnapshot snapshot = resolved.snapshot();
+        if (snapshot.read() instanceof ReadSpec.ArrowStream) {
+            return CatalogViews.declaredColumnsSource(snapshot);
+        }
         if (CatalogTables.completeReason(resolved) == null) {
             return CatalogSources.filesSource(snapshot, snapshot.files().subList(0, 1));
         }
