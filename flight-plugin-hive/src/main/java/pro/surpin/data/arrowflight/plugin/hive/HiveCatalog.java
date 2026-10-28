@@ -14,7 +14,9 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.arrow.c.ArrowArrayStream;
 import org.apache.arrow.c.Data;
@@ -56,12 +58,17 @@ final class HiveCatalog implements Catalog {
     private static final int TABLE_BATCH = 100;
     /** Rows per Arrow batch of an ORC table's stream. */
     private static final int ORC_BATCH_ROWS = 4096;
+    /** ORC files of one table scan decoded at once (their batches still arrive in file order). */
+    private static final int ORC_READ_AHEAD = Math.max(1,
+            Math.min(4, Runtime.getRuntime().availableProcessors()));
 
     private final HiveSettings settings;
     private final Metastore metastore;
     private final Stores stores;
     private final TableFormat iceberg;
     private final ExecutorService listPool;
+    /** Decodes ORC files; idle threads end after a minute. */
+    private final ExecutorService orcPool;
     private final String node;
     private volatile Cached<Map<String, String>> schemas;
     private final Map<String, Cached<Map<String, HiveTable>>> tables = new ConcurrentHashMap<>();
@@ -103,6 +110,12 @@ final class HiveCatalog implements Catalog {
         this.iceberg = iceberg;
         this.listPool = listPool;
         this.node = node;
+        AtomicInteger orcThreads = new AtomicInteger();
+        this.orcPool = Executors.newCachedThreadPool(task -> {
+            Thread thread = new Thread(task, "hive-orc-read-" + orcThreads.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     @Override
@@ -213,7 +226,8 @@ final class HiveCatalog implements Catalog {
         try {
             reader = new OrcTableReader(buffers, files, this::open, hive.orcColumns(),
                     hive.partitionColumns(), scan.columns(),
-                    OrcSearchArguments.of(scan.predicates(), types), ORC_BATCH_ROWS);
+                    OrcSearchArguments.of(scan.predicates(), types), ORC_BATCH_ROWS, orcPool,
+                    ORC_READ_AHEAD);
         } catch (IllegalArgumentException e) {
             throw new IOException("Cannot read " + snapshot.name() + ": " + e.getMessage(), e);
         }
@@ -235,6 +249,7 @@ final class HiveCatalog implements Catalog {
     @Override
     public void close() throws IOException {
         listPool.shutdownNow();
+        orcPool.shutdownNow();
         metastore.close();
         if (iceberg != null) {
             try {

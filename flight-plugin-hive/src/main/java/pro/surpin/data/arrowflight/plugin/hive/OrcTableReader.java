@@ -1,15 +1,23 @@
 package pro.surpin.data.arrowflight.plugin.hive;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.util.TransferPair;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -22,9 +30,11 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 /**
  * Reads the ORC files of one table scan one after the other as one Arrow stream: the requested
  * columns in the requested order, data columns as {@link OrcArrowReader} reads them and partition
- * columns as text, a constant per file from its partition values (NULL when missing). Each file
- * is opened only when the previous one is done. The stream's callbacks run on DuckDB's threads,
- * so every read sets the plugin's context class loader, which Hadoop and ORC load classes from.
+ * columns as text, a constant per file from its partition values (NULL when missing). Up to
+ * {@code readAhead} files are decoded at once on the executor's threads, each a few batches ahead,
+ * and their batches are handed over in file order, so the stream is the same as a file-by-file
+ * read. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
+ * both set the plugin's context class loader, which Hadoop and ORC load classes from.
  */
 final class OrcTableReader extends ArrowReader {
 
@@ -44,6 +54,12 @@ final class OrcTableReader extends ArrowReader {
         ReadableFile open(TableFile file) throws IOException;
     }
 
+    /** Decoded batches a file may hold ahead of the stream. */
+    private static final int BATCHES_AHEAD = 2;
+    private static final long OFFER_MILLIS = 100L;
+    /** Marks the end of a file's batches. */
+    private static final Object END = new Object();
+
     private final List<TableFile> files;
     private final Opener opener;
     private final List<OrcArrowReader.Column> dataColumns;
@@ -53,9 +69,10 @@ final class OrcTableReader extends ArrowReader {
     private final SearchArgument searchArgument;
     private final int batchSize;
     private final ClassLoader loader;
+    private final Executor executor;
+    private final int readAhead;
+    private final ArrayDeque<FileRead> reads = new ArrayDeque<>();
     private int next;
-    private OrcArrowReader current;
-    private TableFile currentFile;
 
     /**
      * Creates the reader; no file is opened yet.
@@ -68,11 +85,14 @@ final class OrcTableReader extends ArrowReader {
      * @param columns requested columns, in output order
      * @param searchArgument stripe and row group filter, or null
      * @param batchSize rows per batch
+     * @param executor runs the decoding of files
+     * @param readAhead files decoded at once, at least 1
      * @throws IllegalArgumentException when a requested column is not a column of the table
      */
     OrcTableReader(BufferAllocator allocator, List<TableFile> files, Opener opener,
             List<OrcArrowReader.Column> dataColumns, List<String> partitionColumns,
-            List<String> columns, SearchArgument searchArgument, int batchSize) {
+            List<String> columns, SearchArgument searchArgument, int batchSize,
+            Executor executor, int readAhead) {
         super(allocator);
         this.files = List.copyOf(files);
         this.opener = opener;
@@ -89,6 +109,8 @@ final class OrcTableReader extends ArrowReader {
         this.searchArgument = searchArgument;
         this.batchSize = batchSize;
         this.loader = OrcTableReader.class.getClassLoader();
+        this.executor = executor;
+        this.readAhead = Math.max(1, readAhead);
     }
 
     @Override
@@ -99,26 +121,35 @@ final class OrcTableReader extends ArrowReader {
         try {
             prepareLoadNextBatch();
             while (true) {
-                if (current == null) {
-                    if (next >= files.size()) {
-                        return false;
-                    }
-                    currentFile = files.get(next++);
-                    current = open(currentFile);
+                while (reads.size() < readAhead && next < files.size()) {
+                    FileRead read = new FileRead(files.get(next++));
+                    // Queued only once accepted: close waits for every queued read to end.
+                    executor.execute(read);
+                    reads.add(read);
                 }
-                boolean loaded;
+                FileRead head = reads.peek();
+                if (head == null) {
+                    return false;
+                }
+                Object item;
                 try {
-                    loaded = current.loadNextBatch();
-                } catch (IOException | RuntimeException e) {
-                    throw failure(currentFile, e);
+                    item = head.batches.take();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new InterruptedIOException("Interrupted reading " + head.file.location());
                 }
-                if (loaded) {
-                    fill(current.getVectorSchemaRoot(), currentFile);
-                    return true;
+                if (item == END) {
+                    reads.poll();
+                    continue;
                 }
-                OrcArrowReader done = current;
-                current = null;
-                done.close();
+                if (item instanceof IOException e) {
+                    reads.poll();
+                    throw e;
+                }
+                try (VectorSchemaRoot batch = (VectorSchemaRoot) item) {
+                    fill(batch, head.file);
+                }
+                return true;
             }
         } finally {
             thread.setContextClassLoader(previous);
@@ -132,16 +163,17 @@ final class OrcTableReader extends ArrowReader {
 
     @Override
     protected void closeReadSource() throws IOException {
-        if (current != null) {
-            Thread thread = Thread.currentThread();
-            ClassLoader previous = thread.getContextClassLoader();
-            thread.setContextClassLoader(loader);
+        IOException failure = null;
+        for (FileRead read : reads) {
             try {
-                current.close();
-            } finally {
-                current = null;
-                thread.setContextClassLoader(previous);
+                read.cancel();
+            } catch (InterruptedIOException e) {
+                failure = e;
             }
+        }
+        reads.clear();
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -204,6 +236,139 @@ final class OrcTableReader extends ArrowReader {
             text.setValueCount(rows);
         }
         root.setRowCount(rows);
+    }
+
+    /**
+     * Decodes one file on the executor into a queue of batches, ended by {@link #END} or by the
+     * file's failure as an {@link IOException}.
+     */
+    private final class FileRead implements Runnable {
+
+        private final TableFile file;
+        private final BlockingQueue<Object> batches = new ArrayBlockingQueue<>(BATCHES_AHEAD + 1);
+        private final CountDownLatch finished = new CountDownLatch(1);
+        private volatile boolean cancelled;
+
+        /**
+         * Creates the read of a file.
+         *
+         * @param file table file
+         */
+        FileRead(TableFile file) {
+            this.file = file;
+        }
+
+        @Override
+        public void run() {
+            Thread thread = Thread.currentThread();
+            ClassLoader previous = thread.getContextClassLoader();
+            thread.setContextClassLoader(loader);
+            try {
+                Object last;
+                try (OrcArrowReader reader = open(file)) {
+                    VectorSchemaRoot source = reader.getVectorSchemaRoot();
+                    while (!cancelled && loadNext(reader)) {
+                        VectorSchemaRoot batch = detach(source);
+                        boolean queued = false;
+                        try {
+                            queued = put(batch);
+                        } finally {
+                            if (!queued) {
+                                batch.close();
+                            }
+                        }
+                        if (!queued) {
+                            return;
+                        }
+                    }
+                    last = END;
+                } catch (IOException e) {
+                    last = e;
+                } catch (RuntimeException e) {
+                    last = failure(file, e);
+                }
+                put(last);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                finished.countDown();
+                thread.setContextClassLoader(previous);
+            }
+        }
+
+        /**
+         * Loads the file's next batch.
+         *
+         * @param reader the file's reader
+         * @return false at the end of the file
+         * @throws IOException naming the file
+         */
+        private boolean loadNext(OrcArrowReader reader) throws IOException {
+            try {
+                return reader.loadNextBatch();
+            } catch (IOException | RuntimeException e) {
+                throw failure(file, e);
+            }
+        }
+
+        /**
+         * Moves a batch out of the file reader's root, which the next batch reuses.
+         *
+         * @param source the file reader's root
+         * @return a batch of its own
+         */
+        private VectorSchemaRoot detach(VectorSchemaRoot source) {
+            List<FieldVector> vectors = new ArrayList<>(source.getFieldVectors().size());
+            for (FieldVector vector : source.getFieldVectors()) {
+                TransferPair pair = vector.getTransferPair(allocator);
+                pair.transfer();
+                vectors.add((FieldVector) pair.getTo());
+            }
+            return new VectorSchemaRoot(source.getSchema().getFields(), vectors,
+                    source.getRowCount());
+        }
+
+        /**
+         * Queues an item unless the read is cancelled.
+         *
+         * @param item batch, {@link #END} or failure
+         * @return false when cancelled (the item was not queued)
+         * @throws InterruptedException when the thread is interrupted
+         */
+        private boolean put(Object item) throws InterruptedException {
+            while (!cancelled) {
+                if (batches.offer(item, OFFER_MILLIS, TimeUnit.MILLISECONDS)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Stops the read, waits for it and frees its queued batches.
+         *
+         * @throws InterruptedIOException when interrupted while waiting
+         */
+        void cancel() throws InterruptedIOException {
+            cancelled = true;
+            try {
+                discard();
+                finished.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new InterruptedIOException("Interrupted closing " + file.location());
+            } finally {
+                discard();
+            }
+        }
+
+        private void discard() {
+            for (Object item = batches.poll(); item != null; item = batches.poll()) {
+                if (item instanceof VectorSchemaRoot batch) {
+                    batch.close();
+                }
+            }
+        }
     }
 
     private OrcArrowReader.Column dataColumn(String name) {
