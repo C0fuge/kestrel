@@ -432,8 +432,12 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     `ssl_ca` = the mounted PEM) reads `alice  42`: GetSchema, GetFlightInfo (path `[sales.orders]`) and DoGet all
     arrive as alice on the session bearer from the Basic handshake; a wrong password fails in ClickHouse ("Failed to
     authenticate") before any call reaches the producer. No code change was needed.
-    *Next step (3):* DuckDB's ADBC path (Flight SQL already; a short check that DuckDB's `adbc_scanner` community
-    extension - or `adbc_driver_flightsql` through DuckDB's Python `arrow` scan - reads a table is enough), then close
+    *Next step (3):* DuckDB as a client: (a) the ADBC path is Flight SQL already (ADBC Flight SQL driver is checked by
+    `CompressionClientsIntegrationTest`); (b) DuckDB's community `airport` extension speaks plain Flight
+    (`airport_take_flight('grpc://host:port', 'SELECT ...')` / a path) - check in CI whether it reads plain
+    descriptors (community-extensions.duckdb.org is not reachable from the cloud session, so add it to the Python
+    step of Dev CI and a case to `GenericFlightClientsIntegrationTest`, skipped when the extension cannot be
+    installed); it may need Airport-specific actions/metadata - if so, note it and do not add them. Then close
     P5. ClickHouse `INSERT` (DoPut) stays unsupported (read-only server; it fails as before).
 P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
     `docs/dev/CATALOGS-STATUS.md`).
@@ -645,3 +649,13 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   (80aa61a, contains all four commits) green; perf runs 40774271172, 40775865607, 40776750625 (numbers under P4);
   package run 40778373787 (package=true, 80aa61a) green -> pre-release `server-1.0.0-80aa61a15557`. P4 closed;
   next session: P5.
+- 2026-10-28 (plugins session): P5 steps 1 + 2 - plain Flight descriptors (SQL text command, table path) behind the
+  new opt-in `plainFlightCommands` (core 5e9ac98, own commit, STATUS.md Log line; Open question noted as additive),
+  pyarrow + ClickHouse 26.8 `arrowFlight` end-to-end tests and a ClickHouse image step in Dev CI (a802c41),
+  ClickHouse TLS + LDAP Basic login test (7c88ccf, test only). Local (GCS mirror of Central; Docker started in the
+  session, image via mirror.gcr.io): `PlainFlightCommandsTest` 3/3, `PlainFlightCommandsIntegrationTest` 5/5,
+  `FlightSqlProducerTest` 33/33, `ConfigAdapterTest` 48/48, `GenericFlightClientsIntegrationTest` 2/2,
+  flight-auth-ldap 36/36 incl. `ClickHouseLdapLoginTest`; Checkstyle + SpotBugs clean. CI: push runs 40788411531,
+  40788854220, 40789242301 cancelled by later pushes; Dev CI run 40789295791 (881bbf7, dispatched by the core lane,
+  contains all three commits) green incl. the ClickHouse image step and package -> pre-release
+  `server-1.0.0-f73de96b8773`. Next: P5 step 3 (DuckDB `airport` in CI), then close P5.

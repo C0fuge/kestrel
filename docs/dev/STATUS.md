@@ -2075,3 +2075,9 @@
   **Screening:** 4/8-stream scans with `-DduckDbSharedDatabase=true -DduckDbStreamingBufferSize=64MiB` vs shared
   alone (item 16 found 64MiB within noise per DuckDB; shared mode may differ). Next: shared DuckDB steps (b) (stand)
   and (d) (decision); no other open core code step is known short of the maintainer's answers.
+- 2026-10-28 (plugins lane): core commit 5e9ac98 (P5) - opt-in `plainFlightCommands` (`FLIGHT_PLAIN_COMMANDS`,
+  default false = unchanged): `FlightSqlProducer` overrides `getFlightInfo` / `getSchema` for descriptors that are
+  not Flight SQL commands (SQL text, or a path naming a table -> `SELECT * FROM schema.table`), through
+  `requireQuery` and `flightInfoForQuery(..., complete)`; complete unless `x-flight-result-mode: partial`. New
+  `adapters/PlainFlightCommands`; `HadoopArrowFlightServer` sets it before start. Dev CI also pulls a ClickHouse image
+  (`-Dclickhouse.it.image`, failed pull = test skipped). Dev CI run 40789295791 green.
