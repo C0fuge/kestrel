@@ -23,7 +23,13 @@
 
 ## Next steps (one per session)
 
-> **Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**
+> ~~**Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**~~
+> *Fixed 2026-10-28 (9efe670, see Log):* default threads cores / 4 in 4..16, the per-GiB cap only above 4, per-connection
+> `memory_limit` unchanged (1024/2201/3942 MiB on the three profiles, `DuckDbSizingTest`). New manual workflow
+> `tpch-perf.yml` (run 40722015834, SF10, 4c/8g container): default 21.82 s, `-DduckDbThreads=4` 21.38 s, pre-fix
+> 2d93081 (2 threads) 29.48 s; all 22 row counts = DuckDB's own. **Screening/stand:** re-measure the pre-release
+> (see Log) against `7562a5bdb7b9`; the CI perf check of the note is `tpch-perf.yml`, not in Dev CI (SF10 takes ~10 min).
+> Original report:
 > Under container limits 4c/8g, 8c/16g, 16c/24g (ADBC + raw Flight, HDFS SF10, 3 rounds, 22/22, 0 OOM): `duckdb=sizing`
 > correctly reports container cores/memory, but chooses threads 2/2/3 (16c/24g cut from 4 to 3 by the 1-thread-per-GiB
 > cap at 3942 MiB) -> TPC-H SF10 17.95/17.94/13.43 s vs 7562a5bdb7b9 (4 threads) 10.71/10.73/9.92. With 4 threads and the
@@ -191,6 +197,8 @@
 >    (done 2026-10-28, fd9f62f, see Log: opt-in `duckDbThreadsWhenIdle` = more threads for a DoGet that starts alone on
 >    the node; "fewer under concurrency" is the existing `duckDbThreadsUnderLoad`). **Stand (large hosts):** a lone
 >    TPC-H SF10 query on 16+ cores with `duckDbThreadsWhenIdle=<cores>` vs default, and the load test with both on.
+>    *Fix 2026-10-28 (9efe670, stand p19b):* thread floor 4 (cores / 4 in 4..16), per-GiB cap only above 4; the memory
+>    split keeps its divisor (cores / (cores / 4 in 2..16)).
 > 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. ~~item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).~~ *Done 2026-10-28 (ea55a4f, in pre-release `server-1.0.0-177dfe3e5716`, see Log):*
