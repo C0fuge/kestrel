@@ -29,6 +29,8 @@
         <!-- Same as flight-server. -->
         <hadoop.version>3.5.0</hadoop.version>
         <duckdb.version>1.5.6.0</duckdb.version>
+        <!-- Same as flight-plugin-s3 (test only). -->
+        <aws.sdk.version>2.34.1</aws.sdk.version>
         <!-- Directory with v<duckdb>/<platform>/{iceberg,avro}.duckdb_extension; tests that need
              DuckDB's iceberg extension are skipped without it. -->
         <iceberg.it.extensionDir></iceberg.it.extensionDir>
@@ -41,6 +43,12 @@
                 <version>${jackson.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- As in flight-plugin-s3: the SDK's Apache client (test only) gets httpcore 4.4.13. -->
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpcore</artifactId>
+                <version>4.4.13</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -221,6 +229,70 @@
             <artifactId>slf4j-simple</artifactId>
             <version>2.0.20</version>
             <scope>test</scope>
+        </dependency>
+        <!-- RestCatalogConformanceTest with an S3 warehouse: the s3 plugin's store reads for the
+             plugin, Iceberg's S3FileIO writes the test tables (same AWS SDK as the s3 plugin). -->
+        <dependency>
+            <groupId>pro.surpin.arrowflight</groupId>
+            <artifactId>arrow-flight-plugin-s3</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-aws</artifactId>
+            <version>${iceberg.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${aws.sdk.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apache-client</artifactId>
+            <version>${aws.sdk.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- S3FileIO's HTTP client in the test (its default needs a newer SDK). -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+            <version>${aws.sdk.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Iceberg's AwsProperties names KMS and STS types. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+            <version>${aws.sdk.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>${aws.sdk.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 

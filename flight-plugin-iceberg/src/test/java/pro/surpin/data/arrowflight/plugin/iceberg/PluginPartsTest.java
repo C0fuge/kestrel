@@ -95,8 +95,9 @@ class PluginPartsTest {
 
     @Test
     void pluginNamesBothCatalogKinds() {
+        // The s3 plugin is on the test class path too (RestCatalogConformanceTest).
         List<Plugin> plugins = ServiceLoader.load(Plugin.class).stream()
-                .map(ServiceLoader.Provider::get).toList();
+                .map(ServiceLoader.Provider::get).filter(IcebergPlugin.class::isInstance).toList();
         assertEquals(1, plugins.size());
         List<String> names = plugins.get(0).catalogProviders().stream()
                 .map(CatalogProvider::name).toList();

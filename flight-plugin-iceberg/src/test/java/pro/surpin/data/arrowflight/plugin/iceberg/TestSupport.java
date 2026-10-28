@@ -22,6 +22,7 @@ import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.spi.storage.DataStore;
 import pro.surpin.data.arrowflight.spi.storage.Located;
 import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
+import pro.surpin.data.arrowflight.spi.storage.StoreContext;
 import pro.surpin.data.arrowflight.spi.storage.Stores;
 
 /**
@@ -38,6 +39,8 @@ final class TestSupport {
      */
     static final class LocalStores implements Stores {
         final List<LocalStore> stores = new ArrayList<>();
+        /** Stores opened elsewhere (an S3 store), looked at first. */
+        final List<DataStore> opened = new ArrayList<>();
         final List<String> located = new ArrayList<>();
         private boolean frozen;
 
@@ -48,6 +51,15 @@ final class TestSupport {
         @Override
         public synchronized Located locate(String absoluteUri) throws IOException {
             located.add(absoluteUri);
+            for (DataStore store : opened) {
+                String root = store.root().endsWith("/") ? store.root() : store.root() + "/";
+                if (absoluteUri.equals(store.root()) || (absoluteUri + "/").equals(root)) {
+                    return new Located(store, "");
+                }
+                if (absoluteUri.startsWith(root)) {
+                    return new Located(store, absoluteUri.substring(root.length()));
+                }
+            }
             for (LocalStore store : stores) {
                 String prefix = store.root + "/";
                 if (absoluteUri.equals(store.root)) {
@@ -194,6 +206,34 @@ final class TestSupport {
         @Override
         public Optional<String> secret(String key) {
             return get(key);
+        }
+    }
+
+    /**
+     * What an S3 store of the s3 plugin is opened with in tests.
+     *
+     * @param config s3 configuration
+     * @param redactor redactor
+     */
+    record S3Context(PluginConfig config, SecretRedactor redactor) implements StoreContext {
+        @Override
+        public String nodeName() {
+            return "test";
+        }
+
+        @Override
+        public String storageHost() {
+            return "localhost";
+        }
+
+        @Override
+        public int ioParallelism() {
+            return 4;
+        }
+
+        @Override
+        public ThreadFactory threadFactory(String name) {
+            return Executors.defaultThreadFactory();
         }
     }
 

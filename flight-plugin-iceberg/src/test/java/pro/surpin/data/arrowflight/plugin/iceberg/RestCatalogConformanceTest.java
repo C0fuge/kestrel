@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -34,7 +35,9 @@ import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
+import pro.surpin.data.arrowflight.plugin.s3.S3DataStoreProvider;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.storage.StoreUse;
 
 /**
  * Conformance of the iceberg-rest catalog against a real Iceberg REST catalog (Apache Polaris,
@@ -42,8 +45,11 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  * written through the catalog itself with Iceberg Java's RESTCatalog and, as the reference,
  * into a Hadoop-layout warehouse; the plugin must see both the same way: names, columns, files,
  * row and delete counts, partial-read problems and, with DuckDB's iceberg extension, the same
- * rows. Skipped unless {@code ICEBERG_REST_IT_URI} is set; the catalog's warehouse must be a
- * local directory shared with the catalog server ({@code ICEBERG_REST_IT_ROOT}). Optional:
+ * rows. Skipped unless {@code ICEBERG_REST_IT_URI} is set; the catalog's warehouse
+ * ({@code ICEBERG_REST_IT_ROOT}) is a local directory shared with the catalog server, or an S3
+ * location ({@code s3://bucket/path}) read and written with {@code ICEBERG_REST_IT_S3_ENDPOINT},
+ * {@code ICEBERG_REST_IT_S3_ACCESS_KEY} and {@code ICEBERG_REST_IT_S3_SECRET_KEY} (path-style
+ * URLs; the plugin reads through the s3 plugin's store). Optional:
  * {@code ICEBERG_REST_IT_WAREHOUSE}, {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2 id:secret),
  * {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_OAUTH_URI}.
  */
@@ -58,6 +64,11 @@ class RestCatalogConformanceTest {
     static String reference;
     static Map<String, String> restMetadata;
     static Map<String, String> settings;
+    /** Whether the catalog's warehouse is on S3. */
+    static boolean s3;
+    static String s3Root;
+    /** Configuration of the s3 plugin's store for {@link #s3Root}. */
+    static Map<String, String> s3Config;
 
     @BeforeAll
     static void writeTables() throws IOException {
@@ -65,14 +76,31 @@ class RestCatalogConformanceTest {
         Assumptions.assumeTrue(uri != null && !uri.isBlank(),
                 "no real REST catalog (ICEBERG_REST_IT_URI)");
         String root = System.getenv("ICEBERG_REST_IT_ROOT");
-        Assumptions.assumeTrue(root != null && Files.isDirectory(Path.of(root)),
-                "ICEBERG_REST_IT_ROOT must be the catalog's local warehouse directory");
+        s3 = root != null && root.startsWith("s3://");
+        Assumptions.assumeTrue(root != null && (s3 || Files.isDirectory(Path.of(root))),
+                "ICEBERG_REST_IT_ROOT must be the catalog's local warehouse directory or s3://...");
         reference = dir.resolve("wh").toString();
         IcebergFixtures.write(reference);
 
         settings = new HashMap<>(Map.of("uri", uri, "roots", root));
-        Map<String, String> writer = new HashMap<>(Map.of("uri", uri,
-                "io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"));
+        Map<String, String> writer = new HashMap<>(Map.of("uri", uri));
+        if (s3) {
+            s3Root = root;
+            s3Config = Map.of("endpoint", env("ICEBERG_REST_IT_S3_ENDPOINT").orElseThrow(),
+                    "accessKey", env("ICEBERG_REST_IT_S3_ACCESS_KEY").orElseThrow(),
+                    "secretKey", env("ICEBERG_REST_IT_S3_SECRET_KEY").orElseThrow(),
+                    "region", "us-east-1", "urlStyle", "path");
+            writer.put("io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
+            writer.put("s3.endpoint", s3Config.get("endpoint"));
+            writer.put("s3.path-style-access", "true");
+            writer.put("s3.access-key-id", s3Config.get("accessKey"));
+            writer.put("s3.secret-access-key", s3Config.get("secretKey"));
+            writer.put("client.region", "us-east-1");
+            // Iceberg's "apache" client is the SDK's Apache 5 client, newer than the s3 plugin's SDK.
+            writer.put("http-client.type", "urlconnection");
+        } else {
+            writer.put("io-impl", "org.apache.iceberg.hadoop.HadoopFileIO");
+        }
         env("ICEBERG_REST_IT_WAREHOUSE").ifPresent(v -> {
             settings.put("warehouse", v);
             writer.put("warehouse", v);
@@ -111,6 +139,11 @@ class RestCatalogConformanceTest {
 
     private static Catalog rest() throws IOException {
         TestSupport.LocalStores stores = new TestSupport.LocalStores();
+        if (s3) {
+            stores.opened.add(new S3DataStoreProvider().open(new TestSupport.S3Context(
+                    new TestSupport.MapConfig("s3", s3Config), new SecretRedactor()), s3Root,
+                    StoreUse.CATALOG_ROOT));
+        }
         Catalog catalog = new IcebergCatalogProvider(IcebergSettings.Kind.REST).open(
                 new TestSupport.Context(new TestSupport.MapConfig("iceberg-rest", settings), stores,
                         new SecretRedactor()));
@@ -167,6 +200,14 @@ class RestCatalogConformanceTest {
                 Statement s = conn.createStatement()) {
             s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");
             s.execute("LOAD '" + ext.resolve("iceberg.duckdb_extension") + "'");
+            if (s3) {
+                s.execute("LOAD '" + ext.resolve("httpfs.duckdb_extension") + "'");
+                URI endpoint = URI.create(s3Config.get("endpoint"));
+                s.execute("CREATE SECRET conformance (TYPE s3, KEY_ID '" + s3Config.get("accessKey")
+                        + "', SECRET '" + s3Config.get("secretKey") + "', REGION 'us-east-1', ENDPOINT '"
+                        + endpoint.getAuthority() + "', URL_STYLE 'path', USE_SSL "
+                        + "https".equals(endpoint.getScheme()) + ")");
+            }
             for (String table : TABLES) {
                 if ("empty".equals(table)) {
                     continue;
