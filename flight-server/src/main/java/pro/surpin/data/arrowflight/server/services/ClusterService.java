@@ -1,7 +1,10 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import com.hazelcast.map.IMap;
+import com.hazelcast.map.listener.EntryAddedListener;
 import com.hazelcast.map.listener.EntryExpiredListener;
+import com.hazelcast.map.listener.EntryRemovedListener;
+import com.hazelcast.map.listener.EntryUpdatedListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.hazelcast.core.EntryEvent;
 import com.hazelcast.core.HazelcastInstance;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
@@ -85,6 +89,9 @@ public final class ClusterService implements AutoCloseable {
     private final Map<String, LocalHandle> localHandles = new ConcurrentHashMap<>();
     /** This node's published inventory, published again when the cluster lost it. */
     private volatile Map<String, Long> localInventory;
+    /** Every node's published inventory as last read or announced, for plans while a member is silent. */
+    private final Map<String, Map<String, Long>> inventoryMirror = new ConcurrentHashMap<>();
+    private volatile boolean inventoryMirrorRead;
 
     /**
      * Associates locally cached state with its expiration deadline.
@@ -164,6 +171,7 @@ public final class ClusterService implements AutoCloseable {
         if (registerNow) {
             register();
         }
+        watchInventories();
 
         hazelcast.onStatementExpired((EntryExpiredListener<String, Serializable>) event -> {
             Serializable value = event.getOldValue();
@@ -501,8 +509,15 @@ public final class ClusterService implements AutoCloseable {
                 }
             }
         } else {
-            for (Map.Entry<String, Map<String, Long>> entry : hazelcast.serverFiles().entrySet()) {
-                inventories.put(entry.getKey(), entry.getValue());
+            Map<String, Map<String, Long>> mirrored = mirroredInventories();
+            if (mirrored != null) {
+                inventories.putAll(mirrored);
+            } else {
+                for (Map.Entry<String, Map<String, Long>> entry : hazelcast.serverFiles().entrySet()) {
+                    inventories.put(entry.getKey(), entry.getValue());
+                }
+                inventoryMirror.putAll(inventories);
+                inventoryMirrorRead = true;
             }
         }
         Map<String, FileAssignment> result = new LinkedHashMap<>();
@@ -526,6 +541,99 @@ public final class ClusterService implements AutoCloseable {
         }
         LogUtil.logTiming(t, "hazelcast.fileLocations", "files=" + result.size());
         return result;
+    }
+
+    /**
+     * Keeps a local copy of every published inventory up to date from the map's entry events, so
+     * that a plan on local disks need not read the whole map while a member does not answer.
+     */
+    private void watchInventories() {
+        try {
+            hazelcast.serverFiles().addEntryListener(new InventoryListener(), true);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Inventory events unavailable, plans read the inventory map: {}", e.toString());
+        }
+    }
+
+    /**
+     * Reads every published inventory without waiting for a member that stopped answering:
+     * the inventories on members that answer by key, the others from the local copy. The keys
+     * are the nodes in the local copy and the current members. A full read of the map
+     * (entrySet) would wait for the silent member until Hazelcast drops it (10 s by default).
+     *
+     * @return inventories by server, or null when every member answers or an inventory on the
+     *         silent member is not known here; the caller then reads the whole map
+     */
+    private Map<String, Map<String, Long>> mirroredInventories() {
+        ClusterView view = hazelcast.view();
+        if (view == null || !inventoryMirrorRead || view.unresponsiveServers().isEmpty()) {
+            return null;
+        }
+        Set<String> keys = new LinkedHashSet<>(inventoryMirror.keySet());
+        Set<String> members = memberServerUris();
+        if (members != null) {
+            keys.addAll(members);
+        }
+        if (localInventory != null) {
+            keys.add(serverUri);
+        }
+        Set<String> readable = new LinkedHashSet<>();
+        Map<String, Map<String, Long>> inventories = new LinkedHashMap<>();
+        for (String key : keys) {
+            if (!view.ownerUnresponsive(key)) {
+                readable.add(key);
+                continue;
+            }
+            Map<String, Long> inventory = key.equals(serverUri) ? localInventory : inventoryMirror.get(key);
+            if (inventory == null && (key.equals(serverUri) || members == null || members.contains(key))) {
+                // A member's inventory that is on the silent member and was never seen here:
+                // leaving it out would drop that node's files from the answer.
+                LOGGER.info("Inventory of {} unknown while its partition owner does not answer;"
+                        + " reading the whole inventory map", key);
+                return null;
+            }
+            if (inventory != null) {
+                inventories.put(key, inventory);
+            }
+        }
+        Map<String, Map<String, Long>> found = readKeys(hazelcast.serverFiles(), readable);
+        for (String key : readable) {
+            Map<String, Long> inventory = found.get(key);
+            if (inventory != null) {
+                inventoryMirror.put(key, inventory);
+            } else {
+                inventoryMirror.remove(key);
+                inventory = key.equals(serverUri) ? localInventory : null;
+            }
+            if (inventory != null) {
+                inventories.put(key, inventory);
+            }
+        }
+        return inventories;
+    }
+
+    /**
+     * Applies the inventory map's entry events to the local copy of the inventories.
+     */
+    private final class InventoryListener implements
+            EntryAddedListener<String, Map<String, Long>>,
+            EntryUpdatedListener<String, Map<String, Long>>,
+            EntryRemovedListener<String, Map<String, Long>> {
+
+        @Override
+        public void entryAdded(EntryEvent<String, Map<String, Long>> event) {
+            inventoryMirror.put(event.getKey(), event.getValue());
+        }
+
+        @Override
+        public void entryUpdated(EntryEvent<String, Map<String, Long>> event) {
+            inventoryMirror.put(event.getKey(), event.getValue());
+        }
+
+        @Override
+        public void entryRemoved(EntryEvent<String, Map<String, Long>> event) {
+            inventoryMirror.remove(event.getKey());
+        }
     }
 
     /**

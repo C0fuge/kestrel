@@ -3,12 +3,18 @@ package pro.surpin.data.arrowflight.server.services;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import pro.surpin.data.arrowflight.server.adapters.ClusterView;
+import com.hazelcast.core.EntryEvent;
+import com.hazelcast.core.EntryEventType;
+import com.hazelcast.map.listener.EntryAddedListener;
+import com.hazelcast.map.listener.EntryRemovedListener;
+import com.hazelcast.map.listener.MapListener;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.model.HandleState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -565,6 +571,116 @@ class ClusterServiceTest {
         ClusterService cs = createService("s1");
         assertEquals(Set.of("f1.parquet", "f2.parquet"), cs.fileLocations(false).keySet());
         verify(serverFiles, never()).getAll(any());
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 3: a plan on local disks while a member does not answer reads the inventories
+     * on members that answer by key and the others from the local copy, instead of a full read
+     * of the map that waits for the silent member; nodes that left keep their inventories.
+     */
+    @Test
+    void fileLocationsOnLocalDisksDoNotWaitForASilentMember() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        String s3 = "grpc://n3:32010";
+        String left = "grpc://n4:32010";
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s2, s3));
+        when(serverFiles.entrySet()).thenReturn(Set.of(
+                Map.entry(s1, Map.of("f1.parquet", 100L)),
+                Map.entry(s2, Map.of("f2.parquet", 200L)),
+                Map.entry(s3, Map.of("f3.parquet", 300L)),
+                Map.entry(left, Map.of("f4.parquet", 400L))));
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        when(hazelcast.members()).thenReturn(Set.of());
+        ClusterService cs = createService(s1);
+        assertEquals(4, cs.fileLocations(false).size());
+
+        // n3 stops answering; its inventory and the one of the node that left live on it.
+        when(view.unresponsiveServers()).thenReturn(Set.of(s3));
+        when(view.ownerUnresponsive(s3)).thenReturn(true);
+        when(view.ownerUnresponsive(left)).thenReturn(true);
+        when(view.getAll(eq(serverFiles), eq(Set.of(s1, s2)), any())).thenReturn(Map.of(
+                s1, Map.of("f1.parquet", 100L),
+                s2, Map.of("f2.parquet", 200L, "f5.parquet", 500L)));
+        Map<String, FileAssignment> result = cs.fileLocations(false);
+
+        assertEquals(Set.of("f1.parquet", "f2.parquet", "f3.parquet", "f4.parquet", "f5.parquet"),
+                result.keySet());
+        assertEquals(Set.of(s3), result.get("f3.parquet").hosts());
+        assertEquals(Set.of(left), result.get("f4.parquet").hosts());
+        verify(serverFiles, times(1)).entrySet();
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 3: the local copy of the inventories follows the map's entry events, so a
+     * node that published or left after the last full read is known while a member is silent.
+     */
+    @Test
+    void fileLocationsWhileAMemberIsSilentFollowInventoryEvents() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        String s3 = "grpc://n3:32010";
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s3));
+        when(serverFiles.entrySet()).thenReturn(Set.of(
+                Map.entry(s1, Map.of("f1.parquet", 100L)),
+                Map.entry(s2, Map.of("f2.parquet", 200L))));
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        when(hazelcast.members()).thenReturn(Set.of());
+        ClusterService cs = createService(s1);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<MapListener> listener = ArgumentCaptor.forClass(MapListener.class);
+        verify(serverFiles).addEntryListener(listener.capture(), eq(true));
+        cs.fileLocations(false);
+
+        // n3 published after the full read, n2 was removed; then n3 stops answering.
+        @SuppressWarnings("unchecked")
+        EntryAddedListener<String, Map<String, Long>> added =
+                (EntryAddedListener<String, Map<String, Long>>) listener.getValue();
+        added.entryAdded(new EntryEvent<>("serverFiles", null, EntryEventType.ADDED.getType(),
+                s3, Map.of("f3.parquet", 300L)));
+        @SuppressWarnings("unchecked")
+        EntryRemovedListener<String, Map<String, Long>> removed =
+                (EntryRemovedListener<String, Map<String, Long>>) listener.getValue();
+        removed.entryRemoved(new EntryEvent<>("serverFiles", null, EntryEventType.REMOVED.getType(),
+                s2, null));
+        when(view.unresponsiveServers()).thenReturn(Set.of(s3));
+        when(view.ownerUnresponsive(s3)).thenReturn(true);
+        when(view.getAll(eq(serverFiles), eq(Set.of(s1)), any())).thenReturn(Map.of(
+                s1, Map.of("f1.parquet", 100L)));
+
+        assertEquals(Set.of("f1.parquet", "f3.parquet"), cs.fileLocations(false).keySet());
+        verify(serverFiles, times(1)).entrySet();
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 3: a member's inventory on the silent member that this node never saw is
+     * not left out (its files would drop from the answer): the plan reads the whole map.
+     */
+    @Test
+    void fileLocationsReadTheWholeMapWhenASilentMembersInventoryIsUnknown() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s2));
+        when(serverFiles.entrySet()).thenReturn(Set.of(
+                Map.entry(s1, Map.of("f1.parquet", 100L))));
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        ClusterService cs = createService(s1);
+        cs.fileLocations(false);
+
+        when(view.unresponsiveServers()).thenReturn(Set.of(s2));
+        when(view.ownerUnresponsive(s2)).thenReturn(true);
+        when(serverFiles.entrySet()).thenReturn(Set.of(
+                Map.entry(s1, Map.of("f1.parquet", 100L)),
+                Map.entry(s2, Map.of("f2.parquet", 200L))));
+
+        assertEquals(Set.of("f1.parquet", "f2.parquet"), cs.fileLocations(false).keySet());
+        verify(serverFiles, times(2)).entrySet();
         cs.close();
     }
 

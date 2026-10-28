@@ -272,6 +272,40 @@ class ClusterMemberLossIntegrationTest {
     }
 
     /**
+     * Item D3 step 3: a plan on local disks needs every inventory, including the silent
+     * member's, so that its files fail the plan instead of leaving the answer. That read waited
+     * for the silent member (a full read of the map) until Hazelcast dropped it; now it takes
+     * the inventories on silent partitions from the node's local copy and does not wait.
+     */
+    @Test
+    void crashedMemberWhoseAddressVanishedDoesNotHoldLocalDiskPlans() throws Exception {
+        String iptables = iptablesCommand();
+        Assumptions.assumeTrue(iptables != null, "needs iptables as root or via sudo -n");
+        List<ClusterService> cluster = crashCluster(null);
+        ClusterService survivor = cluster.get(0);
+        Map<String, FileAssignment> before = survivor.fileLocations(false);
+        String rules = "%1$s %2$s INPUT -s 127.0.0.2 -j DROP && %1$s %2$s INPUT -d 127.0.0.2 -j DROP";
+        long millis;
+        try {
+            assertTrue(run(rules.formatted(iptables, "-I")), "the DROP rules were not added");
+            firstPlanMillisAfterCrash(cluster);
+            long started = System.nanoTime();
+            for (int i = 0; i < 5; i++) {
+                Map<String, FileAssignment> located = survivor.fileLocations(false);
+                assertEquals(before.keySet(), located.keySet());
+                assertTrue(located.keySet().stream().anyMatch(path -> path.contains("/n3-")),
+                        "the crashed member's inventory is gone: " + located.keySet());
+            }
+            millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) / 5;
+            assertEquals(3, survivor.getHazelcastInstance().getCluster().getMembers().size(),
+                    "the crashed member was dropped already; the test measured nothing");
+        } finally {
+            run(rules.formatted(iptables, "-D"));
+        }
+        assertTrue(millis < 500, "local-disk plans took " + millis + " ms each");
+    }
+
+    /**
      * Item D3 step 2: after the first plan found the silent member, the writes of a partial-mode
      * plan with load tracking (load added per server, a reservation per ticket, its release) and
      * the heartbeat do not wait for it either; they land once Hazelcast dropped the member, and

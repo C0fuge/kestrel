@@ -504,6 +504,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   secret (maps kept on every member, whose puts wait for each one) wait in the background or for the next beat, and
   this node's own pending inventory counts as published; a node that stops while its registry entry sits on the
   silent member leaves without deregistering (the others drop it when its member leaves).
+- Cluster: plans on local disks (each node its own data directory) no longer wait for such a node either (item D3
+  step 3). They need every published inventory, so that files only a lost node held fail the plan instead of leaving
+  the answer; the full read of the inventory map waited for the silent member. Each node now keeps a local copy of the
+  inventories (full reads plus the map's entry events) and, while a member does not answer, reads the inventories on
+  members that answer by key and takes the others from that copy; a member's inventory it never saw makes it read the
+  whole map as before. Measured with an iptables DROP: local-disk planning reads well under 500 ms (before: until
+  Hazelcast dropped the member, 10 s).
 - DuckDB threads and memory by host size (item 19b): with `duckDbMemoryLimit` unset every DuckDB connection now gets
   `memory_limit` = the node's DuckDB budget (container `memory.max` or physical memory, minus `-Xmx`, direct memory
   and 15 % headroom) / the connections expected at once (`duckDbMemoryConnections`, default cores / threads, at
