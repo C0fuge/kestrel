@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Iceberg time travel to snapshots whose files cannot be read one by one (deletion vectors, renamed nested fields;
+  item 3 (c)): such a snapshot is now read by DuckDB's `iceberg_scan(..., snapshot_from_id => <id>)` instead of
+  being refused, and only when DuckDB reads it with the snapshot's own columns (names and types, nested field names
+  included) - otherwise refused as before. DuckDB 1.5.6 reads both snapshots of a table before and after a nested
+  rename with their own field names (`IcebergCatalogIntegrationTest`, complete and partial mode). Log line
+  `views=icebergSnapshotRead`.
 - Startup line `duckdb=externalFileCache perConnection= expectedConnections= expectedMiB= memoryMiB=` when
   `duckDbExternalFileCache=true`, and a WARN `duckdb=externalFileCacheUnbounded` when it is on without a per-connection
   `memory_limit` (`duckDbMemoryLimit=none`). Measured on DuckDB 1.5.6: the cache stays within each connection's

@@ -100,6 +100,17 @@
         <Class name="pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter"/>
         <Method name="configureConnection"/>
     </Match>
+
+    <!--
+      SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE: requireDeclaredColumns describes a time-travel source
+      the server built (quoted metadata path, numeric snapshot ID) and casts NULL to the column types
+      the catalog declares, as the declared-columns views do; no client text.
+    -->
+    <Match>
+        <Bug pattern="SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE"/>
+        <Class name="pro.surpin.data.arrowflight.server.services.CatalogViews"/>
+        <Method name="requireDeclaredColumns"/>
+    </Match>
     <!--
       NM_SAME_SIMPLE_NAME_AS_INTERFACE: the server's storage.DataStore extends the plugin SPI's
       DataStore on purpose (it adds Parquet footer reads), so the server code keeps its name.

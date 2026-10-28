@@ -87,6 +87,15 @@ public final class CatalogViews {
     private record TravelViews(String data, String empty) {
     }
 
+    /**
+     * FROM source of a time-travel snapshot.
+     *
+     * @param sql FROM source
+     * @param scan whether DuckDB's iceberg_scan reads the snapshot (its columns must be checked)
+     */
+    private record TravelSource(String sql, boolean scan) {
+    }
+
     /** Most time-travel snapshots kept described. */
     private static final int TRAVEL_CAPACITY = 64;
 
@@ -402,28 +411,100 @@ public final class CatalogViews {
 
     /**
      * Names the FROM source of a time-travel snapshot: its own data files, read by field ID with
-     * the snapshot's columns and deletes like partial answers read them. DuckDB's iceberg_scan
-     * reads the metadata file's current snapshot, so a snapshot whose files cannot be read one by
-     * one (deletion vectors, nested column renames) is refused rather than read wrongly.
+     * the snapshot's columns and deletes like partial answers read them. A snapshot whose files
+     * cannot be read one by one (deletion vectors, nested column renames) is read by DuckDB's
+     * iceberg_scan of that snapshot ({@link #icebergSnapshotSource}); {@link #travelViews} then
+     * refuses it unless DuckDB reads it with the snapshot's own columns.
      *
      * @param resolved the snapshot with its catalog
      * @return FROM source
      * @throws IllegalArgumentException when the snapshot cannot be read this way
      */
-    private static String travelSource(CatalogTables.Resolved resolved) {
+    private static TravelSource travelSource(CatalogTables.Resolved resolved) {
         TableSnapshot snapshot = resolved.snapshot();
         String which = "Snapshot " + snapshot.snapshotId() + " of " + snapshot.name();
         if (snapshot.columns().isEmpty()) {
             throw new IllegalArgumentException(which + " declares no columns");
         }
         if (snapshot.files().isEmpty()) {
-            return declaredColumnsSource(snapshot);
+            return new TravelSource(declaredColumnsSource(snapshot), false);
         }
         String reason = CatalogTables.completeReason(resolved);
-        if (reason != null) {
-            throw new IllegalArgumentException(which + " cannot be read by time travel: " + reason);
+        if (reason == null) {
+            return new TravelSource(ExecutionService.catalogFilesSource(snapshot, snapshot.files()),
+                    false);
         }
-        return ExecutionService.catalogFilesSource(snapshot, snapshot.files());
+        if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
+            LOGGER.info("node={} views=icebergSnapshotRead table={} snapshot={} reason={}",
+                    LogUtil.node(), snapshot.name(), snapshot.snapshotId(), reason);
+            return new TravelSource(icebergSnapshotSource(iceberg.metadataLocation(), snapshot),
+                    true);
+        }
+        throw new IllegalArgumentException(which + " cannot be read by time travel: " + reason);
+    }
+
+    /**
+     * Names DuckDB's scan of one snapshot of an Iceberg table, for snapshots the server cannot
+     * read file by file. Equality deletes get the all-columns read of {@link #icebergSource}.
+     *
+     * @param metadataLocation a metadata file that lists the snapshot
+     * @param snapshot the snapshot; its ID is the Iceberg snapshot ID, then a dot and the
+     *        schema ID
+     * @return {@code iceberg_scan(..., snapshot_from_id => ...)} or a subquery over it
+     * @throws IllegalArgumentException when the snapshot ID names no Iceberg snapshot
+     */
+    static String icebergSnapshotSource(String metadataLocation, TableSnapshot snapshot) {
+        String id = snapshot.snapshotId();
+        int dot = id.indexOf('.');
+        long icebergId;
+        try {
+            icebergId = Long.parseLong(dot < 0 ? id : id.substring(0, dot));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Snapshot " + id + " of " + snapshot.name()
+                    + " cannot be read by time travel: not an Iceberg snapshot ID", e);
+        }
+        String scan = "iceberg_scan(" + DuckDbAdapter.sqlStringLiteral(metadataLocation)
+                + ", snapshot_from_id => " + icebergId + ")";
+        return equalityDeletes(snapshot) ? allColumnsRead(scan, snapshot) : scan;
+    }
+
+    /**
+     * Checks that DuckDB reads a time-travel source with the snapshot's declared columns: names
+     * and types in order, nested field names included. iceberg_scan may use another schema of
+     * the table than the snapshot's, which would answer with the wrong columns.
+     *
+     * @param conn DuckDB connection
+     * @param source FROM source
+     * @param snapshot the snapshot
+     * @throws SQLException when DuckDB cannot describe the source
+     * @throws IllegalArgumentException when the columns differ
+     */
+    static void requireDeclaredColumns(Connection conn, String source, TableSnapshot snapshot)
+            throws SQLException {
+        List<String> read = new ArrayList<>();
+        try (Statement s = conn.createStatement();
+                ResultSet columns = s.executeQuery("DESCRIBE SELECT * FROM " + source)) {
+            while (columns.next()) {
+                read.add(columns.getString("column_name") + " " + columns.getString("column_type"));
+            }
+        }
+        List<String> types = new ArrayList<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            types.add("typeof(CAST(NULL AS " + column.duckDbType() + "))");
+        }
+        List<String> declared = new ArrayList<>();
+        try (Statement s = conn.createStatement();
+                ResultSet row = s.executeQuery("SELECT " + String.join(", ", types))) {
+            row.next();
+            for (int i = 0; i < snapshot.columns().size(); i++) {
+                declared.add(snapshot.columns().get(i).name() + " " + row.getString(i + 1));
+            }
+        }
+        if (!read.equals(declared)) {
+            throw new IllegalArgumentException("Snapshot " + snapshot.snapshotId() + " of "
+                    + snapshot.name() + " cannot be read by time travel: DuckDB reads it with"
+                    + " the columns " + read + ", the snapshot declares " + declared);
+        }
     }
 
     /**
@@ -588,10 +669,13 @@ public final class CatalogViews {
                 return cached;
             }
         }
-        String source = travelSource(resolved);
+        TravelSource source = travelSource(resolved);
         TravelViews views;
         synchronized (this) {
-            TableViews described = describeSource(schema, table, source, key);
+            if (source.scan()) {
+                requireDeclaredColumns(duckDbAdapter.connection(), source.sql(), snapshot);
+            }
+            TableViews described = describeSource(schema, table, source.sql(), key);
             String prefix = "CREATE OR REPLACE VIEW " + DuckDbAdapter.quoteIdentifier(schema) + "."
                     + DuckDbAdapter.quoteIdentifier(table) + " AS ";
             views = new TravelViews(described.data().substring(prefix.length()),
@@ -681,15 +765,37 @@ public final class CatalogViews {
      */
     public static String icebergSource(String metadataLocation, TableSnapshot snapshot) {
         String scan = icebergScan(metadataLocation);
-        boolean equalityDeletes = snapshot.files().stream().flatMap(file -> file.deletes().stream())
-                .anyMatch(delete -> delete.kind() == DeleteFile.Kind.EQUALITY);
-        if (!equalityDeletes || snapshot.columns().isEmpty()) {
+        if (!equalityDeletes(snapshot)) {
             return scan;
         }
         String applied = CatalogSources.deletesAppliedSource(snapshot, snapshot.files());
         if (applied != null) {
             return applied;
         }
+        return allColumnsRead(scan, snapshot);
+    }
+
+    /**
+     * Tells whether a snapshot declares columns and has equality deletes.
+     *
+     * @param snapshot the snapshot
+     * @return true when iceberg_scan must read all its columns
+     */
+    private static boolean equalityDeletes(TableSnapshot snapshot) {
+        return !snapshot.columns().isEmpty() && snapshot.files().stream()
+                .flatMap(file -> file.deletes().stream())
+                .anyMatch(delete -> delete.kind() == DeleteFile.Kind.EQUALITY);
+    }
+
+    /**
+     * Wraps an iceberg_scan so that it always reads every column and keeps the query's filters
+     * above the scan (see {@link #icebergSource}).
+     *
+     * @param scan iceberg_scan call
+     * @param snapshot the snapshot (its declared columns)
+     * @return subquery over the scan
+     */
+    private static String allColumnsRead(String scan, TableSnapshot snapshot) {
         List<String> keep = new ArrayList<>();
         for (ColumnSpec column : snapshot.columns()) {
             keep.add("eq_keep." + DuckDbAdapter.quoteIdentifier(column.name()));

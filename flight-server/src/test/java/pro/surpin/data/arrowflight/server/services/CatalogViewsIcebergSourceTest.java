@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
@@ -94,6 +95,52 @@ class CatalogViewsIcebergSourceTest {
                 rs.next();
                 assertEquals(4, rs.getLong(1));
             }
+        }
+    }
+
+    /**
+     * Verifies that a time-travel snapshot read by iceberg_scan names the Iceberg snapshot ID
+     * without the schema ID the server's snapshot ID carries (a regression: "7.12" was passed as
+     * a decimal), and keeps all columns read with equality deletes.
+     */
+    @Test
+    void snapshotScanNamesTheIcebergSnapshotId() {
+        TableSnapshot plain = snapshot();
+        TableSnapshot schema12 = new TableSnapshot(plain.name(), "-4611686018427387904.12", "f",
+                plain.columns(), List.of(), plain.files(), plain.read());
+        assertEquals("iceberg_scan('" + METADATA + "', snapshot_from_id => -4611686018427387904)",
+                CatalogViews.icebergSnapshotSource(METADATA, schema12));
+        assertEquals("iceberg_scan('" + METADATA + "', snapshot_from_id => 1)",
+                CatalogViews.icebergSnapshotSource(METADATA, plain));
+        assertTrue(CatalogViews.icebergSnapshotSource(METADATA, snapshot(equality(1), VECTOR))
+                .startsWith("(SELECT * FROM iceberg_scan('" + METADATA + "', snapshot_from_id => 1)"
+                        + " AS eq_keep WHERE hash("));
+        TableSnapshot foreign = new TableSnapshot(plain.name(), "abc", "f", plain.columns(),
+                List.of(), plain.files(), plain.read());
+        assertThrows(IllegalArgumentException.class,
+                () -> CatalogViews.icebergSnapshotSource(METADATA, foreign));
+    }
+
+    /**
+     * Verifies that a snapshot read by iceberg_scan is refused unless DuckDB reads it with the
+     * snapshot's declared columns, nested field names included.
+     */
+    @Test
+    void snapshotScanMustHaveTheDeclaredColumns() throws Exception {
+        TableSnapshot nested = new TableSnapshot(new TableName("ice", "n"), "1.0", "f",
+                List.of(new ColumnSpec("id", "BIGINT", false, 1),
+                        new ColumnSpec("st", "STRUCT(\"a\" INTEGER, \"b\" VARCHAR)", true, 2)),
+                List.of(), List.of(), new ReadSpec.IcebergMetadata(METADATA));
+        try (Connection c = DriverManager.getConnection("jdbc:duckdb:")) {
+            CatalogViews.requireDeclaredColumns(c, "(SELECT 1::BIGINT AS id,"
+                    + " {'a': 1::INTEGER, 'b': 'x'} AS st)", nested);
+            IllegalArgumentException renamed = assertThrows(IllegalArgumentException.class,
+                    () -> CatalogViews.requireDeclaredColumns(c, "(SELECT 1::BIGINT AS id,"
+                            + " {'a': 1::INTEGER, 'c': 'x'} AS st)", nested));
+            assertTrue(renamed.getMessage().contains("cannot be read by time travel"),
+                    renamed.getMessage());
+            assertThrows(IllegalArgumentException.class,
+                    () -> CatalogViews.requireDeclaredColumns(c, "(SELECT 1::BIGINT AS id)", nested));
         }
     }
 }

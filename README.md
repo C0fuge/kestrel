@@ -462,9 +462,12 @@ snapshot is read with its own data files, deletes and columns (the schema it was
 e.g. before a rename), and a query may read several snapshots of one table (`FROM t c JOIN t FOR
 VERSION AS OF 1 o ON ...`). An unknown or expired snapshot ID, an unknown tag, or a time before
 the first commit is an error (`INVALID_ARGUMENT`), never the current snapshot; a missing table is
-`NOT_FOUND`. Tables of the data directory, Hive tables (also Iceberg tables registered in a Hive
-Metastore, for now) and snapshots whose files cannot be read one by one (deletion vectors, renamed
-nested fields) refuse the clause. Access is checked like a read of the table itself. In partial
+`NOT_FOUND`. Tables of the data directory and Hive tables (also Iceberg tables registered in a Hive
+Metastore, for now) refuse the clause. A snapshot whose files cannot be read one by one (deletion
+vectors, renamed nested fields) is read by DuckDB's `iceberg_scan(..., snapshot_from_id => ...)`,
+as the current snapshot of such a table is, and only when DuckDB reads it with the snapshot's own
+columns (names and types, nested fields included); otherwise the clause is refused (log line
+`views=icebergSnapshotRead` when this path is used). Access is checked like a read of the table itself. In partial
 mode a query that reads one table and nothing else (no join, subquery, set operation or second
 clause) is answered in parts like a query of the current snapshot: each endpoint reads files of
 the earlier snapshot, with its columns and deletes; any other such query gets its complete answer

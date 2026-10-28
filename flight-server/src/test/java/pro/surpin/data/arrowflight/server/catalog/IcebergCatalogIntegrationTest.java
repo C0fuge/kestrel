@@ -337,17 +337,31 @@ class IcebergCatalogIntegrationTest {
                 assertEquals(List.of("4|7"), answer("SELECT count(o.id), count(c.id) FROM " + table
                         + " c LEFT JOIN " + version + " AS o ON o.id = c.id", mode).rows(), mode);
             }
-            // Deletes of the snapshot read are applied; nested renames cannot be read file by file.
+            // Deletes of the snapshot read are applied; nested renames cannot be read file by
+            // file, so iceberg_scan reads such a snapshot, with that snapshot's field names.
             String deletes = schema + ".deletes FOR VERSION AS OF " + snapshot((schema.equals("ice")
                     ? metadata : restMetadata).get("deletes"), "DESC")[0];
             assertEquals(List.of("1|n1", "3|n3", "5|n5", "6|n6", "7|n7"),
                     answer("SELECT id, label FROM " + deletes + " ORDER BY id", "complete").rows());
-            String nested = schema + ".nested FOR VERSION AS OF " + snapshot((schema.equals("ice")
-                    ? metadata : restMetadata).get("nested"), "DESC")[0];
-            FlightRuntimeException unreadable = assertThrows(FlightRuntimeException.class,
-                    () -> answer("SELECT * FROM " + nested, "complete"));
-            assertTrue(unreadable.getMessage().contains("cannot be read by time travel"),
-                    unreadable.getMessage());
+            String nestedMeta = (schema.equals("ice") ? metadata : restMetadata).get("nested");
+            String renamed = schema + ".nested FOR VERSION AS OF " + snapshot(nestedMeta, "DESC")[0];
+            String before = schema + ".nested FOR VERSION AS OF " + snapshot(nestedMeta, "ASC")[0];
+            for (String mode : List.of("complete", "partial")) {
+                Answer now = answer("SELECT * FROM " + renamed + " ORDER BY id", mode);
+                assertEquals(List.of("id", "st"), now.schema().getFields().stream()
+                        .map(f -> f.getName()).toList(), mode);
+                assertEquals(List.of("a", "c"), now.schema().getFields().get(1).getChildren()
+                        .stream().map(f -> f.getName()).toList(), mode);
+                assertEquals(4, now.rows().size(), mode + " " + now.rows());
+                assertEquals(List.of("x1", "x4"), answer("SELECT st.c FROM " + renamed
+                        + " WHERE id IN (1, 4) ORDER BY id", mode).rows(), mode);
+                Answer old = answer("SELECT * FROM " + before + " ORDER BY id", mode);
+                assertEquals(List.of("a", "b"), old.schema().getFields().get(1).getChildren()
+                        .stream().map(f -> f.getName()).toList(), mode);
+                assertEquals(2, old.rows().size(), mode + " " + old.rows());
+                assertEquals(List.of("20|x2"), answer("SELECT st.a, st.b FROM " + before
+                        + " WHERE id = 2", mode).rows(), mode);
+            }
             assertEquals(List.of("7"), answer("SELECT count(*) FROM " + table
                     + " FOR TIMESTAMP AS OF TIMESTAMP '2999-01-01 00:00:00 UTC'", "complete").rows());
             for (String[] refused : new String[][] {
