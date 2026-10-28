@@ -34,10 +34,12 @@ import java.util.Map;
  *     partitions (not part of equality)
  * @param csv for an {@code OpenCSVSerde} table how its lines are parsed (then only
  *     {@code headerLines} of the other components counts), else null
+ * @param json for a JSON table which serde parses its lines (then only {@code headerLines} of
+ *     the other components counts), else null
  */
 record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, boolean escapeCrlf,
         byte[] nullSequence, int headerLines, boolean lastColumnTakesRest,
-        Map<String, String> tableOverrides, CsvLayout csv) {
+        Map<String, String> tableOverrides, CsvLayout csv, JsonLayout json) {
 
     /** Properties that change how files are read. */
     static final List<String> KEYS = List.of("field.delim", "serialization.format", "escape.delim",
@@ -119,7 +121,7 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
                 nullFormat.getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
                 "true".equalsIgnoreCase(properties.getOrDefault(
                         "serialization.last.column.takes.rest", "false")), Map.copyOf(overrides),
-                null);
+                null, null);
     }
 
     /**
@@ -143,7 +145,36 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
         }
         return new TextFormat(DEFAULT_FIELD_DELIMITER, nested, -1, false,
                 "\\N".getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
-                false, Map.copyOf(overrides), CsvLayout.of(properties));
+                false, Map.copyOf(overrides), CsvLayout.of(properties), null);
+    }
+
+    /**
+     * Reads the format of a JSON table: its serde and header lines.
+     *
+     * @param serdeParameters the serde's parameters, or null
+     * @param tableParameters the table's parameters, or null
+     * @param json which serde parses the lines
+     * @return the format
+     * @throws IllegalArgumentException for footer lines or timestamp formats
+     */
+    static TextFormat json(Map<String, String> serdeParameters, Map<String, String> tableParameters,
+            JsonLayout json) {
+        Map<String, String> properties = new HashMap<>();
+        Map<String, String> overrides = new HashMap<>();
+        merge(serdeParameters, tableParameters, properties, overrides);
+        if (count(properties, "skip.footer.line.count") > 0) {
+            throw new IllegalArgumentException("text table with skip.footer.line.count: not read yet");
+        }
+        if (properties.get("timestamp.formats") != null) {
+            throw new IllegalArgumentException("JSON table with timestamp.formats: not read yet");
+        }
+        byte[] nested = new byte[MAX_LEVEL];
+        for (int level = 1; level <= MAX_LEVEL; level++) {
+            nested[level - 1] = (byte) (level + 1);
+        }
+        return new TextFormat(DEFAULT_FIELD_DELIMITER, nested, -1, false,
+                "\\N".getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
+                false, Map.copyOf(overrides), null, json);
     }
 
     /**
@@ -175,9 +206,12 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
      *
      * @param serdeParameters the partition's serde parameters, or null
      * @return the format
-     * @throws IllegalArgumentException as {@link #of} or {@link #csv}
+     * @throws IllegalArgumentException as {@link #of}, {@link #csv} or {@link #json}
      */
     TextFormat forPartition(Map<String, String> serdeParameters) {
+        if (json != null) {
+            return json(serdeParameters, tableOverrides, json);
+        }
         return csv == null ? of(serdeParameters, tableOverrides) : csv(serdeParameters, tableOverrides);
     }
 
@@ -199,7 +233,8 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
     String canonical() {
         return "d" + fieldDelimiter + ",s" + HexFormat.of().formatHex(nestedSeparators) + ",e" + escape + ",c" + escapeCrlf + ",n"
                 + HexFormat.of().formatHex(nullSequence) + ",h" + headerLines + ",r"
-                + lastColumnTakesRest + (csv == null ? "" : ",csv" + csv.canonical());
+                + lastColumnTakesRest + (csv == null ? "" : ",csv" + csv.canonical())
+                + (json == null ? "" : ",json" + json.canonical());
     }
 
     /**

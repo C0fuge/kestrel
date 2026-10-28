@@ -49,6 +49,8 @@ class HiveTextTableTest {
 
     private static final String COLUMNS = "i int;s string;d decimal(10,2);dt date;ts timestamp;"
             + "b boolean;c char(3);bin binary;l bigint;db double";
+    private static final String JSON_COLUMNS = COLUMNS
+            + ";a array<int>;m map<string,int>;st struct<x:int,y:string>";
 
     @TempDir
     static Path dir;
@@ -100,6 +102,31 @@ class HiveTextTableTest {
                 "csv", null);
         hms.createTable("txt", "unions", "file:" + dir.resolve("lake/unions"),
                 "u uniontype<int,string>", "", "text", null);
+        Path json = Files.createDirectories(dir.resolve("lake/json"));
+        hms.createTable("txt", "json", "file:" + json, JSON_COLUMNS, "p string", "json", null);
+        Files.writeString(file(hms.addPartition("txt", "json", List.of("a"), null), "1.json"),
+                "{\"i\":1,\"S\":\"x\",\"d\":12.345,\"dt\":\"2024-02-29\","
+                        + "\"ts\":\"2024-01-02 03:04:05.1234567\",\"b\":true,\"c\":\"ab\","
+                        + "\"bin\":\"hi\",\"l\":9000000000,\"db\":1.5,\"a\":[1,null],"
+                        + "\"m\":{\"k\":2},\"st\":{\"y\":\"q\",\"x\":7},\"extra\":[{}]}\n"
+                        + "{\"i\":2,\"_col1\":\"by position\",\"a\":[],\"m\":{},\"st\":null}\n");
+        try (OutputStream out = new GZIPOutputStream(Files.newOutputStream(file(
+                hms.addPartition("txt", "json", List.of("__HIVE_DEFAULT_PARTITION__"), null),
+                "2.json.gz")))) {
+            out.write("{\"i\":3,\"d\":\"x\",\"db\":-2e3}\n".getBytes(StandardCharsets.UTF_8));
+        }
+        Path json2 = Files.createDirectories(dir.resolve("lake/json2"));
+        Files.writeString(json2.resolve("000000_0"), "{\"I\":4,\"s\":\"y\"}\n");
+        hms.createTable("txt", "json2", "file:" + json2, "i int;s string", "", "json2", null);
+        hms.createTable("txt", "openx", "file:" + dir.resolve("lake/openx"), "i int", "", "openx",
+                null);
+        hms.createTable("txt", "jsonformats", "file:" + dir.resolve("lake/jsonformats"), "i int",
+                "", "json", Map.of("timestamp.formats", "millis"));
+        hms.createTable("txt", "jsonparts", "file:" + dir.resolve("lake/jsonparts"), "i int",
+                "p int", "json", null);
+        hms.addPartition("txt", "jsonparts", List.of("1"), null);
+        hms.addPartition("txt", "jsonparts", List.of("2"), null, Map.of(HmsFixture.SERDE_LIB,
+                "org.apache.hadoop.hive.serde2.JsonSerDe"));
     }
 
     @Test
@@ -179,6 +206,44 @@ class HiveTextTableTest {
             assertEquals(new ReadSpec.ArrowStream("text"), csv.read());
             assertEquals(List.of("1|x;y|a", "2|null|a"),
                     read(catalog, allocator, csv, List.of("id", "name", "p")));
+            assertEquals(0, allocator.getAllocatedMemory());
+        }
+    }
+
+    @Test
+    void jsonSerdeTablesAreReadAsHiveParsesThem() throws Exception {
+        try (Catalog catalog = open(Map.of("textTables", "true"));
+                BufferAllocator allocator = new RootAllocator();
+                Connection duckdb = DriverManager.getConnection("jdbc:duckdb:")) {
+            List<String> tables = catalog.tables("txt");
+            assertTrue(tables.containsAll(List.of("json", "json2", "jsonparts")), tables.toString());
+            assertFalse(tables.contains("openx"), "OpenX's serde is not read: " + tables);
+            assertFalse(tables.contains("jsonformats"), "timestamp.formats is not read: " + tables);
+            TableSnapshot json = catalog.current(new TableName("txt", "json")).orElseThrow();
+            assertEquals(new ReadSpec.ArrowStream("text"), json.read());
+            List<String> all = List.of("i", "s", "d", "dt", "ts", "b", "c", "bin", "l", "db", "a",
+                    "m", "st", "p");
+            try (ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator)) {
+                catalog.exportArrowScan(json, json.files(), new ArrowScan(all, List.of()),
+                        stream.memoryAddress(), allocator);
+                duckdb.unwrap(DuckDBConnection.class).registerArrowStream("text_json", stream);
+                assertEquals(List.of(
+                        "1,x,12.35,2024-02-29,2024-01-02 03:04:05.123456,true,ab,hi,9000000000,1.5,"
+                                + "[1, NULL],{k=2},{'x': 7, 'y': q},a",
+                        "2,by position,null,null,null,null,null,null,null,null,[],{},null,a",
+                        "3,null,null,null,null,null,null,null,null,-2000.0,null,null,null,null"),
+                        rows(duckdb, "SELECT i, s, d::VARCHAR, dt::VARCHAR, ts::VARCHAR, b, c,"
+                                + " bin::VARCHAR, l, db, a::VARCHAR, m::VARCHAR, st::VARCHAR, p"
+                                + " FROM text_json ORDER BY i"));
+            }
+            TableSnapshot json2 = catalog.current(new TableName("txt", "json2")).orElseThrow();
+            assertNotEquals(json2.snapshotId(), catalog.current(new TableName("txt", "json"))
+                    .orElseThrow().snapshotId());
+            assertEquals(List.of("4|y"), read(catalog, allocator, json2, List.of("i", "s")));
+            IOException e = assertThrows(IOException.class,
+                    () -> catalog.current(new TableName("txt", "jsonparts")));
+            assertTrue(e.getMessage().contains("[2]") && e.getMessage().contains("storage format"),
+                    e.getMessage());
             assertEquals(0, allocator.getAllocatedMemory());
         }
     }

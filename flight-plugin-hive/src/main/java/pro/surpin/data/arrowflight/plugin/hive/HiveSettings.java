@@ -30,7 +30,8 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param listThreads threads that list partition directories
  * @param icebergTables what to do with Iceberg tables registered in the metastore
  * @param orcTables whether ORC tables are shown, read by the plugin and handed over as Arrow
- * @param textTables whether text tables (LazySimpleSerDe) are shown, read like ORC tables
+ * @param textTables whether text tables (LazySimpleSerDe, OpenCSVSerde, JsonSerDe) are shown,
+ *     read like ORC tables
  * @param defaultPartitionName the partition value that stands for NULL
  * @param kerberos Kerberos settings, null without Kerberos
  */
@@ -112,7 +113,8 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         keys.add(ConfigKey.of("orcTables", "whether ORC tables are shown (read by the plugin;"
                 + " transactional ORC tables stay skipped)", "false"));
         keys.add(ConfigKey.of("textTables", "whether text tables of Hive's default serde"
-                + " (LazySimpleSerDe, STORED AS TEXTFILE) are shown (read by the plugin)", "false"));
+                + " (LazySimpleSerDe, STORED AS TEXTFILE), OpenCSVSerde and JsonSerDe are shown"
+                + " (read by the plugin)", "false"));
         keys.add(ConfigKey.of("defaultPartitionName", "partition value that stands for NULL",
                 "__HIVE_DEFAULT_PARTITION__"));
         return List.copyOf(keys);

@@ -240,6 +240,150 @@ class TextArrowReaderTest {
                 org.apache.orc.TypeDescription.fromString("int"), own));
     }
 
+    private static final List<OrcArrowReader.Column> JSON = List.of(
+            new OrcArrowReader.Column("i", "int"), new OrcArrowReader.Column("t", "tinyint"),
+            new OrcArrowReader.Column("l", "bigint"), new OrcArrowReader.Column("b", "boolean"),
+            new OrcArrowReader.Column("f", "float"), new OrcArrowReader.Column("db", "double"),
+            new OrcArrowReader.Column("s", "string"), new OrcArrowReader.Column("bin", "binary"),
+            new OrcArrowReader.Column("d", "decimal(5,2)"), new OrcArrowReader.Column("dt", "date"),
+            new OrcArrowReader.Column("ts", "timestamp"), new OrcArrowReader.Column("v", "varchar(3)"),
+            new OrcArrowReader.Column("c", "char(4)"), new OrcArrowReader.Column("a", "array<int>"),
+            new OrcArrowReader.Column("as", "array<string>"),
+            new OrcArrowReader.Column("m", "map<int,string>"),
+            new OrcArrowReader.Column("st", "struct<x:int,y:string>"));
+
+    @Test
+    void jsonLinesAreReadAsHivesJsonSerDe() throws Exception {
+        TextFormat hcatalog = TextFormat.json(Map.of(), Map.of("skip.header.line.count", "1"),
+                new JsonLayout(true));
+        String text = "a header line\n"
+                + "{}\n"
+                // Keys ignore case, a later key wins, unknown keys (with nested values) are
+                // skipped, text after the object is ignored.
+                + "{\"I\":1,\"i\":2,\"zz\":{\"a\":[1,{\"b\":2}]},\"l\":null} trailing\n"
+                // Numbers through Jackson: fractions cut towards zero, a tinyint up to 255 wraps.
+                + "{\"i\":1.9,\"l\":-1.9,\"t\":200,\"f\":1.5,\"db\":1e3}\n"
+                // Booleans are true only for the text true; strings take any scalar's text.
+                + "{\"b\":\"TRUE\",\"s\":1.50}\n"
+                + "{\"b\":1,\"s\":true,\"bin\":\"h\u00e9llo\"}\n"
+                // Decimals: rounded half up, too wide or unreadable NULL; exponents read.
+                + "{\"d\":123.456}\n{\"d\":1234.5}\n{\"d\":\"abc\"}\n{\"d\":1e2}\n"
+                // Hive's lenient dates and timestamps (nanoseconds cut to micros, ISO too).
+                + "{\"dt\":\"2020-2-30\",\"ts\":\"2020-01-01 10:00:00.123456789\"}\n"
+                + "{\"dt\":\" 2020-01-02 junk\",\"ts\":\"2020-01-01T10:00\"}\n"
+                // varchar and char cut to their length in code points, char without trailing blanks.
+                + "{\"v\":\"abcdef\",\"c\":\"ab  \"}\n"
+                + "{\"v\":\"\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\",\"c\":\"abcdefg\"}\n"
+                // Arrays, maps (keys read as their type, equal keys: the last value at the first
+                // place), structs by name ignoring case, HCatalog's _col<n> names.
+                + "{\"a\":[1,null,3],\"m\":{\"1\":\"a\",\"2\":null,\"01\":\"b\"},"
+                + "\"st\":{\"Y\":\"q\",\"x\":1,\"z\":0}}\n"
+                + "{\"a\":null,\"m\":{},\"st\":{\"_col1\":\"w\"},\"_col1\":5}\n"
+                + "{\"a\":[],\"st\":null}\n"
+                // Hive's walk: an object where a string is expected gives its first token's
+                // text and its keys then count for the enclosing object, whose end it takes.
+                + "{\"s\":{\"i\":7},\"l\":8}\n"
+                + "{\"as\":[\"a\",{\"k\":1}]}\n";
+        List<String> rows = read(text, hcatalog, JSON.stream().map(OrcArrowReader.Column::name)
+                .toList(), "f.json", JSON);
+        assertEquals(List.of(json(),
+                json(0, "2"),
+                json(0, "1", 1, "-56", 2, "-1", 4, "1.5", 5, "1000.0"),
+                json(3, "true", 6, "1.50"),
+                json(3, "false", 6, "true", 7, "h\u00e9llo"),
+                json(8, "123.46"), json(), json(), json(8, "100.00"),
+                json(9, "2020-03-01", 10, "2020-01-01T10:00:00.123456"),
+                json(9, "2020-01-02", 10, "2020-01-01T10:00"),
+                json(11, "abc", 12, "ab"),
+                json(11, "\ud83d\ude00\ud83d\ude00\ud83d\ude00", 12, "abcd"),
+                json(13, "[1, null, 3]", 15, "{1=b, 2=null}", 16, "{x=1, y=q}"),
+                json(1, "5", 15, "{}", 16, "{x=null, y=w}"),
+                json(13, "[]"),
+                json(0, "7", 6, "{"),
+                json(14, "[a, {, k, 1, }]")), rows);
+        // Projections read the columns asked for, in their order; the rest is parsed anyway. A
+        // partition keeps the table's header lines.
+        assertEquals(List.of("q|1", "w|null"), read("header\n{\"st\":{\"y\":\"q\"},\"i\":1}\n"
+                + "{\"st\":{\"y\":\"w\"}}\n", hcatalog.forPartition(Map.of()),
+                List.of("st", "i"), "f.json", JSON).stream()
+                .map(row -> row.replaceAll("\\{x=null, y=(.)}", "$1")).toList());
+        // serde2's JsonSerDe reads alike, but refuses _col<n> keys that name no column.
+        TextFormat serde2 = TextFormat.json(Map.of(), Map.of(), new JsonLayout(false));
+        assertEquals(List.of("3|x"), read("{\"I\":3,\"s\":\"x\"}\n", serde2, List.of("i", "s"),
+                "f.json", JSON));
+        assertThrows(IOException.class, () -> read("{\"_col1\":5}\n", serde2, List.of("i"),
+                "f.json", JSON));
+    }
+
+    @Test
+    void jsonLinesHivesSerdeFailsOnFailTheRead() throws Exception {
+        TextFormat hcatalog = TextFormat.json(Map.of(), Map.of(), new JsonLayout(true));
+        List<OrcArrowReader.Column> keys = List.of(
+                new OrcArrowReader.Column("md", "map<decimal(3,1),int>"),
+                new OrcArrowReader.Column("mb", "map<binary,int>"),
+                new OrcArrowReader.Column("mt", "map<timestamp,int>"),
+                new OrcArrowReader.Column("dt", "date"));
+        for (String line : List.of("[1]", "{\"i\":1", "\"x\"", "{\"i\":\"12\"}",
+                "{\"i\":2147483648}", "{\"t\":256}", "{\"i\":true}", "{\"db\":\"2\"}",
+                "{\"i\":{}}", "{\"dt\":\"x\"}", "{\"ts\":\"2020-13\"}",
+                // Hive's Timestamp.valueOf has no time of day by default.
+                "{\"ts\":\"2020-01-01\"}", "{\"m\":{\"x\":\"a\"}}",
+                "{\"a\":5}", "{\"st\":[1]}", "{\"_col01\":1}", "{\"_col99\":1}",
+                "{\"s\":\"ok\",\"i\":\"bad\"}", "{\"i\":1,}", "{'i':1}", "{\"s\":\"\u0001\"}")) {
+            IOException e = assertThrows(IOException.class, () -> read("{}\n" + line + "\n{}\n",
+                    hcatalog, List.of("s"), "dir/f.json", JSON), line);
+            assertTrue(e.getMessage().startsWith("Line 2 of dir/f.json is not a row Hive's"
+                    + " JsonSerDe reads: "), e.getMessage());
+        }
+        IOException empty = assertThrows(IOException.class, () -> read("{}\n\n{}\n", hcatalog,
+                List.of("s"), "f.json", JSON));
+        assertTrue(empty.getMessage().contains("Line 2 ") && empty.getMessage().endsWith("empty line"),
+                empty.getMessage());
+        // Map keys Arrow cannot hold: a decimal key that reads as NULL, binary keys Hive keeps
+        // twice, timestamps equal once cut to microseconds; dates beyond Arrow's days.
+        for (String line : List.of("{\"md\":{\"x\":1}}", "{\"md\":{\"12345\":1}}",
+                "{\"mb\":{\"k\":1,\"k\":2}}",
+                "{\"mt\":{\"2020-01-01 00:00:00.0000001\":1,\"2020-01-01 00:00:00.0000002\":2}}",
+                "{\"dt\":\"999999999-01-01\"}")) {
+            assertThrows(IOException.class, () -> read(line + "\n", hcatalog,
+                    List.of("md", "mb", "mt", "dt"), "f.json", keys), line);
+            // Only columns read are converted to Arrow.
+            assertEquals(List.of("null"), read(line.startsWith("{\"dt") ? "{}\n" : line + "\n",
+                    hcatalog, List.of("dt"), "f.json", keys));
+        }
+        assertEquals(List.of("{1.5=1, 2.0=2}|{k=1}"), read("{\"md\":{\"1.50\":0,\"1.5\":1,\"2\":2},"
+                + "\"mb\":{\"k\":1}}\n", hcatalog, List.of("md", "mb"), "f.json", keys));
+    }
+
+    @Test
+    void jsonFormatsAndTypes() {
+        TextFormat hcatalog = TextFormat.json(Map.of(), Map.of(), new JsonLayout(true));
+        assertEquals(hcatalog, hcatalog.forPartition(Map.of("some", "property")));
+        assertNotEquals(hcatalog, TextFormat.json(Map.of(), Map.of(), new JsonLayout(false)));
+        assertNotEquals(hcatalog, TextFormat.json(Map.of("skip.header.line.count", "1"), Map.of(),
+                new JsonLayout(true)));
+        assertNotEquals(hcatalog, format(Map.of()));
+        for (Map<String, String> refused : List.of(Map.of("timestamp.formats", "millis"),
+                Map.of("skip.footer.line.count", "1"))) {
+            assertThrows(IllegalArgumentException.class, () -> TextFormat.json(refused, Map.of(),
+                    new JsonLayout(true)), refused.toString());
+        }
+        assertEquals(new JsonLayout(true), JsonLayout.of("org.apache.hive.hcatalog.data.JsonSerDe"));
+        assertEquals(new JsonLayout(false), JsonLayout.of("org.apache.hadoop.hive.serde2.JsonSerDe"));
+        assertEquals(null, JsonLayout.of("org.openx.data.jsonserde.JsonSerDe"));
+        for (String type : List.of("map<int,array<struct<a:int,b:map<string,binary>>>>",
+                "struct<a:struct<b:struct<c:struct<d:struct<e:struct<f:struct<g:array<int>>>>>>>>")) {
+            TextArrowReader.checkType("x", org.apache.orc.TypeDescription.fromString(type), hcatalog);
+        }
+        for (String type : List.of("uniontype<int,string>", "map<struct<a:int>,int>",
+                "timestamp with local time zone", "struct<A:int,a:int>")) {
+            assertThrows(IllegalArgumentException.class, () -> TextArrowReader.checkType("x",
+                    org.apache.orc.TypeDescription.fromString(type), hcatalog), type);
+        }
+        TextArrowReader.checkType("x", org.apache.orc.TypeDescription.fromString(
+                "struct<A:int,a:int>"), TextFormat.json(Map.of(), Map.of(), new JsonLayout(false)));
+    }
+
     @Test
     void nestedColumnsAreSplitAtTheSeparatorsOfTheirLevel() throws Exception {
         List<OrcArrowReader.Column> columns = List.of(new OrcArrowReader.Column("a", "array<int>"),
@@ -280,6 +424,21 @@ class TextArrowReaderTest {
                 "array<array<array<array<array<array<array<int>>>>>>>"));
         TextArrowReader.checkType("c", org.apache.orc.TypeDescription.fromString(
                 "array<array<array<array<array<map<int,int>>>>>>"));
+    }
+
+    /**
+     * Renders a row of {@link #JSON}: NULL but for the given cells.
+     *
+     * @param cells column index, rendered value, ...
+     * @return the row as {@link #read} renders it
+     */
+    private static String json(Object... cells) {
+        String[] row = new String[JSON.size()];
+        java.util.Arrays.fill(row, "null");
+        for (int i = 0; i < cells.length; i += 2) {
+            row[(Integer) cells[i]] = (String) cells[i + 1];
+        }
+        return String.join("|", row);
     }
 
     private static TextFormat format(Map<String, String> serde) {

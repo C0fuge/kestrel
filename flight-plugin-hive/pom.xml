@@ -375,6 +375,14 @@
             <version>2.3</version>
             <scope>compile</scope>
         </dependency>
+        <!-- JSON text tables (hive.textTables): Hive 3.1.3's JsonSerDe walks the tokens of
+             Jackson 1.9, so the plugin parses with the same parser (no dependencies). -->
+        <dependency>
+            <groupId>org.codehaus.jackson</groupId>
+            <artifactId>jackson-core-asl</artifactId>
+            <version>1.9.13</version>
+            <scope>compile</scope>
+        </dependency>
         <!-- ORC's vectorized column batches (orc-core's version); the in-process test metastore
              runs on it too. -->
         <dependency>

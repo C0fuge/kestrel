@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -460,7 +461,8 @@ final class HiveCatalog implements Catalog {
         }
         String problem;
         if (!HiveTable.text(partition.getSd())
-                || HiveTable.csv(partition.getSd()) != (hive.textFormat().csv() != null)) {
+                || HiveTable.csv(partition.getSd()) != (hive.textFormat().csv() != null)
+                || !Objects.equals(HiveTable.json(partition.getSd()), hive.textFormat().json())) {
             problem = "has another storage format";
         } else {
             try {

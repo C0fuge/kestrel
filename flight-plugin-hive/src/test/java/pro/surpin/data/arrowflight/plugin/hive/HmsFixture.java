@@ -40,6 +40,9 @@ import org.apache.thrift.transport.TTransport;
  */
 public final class HmsFixture {
 
+    /** Serde parameter key of {@link #addPartition} naming a partition's own serde class. */
+    public static final String SERDE_LIB = "(serialization.lib)";
+
     private static HmsFixture shared;
 
     private final Path dir;
@@ -112,7 +115,8 @@ public final class HmsFixture {
      * @param location table location (file: URI or path)
      * @param columns {@code name type;name type} (Hive types)
      * @param partitionKeys {@code name type;...}, empty for none
-     * @param format "parquet", "text", "csv" (OpenCSVSerde) or "orc"
+     * @param format "parquet", "text", "csv" (OpenCSVSerde), "json" (HCatalog's JsonSerDe),
+     *     "json2" (serde2's JsonSerDe), "openx" (OpenX's JsonSerDe) or "orc"
      * @param params extra table parameters, or null (with "transactional": a managed table;
      *     keys starting with {@code serde:} go to the serde's parameters without the prefix)
      * @throws TException on metastore errors
@@ -213,7 +217,8 @@ public final class HmsFixture {
      * @param table table name
      * @param values partition values
      * @param location partition location, or null for the default
-     * @param serdeParameters the partition's serde parameters, or null for the table's
+     * @param serdeParameters the partition's serde parameters, or null for the table's; the key
+     *     {@link #SERDE_LIB} gives the partition a serde class of its own
      * @return the partition's location as the metastore stores it
      * @throws TException on metastore errors
      */
@@ -223,7 +228,12 @@ public final class HmsFixture {
         StorageDescriptor sd = t.getSd().deepCopy();
         sd.setLocation(location);
         if (serdeParameters != null) {
-            sd.getSerdeInfo().setParameters(new HashMap<>(serdeParameters));
+            Map<String, String> parameters = new HashMap<>(serdeParameters);
+            String lib = parameters.remove(SERDE_LIB);
+            if (lib != null) {
+                sd.getSerdeInfo().setSerializationLib(lib);
+            }
+            sd.getSerdeInfo().setParameters(parameters);
         }
         Partition partition = new Partition(new ArrayList<>(values), db, table, 0, 0, sd,
                 new HashMap<>());
@@ -445,6 +455,15 @@ public final class HmsFixture {
                 input = "org.apache.hadoop.mapred.TextInputFormat";
                 output = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat";
                 serde = "org.apache.hadoop.hive.serde2.OpenCSVSerde";
+            }
+            case "json", "json2", "openx" -> {
+                input = "org.apache.hadoop.mapred.TextInputFormat";
+                output = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat";
+                serde = switch (format) {
+                    case "json" -> "org.apache.hive.hcatalog.data.JsonSerDe";
+                    case "json2" -> "org.apache.hadoop.hive.serde2.JsonSerDe";
+                    default -> "org.openx.data.jsonserde.JsonSerDe";
+                };
             }
             default -> {
                 input = "org.apache.hadoop.mapred.TextInputFormat";

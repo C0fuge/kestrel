@@ -48,7 +48,8 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * partitioned comma-separated table with a header line and an empty null format) are answered in
  * both result modes exactly like the same rows in Parquet tables of the same metastore, alone,
  * filtered, grouped by a partition column and joined with Parquet and with each other; an
- * OpenCSVSerde table answers its strings as Hive parses them.
+ * OpenCSVSerde table answers its strings as Hive parses them; a JsonSerDe table (DuckDB's JSON of
+ * the same rows, keys in another case and order, an unknown key) answers like the Parquet one.
  */
 class HiveTextIntegrationTest {
 
@@ -134,6 +135,14 @@ class HiveTextIntegrationTest {
                 "id,name,note\n1,\"Doe, Jane\",\"said \"\"hi\"\"\"\n2,Bob\n");
         hms.call("createTable", "hvtxt", "people", "file:" + people, "id string;name string;note string",
                 "", "csv", Map.of("skip.header.line.count", "1"));
+        // HCatalog's JsonSerDe: DuckDB's JSON of the rows, a plain and a gzip file.
+        Path json = Files.createDirectories(lake.resolve("json"));
+        Files.write(json.resolve("000000_0"), json(0, 1000));
+        try (OutputStream out = new GZIPOutputStream(Files.newOutputStream(
+                json.resolve("000001_0.gz")))) {
+            out.write(json(1000, 3000));
+        }
+        hms.call("createTable", "hvtxt", "json", "file:" + json, COLUMNS, "", "json", null);
         Path plugins = dir.resolve("plugins");
         HiveTestTables.installPlugin(plugins);
         proxy = hms.proxy();
@@ -227,6 +236,28 @@ class HiveTextIntegrationTest {
     }
 
     @Test
+    void jsonSerdeTablesAnswerLikeTheSameRowsInParquet() throws Exception {
+        assertEquals(direct("(" + EXPECTED + " FROM range(0, 3000))"), fingerprint("hvtxt.json"));
+        for (String sql : List.of(
+                "SELECT * FROM hvtxt.%s",
+                "SELECT count(*) AS n, sum(dec) AS s, min(dt) AS lo, max(ts) AS hi, count(s) AS c,"
+                        + " sum(d) AS ds, count(m) AS maps, sum(st.x) AS xs, sum(arr[2]) AS a2"
+                        + " FROM hvtxt.%s",
+                "SELECT i, s, ts, arr, st, m FROM hvtxt.%s WHERE i >= 990 AND i < 1010",
+                "SELECT i, flag FROM hvtxt.%s WHERE dec = 1542.50 OR s IS NULL AND i < 30")) {
+            Answer reference = answer(String.format(sql, "flat_pq"), "complete");
+            for (String mode : List.of("complete", "partial")) {
+                Answer answer = answer(String.format(sql, "json"), mode);
+                assertEquals(reference.schema(), answer.schema(), mode + ": " + sql);
+                assertEquals(reference.rows(), answer.rows(), mode + ": " + sql);
+            }
+        }
+        // Every row whose struct and map are not NULL (3000 - 429) joins its Parquet twin.
+        assertEquals(List.of("2571"), answer("SELECT count(*) AS n FROM hvtxt.json a JOIN"
+                + " hvtxt.flat_pq b ON a.i = b.i AND a.st = b.st AND a.m = b.m", "complete").rows());
+    }
+
+    @Test
     void openCsvSerdeTablesAnswerInBothModes() throws Exception {
         for (String mode : List.of("complete", "partial")) {
             Answer answer = answer("SELECT id, name, note FROM hvtxt.people", mode);
@@ -265,6 +296,29 @@ class HiveTextIntegrationTest {
                 ResultSet rs = s.executeQuery(sql)) {
             while (rs.next()) {
                 lines.append(rs.getString(1)).append('\n');
+            }
+        }
+        return lines.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Renders rows [from, to) as JSON lines (DuckDB's JSON of each row with the column s as key
+     * S, i as Hive's internal name _col0 and an unknown key first), as a JsonSerDe table holds
+     * them.
+     */
+    private static byte[] json(int from, int to) throws Exception {
+        StringBuilder lines = new StringBuilder();
+        String sql = "SELECT to_json(t)::VARCHAR FROM (" + EXPECTED + " FROM range(" + from + ", "
+                + to + ")) t ORDER BY i";
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement();
+                ResultSet rs = s.executeQuery(sql)) {
+            while (rs.next()) {
+                String row = rs.getString(1);
+                assertTrue(row.startsWith("{\"i\":") && row.contains(",\"s\":"), row);
+                lines.append("{\"extra\":[1,{\"s\":2}],\"_col0\":")
+                        .append(row.substring("{\"i\":".length()).replace(",\"s\":", ",\"S\":"))
+                        .append('\n');
             }
         }
         return lines.toString().getBytes(StandardCharsets.UTF_8);

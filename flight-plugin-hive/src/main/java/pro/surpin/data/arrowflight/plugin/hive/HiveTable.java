@@ -45,7 +45,10 @@ record HiveTable(String database, String name, Kind kind, String location,
         ICEBERG,
         /** ORC files, read by the plugin and handed to the server as Arrow streams. */
         ORC,
-        /** Text files of LazySimpleSerDe, read by the plugin and handed over as Arrow streams. */
+        /**
+         * Text files of LazySimpleSerDe, OpenCSVSerde or JsonSerDe, read by the plugin and handed
+         * over as Arrow streams.
+         */
         TEXT
     }
 
@@ -142,7 +145,9 @@ record HiveTable(String database, String name, Kind kind, String location,
         TextFormat format = null;
         try {
             if (text) {
-                format = csv(sd) ? TextFormat.csv(sd.getSerdeInfo().getParameters(), params)
+                JsonLayout json = json(sd);
+                format = json != null ? TextFormat.json(sd.getSerdeInfo().getParameters(), params, json)
+                        : csv(sd) ? TextFormat.csv(sd.getSerdeInfo().getParameters(), params)
                         : TextFormat.of(sd.getSerdeInfo().getParameters(), params);
             }
             for (FieldSchema field : sd.getCols()) {
@@ -190,14 +195,26 @@ record HiveTable(String database, String name, Kind kind, String location,
      * Tells whether a storage descriptor names a text table the plugin reads.
      *
      * @param sd storage descriptor
-     * @return true for {@code TextInputFormat} with {@code LazySimpleSerDe} or {@code OpenCSVSerde}
+     * @return true for {@code TextInputFormat} with {@code LazySimpleSerDe}, {@code OpenCSVSerde}
+     *     or one of Hive's {@code JsonSerDe}s
      */
     static boolean text(StorageDescriptor sd) {
         String serde = sd.getSerdeInfo() == null || sd.getSerdeInfo().getSerializationLib() == null
                 ? "" : sd.getSerdeInfo().getSerializationLib();
         String input = sd.getInputFormat() == null ? "" : sd.getInputFormat();
         return "textinputformat".equals(simpleName(input))
-                && ("lazysimpleserde".equals(simpleName(serde)) || csv(sd));
+                && ("lazysimpleserde".equals(simpleName(serde)) || csv(sd) || json(sd) != null);
+    }
+
+    /**
+     * Tells which of Hive's JSON serdes a storage descriptor names.
+     *
+     * @param sd storage descriptor
+     * @return the layout, or null for another serde
+     */
+    static JsonLayout json(StorageDescriptor sd) {
+        return sd.getSerdeInfo() == null ? null
+                : JsonLayout.of(sd.getSerdeInfo().getSerializationLib());
     }
 
     /**

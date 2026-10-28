@@ -20,6 +20,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   directory; directory mode 700. `cacheAdmission=reuse` applies to each tier with its own reach. Metrics
   `arrowflight_s3_cache_disk_*` (capacity/used bytes, blocks, hits, misses, writes, evictions, dropped, errors,
   not_admitted), `disk...=` counts in the `s3=cacheClosed` line, `diskPath=` / `diskCapacityBytes=` in `s3=cacheOpen`.
+- Hive JSON tables (P4 step 2c) under `hive.textTables`: `org.apache.hive.hcatalog.data.JsonSerDe` and
+  `org.apache.hadoop.hive.serde2.JsonSerDe` (TextInputFormat; OpenX's serde stays skipped), one JSON object per line
+  parsed exactly as Hive 3.1.3's serde does, with the same parser (Jackson 1.9 `jackson-core-asl` 1.9.13, new plugin
+  dependency): keys matched ignoring case, unknown keys skipped, a later key wins, HCatalog's `_col<n>` keys; numbers
+  through Jackson's accessors (fractions cut for integer columns, tinyint up to 255 wraps), booleans true only for
+  `true`, strings from any scalar, binary as the text's UTF-8 bytes, Hive's lenient `Date.valueOf` /
+  `Timestamp.valueOf`, decimals rounded half up (unreadable or too wide NULL), varchar/char cut; arrays, maps (keys
+  read as their type) and structs, nested values also where Hive's token walk goes astray. A line Hive's serde fails
+  on (not an object, a quoted number for a number column, an unreadable date or timestamp, an empty line) fails the
+  query naming file and line, never a silent NULL; so do rows Arrow cannot hold (NULL or duplicate map keys).
+  Header lines and `.gz`/`.deflate`/`.bz2` as for other text tables; `timestamp.formats` and footer lines skip the
+  table; a partition with the other JSON serde fails the query.
 - Hive `OpenCSVSerde` tables (P4 step 2c) under `hive.textTables`: lines parsed with opencsv 2.3 (new plugin
   dependency, the version Hive 3.1.3 uses) exactly as Hive's serde does: `separatorChar` / `quoteChar` /
   `escapeChar` (default `,` `"` and, for the default escape `"`, opencsv's backslash), header lines, missing

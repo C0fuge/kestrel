@@ -55,8 +55,9 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * key separator has a NULL value, entries with a NULL key are dropped and of equal keys the first
  * is kept (as Hive's {@code LazyMap}), struct fields are matched by position like a row's.
  * {@code OpenCSVSerde} tables ({@link CsvLayout}) are string columns parsed by opencsv as
- * Hive's serde parses them. Files ending in {@code .gz}, {@code .deflate} or {@code .bz2} are
- * decompressed as Hadoop's codecs write them; other compressed files ({@code .snappy},
+ * Hive's serde parses them; JSON tables ({@link JsonRows}) one JSON object per line as Hive's
+ * {@code JsonSerDe} parses it, a line it fails on fails the read. Files ending in {@code .gz},
+ * {@code .deflate} or {@code .bz2} are decompressed as Hadoop's codecs write them; other compressed files ({@code .snappy},
  * {@code .lz4}, {@code .zst}, {@code .lzo}, {@code .br}) are refused. The Arrow types are the
  * ones of {@link OrcArrowReader#field}, which DuckDB reads as the declared types.
  */
@@ -87,6 +88,10 @@ final class TextArrowReader extends ArrowReader {
     private boolean pendingCarriageReturn;
     private final int[] fieldStarts;
     private final int[] fieldEnds;
+    /** Parser of a JSON table's lines, else null. */
+    private final JsonRows json;
+    /** Lines read so far, header lines included. */
+    private long lineNumber;
 
     /**
      * Opens a file.
@@ -132,6 +137,7 @@ final class TextArrowReader extends ArrowReader {
         this.fieldsNeeded = needed;
         this.fieldStarts = new int[columnCount];
         this.fieldEnds = new int[columnCount];
+        this.json = format.json() == null ? null : new JsonRows(format.json(), columns);
         this.in = decompressed(new BufferedInputStream(new FileStream(file), BUFFER_BYTES), location);
     }
 
@@ -149,7 +155,8 @@ final class TextArrowReader extends ArrowReader {
 
     /**
      * Checks that a column's type is read from a table of a format: every column of an
-     * {@code OpenCSVSerde} table is a string (Hive reads them all as strings).
+     * {@code OpenCSVSerde} table is a string (Hive reads them all as strings), JSON tables see
+     * {@link JsonRows#checkType}.
      *
      * @param name column name
      * @param type its type
@@ -157,7 +164,9 @@ final class TextArrowReader extends ArrowReader {
      * @throws IllegalArgumentException when the type is not read
      */
     static void checkType(String name, TypeDescription type, TextFormat format) {
-        if (format.csv() == null) {
+        if (format.json() != null) {
+            JsonRows.checkType(name, type, format.json());
+        } else if (format.csv() == null) {
             checkType(name, type);
         } else if (type.getCategory() != TypeDescription.Category.STRING) {
             throw new IllegalArgumentException("OpenCSVSerde column " + name + " has type " + type
@@ -216,6 +225,10 @@ final class TextArrowReader extends ArrowReader {
         while (rows < batchSize && readLine()) {
             if (format.csv() != null) {
                 writeCsv(root, rows++);
+                continue;
+            }
+            if (json != null) {
+                writeJson(root, rows++);
                 continue;
             }
             split();
@@ -279,10 +292,12 @@ final class TextArrowReader extends ArrowReader {
             if (i < bufferLimit) {
                 pendingCarriageReturn = buffer[i] == '\r';
                 bufferPosition = i + 1;
+                lineNumber++;
                 return true;
             }
             bufferPosition = i;
         }
+        lineNumber++;
         return true;
     }
 
@@ -371,6 +386,30 @@ final class TextArrowReader extends ArrowReader {
                 ((VarCharVector) vector).setSafe(row,
                         fields[positions[i]].getBytes(StandardCharsets.UTF_8));
             }
+        }
+    }
+
+    /**
+     * Writes the current line of a JSON table, parsed as Hive's serde parses it.
+     *
+     * @param root target batch
+     * @param row target row
+     * @throws IOException when Hive's serde fails on the line or Arrow cannot hold a value
+     */
+    private void writeJson(VectorSchemaRoot root, int row) throws IOException {
+        try {
+            if (lineLength == 0) {
+                // Hive's serde fails on the first such line of a file and repeats the row before
+                // it on later ones (it parses the reused line buffer).
+                throw new IOException("empty line");
+            }
+            Object[] values = json.parse(line, lineLength);
+            for (int i = 0; i < positions.length; i++) {
+                JsonRows.write(root.getVector(i), types[i], row, values[positions[i]]);
+            }
+        } catch (IOException | RuntimeException e) {
+            throw new IOException("Line " + lineNumber + " of " + location
+                    + " is not a row Hive's JsonSerDe reads: " + e.getMessage(), e);
         }
     }
 
