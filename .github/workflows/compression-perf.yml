@@ -48,7 +48,7 @@ jobs:
 
       - name: Unthrottled baseline
         run: >
-          ./mvnw -pl flight-server surefire:test -Dgroups=perf -DexcludedGroups=
+          ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Dgroups=perf -DexcludedGroups=
           -Dtest=CompressionThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
           -Dcompression.perf.rows="${{ inputs.rows }}" -Dcompression.perf.report="$RUNNER_TEMP/baseline.md"
 
@@ -61,7 +61,7 @@ jobs:
 
       - name: Throttled run
         run: >
-          ./mvnw -pl flight-server surefire:test -Dgroups=perf -DexcludedGroups=
+          ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Dgroups=perf -DexcludedGroups=
           -Dtest=CompressionThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
           -Dcompression.perf.rows="${{ inputs.rows }}" -Dcompression.perf.report="$RUNNER_TEMP/netem.md"
 
