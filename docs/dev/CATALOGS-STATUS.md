@@ -157,6 +157,35 @@ C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), fr
     - **Next for C3:** step 2 (the plugin) after Q5. Nothing else in C3 is unblocked.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
     reader allows.
+    - Step 1 done (2026-10-28): `InsertOnlyDirectories` in `flight-plugin-hive` (new class, not wired yet): for one
+      table/partition directory listing and a snapshot (`WriteIds`: high watermark, min open write id, open +
+      aborted ids; `Txns` for `_v<txn>` visibility suffixes) it chooses what to read as Hive's
+      AcidUtils.getAcidState does for MM tables: the newest usable base (`base_N` with nothing open at or below N;
+      an insert-overwrite base only when write id N committed; a compacted one when its visibility txn is
+      committed or its `_metadata_acid` marks it compacted), committed deltas above it (all statement ids of a
+      write; a compacted `delta_x_y_vT` covers its sources), original files only without a base, hidden `_*` /
+      `.*` entries never. Refused with a clear message (never read in part): `delete_delta_*` (full ACID), a
+      compacted base newer than the snapshot ("not enough history"), a multi-id delta without `_v` holding an
+      aborted id, a delta reaching past the snapshot, partially overlapping deltas. `InsertOnlyDirectoriesTest`
+      (9 unit tests).
+    - Step 2 done (2026-10-28): wired behind the new optional setting `hive.insertOnlyTables` (default false).
+      `Metastore.snapshot` (`ThriftMetastore`: `get_open_txns`, then `get_valid_write_ids` with the
+      `ValidReadTxnList` string `hwm:minOpen:open:aborted`); `HiveTable.classify` shows
+      `transactional_properties=insert_only` tables when on (any format the plugin reads; full ACID stays skipped);
+      `HiveCatalog.plan` takes one snapshot per plan and lists each table/partition directory recursively, keeping
+      the files of the entries `InsertOnlyDirectories.select` chooses (directories from `DataStore.directories`,
+      so an empty `base_N` of an INSERT OVERWRITE counts; `_metadata_acid` read only for a base that needs it);
+      a refused layout fails the plan with an IOException naming the directory. `HmsFixture` now creates Hive's
+      txn tables (`TxnDbUtil.prepDb`) and opens/allocates/commits/aborts through the HMS API.
+      `HiveInsertOnlyTableTest` (4 tests: originals + committed/aborted/open deltas, a later commit becoming
+      visible, INSERT OVERWRITE base of an open then committed write, partitions, the delete_delta refusal, the
+      setting off).
+    - **Next (step 3):** (a) server-level test: an insert-only table through the server (complete + partial
+      equal, answers = committed rows), e.g. in the server's Hive catalog tests (`HiveTestTables`); (b) ORC / text
+      insert-only tables (same selection; check the ORC reader with files under `delta_*`); (c) a real Hive
+      writer check if a Hive 3/4 container is practical in `catalogs-ci.yml` (INSERT, INSERT OVERWRITE, a failed
+      INSERT, major compaction -> `_metadata_acid` / `_v` names as Hive really writes them); (d) then full ACID
+      ORC (needs ROW__ID-based delete handling - large, separate decision) or Paimon/Hudi.
 
 ## Open questions
 
@@ -261,3 +290,9 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   CI run 40784918326 (head 77babce) still running at session end (change is tools/ci + workflow only). Q1, Q4, Q5
   still unanswered: C1 step 2b, C2 step 2 and C3 step 2 stay unbuilt. P4 (plugins lane) is closed, so C4 is
   unblocked: next item.
+- 2026-10-28: C4 steps 1 + 2 - Hive insert-only (MM) tables in the hive plugin behind the new optional setting
+  `hive.insertOnlyTables` (default false, additive): `InsertOnlyDirectories` (Hive's getAcidState rules, ambiguous
+  layouts refused) + metastore snapshot + listing; `InsertOnlyDirectoriesTest` (9), `HiveInsertOnlyTableTest` (4,
+  in-process HMS with txn tables). Module `flight-plugin-hive` (plugins lane's module; C4 is lane 4's item):
+  100 tests, checkstyle, spotbugs clean locally (`HiveCatalogTest` needs a UTF-8 locale for its path test).
+  CI: Dev CI 40787036947, Catalogs CI 40787036921 (head 9b231bf) running. Next: C4 step 3.
