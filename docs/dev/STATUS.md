@@ -51,10 +51,11 @@
 >    SetSessionOptions (node-local sessions, cookie `arrow_flight_session_id`, unknown cookies ignored,
 >    `flightSessionIdleSeconds` 3600 / `flightSessionMax` 10000); header > session > `flightCompression`.
 >    **Next steps of 20:** ~~(b) LZ4 via lz4-java~~; ~~(c)
->    Flight SQL session option `arrow-compression`~~; (d) (the patched JDBC driver is in a client repo this lane
->    must not touch: here only START-NOTES text + the driver change described for the coordinator); `arrow-compression` in our patched JDBC driver + START-NOTES;
->    (e) pyarrow / ADBC C++/Go answer checks in CI; (f) parallel per-buffer compression within a batch and the
->    `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
+>    Flight SQL session option `arrow-compression`~~; ~~(d) START-NOTES text + the patched JDBC driver change
+>    described for the coordinator~~ (done 2026-10-28, see Log; the driver itself lives in a client repo);
+>    ~~(e) pyarrow / ADBC C++/Go answer checks in CI~~ (done 2026-10-28, `CompressionClientsIntegrationTest`; ADBC C++
+>    is not a separate Python package - pyarrow Flight is the C++ client); (f) parallel per-buffer compression within
+>    a batch and the `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
 > 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
 >    ~50 (both CPU-bound from 8 clients); c1 latency is already ours. So this is CPU per query, not waiting: profile one
 >    query end to end under 8-32 clients (async-profiler or JFR in a 2-CPU container), list where the CPU goes
@@ -1407,3 +1408,16 @@
   `catalog/ArrowScanRequests` (columns + predicate hints), `shipsPartitionValues` used by `QueryPlanner` and
   `ticketFiles`, describe via `CatalogViews.declaredColumnsSource`. Parquet/Iceberg paths unchanged (only
   `partialSql` extracted). No plugin returns ArrowStream yet.
+- 2026-10-28 (cloud session): item 20 steps (d) and (e) done (23e36ae, no runtime change, no pre-release).
+  (e) `CompressionClientsIntegrationTest` (integration tag): an in-process server, a mixed-type table (120k rows:
+  bigint, int, nullable text, decimal, double, date, timestamp, bool, list, struct) read by
+  `src/test/resources/python/compression_clients.py` through pyarrow Flight (C++; Flight SQL command encoded by
+  hand) and the ADBC Flight SQL driver (Go; headers as `adbc.flight.sql.rpc.call_header.*`), each with no header,
+  `none`, `zstd`, `lz4`, in partial and complete mode: answers equal the client's plain answer, and per client the
+  server's compressed-batch counter rises (so both really asked and decoded). dev-ci.yml installs pyarrow 26.0.0 +
+  adbc-driver-flightsql/-manager 1.13.0 in a venv and passes `-Dpython.it.executable`; without it the test is
+  skipped. (d) START-NOTES: compression opt-in bullet + what our patched JDBC driver needs (bundle
+  arrow-compression + zstd-jni (+ commons-compress) relocated like its Arrow classes with the codec factory
+  service file merged; the driver already sends unknown URL properties as headers, so `?arrow-compression=zstd`
+  is enough) - for the coordinator, the driver repo is not touched here. Push run 40609399809 green (server 831
+  tests, 2 skipped as before = the new test ran). Next: item 20 (f), then item 21.
