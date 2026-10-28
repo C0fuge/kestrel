@@ -23,12 +23,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (CI installs pyarrow 26.0.0 / adbc-driver-flightsql 1.13.0; skipped without `-Dpython.it.executable`).
   START-NOTES now describe the compression opt-in and the change our patched JDBC driver needs to ask for it
   (step (d)). No runtime change.
+- Complete answers over catalog tables read as Arrow streams (P1 step 2 (b) part 2 (2); no plugin produces such
+  tables yet): each reference of such a table named with its schema (`FROM hive.orders o`, joins, FROM lists,
+  subqueries) reads a stream of its own with the columns the query names (all for `*`, `COLUMNS(...)` or a
+  whole-row use of the alias); the WHERE clause's simple conditions go along as hints only when the query is one
+  SELECT of that table alone. The statement is prepared for the run only, with its parameters bound
+  (`DuckDbAdapter.streamCompleteOnce`); describing reads no data. These tables have no complete-mode view, so a
+  reference without the schema fails as a missing table (never an empty answer). Other tables are unchanged.
 - Partial answers over catalog tables read as Arrow streams (P1 step 2 (b) part 2 (1); no plugin produces such
   tables yet): the planner ships their files with partition values like Hive Parquet files, every endpoint asks
   the catalog for one stream with the columns the query names (all for `*`, one for `count(*)`) and the simple
   conditions of the WHERE clause's top-level AND as hints (`ArrowScanRequests`), runs the query once over it
   without the statement cache (`DuckDbAdapter.streamSqlOnce`) and drops the stream afterwards; describing such a
-  query reads no data (declared columns). Complete mode still skips these tables.
+  query reads no data (declared columns).
 - Flight SQL sessions with the option `arrow-compression` (item 20, step (c)): SetSessionOptions /
   GetSessionOptions / CloseSession (were UNIMPLEMENTED) keep options per `arrow_flight_session_id` cookie on the
   node; `arrow-compression` (`none`/`zstd`/`lz4`) is the codec of the session's DoGet calls without the header

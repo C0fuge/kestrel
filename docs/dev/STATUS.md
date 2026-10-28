@@ -1411,6 +1411,13 @@
   `catalog/ArrowScanRequests` (columns + predicate hints), `shipsPartitionValues` used by `QueryPlanner` and
   `ticketFiles`, describe via `CatalogViews.declaredColumnsSource`. Parquet/Iceberg paths unchanged (only
   `partialSql` extracted). No plugin returns ArrowStream yet.
+- 2026-10-28 (plugins lane, FYI core lane): core commit 53c4d71 (P1 step 2 (b) part 2 (2)) - complete mode reads
+  catalog tables whose snapshot is `ReadSpec.ArrowStream`: no view for them (marker in `CatalogViews.refresh`); new
+  `CatalogViews.arrowStreams(sql, scans)` rewrites their schema-qualified FROM references (new
+  `services/TableReferences` on `TimeTravelClause`'s tokenizer, now package-visible) after `timeTravel`; new
+  `DuckDbAdapter.streamCompleteOnce` (views applied, uncached prepare, `bindParameters` extracted from
+  `streamComplete`); `ExecutionService.readComplete` / `completeSchema` / `completeParameterSchema` call it.
+  Without such references the SQL and the path are unchanged (`ArrowStreamScans.close` no-op without streams).
 - 2026-10-28 (cloud session): item 20 steps (d) and (e) done (23e36ae, no runtime change, no pre-release).
   (e) `CompressionClientsIntegrationTest` (integration tag): an in-process server, a mixed-type table (120k rows:
   bigint, int, nullable text, decimal, double, date, timestamp, bool, list, struct) read by
