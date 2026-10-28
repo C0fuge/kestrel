@@ -118,8 +118,11 @@
 >    `endpointsPerServer` 4/8 (partial mode); ~~(c) 8 endpoints stay ~20 % below 4 on 2 cores: try capping the DoGets
 >    that produce batches at once to the cores (opt-in) and look at per-stream budget waits~~ (done 2026-10-28, db66d64, opt-in
 >    `duckDbProducingStreams`, in pre-release `server-1.0.0-9506620bb170`, see Log; screening: measure with value 2 = cores / duckDbThreads at 4/8 endpoints, alone
->    and with `duckDbThreadsUnderLoad=1`); (d) zero-copy writes
->    for the DuckDB stream path only (its buffers are fresh per batch), measured on a quiet runner.
+>    and with `duckDbThreadsUnderLoad=1`); ~~(d) zero-copy writes
+>    for the DuckDB stream path only (its buffers are fresh per batch)~~ (done 2026-10-28, 78a2720, opt-in
+>    `flightZeroCopyWrites`, in pre-release `server-1.0.0-7f308a6cdb4d`, see Log; local A/B: 8 endpoints +1-15 % MB/s,
+>    -10-14 % CPU/GB, 1/4 streams within noise; screening: measure `-DflightZeroCopyWrites=true` at 1/4/8 endpoints,
+>    alone and with `duckDbProducingStreams=2`). **Item 22 has no open code step**; next is the screening's numbers.
 >    Caveat (see the maintainer's S3 tail bug above): fewer threads per query lengthen round-trip-bound S3 reads, so
 >    leave `duckDbThreadsUnderLoad` off on S3 nodes until that bug is understood; it targets CPU-bound local/HDFS scans.
 > 3b. item 17 (e) (new, from the CI screening's cache run 40569584228, `COMPARE-CACHE-2026-10-27.md`) - **S3 read cache
@@ -1628,3 +1631,21 @@
   `server-1.0.0-99113c98c1c3`; push run 40645716991 cancelled (concurrency group). Screening: the cache run with
   `cacheMegabytes=1024` (RSS, SF10, repeated small queries) with `cacheAdmission` always and reuse vs off. New Open
   question "Read cache admission default". Next: item 22 (d) (zero-copy writes on a quiet runner) or item 18 step 2.
+- 2026-10-28 (cloud session): item 22 (d) done (78a2720): opt-in `flightZeroCopyWrites` /
+  `arrowflight.flight.zeroCopyWrites` / `FLIGHT_ZERO_COPY_WRITES` (default false, strict true/false). DuckDB result
+  streams (`streamPrepared`, the only DuckDB stream path) call `setUseZeroCopy(true)` before start, so Flight wraps the
+  exported batch buffers instead of copying them; checked in Arrow 19 that `ArrowMessage` retains them
+  (`ArrowBufRetainingCompositeByteBuf`) and DuckDB's C-data import gives every batch new buffers, so a queued batch
+  stays intact while the next is computed; the outbound budget still applies (gRPC on-ready threshold counts the
+  bytes either way); a queued batch now sits in DuckDB's native memory instead of Netty direct buffers. Metadata and
+  SqlInfo streams keep copying (they may reuse buffers; the global `arrow.flight.enable_zero_copy_write` stays unused).
+  Tests: `ConfigAdapterTest`, `DuckDbAdapterTest.streamSqlUsesZeroCopyWritesOnlyWhenSet`,
+  `ZeroCopyWritesIntegrationTest` (4 endpoints, batchSize 1024, readers pausing after the first batch, mixed types incl.
+  lists/structs/decimals/nulls, partial + complete, plain + zstd: answers equal to a copying server). Local A/B
+  (`ParallelScanPerfTest -Dperf.zeroCopyWrites`, `taskset -c 0,1`, in-process client on the same cores, 6 M rows,
+  2 rounds x 3 runs): 1 stream 191/214 -> 193/228 MB/s, 4 endpoints 258/276 -> 250/264, 8 endpoints 243/234 ->
+  245/268 at 8.05/8.34 -> 7.26/7.15 s CPU/GB - only 8 endpoints gains clearly, not a quiet runner. CI: my push run
+  40651074736 and package dispatch 40651083243 were cancelled by the plugins lane's package dispatch 40651658732 on
+  7f308a6 (concurrency group), which includes 78a2720 and is green (build + package): pre-release
+  `server-1.0.0-7f308a6cdb4d` carries this change. Screening: `-DflightZeroCopyWrites=true` vs off at 1/4/8
+  endpoints (MB/s, CPU, peak RSS). Next: item 18 step 2 (distributed complete mode).
