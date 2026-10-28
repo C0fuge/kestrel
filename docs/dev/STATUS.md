@@ -66,7 +66,7 @@
 >    Hazelcast in single-node mode, thread hand-offs, Arrow allocation, DuckDB threads vs cores) and cut the top items;
 >    compare with upstream's path for the same query. Goal: >= upstream's queries/s at 8 and 32 clients on 2 CPUs with
 >    identical answers; c1 p50 must not get worse.
->    *Step 1 done 2026-10-28 (see Log):* new perf test `SmallQueryThroughputPerfTest` (1/8/32 clients, point lookup +
+>    *Step 1 done 2026-10-28 (881b7c6, package run 40618153054 green, pre-release `server-1.0.0-881b7c62b373`; see Log):* new perf test `SmallQueryThroughputPerfTest` (1/8/32 clients, point lookup +
 >    filtered count as stock clients run them: prepare, GetFlightInfo, DoGet, close; q/s, p50/p95, process CPU per
 >    query and per thread group; run it under `taskset -c 0,1`). Where the CPU goes (local, 2 CPUs, c32, 4 local
 >    Parquet files, ~11 ms CPU per query incl. the in-process client): DoGet handler ~5.7 ms = DuckDB prepare of the
@@ -1472,3 +1472,15 @@
   will be lower, so the screening repo's number decides the 264 MB/s goal. Locally (4 cores, no netem) zstd 209 ->
   314 MB/s. Package run 40611555433 green (push run 40611545280 superseded), pre-release `server-1.0.0-cadd1aca9c23`;
   first perf run 40611557966 failed to fork (`surefire:test` skipped the JaCoCo argLine, fixed in b492228). Next: item 21.
+- 2026-10-28 (cloud session): item 21 step 1 (881b7c6). New perf test `SmallQueryThroughputPerfTest` (1/8/32 clients,
+  point lookup + filtered count via prepare/GetFlightInfo/DoGet/close; q/s, p50/p95, CPU per query by thread group).
+  Profiled under `taskset -c 0,1` with JFR and per-phase thread-CPU probes (temporary, not committed; async-profiler
+  was not allowed in the session). Breakdown and next steps in item 21. Cut: GetFlightInfo's registry + heartbeat
+  reads on a one-member cluster (`ClusterService.alone()`, local member list), the Jackson tree of the per-DoGet
+  execution-path event (hand-written, byte-equal to Jackson's text - test), `Mac.getInstance` per ticket (one per
+  thread), `String.format` per binary qid (same ids - test). Local A/B twice, same session, JaCoCo off: c8 159/161 ->
+  181/195 q/s, c32 218/227 -> 247/254 q/s, CPU/query c8 12.3 -> 10.4 ms. No wire, setting, answer or log-text
+  change. Found: per-query DuckDB threads cannot adapt to load (`lock_configuration`) - Open question "Item 21 (b)";
+  `duckDbThreads=1` is +9 % at c8 locally. Push run 40618147100 cancelled in favour of package run 40618153054
+  (green), pre-release `server-1.0.0-881b7c62b373` for the screening repo (suggest also a round with
+  `-DduckDbThreads=1`). Next: item 21 (c)/(d), or item 22 if the screening shows the gap closed.
