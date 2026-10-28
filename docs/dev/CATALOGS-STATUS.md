@@ -38,13 +38,20 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       `rest_*`) next to iceberg-hadoop over a reference warehouse with the same fixtures; complete answers equal the
       reference (count + md5 per table), partial equal complete, located partial endpoints. `IcebergFixtures.writeRest`
       (shared by both tests). `catalogs-ci.yml` runs it for polaris and iceberg-rest-fixture (passes locally on both).
-    - **Next (step 3b):** the same on the S3 entries: `fixture-libs` needs Iceberg's S3FileIO + AWS SDK groups
-      (`org.apache.iceberg:iceberg-aws`, `software.amazon.awssdk`, url-connection client) for `writeRest` with
-      `io-impl=S3FileIO`; install the s3 plugin next to iceberg in the test's plugins dir with
-      `arrowflight.s3.endpoint/accessKey/secretKey/urlStyle=path` for the bucket root; then drop the `-s3` skip in
-      the workflow step and the local-directory assumption in the test. After that: the same tables registered in an
-      HMS (the hive plugin's Iceberg path, see `HiveCatalogIntegrationTest`) as a third reference; Unity Catalog OSS
-      if its Iceberg REST endpoint runs in CI.
+    - Step 3b done (2026-10-28): the server test on the S3 entries too (polaris-s3, iceberg-rest-fixture-s3,
+      lakekeeper-s3): writer Iceberg S3FileIO (the iceberg module's `fixture-libs` now include
+      `software.amazon.awssdk`, `software.amazon.eventstream`, `org.reactivestreams`, `dev.failsafe`), the s3 plugin
+      installed next to iceberg with `arrowflight.s3.endpoint/region/urlStyle=path` + `FLIGHT_S3_*` keys; the catalog
+      root's store is opened lazily by `CatalogStores.locate`.
+    - Step 3c done (2026-10-28): HMS as a further reference on local warehouses: the REST metadata files registered
+      in the in-process metastore (`HmsFixture.registerIceberg`, schema `hms_ice`, hive plugin -> iceberg plugin);
+      answers equal the REST catalog's (schema + rows), partial equal complete. Skipped on S3 entries (the in-process
+      HMS has no S3 file system); the workflow expects 4 tests with exactly that one skip there.
+    - **Next (step 4):** Unity Catalog OSS: check whether `unitycatalog/unitycatalog` (Docker Hub) serves the Iceberg
+      REST endpoint (`/api/2.1/unity-catalog/iceberg`) read-only for Delta-UniForm tables only - if it cannot create
+      Iceberg tables through REST, `IcebergFixtures.writeRest` cannot feed it and the entry needs UniForm tables
+      written another way (likely out of reach without Spark; then record that and close C1 apart from 2b).
+      Step 2b (vended credentials) still waits on Q1. After step 4 move on to C2.
 C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source through DuckDB's `postgres` / `mysql`
     extensions (bundle for 1.5.6 offline like the others; check availability), read-only, pushdown of filters/projection,
     credentials from the plugin config (never logged), Ranger checks as for other tables. CI with postgres/mysql
@@ -87,3 +94,7 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Catalogs CI green: run 40692394116 (all 5 entries; the 2 file entries run the new test). Dev CI runs 40692394131 and
   40693932375 (head 207b74c): 912 tests, the only failure `DistributedClusterIntegrationTest` (lane 3, intermittent,
   not this change), see Open questions Q2.
+- 2026-10-28: C1 steps 3b + 3c - `RestCatalogServerConformanceTest` on the S3 entries (s3 plugin in the server,
+  S3FileIO writer) and an HMS reference (REST metadata registered in the in-process metastore, local warehouses).
+  Test only. Catalogs CI green: runs 40712157558 (3b, all 5 entries) and 40712744584 (3c, all 5 entries). Dev CI:
+  run 40712744776 green (head 2cfa23e). No new open questions.
