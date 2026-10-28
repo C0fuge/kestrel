@@ -227,4 +227,17 @@ class CompleteAnswerMergeTest {
      */
     private record Answer(List<String> header, List<String> rows) {
     }
+
+    /** Verifies output names must match the endpoint answers' column count. */
+    @org.junit.jupiter.api.Test
+    void outputNamesMustMatchColumnCount() {
+        ParquetQueryParser parsed = ParquetQueryParser.parse("SELECT count(*) FROM s.t");
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> CompleteAnswerMerge.mergeSql(parsed, "parts", java.util.List.of("count(*)"),
+                        java.util.List.of("a", "b")));
+        String sql = CompleteAnswerMerge.mergeSql(parsed, "parts", java.util.List.of("count(*)"),
+                java.util.List.of("count_star()"));
+        org.junit.jupiter.api.Assertions.assertTrue(
+                sql.startsWith("SELECT merged.\"count(*)\" AS \"count_star()\" FROM ("), sql);
+    }
 }

@@ -8,6 +8,8 @@ import org.apache.arrow.memory.BufferAllocator;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
+import pro.surpin.data.arrowflight.server.services.ExecutionService;
+import pro.surpin.data.arrowflight.server.services.QueryPlanner;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 
@@ -32,6 +34,20 @@ public interface ServerComponent {
      * @return cluster service
      */
     ClusterService clusterService();
+
+    /**
+     * Returns the query planner.
+     *
+     * @return query planner
+     */
+    QueryPlanner queryPlanner();
+
+    /**
+     * Returns the query execution service.
+     *
+     * @return execution service
+     */
+    ExecutionService executionService();
 
     /**
      * Returns the store of the data directory.

@@ -9,6 +9,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
@@ -24,6 +25,10 @@ import pro.surpin.data.arrowflight.server.adapters.StreamCompression;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.OutboundBudget;
 import pro.surpin.data.arrowflight.server.adapters.StackTraceTrimmer;
+import pro.surpin.data.arrowflight.server.adapters.InternalCallAuthenticator;
+import pro.surpin.data.arrowflight.server.services.ClusterService;
+import pro.surpin.data.arrowflight.server.services.DistributedComplete;
+import pro.surpin.data.arrowflight.server.services.InternalCallIdentity;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
@@ -84,6 +89,7 @@ public class HadoopArrowFlightServer {
     private MetricsService metricsService;
     private FlightSecurity flightSecurity;
     private HdfsTicketCache hdfsTicketCache;
+    private DistributedComplete distributedComplete;
 
     /**
      * Reads the stream compression settings and logs them.
@@ -201,6 +207,14 @@ public class HadoopArrowFlightServer {
             System.setProperty("grpc.netty.server.flowControlWindow", "1048576");
 
             Location location = flightSecurity.location(localhost, port);
+            java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpc = grpcOptions(outboundBudget);
+            InternalCallIdentity internal = null;
+            if (ConfigAdapter.distributedComplete()) {
+                internal = startDistributedComplete();
+                ClusterService cluster = component.clusterService();
+                grpc = grpc.andThen(builder -> builder.intercept(
+                        InternalCallAuthenticator.memberAddressCheck(cluster::liveServerUris)));
+            }
             server = flightSecurity.configure(FlightServer.builder(
                     component.allocator(),
                     location,
@@ -210,7 +224,7 @@ public class HadoopArrowFlightServer {
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                     .middleware(StreamCompression.KEY, streamCompression())
                     .middleware(FlightSessions.KEY, ConfigAdapter.flightSessions().factory())
-                    .transportHint("grpc.builderConsumer", grpcOptions(outboundBudget)))
+                    .transportHint("grpc.builderConsumer", grpc), internal)
                     .build();
             LOGGER.info("Default result mode: {}; metadata endpoint location: {}; Flight security: {}",
                     config.resultMode(), config.metadataEndpointLocation(), flightSecurity);
@@ -255,6 +269,14 @@ public class HadoopArrowFlightServer {
             server.shutdown();
             LOGGER.info("Flight SQL server stopped");
         }
+        if (distributedComplete != null) {
+            try {
+                distributedComplete.close();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            distributedComplete = null;
+        }
         if (component != null) {
             try {
                 component.authorization().close();
@@ -294,6 +316,26 @@ public class HadoopArrowFlightServer {
             }
             flightSecurity = null;
         }
+    }
+
+    /**
+     * Lets the producer merge complete answers from endpoint answers read from the nodes
+     * (distributedComplete); peer clients trust distributedCompleteTrustedCertificates, else this
+     * node's own certificate.
+     *
+     * @return checker of the signed identities of node-to-node calls
+     */
+    private InternalCallIdentity startDistributedComplete() {
+        String trusted = ConfigAdapter.distributedCompleteTrustedCertificates(ConfigSource.system());
+        File certificates = trusted != null ? new File(trusted) : flightSecurity.certificate();
+        distributedComplete = new DistributedComplete(component.queryPlanner(),
+                component.clusterService(), component.executionService(), component.allocator(),
+                DistributedComplete.clientFactory(component.allocator(), certificates));
+        component.producer().useDistributedComplete(distributedComplete);
+        LOGGER.warn("distributedComplete=true: complete answers are merged from endpoint answers read"
+                + " from the nodes as the client's user; the cluster's ticket secret now allows"
+                + " impersonating any user from a live member's address - protect it like a keytab");
+        return component.clusterService().internalCallIdentity();
     }
 
     /**

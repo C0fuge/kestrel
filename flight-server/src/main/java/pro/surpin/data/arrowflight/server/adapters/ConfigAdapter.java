@@ -276,6 +276,52 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns distributedComplete from the system configuration.
+     *
+     * @return whether complete answers may be merged from endpoint answers read from the nodes
+     */
+    public static boolean distributedComplete() {
+        return distributedComplete(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code distributedComplete} ({@code FLIGHT_DISTRIBUTED_COMPLETE}): whether the
+     * planning node of a complete answer reads the query's partial-mode endpoints from the
+     * cluster's nodes, as the client's user, and merges them, for query shapes whose merge is
+     * exact; default false. When on, nodes accept calls signed with the cluster's ticket secret
+     * from live members' addresses, so the secret then allows impersonating any user.
+     *
+     * @param props configuration source
+     * @return true when on
+     * @throws IllegalArgumentException for a value other than true or false
+     */
+    public static boolean distributedComplete(ConfigSource props) {
+        String value = getStringWithEnv("distributedComplete", "arrowflight.cluster.distributedComplete",
+                "FLIGHT_DISTRIBUTED_COMPLETE", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("distributedComplete must be true or false: " + value);
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    /**
+     * Resolves {@code distributedCompleteTrustedCertificates}
+     * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
+     * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own
+     * certificate file ({@code FLIGHT_TLS_CERT}), which fits nodes sharing one certificate or a
+     * chain that includes the issuing CA.
+     *
+     * @param props configuration source
+     * @return path, or null when not set
+     */
+    public static String distributedCompleteTrustedCertificates(ConfigSource props) {
+        String value = getStringWithEnv("distributedCompleteTrustedCertificates",
+                "arrowflight.cluster.distributedCompleteTrustedCertificates",
+                "FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS", "", props).trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    /**
      * Returns flightZeroCopyWrites from the system configuration.
      *
      * @return whether DuckDB result streams hand their batches to gRPC without a copy

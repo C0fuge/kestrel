@@ -60,6 +60,8 @@ public final class ClusterService implements AutoCloseable {
     private boolean registered;
     private final EndpointTicketCodec endpointTicketCodec;
     private volatile byte[] currentSecret;
+    private final InternalCallIdentity internalCallIdentity =
+            new InternalCallIdentity(() -> currentSecret);
     private final Map<String, LocalHandle> localHandles = new ConcurrentHashMap<>();
     /** This node's published inventory, published again when the cluster lost it. */
     private volatile Map<String, Long> localInventory;
@@ -664,6 +666,25 @@ public final class ClusterService implements AutoCloseable {
      */
     public String serverUri() {
         return serverUri;
+    }
+
+    /**
+     * Returns the signer of node-to-node caller identities, keyed by the cluster's current
+     * ticket secret.
+     *
+     * @return identity signer
+     */
+    public InternalCallIdentity internalCallIdentity() {
+        return internalCallIdentity;
+    }
+
+    /**
+     * Returns the URIs of the live servers of the cluster, this one included.
+     *
+     * @return live server URIs
+     */
+    public Set<String> liveServerUris() {
+        return filterLiveServers(allServerLoads().keySet());
     }
 
     /**

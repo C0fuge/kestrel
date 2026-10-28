@@ -5,6 +5,9 @@ import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 import org.apache.hadoop.conf.Configuration;
 
+import pro.surpin.data.arrowflight.server.adapters.InternalCallAuthenticator;
+import pro.surpin.data.arrowflight.server.services.InternalCallIdentity;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -140,10 +143,28 @@ record FlightSecurity(boolean tlsEnabled, File certificate, File privateKey,
      * @throws IOException if security materials cannot be loaded
      */
     FlightServer.Builder configure(FlightServer.Builder builder) throws IOException {
+        return configure(builder, null);
+    }
+
+    /**
+     * Applies TLS and the selected authenticator to a Flight server builder; with an internal
+     * identity checker, node-to-node calls of distributed complete mode are admitted as the user
+     * their signed header names.
+     *
+     * @param builder server builder
+     * @param internal checker of signed node-to-node identities, or null when they are refused
+     * @return configured builder
+     * @throws IOException if security materials cannot be loaded
+     */
+    FlightServer.Builder configure(FlightServer.Builder builder, InternalCallIdentity internal)
+            throws IOException {
         if (tlsEnabled) {
             builder.useTls(certificate, privateKey);
         }
         CallHeaderAuthenticator authenticator = authentication.authenticator();
+        if (authenticator != null && internal != null) {
+            authenticator = new InternalCallAuthenticator(authenticator, internal);
+        }
         if (authenticator != null) {
             builder.headerAuthenticator(authenticator);
         }

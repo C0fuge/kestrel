@@ -260,6 +260,38 @@ public final class ExecutionService {
     }
 
     /**
+     * Streams the result of one statement over Arrow batches read on this node (the endpoint
+     * answers of a distributed complete answer): the batches are registered on this thread's
+     * DuckDB connection under a view name, read once by the statement, and dropped afterwards.
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param parts         batches to read; DuckDB closes the reader once it has read it
+     * @param name          view name the statement reads the batches from
+     * @param sql           DuckDB statement over the view
+     * @param listener      Flight stream listener, started by this method
+     * @throws Exception on query or stream failure
+     */
+    public void readArrowParts(BufferAllocator allocator, org.apache.arrow.vector.ipc.ArrowReader parts,
+            String name, String sql, FlightProducer.ServerStreamListener listener) throws Exception {
+        Connection connection = duckDbAdapter.connection();
+        try (org.apache.arrow.c.ArrowArrayStream stream =
+                org.apache.arrow.c.ArrowArrayStream.allocateNew(allocator)) {
+            org.apache.arrow.c.Data.exportArrayStream(allocator, parts, stream);
+            try {
+                connection.unwrap(org.duckdb.DuckDBConnection.class).registerArrowStream(name, stream);
+                duckDbAdapter.streamSqlOnce(allocator, sql, listener, true);
+            } finally {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("DROP VIEW IF EXISTS " + DuckDbAdapter.quoteIdentifier(name));
+                } finally {
+                    // A stream DuckDB read is released already; release() then does nothing.
+                    stream.release();
+                }
+            }
+        }
+    }
+
+    /**
      * Turns DuckDB's "table does not exist" for a schema whose catalog could not be read into
      * that catalog's error, so that a metastore outage is not reported as a missing table.
      *

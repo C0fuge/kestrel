@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `endpointBackupLocations`, `endpointsPerServer` |
+| Cluster | `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates` |
 
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per
@@ -312,6 +312,21 @@ until its first batch, so keep it off for mixed workloads with heavy queries.
 each stream gets budget / open streams (at least 1 MiB, at most the per-stream threshold) and waits
 for its client beyond that. Many concurrent scans then slow down instead of running the node out of
 direct memory (streams CANCELLED "Server sendMessage() failed with Error", container killed).
+
+`distributedComplete` (`FLIGHT_DISTRIBUTED_COMPLETE`, default false) lets the node that answers a
+complete-mode query compute it with the cluster: it plans the query in parts as partial mode does, reads
+every part from its node with a Flight DoGet as the client's user, and merges the parts in its own DuckDB.
+Only query shapes whose merge is exact are distributed (one table; plain columns, `count`/`sum`/`min`/`max`,
+`GROUP BY` of selected columns, `DISTINCT`, `ORDER BY` over output columns, `LIMIT` except on aggregates;
+no parameters, no time travel) and only when the plan has at least two parts; the answer has the same
+columns as on one node. Every other query, and any refusal or peer failure before the first batch reaches
+the client, keeps the single-node path; a failure after the first batch fails the query. Node-to-node calls
+carry the client's user in a header signed with the cluster's ticket secret, accepted only from the
+addresses of live cluster members and only by nodes with the setting on (set it on every node). **With the
+setting on, the ticket secret allows impersonating any user from a member's address: protect the cluster
+(Hazelcast) network and the nodes like a keytab.** Over TLS a node trusts its peers with the PEM file
+`distributedCompleteTrustedCertificates` (`FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`), by default its own
+`FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA).
 
 `flightZeroCopyWrites` (`FLIGHT_ZERO_COPY_WRITES`, default false) lets gRPC send the buffers of DuckDB
 result batches as they are instead of copying each batch into its own buffers first (DuckDB exports every

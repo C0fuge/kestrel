@@ -16,6 +16,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and must look to the `iceberg-rest` catalog exactly as the same tables in a Hadoop-layout warehouse (names,
   columns, files, row and delete counts, partial-read problems, DuckDB `iceberg_scan` rows). Test only, no runtime
   change.
+- Distributed complete mode (item 18 step 2, lane 3), opt-in `distributedComplete` / `FLIGHT_DISTRIBUTED_COMPLETE`
+  (default false, unchanged): the planning node of a complete answer reads the query's partial-mode endpoints from the
+  nodes (Flight DoGet as the client's user, header `x-kestrel-internal-identity` signed with the ticket secret,
+  accepted from live members' addresses only) and merges them in DuckDB (`CompleteAnswerMerge`, columns renamed and
+  checked against the single-node answer's schema). Refusal, unmergeable shapes, one-part plans and peer failures
+  before the first batch keep the single-node path. Peer TLS trust: `distributedCompleteTrustedCertificates`, default
+  the node's own certificate. With the setting on, the ticket secret allows impersonation (see README).
 - OIDC / Knox JWT bearer tokens (P2 step 3), new optional module `flight-auth-jwt`, `FLIGHT_AUTH_PROVIDER=jwt`
   (existing providers unchanged; release asset `flight-auth-...` now also holds `auth/jwt/`): every call's bearer JWT
   is verified with nimbus-jose-jwt 10.10 against the issuer's JWKS (`FLIGHT_JWT_JWKS_URL`, HTTPS only, cached and

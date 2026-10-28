@@ -174,6 +174,20 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("flightZeroCopyWrites"), e.getMessage());
     }
 
+    @Test
+    void distributedCompleteIsOffByDefaultAndRefusesOtherValues() throws IOException {
+        assertFalse(ConfigAdapter.distributedComplete(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.distributedComplete(
+                source(Map.of("distributedComplete", "true"), Map.of())));
+        assertTrue(ConfigAdapter.distributedComplete(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE", "TRUE"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedComplete(
+                source(Map.of("distributedComplete", "on"), Map.of())));
+        assertEquals(null, ConfigAdapter.distributedCompleteTrustedCertificates(source(Map.of(), Map.of())));
+        assertEquals("/etc/flight/ca.pem", ConfigAdapter.distributedCompleteTrustedCertificates(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS", " /etc/flight/ca.pem "))));
+    }
+
     /**
      * Regression for the S3 small-query tail (2026-10-28): on object stores the default keeps at
      * least 4 threads, local and HDFS data directories keep the size-aware default, an explicit

@@ -86,6 +86,29 @@ public final class CompleteAnswerMerge {
      * @throws IllegalArgumentException when the query shape cannot be merged
      */
     public static String mergeSql(ParquetQueryParser parsed, String parts, List<String> partColumns) {
+        return mergeSql(parsed, parts, partColumns, null);
+    }
+
+    /**
+     * Renders the DuckDB SQL that computes a query's complete answer from the union of its
+     * endpoint answers, naming its columns as the complete answer names them (endpoint answers
+     * may name an expression otherwise, e.g. {@code count(*)} vs {@code count_star()}).
+     *
+     * @param parsed parsed client query
+     * @param parts SQL relation holding the rows of all endpoint answers
+     * @param partColumns column names of the endpoint answers, in order
+     * @param outputNames column names of the complete answer, in order; null keeps the endpoint
+     *        answers' names
+     * @return merge SQL
+     * @throws IllegalArgumentException when the query shape cannot be merged, or the numbers of
+     *         columns differ
+     */
+    public static String mergeSql(ParquetQueryParser parsed, String parts, List<String> partColumns,
+            List<String> outputNames) {
+        if (outputNames != null && outputNames.size() != partColumns.size()) {
+            throw new IllegalArgumentException("Endpoint answers have " + partColumns.size()
+                    + " columns, the complete answer " + outputNames.size());
+        }
         String reason = refusal(parsed);
         if (reason != null) {
             throw new IllegalArgumentException(reason + " cannot be merged from endpoint answers");
@@ -99,10 +122,12 @@ public final class CompleteAnswerMerge {
         } else {
             sql.append("* FROM ").append(parts);
         }
-        if (parsed.orderBy == null && parsed.limit == null) {
+        if (parsed.orderBy == null && parsed.limit == null && outputNames == null) {
             return sql.toString();
         }
-        StringBuilder outer = new StringBuilder("SELECT * FROM (").append(sql).append(") AS merged");
+        StringBuilder outer = new StringBuilder("SELECT ")
+                .append(outputNames == null ? "*" : renamed(partColumns, outputNames))
+                .append(" FROM (").append(sql).append(") AS merged");
         if (parsed.orderBy != null) {
             outer.append(" ORDER BY ").append(orderBy(parsed, partColumns));
         }
@@ -151,6 +176,23 @@ public final class CompleteAnswerMerge {
     }
 
     /**
+     * Writes the select list that renames the merged columns by position.
+     *
+     * @param partColumns column names of the endpoint answers
+     * @param outputNames column names of the complete answer
+     * @return select list over the relation {@code merged}
+     */
+    private static String renamed(List<String> partColumns, List<String> outputNames) {
+        requireDistinctNames(partColumns);
+        List<String> items = new ArrayList<>(partColumns.size());
+        for (int i = 0; i < partColumns.size(); i++) {
+            items.add("merged." + DuckDbAdapter.quoteIdentifier(partColumns.get(i)) + " AS "
+                    + DuckDbAdapter.quoteIdentifier(outputNames.get(i)));
+        }
+        return String.join(", ", items);
+    }
+
+    /**
      * Rewrites the ORDER BY of a query over the merged answer, where only output names exist.
      *
      * @param parsed parsed client query
@@ -178,7 +220,8 @@ public final class CompleteAnswerMerge {
                 throw new IllegalArgumentException("ORDER BY " + trimmed
                         + " is not an output column and cannot be merged from endpoint answers");
             }
-            items.add(DuckDbAdapter.quoteIdentifier(name) + named.group(2));
+            // Qualified: an output name of the complete answer must not shadow the input column.
+            items.add("merged." + DuckDbAdapter.quoteIdentifier(name) + named.group(2));
         }
         return String.join(", ", items);
     }

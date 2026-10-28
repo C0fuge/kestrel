@@ -51,6 +51,7 @@ import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import pro.surpin.data.arrowflight.server.metrics.ExecutionPathRecorder;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
+import pro.surpin.data.arrowflight.server.services.DistributedComplete;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
@@ -81,6 +82,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private final ClusterService clusterService;
     private final SqlInfoBuilder sqlInfoBuilder;
     private final FlightAuthorization authorization;
+    /** Merges complete answers from endpoint answers (distributedComplete); null when off. */
+    private volatile DistributedComplete distributedComplete;
     private final String defaultResultMode;
     private final java.util.Set<Integer> knownSqlInfo;
 
@@ -362,6 +365,16 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
+     * Lets complete answers be merged from the answers of their partial-mode endpoints, read
+     * from the cluster's nodes (opt-in {@code distributedComplete}).
+     *
+     * @param distributed the distributed path, or null to compute complete answers alone
+     */
+    public void useDistributedComplete(DistributedComplete distributed) {
+        this.distributedComplete = distributed;
+    }
+
+    /**
      * Serves a ticket; every batch is sent with own offset buffers for its empty list vectors
      * (see {@link EmptyListOffsets}), so concurrent streams cannot corrupt each other's batches.
      *
@@ -595,10 +608,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         boolean success = false;
         String failureReason = null;
         try (DuckDbAdapter.QuerySlot slot = executionService.enterQuery()) {
-            authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
+            String user = context == null ? null : context.peerIdentity();
+            authorization.requireQuery(user, query);
             if (state.complete()) {
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);
-                executionService.readComplete(allocator, query, state.parameters(), listener, true);
+                DistributedComplete distributed = distributedComplete;
+                if (distributed == null || state.parameters() != null
+                        || !distributed.stream(query, user, listener)) {
+                    executionService.readComplete(allocator, query, state.parameters(), listener, true);
+                }
             } else {
                 executionService.readParquet(
                         allocator, query, filePaths, listener, true, pathTracker);
