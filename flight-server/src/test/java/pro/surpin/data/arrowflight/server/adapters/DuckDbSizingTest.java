@@ -29,17 +29,41 @@ class DuckDbSizingTest {
         return DuckDbSizing.parseBytes(sizing.memoryLimit());
     }
 
-    /** The screening container: 2 CPUs, 6 GB, -Xmx3g, direct 2g - threads as before, 1 GiB floor. */
+    /** The screening container: 2 CPUs, 6 GB, -Xmx3g, direct 2g - 4 threads as before 19, 1 GiB floor. */
     @Test
-    void smallContainerKeepsTwoThreadsAndTheOneGibFloor() {
+    void smallContainerKeepsFourThreadsAndTheOneGibFloor() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, null, 0);
-        assertEquals(2, s.threads());
+        assertEquals(4, s.threads());
         assertEquals(2, s.connections());
         assertEquals("1024MiB", s.memoryLimit());
         DuckDbSizing s3 = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 true, 0, null, 0);
         assertEquals(4, s3.threads());
+    }
+
+    /**
+     * Regression for the laptop stand p19b (2026-10-28): under container limits 4c/8g, 8c/16g and
+     * 16c/24g (-Xmx3g, direct 2g) item 19b chose 2/2/3 threads and TPC-H SF10 ran 1.35-1.7x slower
+     * than with 4; the thread floor is 4 and the memory limits stay the measured 1024/2201/3942 MiB.
+     */
+    @Test
+    void standContainersGetFourThreadsAndKeepTheirMemoryLimits() {
+        DuckDbSizing c4 = DuckDbSizing.compute(new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, null, 0);
+        assertEquals(4, c4.threads(), c4.describe());
+        assertEquals("1024MiB", c4.memoryLimit());
+        assertEquals(2, c4.connections());
+        DuckDbSizing c8 = DuckDbSizing.compute(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, null, 0);
+        assertEquals(4, c8.threads(), c8.describe());
+        assertEquals("2201MiB", c8.memoryLimit());
+        assertEquals(4, c8.connections());
+        DuckDbSizing c16 = DuckDbSizing.compute(new HostLimits(16, 24 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, null, 0);
+        assertEquals(4, c16.threads(), c16.describe());
+        assertEquals("3942MiB", c16.memoryLimit());
+        assertEquals(4, c16.connections());
     }
 
     @Test
@@ -65,7 +89,7 @@ class DuckDbSizingTest {
     void mediumHostSplitsTheBudget() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(4, 16 * GIB, 4 * GIB, 4 * GIB),
                 false, 0, null, 0);
-        assertEquals(2, s.threads());
+        assertEquals(4, s.threads());
         assertEquals(2, s.connections());
         // 16 - 4 - 4 - 2.4 = 5.6 GiB over 2
         long limit = limitBytes(s);
@@ -89,12 +113,20 @@ class DuckDbSizingTest {
     void manyCoresWithLittleMemoryAreCappedByMemory() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(64, 24 * GIB, 4 * GIB, 2 * GIB),
                 false, 0, null, 0);
-        // 24 - 4 - 2 - 3.6 = 14.4 GiB over 4 connections = 3.6 GiB -> 3 threads
+        // 24 - 4 - 2 - 3.6 = 14.4 GiB over 4 connections = 3.6 GiB -> 3 threads, floor 4
         assertEquals(16, s.coreThreads());
-        assertEquals(3, s.threads());
+        assertEquals(4, s.threads());
+        DuckDbSizing roomy = DuckDbSizing.compute(new HostLimits(64, 96 * GIB, 8 * GIB, 4 * GIB),
+                false, 0, null, 0);
+        // 96 - 8 - 4 - 14.4 = 69.6 GiB over 4 = 17.4 GiB -> 16 threads
+        assertEquals(16, roomy.threads());
+        DuckDbSizing mid = DuckDbSizing.compute(new HostLimits(64, 48 * GIB, 8 * GIB, 4 * GIB),
+                false, 0, null, 0);
+        // 48 - 8 - 4 - 7.2 = 28.8 GiB over 4 = 7.2 GiB -> 7 threads
+        assertEquals(7, mid.threads());
         DuckDbSizing tiny = DuckDbSizing.compute(new HostLimits(64, 8 * GIB, 4 * GIB, 2 * GIB),
                 false, 0, null, 0);
-        assertEquals(2, tiny.threads());
+        assertEquals(4, tiny.threads());
         assertEquals("1024MiB", tiny.memoryLimit());
     }
 
@@ -110,7 +142,9 @@ class DuckDbSizingTest {
         assertEquals(3, DuckDbSizing.compute(host, false, 3, null, 0).threads());
         DuckDbSizing limited = DuckDbSizing.compute(host, false, 0, "4GB", 0);
         assertEquals("4GB", limited.memoryLimit());
-        assertEquals(3, limited.threads());
+        assertEquals(4, limited.threads());
+        assertEquals(4, DuckDbSizing.compute(host, false, 0, "2GB", 0).threads());
+        assertEquals(10, DuckDbSizing.compute(host, false, 0, "10GiB", 0).threads());
         DuckDbSizing none = DuckDbSizing.compute(host, false, 0, "none", 0);
         assertNull(none.memoryLimit());
         assertEquals(16, none.threads());
@@ -124,7 +158,7 @@ class DuckDbSizingTest {
     void unknownMemoryLeavesDuckDbsDefault() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(8, 0, GIB, GIB), false, 0, null, 0);
         assertNull(s.memoryLimit());
-        assertEquals(2, s.threads());
+        assertEquals(4, s.threads());
     }
 
     @Test

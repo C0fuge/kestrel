@@ -509,6 +509,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- DuckDB thread default no longer drops below 4 (laptop stand p19b, 2026-10-28): since item 19b 4c/8g, 8c/16g and
+  16c/24g containers got 2/2/3 threads per connection (cut by the one-thread-per-GiB cap) and TPC-H SF10 ran
+  1.35-1.7x slower than with 4. Default now cores / 4 between 4 and 16, the per-GiB cap applies only above 4; the
+  default per-connection `memory_limit` keeps its values (1024/2201/3942 MiB on those profiles). New manual workflow
+  `tpch-perf.yml` (SF10 in a 4c/8g container, default vs `-DduckDbThreads=4`, fails when the default is > 10 % slower
+  or answers differ) with the perf-tag client `TpchPerfTest`.
 - S3 / lakeFS read cache took about twice its size in heap (item 17 (e), CI screening `COMPARE-CACHE-2026-10-27`:
   RSS ~5.7 GB with `cacheMegabytes=1024` vs ~2.3 GB off): each 1 MiB block was one array, a humongous object for G1
   that takes whole regions (256 MiB of blocks used 512 MiB of heap at `-Xmx3g`); a miss of up to 64 MiB was also

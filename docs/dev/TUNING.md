@@ -144,7 +144,11 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
   set `duckDbThreads=4` there. Since item 19b (2026-10-28) the upper clamp is 16 and the default also follows memory:
   `memory_limit` per connection = (memory - `-Xmx` - direct - 15 %) / `duckDbMemoryConnections` (cores / threads, at
   least 2), at least 1 GiB, and threads at most one per GiB of it (never below 2). Large hosts are still to be measured
-  on the stand (16 vs 32 as the clamp).
+  on the stand (16 vs 32 as the clamp). Since 2026-10-28 (laptop stand p19b) the floor is 4 again: 2/2/3 threads on
+  4c/8g, 8c/16g, 16c/24g containers gave TPC-H SF10 17.95/17.94/13.43 s vs 10.71/10.73/9.92 at 4, while the 1 GiB
+  memory limit was neutral (4 threads + 1 GiB: 10.11 s). Default now: cores / 4 between 4 and 16, the per-GiB cap
+  only above 4; the memory split keeps its divisor (cores / (cores / 4 between 2 and 16)). Check: workflow
+  `tpch-perf.yml` (SF10 in a 4c/8g container, default vs `-DduckDbThreads=4`).
 - `flightBackpressureThresholdBytes=16777216` (16 MiB, was 256 MiB): no loss measured, and per-stream buffering times the number of
   concurrent streams must fit `MaxDirectMemorySize`; with several endpoints per node the 256 MiB default fails.
 - Keep: `duckDbStreamResults=true`, `duckDbExternalFileCache=false`, `resultMode=complete`, `endpointsPerServer=1`,

@@ -432,7 +432,7 @@ public class ConfigAdapter {
 
     /**
      * Returns the DuckDB threads per connection the cores alone give: a quarter of the cores,
-     * between 2 and 16.
+     * between 4 and 16.
      *
      * @param availableCores processors available to the JVM
      * @return threads per DuckDB connection

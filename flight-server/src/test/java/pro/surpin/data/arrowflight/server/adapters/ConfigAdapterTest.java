@@ -216,25 +216,26 @@ class ConfigAdapterTest {
         assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "lakefs://repo/main/data"));
         assertEquals(6, ConfigAdapter.defaultDuckDbThreads(24, "s3://lake/data"));
         assertEquals(16, ConfigAdapter.defaultDuckDbThreads(64, "s3://lake/data"));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "/data/parquet"));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "hdfs://nn:8020/data"));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "file:///data/s3://x"));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, null));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "/data/parquet"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "hdfs://nn:8020/data"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "file:///data/s3://x"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, null));
         HostLimits host = new HostLimits(8, 64L << 30, 8L << 30, 8L << 30);
         assertEquals(4, ConfigAdapter.getConfig(
                 source(Map.of("dataDir", "s3://lake/data"), Map.of()), host).duckDbThreads());
-        assertEquals(2, ConfigAdapter.getConfig(
+        assertEquals(4, ConfigAdapter.getConfig(
                 source(Map.of("dataDir", "hdfs://nn:8020/data"), Map.of()), host).duckDbThreads());
         assertEquals(2, ConfigAdapter.getConfig(source(Map.of("dataDir", "s3://lake/data",
                 "duckDbThreads", "2"), Map.of())).duckDbThreads());
     }
 
     @Test
-    void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndSixteen() {
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(1));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4));
-        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(11));
-        assertEquals(3, ConfigAdapter.defaultDuckDbThreads(12));
+    void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenFourAndSixteen() {
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(1));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(11));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(12));
+        assertEquals(5, ConfigAdapter.defaultDuckDbThreads(20));
         assertEquals(4, ConfigAdapter.defaultDuckDbThreads(16));
         assertEquals(8, ConfigAdapter.defaultDuckDbThreads(32));
         assertEquals(16, ConfigAdapter.defaultDuckDbThreads(64));

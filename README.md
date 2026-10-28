@@ -295,9 +295,9 @@ Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThre
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
 `memory.max`) or machine minus `-Xmx`, the direct memory limit and 15 % headroom; each connection
 gets budget / `duckDbMemoryConnections` (`DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at
-least 2) as `memory_limit`, at least 1 GiB and at most 80 % of the memory; threads are cores / 4
-between 2 and 16 (at least 4 on `s3://`, `s3a://`, `s3n://`, `lakefs://`), at most one per GiB
-of that limit but never below 2. `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
+least 2, where threads here count as cores / 4 between 2 and 16) as `memory_limit`, at least
+1 GiB and at most 80 % of the memory; threads are cores / 4 between 4 and 16, and above 4 at most
+one per GiB of that limit (fewer than 4 made TPC-H SF10 1.35-1.7x slower on 4-16 core hosts). `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
 

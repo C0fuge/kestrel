@@ -1,0 +1,184 @@
+# Manual TPC-H perf check (item 19b's thread floor; the maintainer's laptop stand p19b of
+# 2026-10-28): generates TPC-H SF<sf> as Parquet, starts this ref's server alone in a container
+# limited to 4 CPUs and 8 GB (-Xmx3g, direct 2g: the stand profile whose 2 default threads made
+# SF10 1.35-1.7x slower), once with the default DuckDB sizing and once with -DduckDbThreads=4, and
+# optionally a baseline build; TpchPerfTest runs the 22 queries (one warm-up pass, then <rounds>).
+# Fails when the default's best total is more than 10 % above the -DduckDbThreads=4 one, or when a
+# query answers differently. Not part of Dev CI.
+name: TPC-H perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "10"
+      rounds:
+        description: "measured passes per configuration"
+        type: string
+        default: "2"
+      baseline:
+        description: "baseline commit, tag or branch measured too with its defaults (empty = none)"
+        type: string
+        default: ""
+      cpus:
+        description: "server container CPUs"
+        type: string
+        default: "4"
+      memory:
+        description: "server container memory"
+        type: string
+        default: "8g"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tpch-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref (no tests)
+        run: ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+
+      - name: Build the baseline (no tests)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jars/head"
+          cp -r flight-server/target/arrow-flight-server-1.0.0-shaded.jar flight-server/target/libs "$RUNNER_TEMP/jars/head/"
+          if [ -n "${{ inputs.baseline }}" ]; then
+            git worktree add "$RUNNER_TEMP/base" "${{ inputs.baseline }}"
+            (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+            mkdir -p "$RUNNER_TEMP/jars/base"
+            cp -r "$RUNNER_TEMP/base/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" \
+              "$RUNNER_TEMP/base/flight-server/target/libs" "$RUNNER_TEMP/jars/base/"
+          fi
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: Generate TPC-H SF${{ inputs.sf }} and the queries
+        run: |
+          set -euo pipefail
+          pip install -q duckdb==1.5.6 || pip install -q duckdb
+          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" <<'EOF'
+          import os, re, sys, duckdb
+          tmp, sf = sys.argv[1], float(sys.argv[2])
+          data, queries = os.path.join(tmp, "data", "tpch"), os.path.join(tmp, "queries")
+          os.makedirs(queries, exist_ok=True)
+          db = duckdb.connect(os.path.join(tmp, "gen.duckdb"))
+          db.execute("SET memory_limit='10GB'")
+          db.execute("INSTALL tpch; LOAD tpch")
+          db.execute(f"CALL dbgen(sf={sf})")
+          tables = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
+          for t in tables:
+              os.makedirs(os.path.join(data, t), exist_ok=True)
+              db.execute(f"COPY {t} TO '{os.path.join(data, t, 'data.parquet')}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+          # Qualify the tables: a table name right after FROM, JOIN or a comma of a FROM list.
+          pattern = re.compile(r"(\b(?:from|join)\s+|,\s*)(" + "|".join(tables) + r")\b", re.IGNORECASE)
+          for nr, q in db.execute("SELECT query_nr, query FROM tpch_queries()").fetchall():
+              with open(os.path.join(queries, f"q{nr:02d}.sql"), "w") as f:
+                  f.write(pattern.sub(lambda m: m.group(1) + "tpch." + m.group(2), q))
+          db.close()
+          os.remove(os.path.join(tmp, "gen.duckdb"))
+          EOF
+          du -sh "$RUNNER_TEMP/data/tpch"; ls "$RUNNER_TEMP/queries" | wc -l
+          grep -c 'tpch\.' "$RUNNER_TEMP"/queries/*.sql | head -n 3
+
+      - name: Measure
+        run: |
+          set +e -u
+          out="$RUNNER_TEMP/results.txt"; : > "$out"
+          measure() { # label, jars, extra server options
+            local label=$1 jars=$2 opts=$3
+            docker run -d --name srv --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+              -v "$RUNNER_TEMP/jars/$jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
+              eclipse-temurin:21-jre \
+              java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+              -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+              --port 32010 --hosts 127.0.0.1 > /dev/null
+            for i in $(seq 120); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
+            if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
+              echo "$label: server did not start" >> "$out"; docker logs srv 2>&1 | tail -n 30; docker rm -f srv > /dev/null
+              return
+            fi
+            docker logs srv 2>&1 | grep -o 'duckdb=\(sizing\|threads\) .*' | head -n 2 | sed "s/^/$label: /" >> "$out"
+            ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+              -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
+              -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
+              -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1
+            grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/mvn.log" | sed "s/^/$label: /" >> "$out"
+            if ! grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn.log"; then
+              echo "$label: client failed" >> "$out"; grep -E 'ERROR|FAIL|Exception' "$RUNNER_TEMP/mvn.log" | head -n 20
+              docker logs srv 2>&1 | tail -n 30
+            fi
+            docker stats --no-stream --format '{{.MemUsage}}' srv | sed "s/^/$label: container memory /" >> "$out"
+            docker rm -f srv > /dev/null
+          }
+          measure "default" head ""
+          measure "threads4" head "-DduckDbThreads=4"
+          if [ -n "${{ inputs.baseline }}" ]; then
+            measure "baseline" base ""
+          fi
+          cat "$out"
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/results.txt"
+          best() { grep "^$1: total r" "$out" | grep -v warm-up | awk '{print $4}' | sort -n | head -n 1; }
+          sums() { grep -E "^$1: q[0-9]+ r1 " "$out" | awk '{print $2, $7, $9}'; }
+          d=$(best default); t=$(best threads4)
+          echo "default best total ${d:-none} s, -DduckDbThreads=4 best total ${t:-none} s" | tee "$RUNNER_TEMP/check.txt"
+          [ -n "$d" ] && [ -n "$t" ] || { echo "a configuration produced no result" | tee -a "$RUNNER_TEMP/check.txt"; exit 1; }
+          if [ "$(sums default | wc -l)" -ne 22 ] || [ "$(sums default)" != "$(sums threads4)" ]; then
+            echo "answers differ between the configurations or a query is missing:" | tee -a "$RUNNER_TEMP/check.txt"
+            diff <(sums default) <(sums threads4) | tee -a "$RUNNER_TEMP/check.txt" || true
+            exit 1
+          fi
+          if awk -v d="$d" -v t="$t" 'BEGIN { exit !(d > t * 1.10) }'; then
+            echo "default is more than 10 % slower than -DduckDbThreads=4" | tee -a "$RUNNER_TEMP/check.txt"
+            exit 1
+          fi
+          echo "ok: default within 10 % of -DduckDbThreads=4, same answers" | tee -a "$RUNNER_TEMP/check.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### TPC-H SF${{ inputs.sf }} on $(nproc) runner cores: $GITHUB_SHA"
+            echo
+            echo "Server in a container with ${{ inputs.cpus }} CPUs / ${{ inputs.memory }} (-Xmx3g, direct 2g), complete"
+            echo "mode; one warm-up pass, then ${{ inputs.rounds }} measured. Baseline: ${{ inputs.baseline || 'none' }}."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/check.txt" 2>/dev/null || echo "(no check)"
+            grep -E ': (total|duckdb|container)' "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "(no result)"
+            echo '```'
+            echo
+            echo '<details><summary>per query</summary>'
+            echo
+            echo '```'
+            grep -E ': q[0-9]+ ' "$RUNNER_TEMP/results.txt" 2>/dev/null || true
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

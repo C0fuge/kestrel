@@ -8,8 +8,8 @@ import java.util.regex.Pattern;
  * Default DuckDB threads and memory limit per connection from the host's cores and memory.
  * Every worker connection is a DuckDB instance of its own, so the node's DuckDB memory budget
  * (memory minus heap, direct memory and 15 % headroom) is split between the connections
- * expected to run at once; threads are capped at one per GiB of that share. Explicit settings
- * always win.
+ * expected to run at once. Threads are a quarter of the cores, at least 4; above 4 they are
+ * capped at one per GiB of that share. Explicit settings always win.
  *
  * @param threads             DuckDB threads per connection
  * @param memoryLimit         DuckDB {@code memory_limit} per connection, null = DuckDB's default
@@ -24,8 +24,18 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     /** Value of {@code duckDbMemoryLimit} that leaves DuckDB's own default (80 % of RAM per instance). */
     public static final String MEMORY_LIMIT_NONE = "none";
 
-    /** Fewest default threads per connection (the default before item 19b). */
-    static final int MIN_THREADS = 2;
+    /**
+     * Fewest default threads per connection (the fixed default before item 19). Fewer made
+     * TPC-H SF10 1.35-1.7x slower on 4-16 core containers, whatever the memory limit.
+     */
+    static final int MIN_THREADS = 4;
+
+    /**
+     * Fewest threads assumed per query when the memory budget is split between connections: the
+     * split keeps the shares item 19b measured (cores / 4, at least 2) although the threads have
+     * a floor of 4.
+     */
+    static final int SHARE_MIN_THREADS = 2;
 
     /** Fewest default threads on object stores read over HTTP, whose reads wait on round trips. */
     static final int REMOTE_MIN_THREADS = 4;
@@ -62,10 +72,13 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
             String explicitMemoryLimit, int explicitConnections) {
         int cores = Math.max(1, host.cores());
         int coreThreads = Math.min(MAX_THREADS, Math.max(MIN_THREADS, cores / 4));
-        int floor = objectStore ? REMOTE_MIN_THREADS : MIN_THREADS;
-        coreThreads = Math.max(floor, coreThreads);
+        int shareThreads = Math.min(MAX_THREADS, Math.max(SHARE_MIN_THREADS, cores / 4));
+        if (objectStore) {
+            coreThreads = Math.max(REMOTE_MIN_THREADS, coreThreads);
+            shareThreads = Math.max(REMOTE_MIN_THREADS, shareThreads);
+        }
         int connections = explicitConnections > 0 ? explicitConnections
-                : Math.max(2, cores / coreThreads);
+                : Math.max(2, cores / shareThreads);
         long memory = host.memoryBytes();
         long budget = memory <= 0 ? 0
                 : memory - host.maxHeapBytes() - host.maxDirectBytes() - memory / 100 * HEADROOM_PERCENT;
@@ -94,7 +107,7 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
             threads = coreThreads;
         } else {
             long byMemory = limitBytes / BYTES_PER_THREAD;
-            threads = (int) Math.max(floor, Math.min(coreThreads, byMemory));
+            threads = (int) Math.max(MIN_THREADS, Math.min(coreThreads, byMemory));
         }
         return new DuckDbSizing(threads, memoryLimit, coreThreads, connections, budget, host);
     }

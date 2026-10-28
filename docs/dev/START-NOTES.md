@@ -38,14 +38,14 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
   checks the extension versions at startup.
-- DuckDB runs a quarter of the cores (between 2 and 16, was 8 until item 19b) threads per connection by default
-  (`duckDbThreads`, was a fixed 4; the startup lines `duckdb=threads perConnection=` and `duckdb=sizing` show the
-  value), at most one per GiB of the connection's memory limit but never below 2, at least 4 when `dataDir` is an `s3://` /
-  `s3a://` / `s3n://` / `lakefs://` URI (since 2026-10-28); set `-DduckDbThreads=4` to keep the old value,
+- DuckDB runs a quarter of the cores (between 4 and 16) threads per connection by default (`duckDbThreads`, was a
+  fixed 4; the startup lines `duckdb=threads perConnection=` and `duckdb=sizing` show the value), above 4 at most one
+  per GiB of the connection's memory limit. Since 2026-10-28 (laptop stand p19b) the floor is 4 everywhere: builds
+  a9e43ca..2d93081 chose 2-3 threads on 4-16 core containers and ran TPC-H SF10 1.35-1.7x slower. Explicit values win;
   `-DduckDbThreads=1` / `FLIGHT_DUCKDB_THREADS=1` where compute workers share the node.
 - Since item 19b every DuckDB connection gets a `memory_limit` by default (was DuckDB's 80 % of RAM per instance):
   (memory of the container or machine - `-Xmx` - direct memory - 15 %) / `duckDbMemoryConnections` (default cores /
-  threads, at least 2), at least 1 GiB. A 2-CPU / 6 GB container with `-Xmx3g` and 2g direct gets 1 GiB per
+  (cores / 4 between 2 and 16), at least 2), at least 1 GiB. A 2-CPU / 6 GB container with `-Xmx3g` and 2g direct gets 1 GiB per
   connection. `-DduckDbMemoryLimit=none` restores the old behaviour, an explicit size (e.g. `4GB`) wins.
 - HDFS: put the NameNode RPC timeouts into the `LIBHDFS3_CONF` file (`rpc.client.connect.timeout=5000`,
   `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,
