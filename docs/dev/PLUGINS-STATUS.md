@@ -347,24 +347,31 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     the SQL runs in DuckDB over `h_hvw.people` and over the inner view; cross-database view, cast, ORC source
     without `orcTables` (shown with it), missing table, view over a skipped view, two-view cycle, union column type,
     database outside `hive.databases`).
-    *Next (step 2 (c) views):* part 3 - core (own commit, STATUS.md Log; touches request handling, keep small):
-    (1) `SpiCatalog` delegates `views`; `CatalogViews.refresh` keeps a map `schema.view -> CatalogView` (per
-    catalog entry, like `streamTables`); a view name equal to a table name of the schema: the table wins, log it.
-    (2) `CatalogViews.catalogViews(sql)` - before `timeTravel` in `ExecutionService.completeSchema` (line ~192),
-    `readComplete` (~239) and the third call (~340): `TableReferences.find` with a predicate on the view map,
-    replace each reference by `(<view sql>) AS "<alias or view name>"`, repeat until no view is left (views over
-    views; bound the rounds by 16), so `arrowStreams`, pruning and the DuckDB views see the source tables. A view
-    with `FOR VERSION AS OF` -> refuse. (3) Partial mode: a query naming a view gets the `partialReadProblem`-like
-    refusal (answer in complete mode). (4) Ranger: `FlightAuthorization.requireQuery` parses table names with
-    `ParquetQueryParser`, so a view reference is checked as a table named like the view (Ranger policy on the Hive
-    view resource) - additionally check every source of the expanded SQL: simplest is to call `requireQuery` a
-    second time on the expanded SQL in the 7 `FlightSqlProducer` call sites (lines ~271, 612, 755, 1064, 1181,
-    1205, 1213) through one helper. (5) `MetadataService` GetTables: views as `table_type` `VIEW` (filter at
-    `FlightSqlProducer` ~1369 already accepts several types), GetSchema/describe via `declaredColumnsSource`-like
-    `SELECT CAST(NULL AS t) ... LIMIT 0` from `CatalogView.columns`. Part 4 - end-to-end test (metastore views
-    over Parquet, ORC and text tables, both modes, Ranger denial on a source, GetTables type VIEW). Then (d) perf
-    note (text/CSV/JSON/Avro vs Parquet SF1) and splitting large files (Avro at sync markers, uncompressed text at
-    line boundaries).
+    *Step 2 (c) views, parts 3 + 4 done 2026-10-28 (core 74cc484, 4ca22c3; test c62e0bb):* `SpiCatalog.views`
+    delegates; `CatalogTables.views` drops views with invalid names or a source in another catalog.
+    `CatalogViews.catalogViews(sql)` -> `Expanded(sql, sources)`: a schema-qualified view in a FROM position
+    (`TableReferences`) becomes `(<view sql>) AS "<name>"` (alias kept), repeated for views over views (at most 16
+    rounds, then refused); `FOR VERSION/TIMESTAMP AS OF` on a view refused; SQL without a reference in a catalog
+    schema returns at once without listing views. The view map is its own 60 s cache read from the catalogs only
+    (no DuckDB work, so partial queries cannot fail on a view refresh): a view named like a table of its schema is
+    left out (table wins), as is one whose SQL names (in a FROM position) a table it does not declare as a source
+    (keeps the Ranger check honest); a failing catalog keeps its views. Expansion runs before `timeTravel` in the
+    three complete calls of `ExecutionService`. `FlightSqlProducer.requireQuery(principal, query)` (all 7 call
+    sites): `authorization.requireQuery` as before plus `canReadTable` on every source of every expanded view
+    (invoker rights, see Open questions); the ticket path runs the very text it checked (no second map read) and
+    skips the distributed merge for views. Partial requests: `completeAnswerReason` = "the query reads a catalog
+    view" -> one complete endpoint (same path as other queries endpoints cannot answer in parts). GetTables: views
+    as `VIEW` when no type or `VIEW` is asked, only if the caller may read the view and its sources, schema from
+    the complete describe; GetTableTypes adds `VIEW` when a catalog shows views. Tests: `CatalogViewQueryTest` 5
+    (views over an Arrow-stream table: joins/subqueries/comma lists/view over view, sources listed, idempotent,
+    describe, table wins, undeclared source hidden, time travel/cycle refused), `FlightSqlProducerTest` +4 (source
+    denied -> UNAUTHORIZED before describe, time travel -> INVALID_ARGUMENT, ticket runs the checked text, partial ->
+    complete plan, listing with type filters and denied source), `MetadataUtilsTest` +1, `HiveViewIntegrationTest` 4
+    (packaged plugin, real metastore: views over ORC/Parquet/text, ORC x text join, view over view, both modes,
+    declared types, GetTables/GetTableTypes, time travel refused). Not done: a Ranger end-to-end test of a denied
+    view source (unit-tested in the producer only).
+    *Next:* (d) perf note (text/CSV/JSON/Avro vs Parquet SF1, like `HiveOrcPerfTest`) and splitting large files
+    (Avro at sync markers, uncompressed text at line boundaries) so one big file is not one endpoint.
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -393,8 +400,9 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   `hive.avroTimestampZone`, default unset = fail) if production has such files?
 
 - (P4, views) Ranger semantics for Hive views: Hive (and Ranger's Hive plugin) let a user who may select from a view
-  read it without rights on the tables it reads (definer rights). The plan (step 2 (c) part 3) requires the view
-  **and** every table it reads (invoker rights - stricter, never more access than today). Switch to Hive's semantics
+  read it without rights on the tables it reads (definer rights). The server (since part 3, 74cc484) requires the
+  view **and** every table and view it reads, for queries and for GetTables (invoker rights - stricter, never more
+  access than today). Switch to Hive's semantics
   (view only) if production relies on views to hide tables?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
