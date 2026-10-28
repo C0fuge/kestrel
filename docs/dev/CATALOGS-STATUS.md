@@ -33,7 +33,18 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       reads `config` / `storage-credentials`, refreshes before `s3.session-token-expires-at-ms`. CI: moto STS
       (AssumeRole) with Lakekeeper `sts-enabled` / Polaris without `stsUnavailable`; check what each returns.
       See Open questions before building the core part.
-    - Step 3: answers through the server (partial/complete) for the REST tables vs HMS, Unity Catalog OSS if feasible.
+    - Step 3a done (2026-10-28): answers through the server, local warehouses. `RestCatalogServerConformanceTest`
+      (flight-server, `rest-catalogs`, env-gated like the plugin test) runs the server with iceberg-rest (schemas
+      `rest_*`) next to iceberg-hadoop over a reference warehouse with the same fixtures; complete answers equal the
+      reference (count + md5 per table), partial equal complete, located partial endpoints. `IcebergFixtures.writeRest`
+      (shared by both tests). `catalogs-ci.yml` runs it for polaris and iceberg-rest-fixture (passes locally on both).
+    - **Next (step 3b):** the same on the S3 entries: `fixture-libs` needs Iceberg's S3FileIO + AWS SDK groups
+      (`org.apache.iceberg:iceberg-aws`, `software.amazon.awssdk`, url-connection client) for `writeRest` with
+      `io-impl=S3FileIO`; install the s3 plugin next to iceberg in the test's plugins dir with
+      `arrowflight.s3.endpoint/accessKey/secretKey/urlStyle=path` for the bucket root; then drop the `-s3` skip in
+      the workflow step and the local-directory assumption in the test. After that: the same tables registered in an
+      HMS (the hive plugin's Iceberg path, see `HiveCatalogIntegrationTest`) as a third reference; Unity Catalog OSS
+      if its Iceberg REST endpoint runs in CI.
 C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source through DuckDB's `postgres` / `mysql`
     extensions (bundle for 1.5.6 offline like the others; check availability), read-only, pushdown of filters/projection,
     credentials from the plugin config (never logged), Ranger checks as for other tables. CI with postgres/mysql
@@ -51,6 +62,13 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   (security), so: may lane 4 add this (opt-in, off by default, own commits), or should the core lane own the server
   part? Until answered, lane 4 continues with step 3 and C2 and leaves 2b's core part unbuilt.
 
+- Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
+  `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
+  `peerStreamCutDuringTheAnswer...:212` fail with `mergedAnswers()` 1 instead of 0 in 2 of 3 local runs and in Dev CI
+  runs 40692394131 / 40693932375. Likely cause: a relay cut before the schema now fails over to the endpoint's backup location, which
+  bypasses the cutting relay, so the answer is merged (correct rows) instead of falling back. Lane 4 leaves it to
+  lane 3.
+
 ## Log
 
 - 2026-10-28 (maintainer): lane created; C1-C4.
@@ -64,3 +82,8 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   first run 40677711018 failed on that). Test only. Catalogs CI green: run 40677907066 (all 5 entries, 3/3 tests
   each). Dev CI green: run 40677906918 (head bfa1912). Step 2b analysed (DuckDB accepts `CREATE OR REPLACE
   TEMPORARY SECRET` after lockdown); its core part waits on Open question Q1.
+- 2026-10-28: C1 step 3a - answers through the server for REST catalog tables (local warehouses):
+  `RestCatalogServerConformanceTest`, run by `catalogs-ci.yml` for polaris and iceberg-rest-fixture. Test only.
+  Catalogs CI green: run 40692394116 (all 5 entries; the 2 file entries run the new test). Dev CI runs 40692394131 and
+  40693932375 (head 207b74c): 912 tests, the only failure `DistributedClusterIntegrationTest` (lane 3, intermittent,
+  not this change), see Open questions Q2.
