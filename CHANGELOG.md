@@ -17,6 +17,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Other streams (metadata, SqlInfo) always copy. Local A/B on 2 cores (`ParallelScanPerfTest`, in-process client on
   the same cores, 6 M-row table, two rounds each): 8 endpoints 243/234 -> 245/268 MB/s at 8.05/8.34 -> 7.26/7.15 s
   CPU per GB; 1 and 4 streams within noise. `ParallelScanPerfTest` takes `-Dperf.zeroCopyWrites`.
+- LDAP / Active Directory login (P2 step 1), new optional module `flight-auth-ldap`, `FLIGHT_AUTH_PROVIDER=ldap`
+  (existing providers unchanged): a Basic user name + password (what JDBC/ODBC/ADBC and BI tools send) is checked with
+  a simple bind - DN template (`FLIGHT_LDAP_USER_DN_TEMPLATE`, e.g. an AD UPN `{0}@corp.example`) or search with a
+  service account (`FLIGHT_LDAP_USER_SEARCH_BASE` / `_FILTER` / `FLIGHT_LDAP_BIND_DN`, identity optionally from
+  `FLIGHT_LDAP_USER_ATTRIBUTE`); ldaps or StartTLS with host name checks (clear text only with
+  `FLIGHT_LDAP_ALLOW_PLAINTEXT=true`), several servers in order; the answer carries a signed session bearer token
+  (`FLIGHT_LDAP_SESSION_SECRET`, shared by all nodes, `FLIGHT_LDAP_SESSION_MINUTES` default 10) so later calls skip
+  the directory. Empty passwords, names outside `[letters digits . _ - @]` and names matching several entries are
+  refused; a directory outage is `UNAVAILABLE`, bad credentials `UNAUTHENTICATED`. Requires Flight TLS. The identity
+  reaches Ranger as a Kerberos principal's short name does. Release asset `flight-auth-<v>-<sha>.tar.zst`
+  (`auth/ldap/`).
 - S3 / lakeFS read cache admission (item 17 (e)), opt-in: `arrowflight.s3.cacheAdmission` /
   `arrowflight.lakefs.cacheAdmission` = `always` (default, unchanged) or `reuse`: a missed block is kept only when it
   is read again while it is among the last N blocks not kept (N = the cache's blocks), so a scan larger than the cache

@@ -162,6 +162,12 @@ jobs:
           (cd "$RUNNER_TEMP/ld/libs" && sha256sum -- *.jar > SHA256SUMS)
           tar -C "$RUNNER_TEMP/ld" -cf - libs | zstd -19 -T0 > "$out/flight-server-libs-${version}-${sha}.tar.zst"
           tar -C "$RUNNER_TEMP/pd" -cf - plugins | zstd -19 -T0 > "$out/flight-plugins-${version}-${sha}.tar.zst"
+          # Optional authentication providers, for the server class path (java -cp '<jar>:libs/*:auth/ldap/*').
+          mkdir -p "$RUNNER_TEMP/ad/auth/ldap"
+          cp "flight-auth-ldap/target/arrow-flight-auth-ldap-${version}.jar" flight-auth-ldap/target/auth-libs/*.jar \
+            "$RUNNER_TEMP/ad/auth/ldap/"
+          (cd "$RUNNER_TEMP/ad/auth/ldap" && sha256sum -- *.jar > SHA256SUMS)
+          tar -C "$RUNNER_TEMP/ad" -cf - auth | zstd -19 -T0 > "$out/flight-auth-${version}-${sha}.tar.zst"
           sed -e "s/@VERSION@/${version}/g" -e "s/@SHA@/${sha}/g" -e "s/@COMMIT@/$(git rev-parse HEAD)/g" \
             docs/dev/START-NOTES.md > "$out/START-NOTES.md"
           (cd "$out" && sha256sum -- * > SHA256SUMS)

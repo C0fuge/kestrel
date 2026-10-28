@@ -11,6 +11,8 @@ test suite passed on the same commit. Linux x86-64 / ARM64 only (`-Plinux-only`)
   deployment (Hadoop is `provided`; the server does not start without them), mediated against the jar's own
   libraries so none repeats one of it; `libs/DEPENDENCIES.txt` lists the coordinates, `libs/SHA256SUMS` the jars.
   It replaces any older libs directory: do not mix it with other Hadoop, Netty, Jackson or BouncyCastle jars.
+- `flight-auth-@VERSION@-@SHA@.tar.zst`: `auth/ldap/` - the optional LDAP / Active Directory login provider
+  (`FLIGHT_AUTH_PROVIDER=ldap`, its jar + the UnboundID LDAP SDK + a `SHA256SUMS`); on the class path only when used.
 - `SHA256SUMS`: checksums of the files above.
 
 ## Start
@@ -42,6 +44,14 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,
   `rpc.client.connect.retry=2`); libhdfs3's defaults let a query hang for minutes after a NameNode host crash. The
   server logs a WARN at startup while one of them is unset or over a minute.
+- LDAP / Active Directory logins for JDBC/ODBC/ADBC and BI tools (user name + password, no Kerberos on the client):
+  unpack `flight-auth-...tar.zst` into `/opt/flight`, add `:/opt/flight/auth/ldap/*` to `-cp`, and set
+  `FLIGHT_AUTH_PROVIDER=ldap`, TLS (`FLIGHT_TLS_CERT` / `FLIGHT_TLS_KEY`), `FLIGHT_LDAP_URL=ldaps://dc1.corp:636
+  ldaps://dc2.corp:636`, `FLIGHT_LDAP_SESSION_SECRET` (base64, >= 32 bytes, the same on every node) and either
+  `FLIGHT_LDAP_USER_DN_TEMPLATE={0}@corp.example` (AD UPN bind) or `FLIGHT_LDAP_USER_SEARCH_BASE` +
+  `FLIGHT_LDAP_USER_SEARCH_FILTER=(sAMAccountName={0})` + `FLIGHT_LDAP_BIND_DN` / `FLIGHT_LDAP_BIND_PASSWORD_FILE`.
+  The login name is the Flight identity Ranger checks (groups: Hadoop's group mapping, as for Kerberos users). All
+  settings: `docs/security/providers.md` in the repository.
 - Kerberos HDFS without an external `kinit`: set `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN
