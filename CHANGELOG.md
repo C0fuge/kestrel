@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Small-query perf tooling (maintainer's ADBC c8 tail bug): `SmallQueryThroughputPerfTest` prints p99 and max and
+  takes `-Dperf.server=host:port` / `-Dperf.dataDir` to measure a separately started server; new manual workflow
+  `small-query-perf.yml` runs a baseline build and the current ref, each alone in a container with 2 CPUs by quota
+  (`--cpus=2`, like the CI screening) and pinned (`--cpuset-cpus`), client on the other cores. No runtime change.
 - Zero-copy Flight writes for DuckDB result streams (item 22 (d)), opt-in: `flightZeroCopyWrites` /
   `arrowflight.flight.zeroCopyWrites` / `FLIGHT_ZERO_COPY_WRITES` (default false, unchanged; only `true`/`false`).
   gRPC sends the buffers DuckDB exported for a batch instead of copying each batch first; DuckDB exports every batch
