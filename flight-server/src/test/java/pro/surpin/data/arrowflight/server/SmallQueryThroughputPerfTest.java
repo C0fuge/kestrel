@@ -22,12 +22,16 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.arrow.flight.CallOption;
+import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.HeaderCallOption;
+import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.sql.FlightSqlClient;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
@@ -49,7 +53,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * pinned to few cores (for example {@code taskset -c 0,1}) to see the CPU-bound case. With
  * {@code -Dperf.store=s3} the table lives on the fake S3 behind the real s3 plugin, every object
  * request delayed by {@code -Ds3.perf.latencyMs} (default 2); needs {@code -Ds3.it.httpfs}. Prints
- * the numbers; asserts only the answers.
+ * the numbers; asserts only the answers. {@code -Dperf.server=host:port} measures a server started
+ * separately (pinned to its own cores, so the in-process clients do not share its CPUs) on the
+ * table under {@code -Dperf.dataDir}, which the test writes when it is missing.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -64,8 +70,43 @@ class SmallQueryThroughputPerfTest {
      * @throws Exception on failure
      */
     @Test
-    void printThroughput(@TempDir Path dir) throws Exception {
+    void printThroughput(@TempDir Path tmp) throws Exception {
+        String external = System.getProperty("perf.server");
+        Path dir = System.getProperty("perf.dataDir") != null ? Path.of(System.getProperty("perf.dataDir")) : tmp;
         Path table = dir.resolve("s").resolve("orders");
+        if (!Files.isDirectory(table)) {
+            writeTable(table);
+        }
+        if (external != null) {
+            String[] hostPort = external.split(":");
+            try (BufferAllocator allocator = new RootAllocator();
+                    FlightClient flight = FlightClient.builder(allocator,
+                            Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]))).build()) {
+                measureAll(new FlightSqlClient(flight), System.getProperty("perf.mode", "complete"),
+                        "external " + external);
+            }
+            return;
+        }
+        int threads = Integer.parseInt(System.getProperty("perf.threads", "0"));
+        String mode = System.getProperty("perf.mode", "complete");
+        boolean s3 = "s3".equals(System.getProperty("perf.store", "local"));
+        // 0 = the server's own default for the store (not the helper's 1 thread).
+        TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
+                .dataDir(dir.toString()).resultMode(mode).threads(threads);
+        try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
+                TestFlightServerHelper helper = builder.start()) {
+            measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)
+                    + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default"));
+        }
+    }
+
+    /**
+     * Writes the orders-like table.
+     *
+     * @param table table directory
+     * @throws Exception on failure
+     */
+    private static void writeTable(Path table) throws Exception {
         Files.createDirectories(table);
         try (Connection duck = DriverManager.getConnection("jdbc:duckdb:");
                 Statement st = duck.createStatement()) {
@@ -77,29 +118,28 @@ class SmallQueryThroughputPerfTest {
                         f * ROWS / FILES, (f + 1) * ROWS / FILES, table.resolve("part-" + f + ".parquet")));
             }
         }
-        int threads = Integer.parseInt(System.getProperty("perf.threads", "0"));
+    }
+
+    /**
+     * Warms up, then prints one step per client count.
+     *
+     * @param client Flight SQL client of the measured server
+     * @param mode result mode
+     * @param server description of the server for the header line
+     * @throws Exception on failure
+     */
+    private static void measureAll(FlightSqlClient client, String mode, String server) throws Exception {
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
-        String mode = System.getProperty("perf.mode", "complete");
-        boolean s3 = "s3".equals(System.getProperty("perf.store", "local"));
-        // 0 = the server's own default for the store (not the helper's 1 thread).
-        TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
-                .dataDir(dir.toString()).resultMode(mode).threads(threads);
-        try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
-                TestFlightServerHelper helper = builder.start()) {
-            FlightSqlClient client = helper.sqlClient();
-            FlightCallHeaders headers = new FlightCallHeaders();
-            headers.insert("x-flight-result-mode", mode);
-            CallOption header = new HeaderCallOption(headers);
-            boolean statements = "statement".equals(System.getProperty("perf.client", "prepared"));
-            System.out.printf(Locale.ROOT,
-                    "== store %s, mode %s, client %s, duckDbThreads %s, %d cores, %d s per step%n",
-                    s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2) + " ms)" : "local", mode,
-                    statements ? "statement" : "prepared", threads > 0 ? threads : "default",
-                    Runtime.getRuntime().availableProcessors(), seconds);
-            run(client, header, statements, 8, Math.max(3, seconds / 3), false);
-            for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-                run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
-            }
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert("x-flight-result-mode", mode);
+        CallOption header = new HeaderCallOption(headers);
+        boolean statements = "statement".equals(System.getProperty("perf.client", "prepared"));
+        System.out.printf(Locale.ROOT, "== server %s, mode %s, client %s, %d cores, %d s per step%n",
+                server, mode, statements ? "statement" : "prepared", Runtime.getRuntime().availableProcessors(),
+                seconds);
+        run(client, header, statements, 8, Math.max(3, seconds / 3), false);
+        for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
+            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
         }
     }
 
@@ -199,8 +239,10 @@ class SmallQueryThroughputPerfTest {
             Arrays.sort(times);
             int queries = times.length;
             System.out.printf(Locale.ROOT,
-                    "c%-3d %7.1f q/s  p50 %6.2f p95 %6.2f ms  process cpu %5.2f ms/query (%.2f cores)%n",
+                    "c%-3d %7.1f q/s  p50 %6.2f p95 %6.2f p99 %6.2f max %7.2f ms"
+                            + "  process cpu %5.2f ms/query (%.2f cores)%n",
                     clients, queries / wall, times[queries / 2] / 1e6, times[(int) (queries * 0.95)] / 1e6,
+                    times[(int) (queries * 0.99)] / 1e6, times[queries - 1] / 1e6,
                     cpu / 1e6 / queries, cpu / 1e9 / wall);
             Map<String, Long> cpuAfter = cpuByGroup(mx);
             StringBuilder line = new StringBuilder("     cpu ms/query by thread group:");

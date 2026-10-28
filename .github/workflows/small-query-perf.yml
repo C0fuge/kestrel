@@ -1,0 +1,126 @@
+# Manual perf run for small queries under load (item 21, the maintainer's ADBC c8 tail bug of
+# 2026-10-28): a baseline build and this ref's build, each started alone in a container limited to
+# 2 CPUs - by CPU quota (docker --cpus, as the CI screening runs them) and by pinning (--cpuset-cpus)
+# - with SmallQueryThroughputPerfTest as the client on the other cores (-Dperf.server). Prints q/s,
+# p50/p95/p99/max per client count into the job summary. Not part of Dev CI.
+name: Small query perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: "baseline commit, tag or branch"
+        type: string
+        default: "7562a5bdb7b9"
+      client:
+        description: "client mode: statement (GetFlightInfo, DoGet, like ADBC) or prepared (like JDBC)"
+        type: string
+        default: "statement"
+      clients:
+        description: "client counts"
+        type: string
+        default: "1,8,32"
+      rounds:
+        description: "rounds per configuration"
+        type: string
+        default: "2"
+      headOptions:
+        description: "extra -D options of this ref's server for one more configuration (empty = none)"
+        type: string
+        default: "-DduckDbThreads=4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: small-query-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref (no tests)
+        run: ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+
+      - name: Build the baseline (no tests)
+        run: |
+          set -euo pipefail
+          git worktree add "$RUNNER_TEMP/base" "${{ inputs.baseline }}"
+          (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+          for b in head base; do
+            src=.; [ "$b" = base ] && src="$RUNNER_TEMP/base"
+            mkdir -p "$RUNNER_TEMP/jars/$b"
+            cp -r "$src/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" "$src/flight-server/target/libs" \
+              "$RUNNER_TEMP/jars/$b/"
+          done
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: Write the table
+        run: >
+          ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true -Dgroups=perf
+          -DexcludedGroups= -Dtest=SmallQueryThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
+          -Dperf.dataDir="$RUNNER_TEMP/data" -Dperf.clients=1 -Dperf.seconds=3
+
+      - name: Measure
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/results.txt"; : > "$out"
+          measure() { # label, jars, docker cpu option, extra server options
+            local label=$1 jars=$2 cpu=$3 opts=$4
+            docker run -d --name srv --network host $cpu -v "$RUNNER_TEMP/jars/$jars:/app:ro" \
+              -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true eclipse-temurin:21-jre \
+              java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+              -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+              --port 32010 --hosts 127.0.0.1 > /dev/null
+            for i in $(seq 120); do docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' && break; sleep 1; done
+            docker logs srv 2>&1 | grep -o 'duckdb=threads perConnection=[0-9]*' | head -n 1 | sed "s/^/$label: /" >> "$out"
+            taskset -c 2,3 ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+              -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=SmallQueryThroughputPerfTest \
+              -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 -Dperf.dataDir="$RUNNER_TEMP/data" \
+              -Dperf.client="${{ inputs.client }}" -Dperf.clients="${{ inputs.clients }}" -Dperf.seconds=20 \
+              | grep -E '^c[0-9]' | sed "s/^/$label: /" >> "$out"
+            docker rm -f srv > /dev/null
+          }
+          for r in $(seq "${{ inputs.rounds }}"); do
+            for cpu in quota pinned; do
+              opt="--cpus=2"; [ "$cpu" = pinned ] && opt="--cpuset-cpus=0,1"
+              measure "r$r $cpu base" base "$opt" ""
+              measure "r$r $cpu head" head "$opt" ""
+              if [ -n "${{ inputs.headOptions }}" ]; then
+                measure "r$r $cpu head ${{ inputs.headOptions }}" head "$opt" "${{ inputs.headOptions }}"
+              fi
+            done
+          done
+          cat "$out"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Small query perf on $(nproc) cores: baseline ${{ inputs.baseline }} vs $GITHUB_SHA"
+            echo
+            echo "Server in a container with 2 CPUs (quota = --cpus=2, pinned = --cpuset-cpus=0,1); client"
+            echo "\`${{ inputs.client }}\` on cores 2,3; 20 s per step."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "(no result)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
