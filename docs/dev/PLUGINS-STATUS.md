@@ -315,3 +315,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   Checkstyle + SpotBugs clean (server and module). CI: Dev CI run 40656572265 (e70d80b, package=true) green,
   pre-release `server-1.0.0-e70d80bb7995` (group search opt-in; existing auth unchanged); push run 40656558867
   cancelled by that dispatch. Next: step 3 (JWT provider).
+- 2026-10-28 (plugins session): P2 step 3 - OIDC / Knox JWT provider, new module `flight-auth-jwt` (1b3a7bb; no
+  SPI or core change; root `pom.xml` module line, dev-ci `package` loops over `ldap jwt` for the `flight-auth`
+  asset; CHANGELOG, `docs/security/providers.md`, START-NOTES). Local: module 16/16 (`JwtVerifierTest` 6,
+  `JwtFlightLoginTest` 4, `JwtSettingsTest` 3, `JwtGroupsTest` 3), Checkstyle + SpotBugs clean. CI: Dev CI run
+  40665594250 (1b3a7bb, package=true) green (build + package), pre-release `server-1.0.0-1b3a7bbad4bc` (opt-in
+  provider; existing auth unchanged); push run 40665576701 cancelled by that dispatch (it also superseded the core
+  lane's push run 40665228585 for 4b47b0c, which 40665594250 includes). **P2 closed**; next session starts P3
+  (Spark connector: Kerberos delegation tokens on YARN executors first).
