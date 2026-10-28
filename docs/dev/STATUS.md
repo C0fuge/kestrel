@@ -1886,3 +1886,8 @@
   (9efe670) - measure that one for the 19b bug note. Next: the
   screening's numbers (items 21/22/19b/17 (e)) on that pre-release, then the stand rounds; code candidate: item 1b libs
   pruning (needs a stand).
+- 2026-10-28 (plugins lane, FYI): SPI 1.6 (5ea70fe, additive): `Catalog.views(schema)` (default none) and
+  `CatalogView(name, sql, sources, columns, fingerprint)`; the hive plugin (8410789, descriptor `spi=1.6`) lists
+  simple Hive views under the opt-in `hive.views`. The server does not read them yet; the plugins lane's next step
+  (P4 views part 3, see PLUGINS-STATUS.md) expands view references in `CatalogViews` before `timeTravel`, checks
+  view sources in `requireQuery`, lists views in GetTables - small core commits, announced here.

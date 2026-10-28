@@ -333,18 +333,38 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     the translations: filter + LIKE escape, grouping with declared types, LEFT JOIN + UNION ALL + FROM subquery + IN /
     BETWEEN, CASE / coalesce / nvl / `||` / `==` / comma join; 30+ refusals; FROM-position safety; quoting of
     identifiers with quotes and backticks).
-    *Next (step 2 (c) views):* part 2 - next SPI minor, 1.6 (1.5 = `TableFormat.asOf`, fa3dc0c; own commit, additive): `Catalog.views(schema)` default empty and a
-    record `CatalogView(name, sql, sources, columns, fingerprint)`; hive: `hive.views` opt-in (default false),
-    `HiveTable.classify` keeps skipping views unless on, translate with `schemaPrefix` + shown databases, skip
-    (log reason) when a source table is not shown by the catalog (e.g. ORC without `hive.orcTables`) or the
-    translator refuses; views of views: allowed when the inner view is shown (its SQL is inlined by core). Part 3 -
-    core (small, own commit, STATUS.md Log): expand each reference of a catalog view in a client query into
-    `(<sql>) AS "<view>"` before planning (so `TableReferences` / ArrowStream rewriting, partition pruning and
-    `requireQuery` see the sources), answer queries over views in complete mode (partial: like a
-    `partialReadProblem`), list views in Flight SQL `GetTables` as type `VIEW`; Ranger: require the view **and** every
-    source table (stricter than Hive - Open question). Part 4 - end-to-end test (metastore views over Parquet, ORC and
-    text tables, both modes, Ranger denial on a source). Then (d) perf note (text/CSV/JSON/Avro vs Parquet SF1) and
-    splitting large files (Avro at sync markers, uncompressed text at line boundaries).
+    *Step 2 (c) views, part 2 done 2026-10-28 (5ea70fe SPI, 8410789 hive):* SPI 1.6 (own commit, additive):
+    `Catalog.views(schema)` default `List.of()`, record `CatalogView(name, sql, sources, columns, fingerprint)`
+    (sources/columns non-empty, copied). Hive (descriptor `spi=1.6`): opt-in `hive.views` (default false); with it
+    `VIRTUAL_VIEW` tables are collected in `tablesOf` (same metastore pass, same names TTL) instead of being logged
+    as skipped; `MATERIALIZED_VIEW` stays skipped (its stored rows may differ from its text). `views(schema)`
+    translates each with `HiveViewSql` (schema function = prefix + database when that database is shown) and shows
+    it only when every source is in `tables(schema)` or is itself a shown view (followed recursively, at most 16
+    deep, a view on the current path refused = cycles); declared columns -> `ColumnSpec(name, HiveTypes.duckDb,
+    nullable, no field ID)` (unsupported types skip); fingerprint = SHA-256 of `hive-view|<sql>` (first 16 bytes).
+    Skips are logged once (`hive=viewSkipped view= reason=`). The server does not call `views` yet: no client-visible
+    change. Tests: `HiveViewCatalogTest` 3 (metastore: off -> none; prefix `h_` -> sources/columns/fingerprints,
+    the SQL runs in DuckDB over `h_hvw.people` and over the inner view; cross-database view, cast, ORC source
+    without `orcTables` (shown with it), missing table, view over a skipped view, two-view cycle, union column type,
+    database outside `hive.databases`).
+    *Next (step 2 (c) views):* part 3 - core (own commit, STATUS.md Log; touches request handling, keep small):
+    (1) `SpiCatalog` delegates `views`; `CatalogViews.refresh` keeps a map `schema.view -> CatalogView` (per
+    catalog entry, like `streamTables`); a view name equal to a table name of the schema: the table wins, log it.
+    (2) `CatalogViews.catalogViews(sql)` - before `timeTravel` in `ExecutionService.completeSchema` (line ~192),
+    `readComplete` (~239) and the third call (~340): `TableReferences.find` with a predicate on the view map,
+    replace each reference by `(<view sql>) AS "<alias or view name>"`, repeat until no view is left (views over
+    views; bound the rounds by 16), so `arrowStreams`, pruning and the DuckDB views see the source tables. A view
+    with `FOR VERSION AS OF` -> refuse. (3) Partial mode: a query naming a view gets the `partialReadProblem`-like
+    refusal (answer in complete mode). (4) Ranger: `FlightAuthorization.requireQuery` parses table names with
+    `ParquetQueryParser`, so a view reference is checked as a table named like the view (Ranger policy on the Hive
+    view resource) - additionally check every source of the expanded SQL: simplest is to call `requireQuery` a
+    second time on the expanded SQL in the 7 `FlightSqlProducer` call sites (lines ~271, 612, 755, 1064, 1181,
+    1205, 1213) through one helper. (5) `MetadataService` GetTables: views as `table_type` `VIEW` (filter at
+    `FlightSqlProducer` ~1369 already accepts several types), GetSchema/describe via `declaredColumnsSource`-like
+    `SELECT CAST(NULL AS t) ... LIMIT 0` from `CatalogView.columns`. Part 4 - end-to-end test (metastore views
+    over Parquet, ORC and text tables, both modes, Ranger denial on a source, GetTables type VIEW). Then (d) perf
+    note (text/CSV/JSON/Avro vs Parquet SF1) and splitting large files (Avro at sync markers, uncompressed text at
+    line boundaries).
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -530,3 +550,9 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   presumably 1.5 now; that lane's lock is held, left to it) and `DistributedClusterIntegrationTest.startCluster`
   (Hazelcast port already in use, runner flake). Open question added: Ranger semantics for views (plan: view and its source tables). Next: views part 2
   (SPI 1.6 `Catalog.views` + `hive.views` opt-in), see Next steps.
+- 2026-10-28 (plugins session): P4 step 2 (c) views part 2 - SPI 1.6 `Catalog.views` / `CatalogView` (5ea70fe, own
+  commit, additive; FYI line in STATUS.md Log) and hive `hive.views` opt-in listing translatable views over shown
+  tables (8410789; descriptor `spi=1.6`; comment lines in `arrowflight.properties`; CHANGELOG). No client-visible
+  change (the server does not read catalog views yet). Local (GCS mirror of Central): `SpiTest` 9/9, hive module
+  79/79 (new `HiveViewCatalogTest` 3; UTF-8 locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40744052381
+  (8410789) running at commit time. No pre-release (no runtime change). Next: views part 3 (core), detailed in Next steps.
