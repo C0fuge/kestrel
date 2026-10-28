@@ -19,10 +19,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
 - Iceberg REST catalog conformance on S3 (C1 step 2a): `catalogs-ci.yml` also runs `RestCatalogConformanceTest`
-  with the warehouse in a MinIO bucket for Apache Polaris 1.2.0 (S3 storage without STS), the Iceberg REST fixture
-  1.10.0 (S3FileIO) and Lakekeeper 0.13.8 (PostgreSQL backend, S3 warehouse); the plugin reads metadata through the
-  s3 plugin's store and DuckDB reads the rows over httpfs. Static keys only (vended credentials are step 2b).
-  Test only, no runtime change.
+  with the warehouse in an S3 bucket (moto's S3 server; MinIO's images no longer pull anonymously) for Apache
+  Polaris 1.2.0 (S3 storage without STS), the Iceberg REST fixture 1.10.0 (S3FileIO) and Lakekeeper 0.13.8
+  (PostgreSQL backend, S3 warehouse); the plugin reads metadata through the s3 plugin's store and DuckDB reads the
+  rows over httpfs. Static keys only (vended credentials are step 2b). Test only, no runtime change.
 - Iceberg REST catalog conformance (C1 step 1): new workflow `catalogs-ci.yml` starts Apache Polaris 1.2.0 (OAuth2
   client credentials, prefix from `/v1/config`) and the Apache Iceberg REST fixture 1.10.0 as containers and runs
   `RestCatalogConformanceTest`: the fixture tables are written through each catalog with Iceberg Java's RESTCatalog

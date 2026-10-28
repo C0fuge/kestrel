@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # <catalog>-s3: the warehouse is a MinIO bucket (static keys; the catalog vends none yet).
+        # <catalog>-s3: the warehouse is an S3 bucket (static keys; the catalog vends none yet).
         catalog: [ polaris, iceberg-rest-fixture, polaris-s3, iceberg-rest-fixture-s3, lakekeeper-s3 ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,18 +65,20 @@ jobs:
           test -n "$iceberg" || { echo "no ${DUCKDB_VERSION}/linux_amd64/iceberg.duckdb_extension"; exit 1; }
           echo "ICEBERG_EXT_DIR=$(dirname "$(dirname "$(dirname "$iceberg")")")" >> "$GITHUB_ENV"
 
-      # S3 variants: MinIO on localhost:9000, bucket "lake"; the catalogs run on the host network
-      # and use the same keys (test-only, generated here).
-      - name: Start MinIO
+      # S3 variants: an S3 endpoint on localhost:9000 (moto's server: quay.io/minio/minio refuses
+      # anonymous pulls since 2026-10; moto accepts any key, so the keys only travel), bucket
+      # "lake"; the catalogs run on the host network and use the same keys (test-only, generated).
+      - name: Start S3
         if: endsWith(matrix.catalog, '-s3')
         run: |
           set -euo pipefail
           key=$(openssl rand -hex 8)
           secret=$(openssl rand -hex 16)
           echo "::add-mask::$secret"
-          docker run -d --name minio --network host -e "MINIO_ROOT_USER=$key" \
-            -e "MINIO_ROOT_PASSWORD=$secret" quay.io/minio/minio server /data
-          for _ in $(seq 60); do curl -fsS http://localhost:9000/minio/health/ready && break; sleep 1; done
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install -q 'moto[server]==5.2.5'
+          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 0.0.0.0 -p 9000 > "$RUNNER_TEMP/s3.log" 2>&1 &
+          for _ in $(seq 60); do curl -fsS -o /dev/null http://localhost:9000/ && break; sleep 1; done
           AWS_ACCESS_KEY_ID=$key AWS_SECRET_ACCESS_KEY=$secret AWS_DEFAULT_REGION=us-east-1 \
             aws --endpoint-url http://localhost:9000 s3 mb s3://lake
           {
@@ -188,4 +190,4 @@ jobs:
         if: failure()
         run: |
           docker logs catalog 2>&1 | tail -200
-          docker logs minio 2>&1 | tail -50 || true
+          tail -50 "$RUNNER_TEMP/s3.log" 2>/dev/null || true
