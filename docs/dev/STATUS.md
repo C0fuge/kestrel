@@ -72,6 +72,14 @@
 > **Screening:** measure the pre-release against `7562a5bdb7b9` (expect S3 c8/c32 p95 back to ~1.0x, local disk
 > unchanged); if c32 q/s on S3 drops noticeably, see Open question "S3 thread default".
 
+> **Maintainer, 2026-10-28 22:30 - keep the core lane busy; do not wait for measurements.** Screening/stand numbers arrive
+> on their own; meanwhile take code items in this order: (1) **item 21 continued** - upstream native still does ~70 q/s vs
+> our ~53 on 2 CPUs (screening `track-94ad61021d93`): next cuts from your item-21 breakdown (e.g. a one-round-trip path for
+> small results, plan/prepare cache keyed by SQL text + catalog snapshot, Hazelcast work off the single-node path, fewer
+> allocations per batch); goal >= upstream q/s at 8 and 32 clients with c1 p50 not worse. (2) **item 22 continued** -
+> 4-8 stream scans: goal >= 750 MB/s on 2 CPUs (now ~1.18x of 7562a5b at 8 streams). (3) **item 19b step 2** adaptive
+> threads per query (opt-in). (4) item 16 decision from the existing numbers. Each with a `package=true` pre-release.
+
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
 > four-server comparison in the public CI screening repo (identical containers: 2 CPUs, 6 GB, `-Xmx3g`, direct 2g; reports
