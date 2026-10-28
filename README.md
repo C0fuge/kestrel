@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -342,8 +342,12 @@ the node, so N parallel streams share the cores instead of starting N x `duckDbT
 one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
 are checked as before); `duckDbThreads` and `duckDbMemoryLimit` then mean the node's threads and
 memory (unset = the cores and the whole DuckDB budget, at least 1 GiB, at most 80 % of the memory);
-`duckDbThreadsUnderLoad`, `duckDbThreadsWhenIdle` and `duckDbStreamingBufferSize` (a per-connection
-DuckDB setting that the lockdown freezes) are ignored with a WARN. Each connection keeps the catalog
+`duckDbThreadsUnderLoad` and `duckDbThreadsWhenIdle` are ignored with a WARN.
+`duckDbStreamingBufferSize` is a per-connection DuckDB setting that the lockdown freezes, so with it
+`duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64) connections are
+opened with that buffer before the lockdown and lent to the worker connections (given back, without
+their temporary views and catalog, when a worker thread ends); further workers get DuckDB's default
+buffer (one WARN `duckdb=sharedStreamingBuffer exhausted=true`); 0 ignores the setting. Each connection keeps the catalog
 views in an in-memory catalog of its own (`flight_session_<n>`, made its default), so view versions
 of concurrent queries do not mix; client SQL naming such a catalog or schema is refused. Queries are
 described (prepare, GetFlightInfo) in a second node-wide DuckDB that reads no files (1 thread,

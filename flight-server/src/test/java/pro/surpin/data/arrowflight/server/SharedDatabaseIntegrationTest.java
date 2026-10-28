@@ -68,8 +68,16 @@ class SharedDatabaseIntegrationTest {
         System.setProperty("endpointsPerServer", String.valueOf(FILES));
         try {
             for (String mode : List.of("partial", "complete")) {
-                assertEquals(answers(dir, mode, null), answers(dir, mode, new DuckDbSizing.Shared(2, "1GiB")),
-                        mode);
+                List<String> expected = answers(dir, mode, null);
+                assertEquals(expected, answers(dir, mode, new DuckDbSizing.Shared(2, "1GiB")), mode);
+                // Sessions on buffered connections (fewer than the parallel streams) and on others.
+                System.setProperty("duckDbStreamingBufferSize", "64KB");
+                try {
+                    assertEquals(expected, answers(dir, mode, new DuckDbSizing.Shared(2, "1GiB", 2)),
+                            mode + " with duckDbStreamingBufferSize");
+                } finally {
+                    System.clearProperty("duckDbStreamingBufferSize");
+                }
             }
         } finally {
             System.clearProperty("endpointsPerServer");

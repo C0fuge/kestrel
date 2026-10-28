@@ -116,10 +116,35 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
      * Node-wide DuckDB threads and memory limit of {@code duckDbSharedDatabase}, where every
      * worker connection is a connection to one DuckDB of the node.
      *
-     * @param threads     DuckDB threads of the node
-     * @param memoryLimit DuckDB {@code memory_limit} of the node, null = DuckDB's default
+     * @param threads             DuckDB threads of the node
+     * @param memoryLimit         DuckDB {@code memory_limit} of the node, null = DuckDB's default
+     * @param bufferedConnections connections opened before the lockdown with
+     *                            {@code duckDbStreamingBufferSize} set, used only with that setting
      */
-    public record Shared(int threads, String memoryLimit) {
+    public record Shared(int threads, String memoryLimit, int bufferedConnections) {
+
+        /** Default of {@code duckDbSharedBufferedConnections}. */
+        public static final int DEFAULT_BUFFERED_CONNECTIONS = 64;
+
+        /**
+         * Creates the node-wide sizing with the default number of buffered connections.
+         *
+         * @param threads     DuckDB threads of the node
+         * @param memoryLimit DuckDB {@code memory_limit} of the node, null = DuckDB's default
+         */
+        public Shared(int threads, String memoryLimit) {
+            this(threads, memoryLimit, DEFAULT_BUFFERED_CONNECTIONS);
+        }
+
+        /**
+         * Returns this sizing with another number of buffered connections.
+         *
+         * @param connections connections opened before the lockdown, 0 = none
+         * @return sizing with the given number
+         */
+        public Shared withBufferedConnections(int connections) {
+            return new Shared(threads, memoryLimit, connections);
+        }
 
         /**
          * Describes the chosen values for the startup log.

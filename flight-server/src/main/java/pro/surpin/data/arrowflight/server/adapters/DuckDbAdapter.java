@@ -158,6 +158,11 @@ public final class DuckDbAdapter implements AutoCloseable {
     /** Guards the replacement of sharedRoot. */
     private final Object sharedRootLock = new Object();
     /**
+     * Connections of sharedRoot with duckDbStreamingBufferSize set before the lockdown; replaced
+     * with sharedRoot; null when the shared DuckDB is off or the buffer size is not set.
+     */
+    private volatile BufferedConnections buffered;
+    /**
      * The node's DuckDB for describing queries with duckDbSharedDatabase: it reads no files, and
      * every session describes in a catalog of its own in it. Replaced when DuckDB invalidates
      * it; null when every session has a describe DuckDB of its own.
@@ -492,10 +497,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                 LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbThreadsUnderLoad,"
                         + "duckDbThreadsWhenIdle reason=\"threads are node-wide\"", LogUtil.node());
             }
-            if (appConfig.duckDbStreamingBufferSize() != null) {
+            if (appConfig.duckDbStreamingBufferSize() != null && shared.bufferedConnections() == 0) {
                 LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbStreamingBufferSize"
-                        + " reason=\"a per-connection setting, locked before the sessions connect\"",
-                        LogUtil.node());
+                        + " reason=\"duckDbSharedBufferedConnections=0\"", LogUtil.node());
             }
         } else if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null) {
             // An extension file of another DuckDB version (hadoopfs v1.4.5 next to DuckDB 1.5.6)
@@ -572,11 +576,15 @@ public final class DuckDbAdapter implements AutoCloseable {
             Session session;
             if (root == null) {
                 session = new Session(Thread.currentThread(), openConnection(false, threads),
-                        appConfig.duckDbStatementCacheSize(), null, null);
+                        appConfig.duckDbStatementCacheSize(), null, null, null);
             } else {
                 String catalog = SESSION_CATALOG_PREFIX + sessionIds.incrementAndGet();
-                session = new Session(Thread.currentThread(), openSharedConnection(root, catalog),
-                        appConfig.duckDbStatementCacheSize(), root, catalog);
+                BufferedConnections pool = buffered;
+                Connection lent = pool != null && pool.root() == root ? pool.take() : null;
+                session = new Session(Thread.currentThread(),
+                        openSharedConnection(root, catalog, lent, pool),
+                        appConfig.duckDbStatementCacheSize(), root, catalog,
+                        lent != null ? pool : null);
             }
             allSessions.add(session);
             return session;
@@ -591,17 +599,22 @@ public final class DuckDbAdapter implements AutoCloseable {
      *
      * @param root    connection of the shared DuckDB
      * @param catalog name of the session's catalog
+     * @param lent    connection lent by the buffered connections, or null for a new one
+     * @param pool    pool that lent it, or null
      * @return connection whose default catalog is the session's
      * @throws java.sql.SQLException when DuckDB cannot connect or attach
      */
-    private static Connection openSharedConnection(Connection root, String catalog)
-            throws java.sql.SQLException {
-        Connection conn = root.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
+    private static Connection openSharedConnection(Connection root, String catalog,
+            Connection lent, BufferedConnections pool) throws java.sql.SQLException {
+        Connection conn = lent != null ? lent
+                : root.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
         try (Statement s = conn.createStatement()) {
             s.execute("ATTACH ':memory:' AS " + quoteIdentifier(catalog));
             s.execute("USE " + quoteIdentifier(catalog));
         } catch (java.sql.SQLException e) {
-            Session.closeQuietly(conn);
+            if (lent == null || !pool.give(conn)) {
+                Session.closeQuietly(conn);
+            }
             throw e;
         }
         return conn;
@@ -617,18 +630,29 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Connection openSharedRoot(boolean logExtensions) {
         try {
+            int spareCount = appConfig.duckDbStreamingBufferSize() != null
+                    ? shared.bufferedConnections() : 0;
+            List<Connection> spares = new ArrayList<>(spareCount);
             Connection conn = openConnection(logExtensions, shared.threads(), shared.memoryLimit(),
-                    tempRoot.resolve("shared" + sessionIds.incrementAndGet()));
+                    tempRoot.resolve("shared" + sessionIds.incrementAndGet()), spareCount, spares);
             try {
                 if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                     LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
                 }
             } catch (Exception e) {
+                spares.forEach(Session::closeQuietly);
                 Session.closeQuietly(conn);
                 throw e;
             }
-            LOGGER.info("node={} duckdb=sharedDatabaseOpened {} statements={}", LogUtil.node(),
-                    shared.describe(), storageSetupStatements.size());
+            BufferedConnections previous = buffered;
+            buffered = spareCount > 0 ? new BufferedConnections(conn, spares) : null;
+            if (previous != null) {
+                previous.close();
+            }
+            LOGGER.info("node={} duckdb=sharedDatabaseOpened {} statements={}"
+                    + " bufferedConnections={} streamingBufferSize={}", LogUtil.node(),
+                    shared.describe(), storageSetupStatements.size(), spareCount,
+                    spareCount > 0 ? appConfig.duckDbStreamingBufferSize() : "duckdbDefault");
             return conn;
         } catch (Exception e) {
             throw new IllegalStateException("DuckDB cannot be set up for the data store: "
@@ -722,6 +746,25 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Connection openConnection(boolean logExtensions, int threads, String memoryLimit,
             Path tempDirectory) throws Exception {
+        return openConnection(logExtensions, threads, memoryLimit, tempDirectory, 0, new ArrayList<>());
+    }
+
+    /**
+     * Opens and configures a DuckDB and, before its lockdown, further connections to it with
+     * duckDbStreamingBufferSize set (a per-connection setting the lockdown freezes).
+     *
+     * @param logExtensions whether to log the storage extensions loaded
+     * @param threads       DuckDB threads
+     * @param memoryLimit   DuckDB memory_limit, null or blank = DuckDB's default
+     * @param tempDirectory spill directory of this DuckDB
+     * @param spareCount    further connections to open
+     * @param spares        receives the further connections; the caller closes them, also when
+     *                      this method fails
+     * @return configured connection
+     * @throws Exception when DuckDB cannot be opened or configured
+     */
+    private Connection openConnection(boolean logExtensions, int threads, String memoryLimit,
+            Path tempDirectory, int spareCount, List<Connection> spares) throws Exception {
         Properties props = new Properties();
         if (appConfig.duckDbAllowUnsignedExtensions()) {
             props.setProperty("allow_unsigned_extensions", "true");
@@ -734,8 +777,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         props.setProperty("allow_persistent_secrets", "false");
         Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
         try {
-            configureConnection(conn, logExtensions, threads, memoryLimit, tempDirectory);
+            configureConnection(conn, logExtensions, threads, memoryLimit, tempDirectory,
+                    spareCount, spares);
         } catch (Exception e) {
+            spares.forEach(Session::closeQuietly);
             Session.closeQuietly(conn);
             throw e;
         }
@@ -770,10 +815,13 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param threads       DuckDB threads of the connection
      * @param memLimit      DuckDB memory_limit, null or blank = DuckDB's default
      * @param tempDirectory spill directory of this DuckDB
+     * @param spareCount    further connections to open before the lockdown
+     * @param spares        receives the further connections
      * @throws Exception on configuration failure
      */
     private void configureConnection(Connection conn, boolean logExtensions, int threads,
-            String memLimit, Path tempDirectory) throws Exception {
+            String memLimit, Path tempDirectory, int spareCount, List<Connection> spares)
+            throws Exception {
         try (Statement s = conn.createStatement()) {
             s.execute("SET threads = " + threads);
             if (memLimit != null && !memLimit.isBlank()) {
@@ -831,6 +879,16 @@ public final class DuckDbAdapter implements AutoCloseable {
             runStorageSetup(s);
             if (logExtensions) {
                 logStorageExtensions(s);
+            }
+            for (int i = 0; i < spareCount; i++) {
+                // streaming_buffer_size is LOCAL: it cannot be set globally, connections opened
+                // later start at DuckDB's default and cannot change it after the lockdown.
+                Connection spare = conn.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
+                spares.add(spare);
+                try (Statement ss = spare.createStatement()) {
+                    ss.execute("SET streaming_buffer_size = "
+                            + sqlStringLiteral(appConfig.duckDbStreamingBufferSize()));
+                }
             }
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                 // Clients may send any SQL in complete-answer mode, and filters reach DuckDB as
@@ -1054,6 +1112,15 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     Connection describeDatabase() {
         return describeRoot;
+    }
+
+    /**
+     * Returns the connections of the shared DuckDB with duckDbStreamingBufferSize set, for tests.
+     *
+     * @return the pool, or null when there is none
+     */
+    BufferedConnections bufferedConnections() {
+        return buffered;
     }
 
     /**
@@ -2336,7 +2403,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 session.describeConn = openDescribeConnection();
             } else {
                 String catalog = SESSION_CATALOG_PREFIX + sessionIds.incrementAndGet();
-                session.describeConn = openSharedConnection(root, catalog);
+                session.describeConn = openSharedConnection(root, catalog, null, null);
                 session.describeRoot = root;
                 session.describeCatalog = catalog;
             }
@@ -2637,6 +2704,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         private final Connection root;
         /** The session's catalog in the shared DuckDB; null for a DuckDB of its own. */
         private final String catalog;
+        /** Pool that lent conn and takes it back on close; null when conn is the session's own. */
+        private final BufferedConnections lender;
 
         /**
          * Binds a connection to the thread that uses it.
@@ -2646,10 +2715,12 @@ public final class DuckDbAdapter implements AutoCloseable {
          * @param maxStatements prepared statements to keep; 0 or less keeps only the one in use
          * @param root          connection of the shared DuckDB, or null
          * @param catalog       the session's catalog in the shared DuckDB, or null
+         * @param lender        pool that lent the connection, or null
          */
         private Session(Thread owner, Connection conn, int maxStatements, Connection root,
-                String catalog) {
+                String catalog, BufferedConnections lender) {
             this.owner = owner;
+            this.lender = lender;
             this.conn = conn;
             this.root = root;
             this.catalog = catalog;
@@ -2674,11 +2745,14 @@ public final class DuckDbAdapter implements AutoCloseable {
          */
         private void close() {
             statements.closeAll();
+            boolean detached = true;
             if (catalog != null) {
                 // The catalog belongs to the shared DuckDB and outlives this connection.
-                detachQuietly(conn, catalog);
+                detached = detachQuietly(conn, catalog);
             }
-            closeQuietly(conn);
+            if (lender == null || !detached || !lender.give(conn)) {
+                closeQuietly(conn);
+            }
             closeDescribe();
         }
 
@@ -2709,13 +2783,16 @@ public final class DuckDbAdapter implements AutoCloseable {
          *
          * @param conn connection to a shared DuckDB
          * @param name the session's catalog
+         * @return whether the catalog was detached
          */
-        private static void detachQuietly(Connection conn, String name) {
+        private static boolean detachQuietly(Connection conn, String name) {
             try (Statement s = conn.createStatement()) {
                 s.execute("USE memory");
                 s.execute("DETACH DATABASE IF EXISTS " + quoteIdentifier(name));
+                return true;
             } catch (Exception e) {
                 LOGGER.debug("Failed to detach DuckDB session catalog {}", name, e);
+                return false;
             }
         }
 
@@ -2912,6 +2989,10 @@ public final class DuckDbAdapter implements AutoCloseable {
             session.close();
         }
         allSessions.clear();
+        BufferedConnections pool = buffered;
+        if (pool != null) {
+            pool.close();
+        }
         Connection root = sharedRoot;
         if (root != null) {
             Session.closeQuietly(root);

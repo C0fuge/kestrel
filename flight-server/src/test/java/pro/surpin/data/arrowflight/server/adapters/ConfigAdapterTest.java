@@ -223,6 +223,15 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbSharedDatabase"), e.getMessage());
         assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.duckDbShared(
                 source(Map.of("duckDbSharedDatabase", "true", "duckDbThreads", "-1"), Map.of()), host));
+        assertEquals(64, ConfigAdapter.duckDbShared(
+                source(Map.of("duckDbSharedDatabase", "true"), Map.of()), host).bufferedConnections());
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB", 8), ConfigAdapter.duckDbShared(
+                source(Map.of("duckDbSharedDatabase", "true"),
+                        Map.of("DUCKDB_SHARED_BUFFERED_CONNECTIONS", "8")), host));
+        assertEquals(0, ConfigAdapter.duckDbShared(source(Map.of("duckDbSharedDatabase", "true",
+                "arrowflight.duckdb.sharedBufferedConnections", "0"), Map.of()), host).bufferedConnections());
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.duckDbShared(source(Map.of(
+                "duckDbSharedDatabase", "true", "duckDbSharedBufferedConnections", "-1"), Map.of()), host));
     }
 
     @Test

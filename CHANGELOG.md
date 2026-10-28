@@ -16,6 +16,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (`schema.table`, plain identifiers -> `SELECT * FROM schema.table`), then `DoGet` on the tickets. Flight SQL
   commands keep their handling; same authentication and Ranger checks as Flight SQL queries; the answer is complete
   unless the client sends `x-flight-result-mode: partial` (P5).
+- With `duckDbSharedDatabase`, `duckDbStreamingBufferSize` now applies instead of being ignored: new setting
+  `duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64; 0 = ignored as before)
+  connections get the buffer before the lockdown and are lent to worker connections, given back without temporary
+  views and catalog when a worker thread ends; workers beyond them use DuckDB's default buffer (one WARN). Without
+  `duckDbSharedDatabase` or `duckDbStreamingBufferSize` nothing changes (item 22 shared DuckDB step (c)).
 - Hive plugin: insert-only (MM) transactional tables with the new optional setting `hive.insertOnlyTables=true`
   (default `false`: skipped as before; Hive 3 metastores). The plugin takes one snapshot of committed writes per plan
   (`get_open_txns` + `get_valid_write_ids`) and reads in every table/partition directory what Hive reads at that

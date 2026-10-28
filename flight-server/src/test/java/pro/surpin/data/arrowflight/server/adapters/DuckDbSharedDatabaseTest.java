@@ -296,6 +296,129 @@ class DuckDbSharedDatabaseTest {
         }
     }
 
+    /**
+     * Verifies duckDbStreamingBufferSize reaches sessions of the shared DuckDB through the
+     * connections opened before the lockdown: a session gets one while there are idle ones, a
+     * further session DuckDB's default, and a connection comes back without the temporary views
+     * and the catalog of its last session when that session's thread ends.
+     */
+    @Test
+    void streamingBufferSizeReachesSessionsThroughBufferedConnections(@TempDir Path dir)
+            throws Exception {
+        Path data = Files.createDirectories(dir.resolve("data"));
+        AppConfig config = config().withDuckDbScanOrder(config().duckDbPreserveInsertionOrder(), "8MB");
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, Executors.newSingleThreadExecutor(),
+                DuckDbSetupPlan.of(List.of(data.toString()), List.of()), 0, 0, 2,
+                ProducingStreamGate.OFF, false, SHARED.withBufferedConnections(2))) {
+            BufferedConnections pool = adapter.bufferedConnections();
+            assertNotNull(pool);
+            assertSame(adapter.sharedDatabase(), pool.root());
+            assertEquals(2, pool.idle());
+
+            CyclicBarrier all = new CyclicBarrier(3);
+            ExecutorService workers = Executors.newFixedThreadPool(3);
+            List<Future<String>> sessions = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                sessions.add(workers.submit(() -> {
+                    Connection conn = adapter.connection();
+                    String buffer = single(conn, "SELECT current_setting('streaming_buffer_size')");
+                    try (Statement s = conn.createStatement()) {
+                        assertThrows(java.sql.SQLException.class,
+                                () -> s.execute("SET streaming_buffer_size = '1MB'"));
+                    }
+                    try (Statement s = conn.createStatement()) {
+                        s.execute("CREATE OR REPLACE TEMP VIEW left_behind AS SELECT 1 AS x");
+                    }
+                    all.await(30, TimeUnit.SECONDS);
+                    return buffer + "|" + single(conn, "SELECT current_database()");
+                }));
+            }
+            List<String> buffers = new ArrayList<>();
+            List<String> catalogs = new ArrayList<>();
+            for (Future<String> session : sessions) {
+                String[] parts = session.get(60, TimeUnit.SECONDS).split("\\|");
+                buffers.add(parts[0]);
+                catalogs.add(parts[1]);
+            }
+            buffers.sort(null);
+            assertEquals(List.of("7.6 MiB", "7.6 MiB", "976.5 KiB"), buffers);
+            assertEquals(0, pool.idle());
+            assertEquals(1, pool.missed());
+
+            workers.shutdown();
+            assertTrue(workers.awaitTermination(30, TimeUnit.SECONDS));
+            adapter.closeSessionsOfEndedThreads();
+            assertEquals(2, pool.idle());
+
+            ExecutorService next = Executors.newSingleThreadExecutor();
+            try {
+                String reused = next.submit(() -> {
+                    Connection conn = adapter.connection();
+                    return single(conn, "SELECT current_setting('streaming_buffer_size')") + "|"
+                            + single(conn, "SELECT count(*) FROM duckdb_views() WHERE view_name = 'left_behind'")
+                            + "|" + single(conn, "SELECT string_agg(database_name, ',') FROM duckdb_databases()");
+                }).get(30, TimeUnit.SECONDS);
+                String[] parts = reused.split("\\|");
+                assertEquals("7.6 MiB", parts[0]);
+                assertEquals("0", parts[1]);
+                for (String catalog : catalogs) {
+                    assertFalse(List.of(parts[2].split(",")).contains(catalog), parts[2]);
+                }
+                assertEquals(1, pool.idle());
+            } finally {
+                next.shutdownNow();
+            }
+        }
+    }
+
+    /**
+     * Verifies a replaced shared DuckDB gets buffered connections of its own and the old ones are
+     * closed, also the ones lent out when their sessions end.
+     */
+    @Test
+    void replacedDatabaseGetsNewBufferedConnections() throws Exception {
+        AppConfig config = config().withDuckDbScanOrder(config().duckDbPreserveInsertionOrder(), "8MB");
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, Executors.newSingleThreadExecutor(),
+                DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false,
+                SHARED.withBufferedConnections(2))) {
+            BufferedConnections before = adapter.bufferedConnections();
+            Connection lent = adapter.connection();
+            assertEquals(1, before.idle());
+            adapter.replaceSharedRoot(adapter.sharedDatabase());
+            BufferedConnections after = adapter.bufferedConnections();
+            assertNotSame(before, after);
+            assertSame(adapter.sharedDatabase(), after.root());
+            assertEquals(0, before.idle());
+            assertEquals(2, after.idle());
+            Connection fresh = adapter.connection();
+            assertNotSame(lent, fresh);
+            assertTrue(lent.isClosed());
+            assertEquals("7.6 MiB", single(fresh, "SELECT current_setting('streaming_buffer_size')"));
+            assertEquals(1, after.idle());
+        }
+    }
+
+    /**
+     * Verifies no buffered connections are opened without duckDbStreamingBufferSize or with
+     * duckDbSharedBufferedConnections 0: sessions keep DuckDB's default.
+     */
+    @Test
+    void noBufferedConnectionsWithoutTheBufferSize() throws Exception {
+        try (DuckDbAdapter adapter = sharedAdapter(List.of(), List.of())) {
+            assertNull(adapter.bufferedConnections());
+            assertEquals("976.5 KiB",
+                    single(adapter.connection(), "SELECT current_setting('streaming_buffer_size')"));
+        }
+        AppConfig config = config().withDuckDbScanOrder(config().duckDbPreserveInsertionOrder(), "8MB");
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, Executors.newSingleThreadExecutor(),
+                DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false,
+                SHARED.withBufferedConnections(0))) {
+            assertNull(adapter.bufferedConnections());
+            assertEquals("976.5 KiB",
+                    single(adapter.connection(), "SELECT current_setting('streaming_buffer_size')"));
+        }
+    }
+
     /** Verifies the parse check keeps session catalog and schema qualifiers among the names. */
     @Test
     void parseCheckKeepsSessionQualifiers() {

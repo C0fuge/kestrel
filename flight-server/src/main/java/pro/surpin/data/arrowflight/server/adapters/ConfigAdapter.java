@@ -449,12 +449,15 @@ public class ConfigAdapter {
      * whether every worker connection connects to one DuckDB of the node, with one thread pool
      * and one memory limit, instead of being a DuckDB of its own. When on, {@code duckDbThreads}
      * and {@code duckDbMemoryLimit} apply to the node (unset = the cores and the DuckDB budget).
+     * With {@code duckDbStreamingBufferSize} set, {@code duckDbSharedBufferedConnections}
+     * ({@code DUCKDB_SHARED_BUFFERED_CONNECTIONS}, default 64) connections get that buffer
+     * before the lockdown and are lent to the sessions; 0 leaves every session at DuckDB's default.
      *
      * @param props configuration source
      * @param host  cores and memory of the host
      * @return node-wide sizing, or null when the setting is off
      * @throws IllegalArgumentException for a value other than true or false, or a negative
-     *         thread count
+     *         thread or connection count
      */
     public static DuckDbSizing.Shared duckDbShared(ConfigSource props, HostLimits host) {
         String value = getStringWithEnv("duckDbSharedDatabase", "arrowflight.duckdb.sharedDatabase",
@@ -470,7 +473,14 @@ public class ConfigAdapter {
             throw new IllegalArgumentException("duckDbThreads must not be negative: " + threads);
         }
         String memoryLimit = getString("duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null, props);
-        return DuckDbSizing.shared(host, threads, memoryLimit);
+        int buffered = getIntWithEnv("duckDbSharedBufferedConnections",
+                "arrowflight.duckdb.sharedBufferedConnections", "DUCKDB_SHARED_BUFFERED_CONNECTIONS",
+                DuckDbSizing.Shared.DEFAULT_BUFFERED_CONNECTIONS, props);
+        if (buffered < 0) {
+            throw new IllegalArgumentException("duckDbSharedBufferedConnections must not be negative: "
+                    + buffered);
+        }
+        return DuckDbSizing.shared(host, threads, memoryLimit).withBufferedConnections(buffered);
     }
 
     /**
