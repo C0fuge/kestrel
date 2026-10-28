@@ -102,9 +102,10 @@
 >
 > *Item 22 shared DuckDB, step 1 done 2026-10-28 (4075216, see Log):* opt-in `duckDbSharedDatabase` (default false).
 > **Screening:** 4/8-stream scans, small-query load and SF10 on the pre-release with `-DduckDbSharedDatabase=true` vs
-> without (and vs `7562a5bdb7b9`). **Next steps of the shared DuckDB** (each small, own pre-release): (a) the describe
-> connection (today still one small DuckDB per worker, 1 thread / 256 MB) as a second catalog of the shared one;
-> (b) a stand round with Ranger and the hive/iceberg catalogs on; (c) `duckDbStreamingBufferSize` in shared mode
+> without (and vs `7562a5bdb7b9`). **Next steps of the shared DuckDB** (each small, own pre-release): ~~(a) the describe
+> connection (today still one small DuckDB per worker, 1 thread / 256 MB) as a second catalog of the shared one~~
+> (done 2026-10-28, e751192, see Log: a second node-wide DuckDB, not a catalog of the query one, so describes still
+> read no files); (b) a stand round with Ranger and the hive/iceberg catalogs on; (c) `duckDbStreamingBufferSize` in shared mode
 > (DuckDB freezes this per-connection setting with the lockdown - only via a DuckDB-side default, see Log);
 > (d) default change only after the screening's numbers and the maintainer's decision.
 
