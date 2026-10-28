@@ -333,7 +333,7 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     the translations: filter + LIKE escape, grouping with declared types, LEFT JOIN + UNION ALL + FROM subquery + IN /
     BETWEEN, CASE / coalesce / nvl / `||` / `==` / comma join; 30+ refusals; FROM-position safety; quoting of
     identifiers with quotes and backticks).
-    *Next (step 2 (c) views):* part 2 - SPI 1.5 (own commit, additive): `Catalog.views(schema)` default empty and a
+    *Next (step 2 (c) views):* part 2 - next SPI minor, 1.6 (1.5 = `TableFormat.asOf`, fa3dc0c; own commit, additive): `Catalog.views(schema)` default empty and a
     record `CatalogView(name, sql, sources, columns, fingerprint)`; hive: `hive.views` opt-in (default false),
     `HiveTable.classify` keeps skipping views unless on, translate with `schemaPrefix` + shown databases, skip
     (log reason) when a source table is not shown by the catalog (e.g. ORC without `hive.orcTables`) or the
@@ -524,5 +524,9 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   SQL, whitelist only, not wired into the catalog yet (5011e8d; plugin only, no SPI or core change, no runtime
   behaviour change, so no CHANGELOG line or pre-release). Local (Maven through the GCS mirror of Central, since
   `repo.maven.apache.org` answered 429): `HiveViewSqlTest` 3/3, Checkstyle + SpotBugs clean. CI: Dev CI run
-  40737753002 (queued behind the core lane's dispatch at the time of writing; result below). Open question added: Ranger semantics for views (plan: view and its source tables). Next: views part 2
-  (SPI 1.5 `Catalog.views` + `hive.views` opt-in), see Next steps.
+  40737753002 cancelled by a later push; Dev CI run 40737948663 (27d9b32, contains 5011e8d): SPI, all plugin
+  modules incl. hive (`HiveViewSqlTest`) SUCCESS; server red on two failures not from this change -
+  `PluginLoadingTest.newerSpiVersionsAreRefused` (fa3dc0c bumps the SPI to 1.5, the test's "newer" version is
+  presumably 1.5 now; that lane's lock is held, left to it) and `DistributedClusterIntegrationTest.startCluster`
+  (Hazelcast port already in use, runner flake). Open question added: Ranger semantics for views (plan: view and its source tables). Next: views part 2
+  (SPI 1.6 `Catalog.views` + `hive.views` opt-in), see Next steps.
