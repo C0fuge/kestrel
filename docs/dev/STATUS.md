@@ -531,8 +531,12 @@
     (a) ~~`duckDbThreads` default 2 -> 4~~ done as item 0c (plain 4) (SF10 JDBC 1.8x, SF1 1.3x faster; single point lookup +14 %, 32-client p95
     unchanged), or a size-aware default (cores / 4, between 2 and 8); (b) `flightBackpressureThresholdBytes` default
     256 MiB -> 16 MiB (no measured loss; with `endpointsPerServer` 4/8 the 256 MiB per stream exhausts
-    `MaxDirectMemorySize` and streams are CANCELLED); (c) `duckDbExternalFileCache=true` has no memory bound and gets the
-    server OOM-killed on SF10 (HDFS and S3) - bound it or document it as unsafe; (d) ~~ADBC Go driver connects rarely fail
+    `MaxDirectMemorySize` and streams are CANCELLED); (c) ~~`duckDbExternalFileCache=true` has no memory bound and gets the
+    server OOM-killed on SF10 (HDFS and S3) - bound it or document it as unsafe~~ (done 2026-10-28, 3042102, see Log:
+    DuckDB 1.5.6 keeps the cache within each connection's `memory_limit`, so since 19b's default it is bounded per
+    connection (node: limit x live connections); startup line `duckdb=externalFileCache`, WARN
+    `duckdb=externalFileCacheUnbounded` with `duckDbMemoryLimit=none`; README documents it; default stays off. The
+    node-wide bound for S3/lakeFS is item 17's read cache); (d) ~~ADBC Go driver connects rarely fail
     with "failed to update autocommit: rpc error: code = Unimplemented"~~ — fixed 2026-10-26 (4939fb7, see Log):
     the call is BeginTransaction (ADBC sends it only when it decoded SqlInfo TRANSACTION as supported); concurrent
     DoGet streams corrupted each other's empty buffers through Arrow's shared empty buffer (`EmptyListOffsets`).
