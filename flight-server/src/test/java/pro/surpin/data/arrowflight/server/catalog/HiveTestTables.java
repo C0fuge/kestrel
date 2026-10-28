@@ -70,8 +70,27 @@ public final class HiveTestTables {
     }
 
     /**
-     * Reads a constant of the ORC test table: COLUMNS (metastore notation) or EXPECTED (the
-     * rows in DuckDB SQL, to be followed by {@code FROM range(from, to)}).
+     * Writes rows [from, to) of the plugin module's lineitem-like table as an ORC file
+     * (OrcTestFiles.writeLineitem, in the metastore's class loader).
+     *
+     * @param file file to write
+     * @param from first row
+     * @param to row after the last
+     * @param compression ORC compression kind
+     * @throws Exception when it cannot be written
+     */
+    public static void writeLineitemOrc(Path file, long from, long to, String compression)
+            throws Exception {
+        ClassLoader child = loader();
+        inLoader(() -> Class.forName(ORC, true, child).getMethod("writeLineitem", String.class,
+                long.class, long.class, String.class).invoke(null, file.toString(), from, to,
+                compression));
+    }
+
+    /**
+     * Reads a constant of the ORC test files: COLUMNS (metastore notation) or EXPECTED (the
+     * rows in DuckDB SQL, to be followed by {@code FROM range(from, to)}), LINEITEM_COLUMNS or
+     * LINEITEM (followed by {@code FROM range(from, to) t(r)}).
      *
      * @param name constant name
      * @return its value

@@ -1,0 +1,60 @@
+# Manual perf run of plugins item P1 (e): a lineitem-like Hive table (SF1 size by default) as
+# Parquet and as ORC (zlib, zstd) through the server with the packaged hive plugin and
+# hive.orcTables=true; best of 3 per query and result mode (HiveOrcPerfTest) into the job
+# summary. Not part of Dev CI.
+name: Hive ORC perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "rows of the lineitem-like table (6000000 = SF1)"
+        type: string
+        default: "6000000"
+      files:
+        description: "files per table"
+        type: string
+        default: "4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-orc-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build the hive plugin and the server (no tests)
+        run: ./mvnw install -pl flight-plugin-hive,flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+
+      - name: ORC vs Parquet
+        run: >
+          ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Dgroups=perf -DexcludedGroups=
+          -Dtest=HiveOrcPerfTest -Dsurefire.failIfNoSpecifiedTests=false
+          -Dhive.orc.perf.rows="${{ inputs.rows }}" -Dhive.orc.perf.files="${{ inputs.files }}"
+          -Dhive.orc.perf.report="$RUNNER_TEMP/report.md"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Hive ORC vs Parquet on $(nproc) cores"
+            echo
+            cat "$RUNNER_TEMP/report.md" 2>/dev/null || echo "(no result)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
