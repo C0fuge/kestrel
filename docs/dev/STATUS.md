@@ -1745,3 +1745,6 @@
   Screening: TPC-H SF10 + load test on the 2c/6g container vs `7562a5bdb7b9` (1 GiB per connection now; see Open
   question "Item 19b expected connections"). Next: 19b step 2 (adaptive threads, opt-in) after the screening's
   numbers, or item 17 (a).
+- 2026-10-28 (lane 3 session): D2 (a) merged into `main` (8d2006c): 3-node in-JVM test of distributed complete mode
+  (`DistributedClusterIntegrationTest`, `CuttingRelay`; `TestFlightServerHelper` gains `hazelcastSeeds` and
+  `sharedStorage`). Test only. CI 40681311340 green on `lane/distributed`. Details in `LANE3-STATUS.md`.
