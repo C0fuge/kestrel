@@ -52,8 +52,9 @@ public interface Catalog extends AutoCloseable {
     /**
      * Returns the columns of the snapshot the planning node used, for an executing node whose
      * ticket names the snapshot's files with their partition values (snapshots read as
-     * {@link ReadSpec.ParquetFiles}): such a node never lists the files again, so the returned
-     * snapshot may come without files. The default returns {@link #pinned}.
+     * {@link ReadSpec.ParquetFiles} or {@link ReadSpec.ArrowStream}): such a node never lists the
+     * files again, so the returned snapshot may come without files. The default returns
+     * {@link #pinned}.
      *
      * @param table table name
      * @param snapshotId snapshot ID from the planning node
