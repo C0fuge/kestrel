@@ -48,18 +48,24 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     `ArrowScanRequestsTest` 6/6, `ArrowStreamExecutionTest` 5/5 (whole snapshot, same text twice, count(*), group
     by partition, planner tickets -> endpoint read, outside-root refusal, describe reads nothing, failing catalog
     leaves no view/buffer).
-    **Next step (step 2 (b) part 2 (2)):** complete mode - rewrite each reference of an ArrowStream table in the
-    client SQL to its own stream source, the way `CatalogViews.timeTravel(sql, describe)` rewrites time-travel
-    references (reuse its reference finder; `TimeTravelClause.find`), with `ArrowScanRequests.of(snapshot,
-    clientSql, null)` per reference (columns from the whole client SQL; predicates only when the query is a single
-    table - a filter of a join may not hold for this reference), run through `streamSqlOnce`; describe ->
-    `declaredColumnsSource`; complete-mode views keep skipping the table for queries that do not name it. Watch:
-    `streamComplete` applies views and binds parameters on a cached statement - the stream variant needs the same
-    parameter binding on an uncached one. Then (c) hive `exportArrowScan` with `OrcArrowReader`
-    (one reader per file chained; set the plugin's context class loader inside `loadNextBatch`, since DuckDB calls
-    it on its own threads; predicates -> ORC SARG), `hive.orcTables` + ACID refusal, (d) end-to-end tests as planned
-    above. Risk still open: the plugin ships zstd-jni 1.5.6-10 next to the server's copy (separate class loaders
-    extract their own temp copy of the native library - expected to work, confirm in the end-to-end test).
+    *Step 2 (b) part 2 (2) done 2026-10-28:* complete mode reads ArrowStream snapshots (core 53c4d71, STATUS.md
+    Log): such tables get no view (marker in `CatalogViews.refresh`); `CatalogViews.arrowStreams(sql, scans)`
+    (after `timeTravel`) replaces each schema-qualified reference in a FROM position (`services/TableReferences`
+    on `TimeTravelClause`'s tokens: after FROM, JOIN or a comma of a FROM list; three-part names, table functions,
+    literals, comments, column qualifiers left alone) by its own stream source; columns from the whole client SQL
+    (all for `*`, `COLUMNS(...)`, or a whole-row use of the alias/name); predicates only when the SQL is one
+    SELECT of that table alone (`singleSelect` + `ParquetQueryParser`); describe -> `declaredColumnsSource`;
+    `DuckDbAdapter.streamCompleteOnce` (views applied, uncached prepare, parameters bound). Known limits: an
+    unqualified name (`FROM orders`) or a reference after an ON condition's comma is not replaced and fails as a
+    missing table (never an empty answer). Tests `ArrowStreamCompleteTest` 7/7, `TableReferencesTest` 4/4.
+    **Next step (step 2 (c)):** hive `exportArrowScan` with `OrcArrowReader` (one reader per file chained; set the
+    plugin's context class loader inside `loadNextBatch`, since DuckDB calls it on its own threads; predicates ->
+    ORC SARG; partition values as UTF-8 text columns), `hive.orcTables` opt-in per catalog (snapshot
+    `ReadSpec.ArrowStream("orc")` for ORC tables, today skipped) + clear refusal of ORC ACID tables
+    (`transactional=true`), then (d) end-to-end tests as planned above (both result modes, partitioned table,
+    all types vs the same data in Parquet). Risk still open: the plugin ships zstd-jni 1.5.6-10 next to the
+    server's copy (separate class loaders extract their own temp copy of the native library - expected to work,
+    confirm in the end-to-end test).
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -124,3 +130,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   `HiveCatalogIntegrationTest` 7 (+1 skip), Checkstyle + SpotBugs clean. CI: run 40608463690 (31f16f5) green.
   No package release: no plugin serves ArrowStream yet, nothing client-visible changes. Next: part 2 (2), complete
   mode (see Next steps).
+- 2026-10-28 (plugins session): P1 step 2 (b) part 2 (2) - complete mode over ArrowStream snapshots (core 53c4d71:
+  `CatalogViews.arrowStreams`, `services/TableReferences`, `DuckDbAdapter.streamCompleteOnce`; FYI line in
+  STATUS.md Log; CHANGELOG 9db19b0). Local: `ArrowStreamCompleteTest` 7/7, `TableReferencesTest` 4/4,
+  `ArrowStreamExecutionTest` 5/5, `ArrowScanRequestsTest` 6/6, `DuckDbAdapterTest` 90 (+2 skip),
+  `ExecutionServiceTest` 43, `QueryPlannerTest` 58, `FlightSqlProducerTest` 27, CatalogViews tests, Checkstyle +
+  SpotBugs clean. CI: run 40616190366 (9db19b0, dispatched: the push's head commit was `[skip ci]`) green. No
+  package release: no plugin serves ArrowStream yet, nothing client-visible changes. Next: step 2 (c), hive
+  `exportArrowScan` + `hive.orcTables`.
