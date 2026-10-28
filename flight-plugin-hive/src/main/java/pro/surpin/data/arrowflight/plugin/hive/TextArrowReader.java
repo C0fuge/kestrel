@@ -5,10 +5,13 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
@@ -27,6 +30,9 @@ import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -43,7 +49,11 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * ignored (or kept in the last column, see {@link TextFormat}), a field equal to the NULL text is
  * NULL, and a field that does not read as its column's type is NULL ({@link TextValues}). Text
  * columns are unescaped; VARCHAR and CHAR values are cut to their length, CHAR values lose their
- * trailing spaces. Files ending in {@code .gz}, {@code .deflate} or {@code .bz2} are
+ * trailing spaces. Arrays, maps and structs are split at the separators of their nesting level
+ * ({@link TextFormat#separator}): an empty field is an empty array or map, a map entry without a
+ * key separator has a NULL value, entries with a NULL key are dropped and of equal keys the first
+ * is kept (as Hive's {@code LazyMap}), struct fields are matched by position like a row's.
+ * Files ending in {@code .gz}, {@code .deflate} or {@code .bz2} are
  * decompressed as Hadoop's codecs write them; other compressed files ({@code .snappy},
  * {@code .lz4}, {@code .zst}, {@code .lzo}, {@code .br}) are refused. The Arrow types are the
  * ones of {@link OrcArrowReader#field}, which DuckDB reads as the declared types.
@@ -128,15 +138,44 @@ final class TextArrowReader extends ArrowReader {
      *
      * @param name column name
      * @param type its type
-     * @throws IllegalArgumentException for nested types and time zone timestamps
+     * @throws IllegalArgumentException for unions, time zone timestamps, nested map keys and
+     *     nesting deeper than {@link TextFormat#MAX_LEVEL} levels
      */
     static void checkType(String name, TypeDescription type) {
+        checkType(name, type, type, 1);
+    }
+
+    private static void checkType(String name, TypeDescription column, TypeDescription type,
+            int level) {
         switch (type.getCategory()) {
             case BOOLEAN, BYTE, SHORT, INT, LONG, FLOAT, DOUBLE, STRING, VARCHAR, CHAR, BINARY,
                     DECIMAL, DATE, TIMESTAMP -> {
             }
-            default -> throw new IllegalArgumentException("column " + name + " has type " + type
+            case LIST, STRUCT -> {
+                checkLevel(name, column, level);
+                for (TypeDescription child : type.getChildren()) {
+                    checkType(name, column, child, level + 1);
+                }
+            }
+            case MAP -> {
+                checkLevel(name, column, level + 1);
+                TypeDescription key = type.getChildren().get(0);
+                if (!key.getCategory().isPrimitive()) {
+                    throw new IllegalArgumentException("column " + name + " has type " + column
+                            + " with a map key that is not a primitive");
+                }
+                checkType(name, column, key, level + 2);
+                checkType(name, column, type.getChildren().get(1), level + 2);
+            }
+            default -> throw new IllegalArgumentException("column " + name + " has type " + column
                     + " that the text reader does not read yet");
+        }
+    }
+
+    private static void checkLevel(String name, TypeDescription column, int level) {
+        if (level > TextFormat.MAX_LEVEL) {
+            throw new IllegalArgumentException("column " + name + " has type " + column
+                    + " nested deeper than " + TextFormat.MAX_LEVEL + " levels");
         }
     }
 
@@ -157,7 +196,8 @@ final class TextArrowReader extends ArrowReader {
         while (rows < batchSize && readLine()) {
             split();
             for (int i = 0; i < positions.length; i++) {
-                write(root.getVector(i), types[i], rows, positions[i]);
+                write(root.getVector(i), types[i], rows, fieldStarts[positions[i]],
+                        fieldEnds[positions[i]], 1);
             }
             rows++;
         }
@@ -290,25 +330,43 @@ final class TextArrowReader extends ArrowReader {
     }
 
     /**
-     * Writes one field of the current line into a vector.
+     * Finds the end of a value: the next separator that is not escaped, or the end.
+     *
+     * @param from first byte of the value
+     * @param end end of the enclosing value
+     * @param separator separator byte
+     * @return position of the separator, or end
+     */
+    private int next(int from, int end, byte separator) {
+        int escape = format.escape();
+        int i = from;
+        while (i < end && line[i] != separator) {
+            i += escape >= 0 && line[i] == (byte) escape && i + 1 < end ? 2 : 1;
+        }
+        return i;
+    }
+
+    /**
+     * Writes one value of the current line into a vector.
      *
      * @param vector target vector
-     * @param type the column's type
-     * @param row target row
-     * @param position the column's position in the table
+     * @param type the value's type
+     * @param row target index in the vector
+     * @param start first byte of the value, -1 when it is missing
+     * @param end end of the value
+     * @param level nesting level of the value's own separator
      */
-    private void write(FieldVector vector, TypeDescription type, int row, int position) {
-        int start = fieldStarts[position];
-        int end = fieldEnds[position];
+    private void write(FieldVector vector, TypeDescription type, int row, int start, int end,
+            int level) {
         if (start < 0 || isNullSequence(start, end)) {
-            vector.setNull(row);
+            OrcArrowReader.setNull(vector, row);
             return;
         }
         switch (type.getCategory()) {
             case BOOLEAN -> {
                 int value = TextValues.bool(line, start, end);
                 if (value < 0) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((BitVector) vector).setSafe(row, value);
                 }
@@ -316,7 +374,7 @@ final class TextArrowReader extends ArrowReader {
             case BYTE -> {
                 Long value = TextValues.integer(line, start, end, Byte.MIN_VALUE, Byte.MAX_VALUE);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((TinyIntVector) vector).setSafe(row, value.byteValue());
                 }
@@ -324,7 +382,7 @@ final class TextArrowReader extends ArrowReader {
             case SHORT -> {
                 Long value = TextValues.integer(line, start, end, Short.MIN_VALUE, Short.MAX_VALUE);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((SmallIntVector) vector).setSafe(row, value.shortValue());
                 }
@@ -333,7 +391,7 @@ final class TextArrowReader extends ArrowReader {
                 Long value = TextValues.integer(line, start, end, Integer.MIN_VALUE,
                         Integer.MAX_VALUE);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((IntVector) vector).setSafe(row, value.intValue());
                 }
@@ -341,7 +399,7 @@ final class TextArrowReader extends ArrowReader {
             case LONG -> {
                 Long value = TextValues.integer(line, start, end, Long.MIN_VALUE, Long.MAX_VALUE);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((BigIntVector) vector).setSafe(row, value);
                 }
@@ -349,7 +407,7 @@ final class TextArrowReader extends ArrowReader {
             case FLOAT -> {
                 Float value = TextValues.single(line, start, end);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((Float4Vector) vector).setSafe(row, value);
                 }
@@ -357,7 +415,7 @@ final class TextArrowReader extends ArrowReader {
             case DOUBLE -> {
                 Double value = TextValues.floating(line, start, end);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((Float8Vector) vector).setSafe(row, value);
                 }
@@ -366,7 +424,7 @@ final class TextArrowReader extends ArrowReader {
                 BigDecimal value = TextValues.decimal(line, start, end, type.getPrecision(),
                         type.getScale());
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((DecimalVector) vector).setSafe(row, value);
                 }
@@ -374,7 +432,7 @@ final class TextArrowReader extends ArrowReader {
             case DATE -> {
                 Integer value = TextValues.date(line, start, end);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((DateDayVector) vector).setSafe(row, value);
                 }
@@ -382,7 +440,7 @@ final class TextArrowReader extends ArrowReader {
             case TIMESTAMP -> {
                 Long value = TextValues.timestamp(line, start, end);
                 if (value == null) {
-                    vector.setNull(row);
+                    OrcArrowReader.setNull(vector, row);
                 } else {
                     ((TimeStampVector) vector).setSafe(row, value);
                 }
@@ -403,7 +461,119 @@ final class TextArrowReader extends ArrowReader {
                 }
                 ((VarCharVector) vector).setSafe(row, text, 0, length);
             }
+            case LIST -> writeList((ListVector) vector, type, row, start, end, level);
+            case MAP -> writeMap((MapVector) vector, type, row, start, end, level);
+            case STRUCT -> writeStruct((StructVector) vector, type, row, start, end, level);
             default -> throw new IllegalArgumentException("type " + type + " is not read from text");
+        }
+    }
+
+    /**
+     * Writes an array: its elements are split at the level's separator.
+     *
+     * @param list target vector
+     * @param type the array's type
+     * @param row target index
+     * @param start first byte
+     * @param end end of the value
+     * @param level the array's nesting level
+     */
+    private void writeList(ListVector list, TypeDescription type, int row, int start, int end,
+            int level) {
+        FieldVector elements = list.getDataVector();
+        TypeDescription elementType = type.getChildren().get(0);
+        int offset = list.startNewValue(row);
+        int count = 0;
+        if (end > start) {
+            byte separator = format.separator(level);
+            int from = start;
+            while (true) {
+                int to = next(from, end, separator);
+                write(elements, elementType, offset + count, from, to, level + 1);
+                count++;
+                if (to >= end) {
+                    break;
+                }
+                from = to + 1;
+            }
+        }
+        list.endValue(row, count);
+    }
+
+    /**
+     * Writes a map: entries split at the level's separator, key and value at the next level's;
+     * entries with a NULL key are dropped, of equal keys the first is kept.
+     *
+     * @param map target vector
+     * @param type the map's type
+     * @param row target index
+     * @param start first byte
+     * @param end end of the value
+     * @param level the map's nesting level
+     */
+    private void writeMap(MapVector map, TypeDescription type, int row, int start, int end,
+            int level) {
+        StructVector entries = (StructVector) map.getDataVector();
+        FieldVector keys = (FieldVector) entries.getChildByOrdinal(0);
+        FieldVector values = (FieldVector) entries.getChildByOrdinal(1);
+        TypeDescription keyType = type.getChildren().get(0);
+        TypeDescription valueType = type.getChildren().get(1);
+        int offset = map.startNewValue(row);
+        int count = 0;
+        if (end > start) {
+            byte separator = format.separator(level);
+            byte keySeparator = format.separator(level + 1);
+            Set<Object> seen = new HashSet<>();
+            int from = start;
+            while (true) {
+                int to = next(from, end, separator);
+                int keyEnd = next(from, to, keySeparator);
+                int slot = offset + count;
+                write(keys, keyType, slot, from, keyEnd, level + 2);
+                if (!keys.isNull(slot) && seen.add(key(keys.getObject(slot)))) {
+                    write(values, valueType, slot, keyEnd < to ? keyEnd + 1 : -1, to, level + 2);
+                    entries.setIndexDefined(slot);
+                    count++;
+                }
+                if (to >= end) {
+                    break;
+                }
+                from = to + 1;
+            }
+        }
+        map.endValue(row, count);
+    }
+
+    private static Object key(Object value) {
+        return value instanceof byte[] bytes ? ByteBuffer.wrap(bytes) : value;
+    }
+
+    /**
+     * Writes a struct: its fields are split at the level's separator and matched by position.
+     *
+     * @param struct target vector
+     * @param type the struct's type
+     * @param row target index
+     * @param start first byte
+     * @param end end of the value
+     * @param level the struct's nesting level
+     */
+    private void writeStruct(StructVector struct, TypeDescription type, int row, int start,
+            int end, int level) {
+        struct.setIndexDefined(row);
+        byte separator = format.separator(level);
+        List<TypeDescription> children = type.getChildren();
+        int from = start;
+        for (int f = 0; f < children.size(); f++) {
+            FieldVector child = (FieldVector) struct.getChildByOrdinal(f);
+            if (from < 0) {
+                write(child, children.get(f), row, -1, -1, level + 1);
+                continue;
+            }
+            int to = f == children.size() - 1 && format.lastColumnTakesRest() ? end
+                    : next(from, end, separator);
+            write(child, children.get(f), row, from, to, level + 1);
+            from = to < end ? to + 1 : -1;
         }
     }
 

@@ -15,13 +15,18 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPOutputStream;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.DateDayVector;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.compress.BZip2Codec;
 import org.junit.jupiter.api.AfterEach;
@@ -183,8 +188,57 @@ class TextArrowReaderTest {
         }
         assertEquals(1, format(Map.of("line.delim", "\n")).fieldDelimiter());
         assertEquals(1, format(Map.of("line.delim", "10")).fieldDelimiter());
-        assertThrows(IllegalArgumentException.class, () -> TextArrowReader.checkType("m",
-                org.apache.orc.TypeDescription.fromString("map<string,int>")));
+        assertEquals(List.of(":", ";"), List.of(
+                String.valueOf((char) format(Map.of("colelction.delim", ":")).separator(1)),
+                String.valueOf((char) format(Map.of("colelction.delim", ":",
+                        "collection.delim", ";")).separator(1))));
+        assertNotEquals(defaults.canonical(), format(Map.of("mapkey.delim", "=")).canonical());
+        for (Map<String, String> refused : List.of(Map.of("collection.delim", "\u00fe"),
+                Map.of("mapkey.delim", "\n"), Map.of("escape.delim", "\\", "mapkey.delim", "\\"))) {
+            assertThrows(IllegalArgumentException.class, () -> format(refused), refused.toString());
+        }
+    }
+
+    @Test
+    void nestedColumnsAreSplitAtTheSeparatorsOfTheirLevel() throws Exception {
+        List<OrcArrowReader.Column> columns = List.of(new OrcArrowReader.Column("a", "array<int>"),
+                new OrcArrowReader.Column("m", "map<string,int>"),
+                new OrcArrowReader.Column("st", "struct<x:int,y:string,z:array<string>>"),
+                new OrcArrowReader.Column("aa", "array<array<int>>"),
+                new OrcArrowReader.Column("ma", "map<string,array<int>>"));
+        List<String> all = List.of("a", "m", "st", "aa", "ma");
+        String text = String.join("\u0001", "1\u00022\u0002x\u0002",
+                "k1\u00031\u0002k2\u0003\u0002k1\u00039\u0002\\N\u00035\u0002k3",
+                "7\u0002hi\u0002p\u0003q", "1\u00032\u00023", "k\u00031\u00042\u0002j\u0003") + "\n"
+                + "\u0001\u0001\\N\u0001\\N\u0001\n"
+                + "5\n"
+                + "\u0001\u0001\u0001\u0003\u0002\u0001\\N\u00031\n";
+        assertEquals(List.of(
+                "[1, 2, null, null]|{k1=1, k2=null, k3=null}|{x=7, y=hi, z=[p, q]}|[[1, 2], [3]]"
+                        + "|{k=[1, 2], j=[]}",
+                "[]|{}|null|null|{}",
+                "[5]|null|null|null|null",
+                "[]|{}|{x=null, y=null, z=null}|[[null, null], []]|{}"),
+                read(text, format(Map.of()), all, "f", columns));
+        // Own separators and escapes; struct fields beyond the text are NULL.
+        TextFormat own = format(Map.of("field.delim", "|", "collection.delim", ",",
+                "mapkey.delim", ":", "escape.delim", "\\"));
+        List<OrcArrowReader.Column> two = List.of(new OrcArrowReader.Column("a", "array<string>"),
+                new OrcArrowReader.Column("st", "struct<x:int,m:map<int,boolean>>"));
+        // The map in the struct is on level 2: entries split at the map key separator ':', keys
+        // from values at byte 4 (absent: NULL values); keys that are not ints are dropped.
+        assertEquals(List.of("[x,y, z]|{x=1, m={2=null, 3=null}}", "[a:b]|{x=3, m=null}"),
+                read("x\\,y,z|1,2:true:x:false:3\na:b|3\n", own, List.of("a", "st"), "f", two));
+        for (String type : List.of("uniontype<int,string>", "map<array<int>,int>",
+                "array<array<array<array<array<array<array<array<int>>>>>>>>",
+                "array<array<array<array<array<array<map<int,int>>>>>>>")) {
+            assertThrows(IllegalArgumentException.class, () -> TextArrowReader.checkType("c",
+                    org.apache.orc.TypeDescription.fromString(type)), type);
+        }
+        TextArrowReader.checkType("c", org.apache.orc.TypeDescription.fromString(
+                "array<array<array<array<array<array<array<int>>>>>>>"));
+        TextArrowReader.checkType("c", org.apache.orc.TypeDescription.fromString(
+                "array<array<array<array<array<map<int,int>>>>>>"));
     }
 
     private static TextFormat format(Map<String, String> serde) {
@@ -214,18 +268,52 @@ class TextArrowReaderTest {
                 for (int r = 0; r < root.getRowCount(); r++) {
                     StringBuilder row = new StringBuilder();
                     for (int c = 0; c < root.getFieldVectors().size(); c++) {
-                        Object value = root.getVector(c).getObject(r);
-                        if (root.getVector(c) instanceof DateDayVector && value != null) {
-                            value = LocalDate.ofEpochDay((Integer) value);
-                        }
-                        row.append(c > 0 ? "|" : "").append(value instanceof byte[] raw
-                                ? new String(raw, StandardCharsets.UTF_8) : value);
+                        row.append(c > 0 ? "|" : "").append(render(root.getVector(c), r));
                     }
                     rows.add(row.toString());
                 }
             }
         }
         return rows;
+    }
+
+    /**
+     * Renders a value without Arrow's JSON text (the test class path has an older Jackson).
+     */
+    private static String render(FieldVector vector, int index) {
+        if (vector.isNull(index)) {
+            return "null";
+        }
+        if (vector instanceof MapVector map) {
+            StructVector entries = (StructVector) map.getDataVector();
+            StringJoiner out = new StringJoiner(", ", "{", "}");
+            for (int i = map.getElementStartIndex(index); i < map.getElementEndIndex(index); i++) {
+                out.add(render((FieldVector) entries.getChildByOrdinal(0), i) + "="
+                        + render((FieldVector) entries.getChildByOrdinal(1), i));
+            }
+            return out.toString();
+        }
+        if (vector instanceof ListVector list) {
+            StringJoiner out = new StringJoiner(", ", "[", "]");
+            for (int i = list.getElementStartIndex(index); i < list.getElementEndIndex(index); i++) {
+                out.add(render(list.getDataVector(), i));
+            }
+            return out.toString();
+        }
+        if (vector instanceof StructVector struct) {
+            StringJoiner out = new StringJoiner(", ", "{", "}");
+            for (int f = 0; f < struct.size(); f++) {
+                FieldVector child = (FieldVector) struct.getChildByOrdinal(f);
+                out.add(child.getName() + "=" + render(child, index));
+            }
+            return out.toString();
+        }
+        Object value = vector.getObject(index);
+        if (vector instanceof DateDayVector) {
+            value = LocalDate.ofEpochDay((Integer) value);
+        }
+        return String.valueOf(value instanceof byte[] raw ? new String(raw, StandardCharsets.UTF_8)
+                : value);
     }
 
     private TextArrowReader reader(byte[] data, TextFormat format, List<String> projection,

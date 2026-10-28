@@ -13,11 +13,17 @@ import java.util.Map;
  * {@code serialization.format}, default byte 1), the escape byte ({@code escape.delim}, none by
  * default) with {@code serialization.escape.crlf}, the text that stands for NULL
  * ({@code serialization.null.format}, default {@code \N}), the header lines of every file
- * ({@code skip.header.line.count}) and {@code serialization.last.column.takes.rest}. A delimiter
- * property is a byte number when it reads as one ({@code 9} is a tab), else its first character.
+ * ({@code skip.header.line.count}) and {@code serialization.last.column.takes.rest}. Nested
+ * columns are split at the separators of their nesting level: level 1 is
+ * {@code collection.delim} (or Hive's misspelt {@code colelction.delim}, default byte 2), level 2
+ * {@code mapkey.delim} (default byte 3), levels 3 to 7 bytes 4 to 8, as Hive's
+ * {@code LazySerDeParameters} sets them (deeper nesting is not read). A delimiter property is a
+ * byte number when it reads as one ({@code 9} is a tab), else its first character.
  * Rows end at a line feed, a carriage return or both, as Hadoop's text input format splits them.
  *
  * @param fieldDelimiter byte between fields
+ * @param nestedSeparators separators of nesting levels 1 to {@link #MAX_LEVEL}, index 0 for
+ *     level 1
  * @param escape escape byte, or -1 for none
  * @param escapeCrlf whether an escaped {@code r} or {@code n} stands for a carriage return or a
  *     line feed
@@ -27,17 +33,20 @@ import java.util.Map;
  * @param tableOverrides the table's parameters among {@link #KEYS}, which also apply to its
  *     partitions (not part of equality)
  */
-record TextFormat(byte fieldDelimiter, int escape, boolean escapeCrlf, byte[] nullSequence,
+record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, boolean escapeCrlf, byte[] nullSequence,
         int headerLines, boolean lastColumnTakesRest, Map<String, String> tableOverrides) {
 
     /** Properties that change how files are read. */
     static final List<String> KEYS = List.of("field.delim", "serialization.format", "escape.delim",
             "serialization.escape.crlf", "serialization.null.format", "skip.header.line.count",
             "skip.footer.line.count", "serialization.last.column.takes.rest", "line.delim",
-            "serialization.encoding", "timestamp.formats");
+            "serialization.encoding", "timestamp.formats", "collection.delim", "colelction.delim",
+            "mapkey.delim");
 
     /** Hive's default field delimiter, byte 1 (Ctrl-A). */
     static final byte DEFAULT_FIELD_DELIMITER = 1;
+    /** Deepest nesting level read (Hive's limit without extended nesting levels). */
+    static final int MAX_LEVEL = 7;
 
     /**
      * Reads the format of a table.
@@ -91,8 +100,28 @@ record TextFormat(byte fieldDelimiter, int escape, boolean escapeCrlf, byte[] nu
             throw new IllegalArgumentException("text table with field delimiter " + describe(field)
                     + " and escape " + describe(escapeText) + ": not read");
         }
+        byte[] nested = new byte[MAX_LEVEL];
+        for (int level = 1; level <= MAX_LEVEL; level++) {
+            nested[level - 1] = (byte) (level + 1);
+        }
+        String collection = properties.getOrDefault("collection.delim",
+                properties.get("colelction.delim"));
+        String mapKey = properties.get("mapkey.delim");
+        if (collection != null && !collection.isEmpty()) {
+            nested[0] = byteOf(collection, nested[0]);
+        }
+        if (mapKey != null && !mapKey.isEmpty()) {
+            nested[1] = byteOf(mapKey, nested[1]);
+        }
+        for (byte separator : nested) {
+            if (separator < 0 || separator == '\n' || separator == '\r' || separator == escape) {
+                throw new IllegalArgumentException("text table with collection delimiter "
+                        + describe(collection) + ", map key delimiter " + describe(mapKey)
+                        + " and escape " + describe(escapeText) + ": not read");
+            }
+        }
         String nullFormat = properties.getOrDefault("serialization.null.format", "\\N");
-        return new TextFormat(delimiter, escape,
+        return new TextFormat(delimiter, nested, escape,
                 "true".equalsIgnoreCase(properties.getOrDefault("serialization.escape.crlf", "false")),
                 nullFormat.getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
                 "true".equalsIgnoreCase(properties.getOrDefault(
@@ -111,12 +140,22 @@ record TextFormat(byte fieldDelimiter, int escape, boolean escapeCrlf, byte[] nu
     }
 
     /**
+     * Gives the separator of a nesting level.
+     *
+     * @param level 0 for the fields of a row, 1 to {@link #MAX_LEVEL} for nested values
+     * @return the separator byte
+     */
+    byte separator(int level) {
+        return level == 0 ? fieldDelimiter : nestedSeparators[level - 1];
+    }
+
+    /**
      * Describes the format for the table's schema ID: every node must split rows the same way.
      *
      * @return canonical text
      */
     String canonical() {
-        return "d" + fieldDelimiter + ",e" + escape + ",c" + escapeCrlf + ",n"
+        return "d" + fieldDelimiter + ",s" + HexFormat.of().formatHex(nestedSeparators) + ",e" + escape + ",c" + escapeCrlf + ",n"
                 + HexFormat.of().formatHex(nullSequence) + ",h" + headerLines + ",r"
                 + lastColumnTakesRest;
     }

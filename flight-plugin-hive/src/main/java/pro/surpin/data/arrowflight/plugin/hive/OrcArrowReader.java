@@ -603,7 +603,7 @@ final class OrcArrowReader extends ArrowReader {
      * @param target vector
      * @param index row
      */
-    private static void setNull(FieldVector target, int index) {
+    static void setNull(FieldVector target, int index) {
         if (target instanceof StructVector struct) {
             struct.setNull(index);
             for (int f = 0; f < struct.size(); f++) {

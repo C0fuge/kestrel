@@ -85,8 +85,14 @@ class HiveTextTableTest {
         hms.addPartition("txt", "other", List.of("2"), null, Map.of("field.delim", "|"));
         hms.createTable("txt", "footer", "file:" + dir.resolve("lake/footer"), "a int", "", "text",
                 Map.of("skip.footer.line.count", "1"));
-        hms.createTable("txt", "nested", "file:" + dir.resolve("lake/nested"), "a array<int>", "",
+        Path nested = Files.createDirectories(dir.resolve("lake/nested"));
+        Files.writeString(nested.resolve("000000_0"), "1\u00011\u00022\u0001a\u00031\u0002b\u0003"
+                + "\u00017\u0002x\u00025\u00046\n2\u0001\u0001\u0001\\N\n");
+        hms.createTable("txt", "nested", "file:" + nested,
+                "i int;a array<int>;m map<string,int>;st struct<x:int,y:string,z:map<int,int>>", "",
                 "text", null);
+        hms.createTable("txt", "unions", "file:" + dir.resolve("lake/unions"),
+                "u uniontype<int,string>", "", "text", null);
     }
 
     @Test
@@ -99,7 +105,8 @@ class HiveTextTableTest {
             List<String> tables = catalog.tables("txt");
             assertTrue(tables.containsAll(List.of("flat", "parted", "other")), tables.toString());
             assertFalse(tables.contains("footer"), "footer lines are not read: " + tables);
-            assertFalse(tables.contains("nested"), "nested columns are not read yet: " + tables);
+            assertTrue(tables.contains("nested"), tables.toString());
+            assertFalse(tables.contains("unions"), "unions are not read: " + tables);
             TableSnapshot flat = catalog.current(new TableName("txt", "flat")).orElseThrow();
             assertEquals(new ReadSpec.ArrowStream("text"), flat.read());
             assertEquals(2, flat.files().size());
@@ -128,6 +135,28 @@ class HiveTextTableTest {
                         "3,ü,-0.50,1970-01-01,1969-12-31 23:59:59,false,xyz,!,-1,-2000.0"),
                         rows(duckdb, "SELECT i, s, d::VARCHAR, dt::VARCHAR, ts::VARCHAR, b, c,"
                                 + " bin::VARCHAR, l, db FROM text_flat ORDER BY i"));
+            }
+            assertEquals(0, allocator.getAllocatedMemory());
+        }
+    }
+
+    @Test
+    void duckDbReadsNestedColumnsAsListsMapsAndStructs() throws Exception {
+        try (Catalog catalog = open(Map.of("textTables", "true"));
+                BufferAllocator allocator = new RootAllocator();
+                Connection duckdb = DriverManager.getConnection("jdbc:duckdb:")) {
+            TableSnapshot nested = catalog.current(new TableName("txt", "nested")).orElseThrow();
+            try (ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator)) {
+                catalog.exportArrowScan(nested, nested.files(),
+                        new ArrowScan(List.of("i", "a", "m", "st"), List.of()), stream.memoryAddress(),
+                        allocator);
+                duckdb.unwrap(DuckDBConnection.class).registerArrowStream("text_nested", stream);
+                assertEquals(List.of(
+                        "1,[1, 2],{a=1, b=NULL},{'x': 7, 'y': x, 'z': {5=6}},INTEGER[],"
+                                + "MAP(VARCHAR, INTEGER)",
+                        "2,[],{},null,INTEGER[],MAP(VARCHAR, INTEGER)"),
+                        rows(duckdb, "SELECT i, a::VARCHAR, m::VARCHAR, st::VARCHAR, typeof(a),"
+                                + " typeof(m) FROM text_nested ORDER BY i"));
             }
             assertEquals(0, allocator.getAllocatedMemory());
         }

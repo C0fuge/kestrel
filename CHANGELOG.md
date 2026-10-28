@@ -20,6 +20,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   directory; directory mode 700. `cacheAdmission=reuse` applies to each tier with its own reach. Metrics
   `arrowflight_s3_cache_disk_*` (capacity/used bytes, blocks, hits, misses, writes, evictions, dropped, errors,
   not_admitted), `disk...=` counts in the `s3=cacheClosed` line, `diskPath=` / `diskCapacityBytes=` in `s3=cacheOpen`.
+- Hive text tables with nested columns (P4 step 2): arrays, maps and structs of `LazySimpleSerDe` tables
+  (`hive.textTables`) are read as Hive reads them: split at `collection.delim` (or the misspelt
+  `colelction.delim`, default byte 2), `mapkey.delim` (default 3) and bytes 4-8 for deeper levels, up to Hive's 7
+  nesting levels; an empty field is an empty array or map, a map entry without a key separator has a NULL value,
+  entries with a NULL or unreadable key are dropped and of equal keys the first is kept; struct fields by
+  position. Tables with unions, non-primitive map keys or deeper nesting stay skipped with a log reason. New
+  end-to-end test `HiveTextIntegrationTest` (text vs Parquet of the same rows through the server, both result
+  modes, partition pruning, joins). Text tables' schema IDs change (the separators are part of them).
 - Hive text tables (P4 step 1), opt-in `hive.textTables` (default false; text tables were and stay skipped
   without it): `STORED AS TEXTFILE` tables of `LazySimpleSerDe` are read by the hive plugin and handed to DuckDB
   as Arrow streams (the ORC path, both result modes), as Hive reads them: `field.delim` / `serialization.format`,

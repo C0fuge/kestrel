@@ -43,7 +43,8 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 
 /**
  * Runs the server with the packaged hive plugin and hive.textTables=true against a real
- * metastore: text tables written in the test (Hive's default layout with a gzip file, and a
+ * metastore: text tables written in the test (arrays, structs and maps among the columns; Hive's
+ * default layout with a gzip file, and a
  * partitioned comma-separated table with a header line and an empty null format) are answered in
  * both result modes exactly like the same rows in Parquet tables of the same metastore, alone,
  * filtered, grouped by a partition column and joined with Parquet and with each other.
@@ -51,7 +52,8 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 class HiveTextIntegrationTest {
 
     private static final String COLUMNS = "i int;b bigint;s string;dec decimal(12,2);dt date;"
-            + "d double;flag boolean;ts timestamp";
+            + "d double;flag boolean;ts timestamp;arr array<int>;st struct<x:int,y:string>;"
+            + "m map<string,int>";
     /** The rows computed by DuckDB: append {@code FROM range(from, to)}. */
     private static final String EXPECTED = "SELECT range::INTEGER AS i,"
             + " CASE WHEN range % 7 = 3 THEN NULL ELSE range * 1000000000 END AS b,"
@@ -61,9 +63,18 @@ class HiveTextIntegrationTest {
             + " CASE WHEN range % 7 = 3 THEN NULL ELSE range::DOUBLE / 8 END AS d,"
             + " CASE WHEN range % 7 = 3 THEN NULL ELSE range % 2 = 0 END AS flag,"
             + " CASE WHEN range % 7 = 3 THEN NULL ELSE TIMESTAMP '2020-06-01 01:30:00'"
-            + " + INTERVAL (range) MINUTE + INTERVAL (range * 1001) MILLISECOND END AS ts";
+            + " + INTERVAL (range) MINUTE + INTERVAL (range * 1001) MILLISECOND END AS ts,"
+            + " CASE WHEN range % 7 = 3 THEN NULL ELSE [range::INTEGER, range::INTEGER + 1] END AS arr,"
+            + " CASE WHEN range % 7 = 3 THEN NULL ELSE {'x': -range::INTEGER, 'y': 'y' || range}"
+            + " END AS st,"
+            + " CASE WHEN range % 7 = 3 THEN NULL ELSE MAP {'k' || range: range::INTEGER} END AS m";
     private static final List<String> NAMES = List.of("i", "b", "s", "dec", "dt", "d", "flag",
-            "ts");
+            "ts", "arr", "st", "m");
+    /** Each column as Hive writes it in text (nested values at the default separators 2, 3). */
+    private static final List<String> TEXT = List.of("i::VARCHAR", "b::VARCHAR", "s", "dec::VARCHAR",
+            "dt::VARCHAR", "d::VARCHAR", "flag::VARCHAR", "ts::VARCHAR",
+            "arr[1]::VARCHAR || chr(2) || arr[2]::VARCHAR", "st.x::VARCHAR || chr(2) || st.y",
+            "map_keys(m)[1] || chr(3) || map_values(m)[1]::VARCHAR");
 
     @TempDir
     static Path dir;
@@ -166,8 +177,9 @@ class HiveTextIntegrationTest {
                 "SELECT * FROM hvtxt.%s",
                 "SELECT count(*) AS n FROM hvtxt.%s",
                 "SELECT region, count(*) AS n, sum(dec) AS s, min(dt) AS lo, max(ts) AS hi,"
-                        + " count(s) AS strings, sum(d) AS ds FROM hvtxt.%s GROUP BY region",
-                "SELECT i, s, ts FROM hvtxt.%s WHERE i >= 3990 AND i < 4010",
+                        + " count(s) AS strings, sum(d) AS ds, count(m) AS maps, sum(st.x) AS xs,"
+                        + " sum(arr[2]) AS a2 FROM hvtxt.%s GROUP BY region",
+                "SELECT i, s, ts, arr, st, m FROM hvtxt.%s WHERE i >= 3990 AND i < 4010",
                 "SELECT count(*) AS n FROM hvtxt.%s WHERE region = 'MAIL' AND b < 3000000000000"
                         + " AND s LIKE 's2%%'",
                 "SELECT i, flag FROM hvtxt.%s WHERE dec = 1542.50",
@@ -224,9 +236,9 @@ class HiveTextIntegrationTest {
     private static byte[] text(int from, int to, String delimiter, String nullFormat,
             boolean header) throws Exception {
         StringBuilder fields = new StringBuilder();
-        for (String name : NAMES) {
-            fields.append(fields.isEmpty() ? "" : ", ").append("coalesce(").append(name)
-                    .append("::VARCHAR, '").append(nullFormat).append("')");
+        for (String value : TEXT) {
+            fields.append(fields.isEmpty() ? "" : ", ").append("coalesce(").append(value)
+                    .append(", '").append(nullFormat).append("')");
         }
         StringBuilder lines = new StringBuilder(header ? String.join(delimiter, NAMES) + "\n" : "");
         String sql = "SELECT concat_ws(chr(" + (int) delimiter.charAt(0) + "), " + fields
