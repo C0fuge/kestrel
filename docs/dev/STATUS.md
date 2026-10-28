@@ -1766,3 +1766,7 @@
   and dispatches (shared `dev-ci-main` concurrency group); the plugins lane's package run 40682965605 on 177dfe3
   (contains ea55a4f) green: server 907 tests / 2 skipped, pre-release `server-1.0.0-177dfe3e5716`. Stand/screening:
   see Next steps item 5. Next: 19b step 2 after the screening, or the stand rounds (items 15, 16, 19).
+- 2026-10-28 (lane 3 session): D2 (b) + D2 (c) part 2 merged into `main` (ffcbabf, c7e436e): `DistributedCompletePerfTest`
+  (`perf`), peer bytes / wait counters, and opt-in `distributedComplete` now fails over to an endpoint's backup
+  locations before the single-node fallback. Only `DistributedComplete` and its tests changed. Details in
+  `LANE3-STATUS.md`.
