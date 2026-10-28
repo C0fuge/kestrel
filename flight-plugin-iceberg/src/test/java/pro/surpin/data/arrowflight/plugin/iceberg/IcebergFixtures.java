@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -80,9 +81,23 @@ public final class IcebergFixtures {
      * @throws IOException when a file cannot be written
      */
     public static Map<String, String> write(String warehouse) throws IOException {
+        return write(warehouse, Set.of());
+    }
+
+    /**
+     * Writes all test tables, leaving columns out of table {@code types} (for catalogs that
+     * refuse a type, e.g. Unity Catalog and {@code time}).
+     *
+     * @param warehouse warehouse directory (created when missing)
+     * @param omitted top-level column names of table {@code types} to leave out
+     * @return table name to its current metadata file
+     * @throws IOException when a file cannot be written
+     */
+    public static Map<String, String> write(String warehouse, Set<String> omitted)
+            throws IOException {
         HadoopCatalog catalog = catalog(warehouse);
         try {
-            return write(catalog);
+            return write(catalog, omitted);
         } finally {
             catalog.close();
         }
@@ -97,6 +112,20 @@ public final class IcebergFixtures {
      * @throws IOException when a file cannot be written
      */
     public static Map<String, String> writeRest(Map<String, String> properties) throws IOException {
+        return writeRest(properties, Set.of());
+    }
+
+    /**
+     * Writes all test tables through a real Iceberg REST catalog, leaving columns out of table
+     * {@code types}; see {@link #write(String, Set)}.
+     *
+     * @param properties RESTCatalog properties (uri, warehouse, credential, io-impl, ...)
+     * @param omitted top-level column names of table {@code types} to leave out
+     * @return table name to its current metadata file
+     * @throws IOException when a file cannot be written
+     */
+    public static Map<String, String> writeRest(Map<String, String> properties,
+            Set<String> omitted) throws IOException {
         try (RESTCatalog rest = new RESTCatalog()) {
             rest.setConf(new Configuration());
             rest.initialize("conformance", properties);
@@ -108,7 +137,7 @@ public final class IcebergFixtures {
             } else {
                 rest.createNamespace(ns);
             }
-            return write(rest);
+            return write(rest, omitted);
         }
     }
 
@@ -117,12 +146,13 @@ public final class IcebergFixtures {
      * tests) whose namespace {@link #NAMESPACE} exists.
      *
      * @param catalog catalog
+     * @param omitted top-level column names of table {@code types} to leave out
      * @return table name to its current metadata file
      * @throws IOException when a file cannot be written
      */
-    static Map<String, String> write(Catalog catalog) throws IOException {
+    static Map<String, String> write(Catalog catalog, Set<String> omitted) throws IOException {
         Map<String, String> result = new LinkedHashMap<>();
-        result.put("types", metadata(types(catalog)));
+        result.put("types", metadata(types(catalog, omitted)));
         result.put("evolved", metadata(evolved(catalog)));
         result.put("parted", metadata(parted(catalog)));
         result.put("deletes", metadata(deletes(catalog)));
@@ -183,8 +213,8 @@ public final class IcebergFixtures {
         return ((HasTableOperations) table).operations().current().metadataFileLocation();
     }
 
-    private static Table types(Catalog catalog) throws IOException {
-        Schema schema = new Schema(
+    private static Table types(Catalog catalog, Set<String> omitted) throws IOException {
+        Schema all = new Schema(
                 required(1, "id", Types.LongType.get()),
                 optional(2, "b", Types.BooleanType.get()),
                 optional(3, "i", Types.IntegerType.get()),
@@ -206,40 +236,49 @@ public final class IcebergFixtures {
                 optional(17, "lst", Types.ListType.ofOptional(22, Types.IntegerType.get())),
                 optional(18, "mp", Types.MapType.ofOptional(23, 24, Types.StringType.get(),
                         Types.IntegerType.get())));
+        Schema schema = new Schema(all.columns().stream()
+                .filter(f -> !omitted.contains(f.name())).toList());
         Table t = catalog.createTable(id("types"), schema, PartitionSpec.unpartitioned(),
                 Map.of("format-version", "2"));
         List<Record> first = new ArrayList<>();
         List<Record> second = new ArrayList<>();
         for (int n = 1; n <= 5; n++) {
             Record r = GenericRecord.create(schema);
-            r.setField("id", (long) n);
+            set(r, "id", (long) n);
             if (n != 3) {
-                r.setField("b", n % 2 == 0);
-                r.setField("i", n * 10);
-                r.setField("f", n + 0.5f);
-                r.setField("d", n * 1.25d);
-                r.setField("dec", new BigDecimal(n + "123.45"));
-                r.setField("dec38", new BigDecimal("12345678901234567890123456789012." + n + "00000"));
-                r.setField("dt", LocalDate.of(2024, 1, n));
-                r.setField("tm", LocalTime.of(10, n, 30));
-                r.setField("ts", LocalDateTime.of(2024, 1, n, 12, 0, 1, 123456000));
-                r.setField("tstz", OffsetDateTime.of(2024, 1, n, 12, 0, 0, 0, ZoneOffset.UTC));
-                r.setField("s", "text " + n + (n == 5 ? " äöü" : ""));
-                r.setField("u", UUID.nameUUIDFromBytes(("u" + n).getBytes(StandardCharsets.UTF_8)));
-                r.setField("bin", ByteBuffer.wrap(new byte[] {(byte) n, 0, (byte) 255}));
-                r.setField("fx", new byte[] {1, 2, 3, (byte) n});
-                Record st = GenericRecord.create(schema.findField("st").type().asStructType());
+                set(r, "b", n % 2 == 0);
+                set(r, "i", n * 10);
+                set(r, "f", n + 0.5f);
+                set(r, "d", n * 1.25d);
+                set(r, "dec", new BigDecimal(n + "123.45"));
+                set(r, "dec38", new BigDecimal("12345678901234567890123456789012." + n + "00000"));
+                set(r, "dt", LocalDate.of(2024, 1, n));
+                set(r, "tm", LocalTime.of(10, n, 30));
+                set(r, "ts", LocalDateTime.of(2024, 1, n, 12, 0, 1, 123456000));
+                set(r, "tstz", OffsetDateTime.of(2024, 1, n, 12, 0, 0, 0, ZoneOffset.UTC));
+                set(r, "s", "text " + n + (n == 5 ? " äöü" : ""));
+                set(r, "u", UUID.nameUUIDFromBytes(("u" + n).getBytes(StandardCharsets.UTF_8)));
+                set(r, "bin", ByteBuffer.wrap(new byte[] {(byte) n, 0, (byte) 255}));
+                set(r, "fx", new byte[] {1, 2, 3, (byte) n});
+                Record st = GenericRecord.create(all.findField("st").type().asStructType());
                 st.setField("a", n);
                 st.setField("b", "b" + n);
-                r.setField("st", st);
-                r.setField("lst", List.of(n, n + 1));
-                r.setField("mp", Map.of("k" + n, n));
+                set(r, "st", st);
+                set(r, "lst", List.of(n, n + 1));
+                set(r, "mp", Map.of("k" + n, n));
             }
             (n <= 3 ? first : second).add(r);
         }
         t.newAppend().appendFile(writeData(t, first, null)).commit();
         t.newAppend().appendFile(writeData(t, second, null)).commit();
         return t;
+    }
+
+    /** Sets a field of a {@code types} row unless the column was left out. */
+    private static void set(Record r, String name, Object value) {
+        if (r.struct().field(name) != null) {
+            r.setField(name, value);
+        }
     }
 
     private static Table evolved(Catalog catalog) throws IOException {

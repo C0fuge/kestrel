@@ -36,7 +36,9 @@ jobs:
       fail-fast: false
       matrix:
         # <catalog>-s3: the warehouse is an S3 bucket (static keys; the catalog vends none yet).
-        catalog: [ polaris, iceberg-rest-fixture, polaris-s3, iceberg-rest-fixture-s3, lakekeeper-s3 ]
+        # unity-catalog: Unity Catalog OSS, managed Iceberg tables on a local storage root.
+        catalog: [ polaris, iceberg-rest-fixture, polaris-s3, iceberg-rest-fixture-s3, lakekeeper-s3,
+                   unity-catalog ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -162,6 +164,35 @@ jobs:
               echo "ICEBERG_REST_IT_ROOT=s3://lake/fixture" >> "$GITHUB_ENV"
               echo "ICEBERG_REST_IT_URI=http://localhost:8181" >> "$GITHUB_ENV"
               ;;
+            unity-catalog)
+              # Unity Catalog OSS 0.7: its Iceberg REST endpoint creates managed tables under
+              # storage-root.tables. It writes etc/conf, etc/db and etc/logs and its home is only
+              # readable by group 101, so it runs as the runner user in that group on writable
+              # copies (the H2 database keeps the image's sample catalog "unity"). It refuses Iceberg
+              # "time" columns (left out of the fixtures on both sides) and its sample table
+              # default.marksheet_uniform cannot be loaded (500), so the server shows namespace ice only.
+              image=unitycatalog/unitycatalog:v0.7.0
+              uc="$RUNNER_TEMP/uc"
+              mkdir -p "$uc/db" "$uc/logs"
+              docker create --name uc-seed "$image" > /dev/null
+              docker cp uc-seed:/home/unitycatalog/etc/conf "$uc/conf"
+              docker cp uc-seed:/home/unitycatalog/etc/db/h2db.mv.db "$uc/db/"
+              docker rm uc-seed > /dev/null
+              echo "storage-root.tables=file://$wh" >> "$uc/conf/server.properties"
+              docker run -d --name catalog --user "$(id -u):101" -v /etc/passwd:/etc/passwd:ro \
+                -v /etc/group:/etc/group:ro -p 8080:8080 -v "$wh:$wh" \
+                -v "$uc/conf:/home/unitycatalog/etc/conf" -v "$uc/db:/home/unitycatalog/etc/db" \
+                -v "$uc/logs:/home/unitycatalog/etc/logs" "$image"
+              base=http://localhost:8080/api/2.1/unity-catalog/iceberg
+              for _ in $(seq 60); do curl -fsS "$base/v1/config?warehouse=unity" && break; sleep 2; done
+              {
+                echo "ICEBERG_REST_IT_ROOT=$wh"
+                echo "ICEBERG_REST_IT_URI=$base"
+                echo "ICEBERG_REST_IT_WAREHOUSE=unity"
+                echo "ICEBERG_REST_IT_OMIT_COLUMNS=tm"
+                echo "ICEBERG_REST_IT_NAMESPACES=ice"
+              } >> "$GITHUB_ENV"
+              ;;
             lakekeeper-s3)
               tools/ci/lakekeeper-setup.sh vakamo/lakekeeper:v0.13.8 conformance lake lakekeeper \
                 http://localhost:9000 "$S3_KEY" "$S3_SECRET"
@@ -211,4 +242,5 @@ jobs:
         if: failure()
         run: |
           docker logs catalog 2>&1 | tail -200
+          tail -100 "$RUNNER_TEMP/uc/logs/"*.log 2>/dev/null || true
           tail -50 "$RUNNER_TEMP/s3.log" 2>/dev/null || true

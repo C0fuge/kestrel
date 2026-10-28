@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.Properties;
 import java.util.stream.Stream;
 
@@ -53,7 +54,9 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * S3FileIO and read through the real s3 plugin) with {@code ICEBERG_REST_IT_S3_ENDPOINT},
  * {@code ICEBERG_REST_IT_S3_ACCESS_KEY} and {@code ICEBERG_REST_IT_S3_SECRET_KEY} (path-style
  * URLs). Optional {@code ICEBERG_REST_IT_WAREHOUSE}, {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2
- * id:secret), {@code ICEBERG_REST_IT_SCOPE}. Needs {@code -Diceberg.it.extensionDir} (with
+ * id:secret), {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_NAMESPACES} (the plugin's
+ * {@code namespaces}), {@code ICEBERG_REST_IT_OMIT_COLUMNS} (columns of table types the catalog
+ * refuses). Needs {@code -Diceberg.it.extensionDir} (with
  * httpfs for S3) and the iceberg plugin built (and the s3 plugin for S3).
  */
 @Tag("rest-catalogs")
@@ -89,7 +92,7 @@ class RestCatalogServerConformanceTest {
         Assumptions.assumeTrue(!s3 || Files.isDirectory(S3_PLUGIN), "flight-plugin-s3 is not built");
 
         String reference = dir.resolve("wh").toString();
-        IcebergTestTables.write(reference);
+        IcebergTestTables.write(reference, omitted());
         Map<String, String> writer = new HashMap<>(Map.of("uri", uri));
         Map<String, String> sys = new HashMap<>();
         Map<String, String> envs = new HashMap<>();
@@ -120,6 +123,9 @@ class RestCatalogServerConformanceTest {
             writer.put("warehouse", v);
             sys.put("arrowflight.iceberg-rest.warehouse", v);
         });
+        // Catalogs with tables of their own (Unity Catalog's samples) show the test's namespace only.
+        env("ICEBERG_REST_IT_NAMESPACES")
+                .ifPresent(v -> sys.put("arrowflight.iceberg-rest.namespaces", v));
         env("ICEBERG_REST_IT_SCOPE").ifPresent(v -> {
             writer.put("scope", v);
             sys.put("arrowflight.iceberg-rest.scope", v);
@@ -128,7 +134,7 @@ class RestCatalogServerConformanceTest {
             writer.put("credential", v);
             envs.put("FLIGHT_ICEBERG_REST_CREDENTIAL", v);
         });
-        Map<String, String> metadata = IcebergTestTables.writeRest(writer);
+        Map<String, String> metadata = IcebergTestTables.writeRest(writer, omitted());
 
         Path plugins = dir.resolve("plugins");
         IcebergTestTables.installPlugin(plugins);
@@ -178,6 +184,17 @@ class RestCatalogServerConformanceTest {
     private static String fileUri(String location) {
         return location.startsWith("/") ? "file:" + location
                 : "file:" + Path.of(URI.create(location)).toString();
+    }
+
+    /**
+     * Columns of table {@code types} the catalog refuses, from
+     * {@code ICEBERG_REST_IT_OMIT_COLUMNS} (comma-separated).
+     *
+     * @return column names, empty when unset
+     */
+    static Set<String> omitted() {
+        return env("ICEBERG_REST_IT_OMIT_COLUMNS").map(v -> Set.of(v.split("\\s*,\\s*")))
+                .orElse(Set.of());
     }
 
     private static Optional<String> env(String name) {

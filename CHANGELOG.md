@@ -91,6 +91,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Unity Catalog OSS as an Iceberg REST catalog (C1 step 4): `catalogs-ci.yml` entry `unity-catalog`
+  (`unitycatalog/unitycatalog:v0.7.0`, managed tables on a local storage root) runs both REST conformance tests;
+  answers equal the Hadoop and Hive metastore references. Unity Catalog refuses Iceberg `time` columns (new
+  optional `ICEBERG_REST_IT_OMIT_COLUMNS` leaves them out of both sides) and its sample table
+  `default.marksheet_uniform` answers 500 (the server test shows namespace `ice` only,
+  `ICEBERG_REST_IT_NAMESPACES`). Test only.
 - Iceberg REST catalog tables registered in a Hive metastore (C1 step 3c): on local warehouses
   `RestCatalogServerConformanceTest` registers the REST catalog's metadata files in the in-process metastore (schema
   `hms_ice`, hive plugin -> iceberg plugin); answers equal the REST catalog's, partial equal complete. Test only.

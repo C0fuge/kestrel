@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -66,7 +67,21 @@ public final class IcebergTestTables {
      */
     @SuppressWarnings("unchecked")
     public static Map<String, String> write(String warehouse) throws Exception {
-        return (Map<String, String>) call(FIXTURES, "write", warehouse);
+        return write(warehouse, Set.of());
+    }
+
+    /**
+     * Writes all test tables into a warehouse directory, leaving columns out of table types.
+     *
+     * @param warehouse directory
+     * @param omitted top-level column names of table types to leave out
+     * @return table name to its current metadata file
+     * @throws Exception when the tables cannot be written
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, String> write(String warehouse, Set<String> omitted)
+            throws Exception {
+        return (Map<String, String>) call(FIXTURES, "write", warehouse, omitted);
     }
 
     /**
@@ -78,7 +93,22 @@ public final class IcebergTestTables {
      */
     @SuppressWarnings("unchecked")
     public static Map<String, String> writeRest(Map<String, String> properties) throws Exception {
-        return (Map<String, String>) call(FIXTURES, "writeRest", properties);
+        return writeRest(properties, Set.of());
+    }
+
+    /**
+     * Writes all test tables through a real Iceberg REST catalog, leaving columns out of table
+     * types.
+     *
+     * @param properties RESTCatalog properties (uri, warehouse, credential, io-impl, ...)
+     * @param omitted top-level column names of table types to leave out
+     * @return table name to its current metadata file
+     * @throws Exception when the tables cannot be written
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, String> writeRest(Map<String, String> properties,
+            Set<String> omitted) throws Exception {
+        return (Map<String, String>) call(FIXTURES, "writeRest", properties, omitted);
     }
 
     /**

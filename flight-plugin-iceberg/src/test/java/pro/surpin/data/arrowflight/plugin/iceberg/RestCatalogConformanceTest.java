@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,7 +48,9 @@ import pro.surpin.data.arrowflight.spi.storage.StoreUse;
  * {@code ICEBERG_REST_IT_S3_ACCESS_KEY} and {@code ICEBERG_REST_IT_S3_SECRET_KEY} (path-style
  * URLs; the plugin reads through the s3 plugin's store). Optional:
  * {@code ICEBERG_REST_IT_WAREHOUSE}, {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2 id:secret),
- * {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_OAUTH_URI}.
+ * {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_OAUTH_URI},
+ * {@code ICEBERG_REST_IT_OMIT_COLUMNS} (columns of table {@code types} the catalog refuses, left
+ * out of both warehouses).
  */
 @Tag("rest-catalogs")
 class RestCatalogConformanceTest {
@@ -76,7 +79,7 @@ class RestCatalogConformanceTest {
         Assumptions.assumeTrue(root != null && (s3 || Files.isDirectory(Path.of(root))),
                 "ICEBERG_REST_IT_ROOT must be the catalog's local warehouse directory or s3://...");
         reference = dir.resolve("wh").toString();
-        IcebergFixtures.write(reference);
+        IcebergFixtures.write(reference, omitted());
 
         settings = new HashMap<>(Map.of("uri", uri, "roots", root));
         Map<String, String> writer = new HashMap<>(Map.of("uri", uri));
@@ -113,7 +116,18 @@ class RestCatalogConformanceTest {
             settings.put("oauthUri", v);
             writer.put("oauth2-server-uri", v);
         });
-        restMetadata = IcebergFixtures.writeRest(writer);
+        restMetadata = IcebergFixtures.writeRest(writer, omitted());
+    }
+
+    /**
+     * Columns of table {@code types} the catalog refuses, from
+     * {@code ICEBERG_REST_IT_OMIT_COLUMNS} (comma-separated).
+     *
+     * @return column names, empty when unset
+     */
+    static Set<String> omitted() {
+        return env("ICEBERG_REST_IT_OMIT_COLUMNS").map(v -> Set.of(v.split("\\s*,\\s*")))
+                .orElse(Set.of());
     }
 
     private static Optional<String> env(String name) {
