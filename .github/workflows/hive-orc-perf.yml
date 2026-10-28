@@ -1,7 +1,7 @@
-# Manual perf run of plugins item P1 (e): a lineitem-like Hive table (SF1 size by default) as
-# Parquet and as ORC (zlib, zstd) through the server with the packaged hive plugin and
-# hive.orcTables=true; best of 3 per query and result mode (HiveOrcPerfTest) into the job
-# summary. Not part of Dev CI. Runs without the jacoco agent and -ea (-DargLine=), which slow the
+# Manual perf run of plugins items P1 (e) and P4 (d): a lineitem-like Hive table (SF1 size by
+# default) as Parquet, ORC (zlib, zstd), text and Avro (deflate) through the server with the
+# packaged hive plugin and hive.orcTables/textTables/avroTables=true; best of 3 per query and
+# result mode (HiveOrcPerfTest) into the job summary. Not part of Dev CI. Runs without the jacoco agent and -ea (-DargLine=), which slow the
 # plugin's Java ORC path ~40 % but not DuckDB's Parquet reader.
 name: Hive ORC perf
 
@@ -43,7 +43,7 @@ jobs:
       - name: Build the hive plugin and the server (no tests)
         run: ./mvnw install -pl flight-plugin-hive,flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
 
-      - name: ORC vs Parquet
+      - name: ORC, text and Avro vs Parquet
         run: >
           ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true -DargLine=
           -Dgroups=perf -DexcludedGroups=
@@ -55,7 +55,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Hive ORC vs Parquet on $(nproc) cores"
+            echo "### Hive ORC, text and Avro vs Parquet on $(nproc) cores"
             echo
             cat "$RUNNER_TEMP/report.md" 2>/dev/null || echo "(no result)"
           } >> "$GITHUB_STEP_SUMMARY"
