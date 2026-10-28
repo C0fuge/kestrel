@@ -49,7 +49,7 @@ public final class HazelcastAdapter implements AutoCloseable {
      * and backup they held (Hazelcast: "Promotion commit failed"), and the survivor planned
      * with part of the inventories (a partial table) or signed tickets the others refused.
      */
-    static final int ALL_MEMBERS_BACKUP_COUNT = MapConfig.MAX_BACKUP_COUNT;
+    public static final int ALL_MEMBERS_BACKUP_COUNT = MapConfig.MAX_BACKUP_COUNT;
 
     private final HazelcastInstance instance;
     private final IMap<String, Long> serverRegistry;

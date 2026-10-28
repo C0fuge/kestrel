@@ -886,4 +886,98 @@ class ClusterServiceTest {
         verify(serverRegistry, never()).remove(s2);
         cs.close();
     }
+
+    /**
+     * Item D3 step 2b: moving the load of an endpoint whose reservation lives on a member that
+     * stopped answering does not hold the stream's end; the release queues behind the move and
+     * finds the moved reservation.
+     */
+    @Test
+    void claimOfAReservationOnAnUnresponsiveMemberDoesNotHoldTheRelease() throws Exception {
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("primary", 100L);
+        registry.put("backup", 0L);
+        Map<String, Serializable> cache = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
+        when(statementCache.put(anyString(), any(), anyLong(), any())).thenAnswer(
+                invocation -> cache.put(invocation.getArgument(0), invocation.getArgument(1)));
+        when(statementCache.remove(anyString())).thenAnswer(invocation -> {
+            answer.await();
+            return cache.remove((String) invocation.getArgument(0));
+        });
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService cs = createService("backup");
+        byte[] handle = cs.createEndpointHandle(state);
+        when(view.replicaUnresponsive(anyString(), anyInt())).thenAnswer(
+                invocation -> ((String) invocation.getArgument(0)).startsWith("__arrowflight-ticket-load"));
+
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(1), () -> {
+            cs.claimEndpointLoadLater(handle, state).join();
+            cs.releaseEndpointLoad(handle, state);
+        });
+        assertEquals(2, cs.deferredWrites(), "the release must queue behind the claim");
+
+        answer.countDown();
+        await(() -> cache.isEmpty() && registry.get("primary") == 0L && registry.get("backup") == 0L,
+                "the release missed the moved reservation: " + cache + " " + registry);
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 2b: the inventory and the ticket secret are kept on every member, so their
+     * puts wait for any member that stopped answering, also one that holds a later backup: the
+     * publication goes to the background and the heartbeat's repairs wait until it answers.
+     */
+    @Test
+    void inventoryAndSecretWritesDoNotWaitForAnUnresponsiveBackup() throws Exception {
+        String s1 = "grpc://n1:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        ClusterService cs = createService(s1);
+        java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
+        when(serverFiles.put(eq(s1), anyMap())).thenAnswer(invocation -> {
+            answer.await();
+            return null;
+        });
+        when(view.replicaUnresponsive(anyString(), eq(HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT)))
+                .thenReturn(true);
+        when(statementCache.get("__arrowflight-ticket-secret-v1")).thenReturn(null);
+        clearInvocations(statementCache);
+
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(1), () -> {
+            cs.registerLocalFiles(Map.of("s/t/a.parquet", 10L));
+            cs.repairClusterState();
+        });
+        assertEquals(1, cs.deferredWrites());
+        verify(serverFiles, never()).containsKey(s1);
+        verify(statementCache, never()).putIfAbsent(anyString(), any());
+        assertTrue(cs.hasFileInventory(s1), "this node's own inventory counts from its local copy");
+
+        answer.countDown();
+        await(() -> mockingDetails(serverFiles).getInvocations().stream()
+                .anyMatch(call -> call.getMethod().getName().equals("put")), "the inventory was not published");
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 2b: a node that stops while its registry entry lives on a member that
+     * stopped answering does not wait for it to deregister.
+     */
+    @Test
+    void closeDoesNotWaitForAnUnresponsiveMemberToDeregister() {
+        String s1 = "grpc://n1:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        ClusterService cs = createService(s1);
+        when(view.replicaUnresponsive(eq(s1), anyInt())).thenReturn(true);
+
+        cs.close();
+
+        verify(serverRegistry, never()).remove(s1);
+        verify(serverHeartbeats, never()).remove(s1);
+        verify(hazelcast).close();
+    }
 }

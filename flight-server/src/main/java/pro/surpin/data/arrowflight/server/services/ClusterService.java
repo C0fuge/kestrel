@@ -235,11 +235,23 @@ public final class ClusterService implements AutoCloseable {
      * @return true when the write goes to the background
      */
     private boolean mustDefer(String key) {
+        return mustDefer(key, MAP_BACKUP_COUNT);
+    }
+
+    /**
+     * Tells whether a write of a key of a map with the given backups would wait for a member
+     * that stopped answering, or must follow deferred writes of the same key.
+     *
+     * @param key map key
+     * @param backupCount synchronous backups of the key's map
+     * @return true when the write goes to the background
+     */
+    private boolean mustDefer(String key, int backupCount) {
         if (deferredKeys.containsKey(key)) {
             return true;
         }
         ClusterView view = hazelcast.view();
-        return view != null && view.replicaUnresponsive(key, MAP_BACKUP_COUNT);
+        return view != null && view.replicaUnresponsive(key, backupCount);
     }
 
     /**
@@ -264,7 +276,21 @@ public final class ClusterService implements AutoCloseable {
      * @return true when the write was deferred
      */
     boolean writeOrDefer(String key, String what, Runnable write) {
-        if (!mustDefer(key)) {
+        return writeOrDefer(key, MAP_BACKUP_COUNT, what, write);
+    }
+
+    /**
+     * Runs a cluster map write now, or in the background when its key or one of the key's
+     * backups lives on a member that stopped answering; see {@link #writeOrDefer(String, String, Runnable)}.
+     *
+     * @param key map key the write waits for
+     * @param backupCount synchronous backups of the key's map
+     * @param what what the write does, for the log
+     * @param write the write
+     * @return true when the write was deferred
+     */
+    private boolean writeOrDefer(String key, int backupCount, String what, Runnable write) {
+        if (!mustDefer(key, backupCount)) {
             write.run();
             return false;
         }
@@ -422,7 +448,10 @@ public final class ClusterService implements AutoCloseable {
      */
     public void registerLocalFiles(Map<String, Long> files) {
         localInventory = new LinkedHashMap<>(files);
-        hazelcast.serverFiles().put(this.serverUri, new LinkedHashMap<>(files));
+        Map<String, Long> published = new LinkedHashMap<>(files);
+        // The inventory map keeps a copy on every member, and a put waits for all of them.
+        writeOrDefer(this.serverUri, HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT, "publish inventory",
+                () -> hazelcast.serverFiles().put(this.serverUri, published));
         LOGGER.info("Registered {} local Parquet file(s) for {}", files.size(), this.serverUri);
     }
 
@@ -507,6 +536,11 @@ public final class ClusterService implements AutoCloseable {
             // The entry lives on a member that stopped answering. Every node publishes its
             // inventory before it registers, and the inventory gives locality only on the
             // shared storage such plans read: waiting for the member would hold the plan.
+            return true;
+        }
+        if (serverUri.equals(this.serverUri) && localInventory != null
+                && mustDefer(serverUri, HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT)) {
+            // This node's publication waits in the background for a member that stopped answering.
             return true;
         }
         return hazelcast.serverFiles().containsKey(serverUri);
@@ -731,17 +765,21 @@ public final class ClusterService implements AutoCloseable {
             return true;
         }
         String key = loadReservationKey(handle);
-        Serializable reservation = hazelcast.statementCache().remove(key);
-        if (reservation instanceof HandleState reserved && !serverUri.equals(reserved.serverUri())) {
-            subtractLoad(reserved.serverUri(), reserved.bytes());
-            addLoad(serverUri, reserved.bytes());
-            hazelcast.statementCache().put(key, new HandleState(reserved.query(),
-                    reserved.filePaths(), serverUri, reserved.bytes(), true, false,
-                    reserved.parameters()), loadReservationSeconds, TimeUnit.SECONDS);
-        } else if (reservation != null) {
-            hazelcast.statementCache().put(key, reservation, loadReservationSeconds,
-                    TimeUnit.SECONDS);
-        }
+        // While the reservation lives on a member that stopped answering (often the planned node
+        // itself), the move waits in the background; the release of the same key queues behind it.
+        writeOrDefer(key, "claim endpoint load", () -> {
+            Serializable reservation = hazelcast.statementCache().remove(key);
+            if (reservation instanceof HandleState reserved && !serverUri.equals(reserved.serverUri())) {
+                subtractLoad(reserved.serverUri(), reserved.bytes());
+                addLoad(serverUri, reserved.bytes());
+                hazelcast.statementCache().put(key, new HandleState(reserved.query(),
+                        reserved.filePaths(), serverUri, reserved.bytes(), true, false,
+                        reserved.parameters()), loadReservationSeconds, TimeUnit.SECONDS);
+            } else if (reservation != null) {
+                hazelcast.statementCache().put(key, reservation, loadReservationSeconds,
+                        TimeUnit.SECONDS);
+            }
+        });
         return true;
     }
 
@@ -828,7 +866,9 @@ public final class ClusterService implements AutoCloseable {
         Map<String, Long> inventory = localInventory;
         // Entries on a member that stopped answering can neither be checked nor repaired now;
         // checking would hold the heartbeat thread until Hazelcast drops the member.
-        if (inventory != null && !ownerUnresponsive(serverUri) && !hazelcast.serverFiles().containsKey(serverUri)) {
+        // The inventory and secret maps keep a copy on every member: their puts wait for each one.
+        if (inventory != null && !mustDefer(serverUri, HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT)
+                && !hazelcast.serverFiles().containsKey(serverUri)) {
             hazelcast.serverFiles().put(serverUri, new LinkedHashMap<>(inventory));
             LOGGER.warn("The cluster had lost the file inventory of {}; published it again ({} files)",
                     serverUri, inventory.size());
@@ -838,6 +878,9 @@ public final class ClusterService implements AutoCloseable {
         }
         Serializable shared = hazelcast.clusterSecrets().get(TICKET_SECRET_KEY);
         if (shared == null) {
+            if (mustDefer(TICKET_SECRET_KEY, HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT)) {
+                return;
+            }
             byte[] own = currentSecret;
             shared = hazelcast.clusterSecrets().putIfAbsent(TICKET_SECRET_KEY, own);
             if (shared == null) {
@@ -940,8 +983,14 @@ public final class ClusterService implements AutoCloseable {
     @Override
     public void close() {
         try {
-            hazelcast.serverRegistry().remove(serverUri);
-            hazelcast.serverHeartbeats().remove(serverUri);
+            if (mustDefer(serverUri)) {
+                // The removal would wait for a member that stopped answering; the other nodes
+                // leave this server out as soon as its member has left the cluster.
+                LOGGER.info("Not deregistering {}: its entries live on a member that does not answer", serverUri);
+            } else {
+                hazelcast.serverRegistry().remove(serverUri);
+                hazelcast.serverHeartbeats().remove(serverUri);
+            }
         } catch (Exception e) {
             LOGGER.warn("Failed to deregister server from cluster: {}", e.getMessage());
         }

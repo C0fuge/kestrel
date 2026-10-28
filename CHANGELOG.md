@@ -482,6 +482,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   silent member is no longer dropped as stale. Measured with an iptables DROP: 40 load-tracked tickets with their
   releases and heartbeats in 65-88 ms (before: the first write on the silent member's partitions waited until
   Hazelcast dropped it, up to 10 s; a write whose backup alone was silent waited the 5 s backup timeout).
+- Cluster: the remaining waits for such a node (item D3 step 2b). A backup node moving an endpoint's load reservation
+  whose entry sits on the silent member no longer holds the end of the stream (the move and the release queue in the
+  background, in order); publishing this node's file inventory and the heartbeat's repairs of the inventory and ticket
+  secret (maps kept on every member, whose puts wait for each one) wait in the background or for the next beat, and
+  this node's own pending inventory counts as published; a node that stops while its registry entry sits on the
+  silent member leaves without deregistering (the others drop it when its member leaves).
 - DuckDB threads and memory by host size (item 19b): with `duckDbMemoryLimit` unset every DuckDB connection now gets
   `memory_limit` = the node's DuckDB budget (container `memory.max` or physical memory, minus `-Xmx`, direct memory
   and 15 % headroom) / the connections expected at once (`duckDbMemoryConnections`, default cores / threads, at
