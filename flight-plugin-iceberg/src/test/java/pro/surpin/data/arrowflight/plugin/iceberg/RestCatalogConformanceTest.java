@@ -165,7 +165,6 @@ class RestCatalogConformanceTest {
         try (Catalog viaRest = rest(); Catalog viaDir = hadoop();
                 Connection conn = DriverManager.getConnection("jdbc:duckdb:");
                 Statement s = conn.createStatement()) {
-            s.execute("SET allow_unsigned_extensions = true");
             s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");
             s.execute("LOAD '" + ext.resolve("iceberg.duckdb_extension") + "'");
             for (String table : TABLES) {
