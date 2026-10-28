@@ -45,6 +45,7 @@ import org.apache.hadoop.hive.ql.exec.vector.MapColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.StructColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.TimestampColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
+import org.apache.hadoop.hive.ql.io.sarg.PredicateLeaf;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
 import org.apache.orc.OrcConf;
 import org.apache.orc.OrcFile;
@@ -59,7 +60,8 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * file's columns are matched to them by name (case-insensitive), or by position when the file
  * has Hive 1.x names ({@code _col0}, {@code _col1}, ...); a column the file lacks reads NULL and
  * a column of another type is converted by ORC's schema evolution. Only the projected columns
- * are read, and a search argument skips stripes and row groups whose statistics rule it out
+ * are read (and the columns of the search argument, which ORC needs to evaluate it), and a
+ * search argument skips stripes and row groups whose statistics rule it out
  * (rows are not filtered: the query applies its filters again). The Arrow types are the ones
  * DuckDB reads for the same Hive types from Parquet ({@link HiveTypes}); CHAR values lose their
  * trailing spaces, as Hive reads them. The file is read through the server's store.
@@ -109,9 +111,15 @@ final class OrcArrowReader extends ArrowReader {
                 throw new IOException("Column " + name + " is not a data column of " + location);
             }
             projected.add(index);
-            TypeDescription child = readerSchema.getChildren().get(index);
-            for (int id = child.getId(); id <= child.getMaximumId(); id++) {
-                include[id] = true;
+            include(include, readerSchema.getChildren().get(index));
+        }
+        if (searchArgument != null) {
+            // ORC evaluates a predicate only on columns it reads.
+            for (PredicateLeaf leaf : searchArgument.getLeaves()) {
+                int index = indexOf(columns, leaf.getColumnName());
+                if (index >= 0) {
+                    include(include, readerSchema.getChildren().get(index));
+                }
             }
         }
         Configuration conf = new Configuration(false);
@@ -360,6 +368,18 @@ final class OrcArrowReader extends ArrowReader {
                 target.reAlloc();
             }
             target.setNull(index);
+        }
+    }
+
+    /**
+     * Marks a column and its children as read.
+     *
+     * @param include read flags by column ID
+     * @param type column type
+     */
+    private static void include(boolean[] include, TypeDescription type) {
+        for (int id = type.getId(); id <= type.getMaximumId(); id++) {
+            include[id] = true;
         }
     }
 

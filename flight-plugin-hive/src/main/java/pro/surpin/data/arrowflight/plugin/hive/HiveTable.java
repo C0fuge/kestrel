@@ -13,32 +13,36 @@ import java.util.Optional;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
 import org.apache.hadoop.hive.metastore.api.Table;
+import org.apache.orc.TypeDescription;
 
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 /**
- * A metastore table the catalog can show: a Parquet table with its columns (data columns, then
- * partition columns, as DuckDB types) or an Iceberg table with its metadata file.
+ * A metastore table the catalog can show: a Parquet or ORC table with its columns (data columns,
+ * then partition columns, as DuckDB types) or an Iceberg table with its metadata file.
  *
  * @param database database name
  * @param name table name
  * @param kind how it is read
  * @param location normalised table location
- * @param columns declared columns, partition columns last (Parquet tables)
- * @param partitionColumns partition column names (Parquet tables)
- * @param schemaId hash of the columns and their types; the snapshot ID of Parquet tables
+ * @param columns declared columns, partition columns last (Parquet and ORC tables)
+ * @param partitionColumns partition column names (Parquet and ORC tables)
+ * @param schemaId hash of the columns and their types; the snapshot ID of Parquet and ORC tables
  * @param metadataLocation normalised current metadata file (Iceberg tables), or null
+ * @param orcColumns data columns with their Hive types (ORC tables), else empty
  */
 record HiveTable(String database, String name, Kind kind, String location,
         List<ColumnSpec> columns, List<String> partitionColumns, String schemaId,
-        String metadataLocation) {
+        String metadataLocation, List<OrcArrowReader.Column> orcColumns) {
 
     /** How a table is read. */
     enum Kind {
         /** Parquet files, read by the server. */
         PARQUET,
         /** Iceberg, planned by the iceberg plugin's table format. */
-        ICEBERG
+        ICEBERG,
+        /** ORC files, read by the plugin and handed to the server as Arrow streams. */
+        ORC
     }
 
     /**
@@ -66,9 +70,11 @@ record HiveTable(String database, String name, Kind kind, String location,
      * @param table metastore table
      * @param roots readable roots
      * @param icebergFormat whether Iceberg tables can be read
+     * @param orcTables whether ORC tables are shown
      * @return the table, or why it is skipped or hidden
      */
-    static Classified classify(Table table, List<String> roots, boolean icebergFormat) {
+    static Classified classify(Table table, List<String> roots, boolean icebergFormat,
+            boolean orcTables) {
         String type = table.getTableType() == null ? "" : table.getTableType();
         Map<String, String> params = table.getParameters() == null ? Map.of() : table.getParameters();
         if (type.toUpperCase(Locale.ROOT).contains("VIEW")) {
@@ -92,19 +98,24 @@ record HiveTable(String database, String name, Kind kind, String location,
                 return hidden(location + " / " + normalized);
             }
             return new Classified(new HiveTable(table.getDbName(), table.getTableName(), Kind.ICEBERG,
-                    location, List.of(), List.of(), "iceberg", normalized), null, null);
+                    location, List.of(), List.of(), "iceberg", normalized, List.of()), null, null);
         }
         if (params.containsKey("storage_handler")) {
             return skipped("storage handler " + params.get("storage_handler"));
         }
+        boolean orc = sd != null && orc(sd);
         if ("true".equalsIgnoreCase(params.getOrDefault("transactional", "false"))) {
-            return skipped("transactional (ACID) table");
+            return skipped(orc ? "transactional (ACID) ORC table: not read yet"
+                    : "transactional (ACID) table");
         }
         String provider = params.get("spark.sql.sources.provider");
         if (provider != null && !"parquet".equalsIgnoreCase(provider) && !"hive".equalsIgnoreCase(provider)) {
             return skipped("Spark " + provider + " table");
         }
-        if (sd == null || !parquet(sd)) {
+        if (orc && !orcTables) {
+            return skipped("ORC table (hive.orcTables=false)");
+        }
+        if (sd == null || !(orc || parquet(sd))) {
             return skipped("storage format " + (sd == null ? "none" : sd.getInputFormat()));
         }
         if (location == null) {
@@ -115,9 +126,13 @@ record HiveTable(String database, String name, Kind kind, String location,
         }
         List<ColumnSpec> columns = new ArrayList<>();
         List<String> partitions = new ArrayList<>();
+        List<OrcArrowReader.Column> orcColumns = new ArrayList<>();
         try {
             for (FieldSchema field : sd.getCols()) {
                 columns.add(column(field));
+                if (orc) {
+                    orcColumns.add(orcColumn(field));
+                }
             }
             if (table.getPartitionKeys() != null) {
                 for (FieldSchema field : table.getPartitionKeys()) {
@@ -131,9 +146,50 @@ record HiveTable(String database, String name, Kind kind, String location,
         if (columns.size() == partitions.size()) {
             return skipped("no data columns");
         }
-        return new Classified(new HiveTable(table.getDbName(), table.getTableName(), Kind.PARQUET,
-                location, columns, partitions, schemaId(table, columns, partitions), null), null,
-                null);
+        Kind kind = orc ? Kind.ORC : Kind.PARQUET;
+        return new Classified(new HiveTable(table.getDbName(), table.getTableName(), kind,
+                location, columns, partitions, schemaId(table, kind, columns, partitions), null,
+                List.copyOf(orcColumns)), null, null);
+    }
+
+    /**
+     * Tells whether a storage descriptor names ORC.
+     *
+     * @param sd storage descriptor
+     * @return true for an ORC serde or input format
+     */
+    private static boolean orc(StorageDescriptor sd) {
+        String serde = sd.getSerdeInfo() == null || sd.getSerdeInfo().getSerializationLib() == null
+                ? "" : sd.getSerdeInfo().getSerializationLib();
+        String input = sd.getInputFormat() == null ? "" : sd.getInputFormat();
+        return simpleName(serde).contains("orc") || simpleName(input).contains("orc");
+    }
+
+    /**
+     * Returns the lower case simple name of a class name.
+     *
+     * @param className class name
+     * @return text after the last dot
+     */
+    private static String simpleName(String className) {
+        return className.substring(className.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Checks that ORC reads a data column and keeps its Hive type.
+     *
+     * @param field metastore column
+     * @return the column for the ORC reader
+     * @throws IllegalArgumentException when ORC or Arrow has no counterpart of the type
+     */
+    private static OrcArrowReader.Column orcColumn(FieldSchema field) {
+        try {
+            OrcArrowReader.field(field.getName(), TypeDescription.fromString(field.getType()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("column " + field.getName() + " has type "
+                    + field.getType() + " that the ORC reader cannot read: " + e.getMessage(), e);
+        }
+        return new OrcArrowReader.Column(field.getName(), field.getType());
     }
 
     /**
@@ -170,12 +226,16 @@ record HiveTable(String database, String name, Kind kind, String location,
      * Hashes what an executing node must read the same way as the planning node.
      *
      * @param table metastore table
+     * @param kind how the table is read
      * @param columns declared columns
      * @param partitions partition columns
      * @return {@code h<16 hex>}
      */
-    static String schemaId(Table table, List<ColumnSpec> columns, List<String> partitions) {
-        StringBuilder canonical = new StringBuilder("hive|").append(table.getDbName()).append('.')
+    static String schemaId(Table table, Kind kind, List<ColumnSpec> columns,
+            List<String> partitions) {
+        // Parquet tables keep the IDs they had before ORC tables were read.
+        StringBuilder canonical = new StringBuilder(kind == Kind.ORC ? "hive-orc|" : "hive|")
+                .append(table.getDbName()).append('.')
                 .append(table.getTableName()).append('|');
         for (ColumnSpec column : columns) {
             canonical.append(column.name()).append(':').append(column.duckDbType()).append(';');

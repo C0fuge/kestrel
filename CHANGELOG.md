@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- ORC tables in the Hive catalog, opt-in (P1 step 2 (c)): with `hive.orcTables=true`
+  (`arrowflight.hive.orcTables`, default false: ORC tables stay skipped as before) the hive plugin shows ORC tables
+  and reads their files itself (orc-core through the server's stores), one Arrow stream per table reference with only
+  the columns the query names; partition values come from the metastore. The query's simple filters on integer,
+  DOUBLE, DECIMAL, STRING/VARCHAR, BOOLEAN and DATE columns skip ORC stripes and row groups (the server still applies
+  every filter). Transactional (ACID) ORC tables stay skipped with a log line. End-to-end server tests follow.
 - Parallel stream compression (item 20, step (f)): the buffers of a large compressed batch are compressed side by
   side by the stream's thread and helper threads shared by all streams, largest first; the batch is sent once all
   are done (byte for byte the serial batch, no extra batches held). New setting `flightCompressionThreads` /
