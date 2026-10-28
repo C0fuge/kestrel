@@ -62,6 +62,7 @@ import org.apache.orc.OrcConf;
 import org.apache.orc.OrcFile;
 import org.apache.orc.Reader;
 import org.apache.orc.RecordReader;
+import org.apache.orc.StripeInformation;
 import org.apache.orc.TypeDescription;
 
 import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
@@ -104,6 +105,28 @@ final class OrcArrowReader extends ArrowReader {
     OrcArrowReader(BufferAllocator allocator, ReadableFile file, String location,
             List<Column> columns, List<String> projection, SearchArgument searchArgument,
             int batchSize) throws IOException {
+        this(allocator, file, location, columns, projection, searchArgument, batchSize, 0L,
+                Long.MAX_VALUE);
+    }
+
+    /**
+     * Opens a byte range of a file: only the stripes that start in the range are read, so ranges
+     * that cover the file read each stripe once.
+     *
+     * @param allocator allocator of the batches
+     * @param file the file, opened through the server's store
+     * @param location the file's location, for messages
+     * @param columns the table's data columns as {@code name -> Hive type}, in table order
+     * @param projection names of the columns to read, in output order
+     * @param searchArgument stripe and row group filter, or null
+     * @param batchSize rows per batch
+     * @param offset first byte of the range
+     * @param length bytes in the range
+     * @throws IOException when the file cannot be read or a column is unknown
+     */
+    OrcArrowReader(BufferAllocator allocator, ReadableFile file, String location,
+            List<Column> columns, List<String> projection, SearchArgument searchArgument,
+            int batchSize, long offset, long length) throws IOException {
         super(allocator);
         this.readerSchema = TypeDescription.createStruct();
         for (Column column : columns) {
@@ -134,21 +157,14 @@ final class OrcArrowReader extends ArrowReader {
                 }
             }
         }
-        Configuration conf = new Configuration(false);
-        OrcConf.IS_SCHEMA_EVOLUTION_CASE_SENSITIVE.setBoolean(conf, false);
-        Path path = new Path("readable:/" + Integer.toHexString(location.hashCode()) + ".orc");
-        ReadableFileSystem fs = new ReadableFileSystem(file, path);
-        fs.setConf(conf);
-        Reader reader = OrcFile.createReader(path,
-                // Timestamps as their wall clock in UTC, whatever the JVM's zone.
-                OrcFile.readerOptions(conf).filesystem(fs).maxLength(file.length())
-                        .useUTCTimestamp(true));
+        Reader reader = footer(file, location);
         boolean positional = !reader.getSchema().getFieldNames().isEmpty();
         for (String name : reader.getSchema().getFieldNames()) {
             positional &= POSITIONAL.matcher(name).matches();
         }
         Reader.Options options = reader.options().schema(readerSchema).include(include)
-                .forcePositionalEvolution(positional).useSelected(false).allowSARGToFilter(false);
+                .forcePositionalEvolution(positional).useSelected(false).allowSARGToFilter(false)
+                .range(offset, length);
         if (searchArgument != null) {
             options.searchArgument(searchArgument, new String[0]);
         }
@@ -162,6 +178,40 @@ final class OrcArrowReader extends ArrowReader {
         this.batch = readerSchema.createRowBatch(TypeDescription.RowBatchVersion.USE_DECIMAL64,
                 batchSize);
         reader.close();
+    }
+
+    /**
+     * Reads the stripes of a file from its footer.
+     *
+     * @param file the file, opened through the server's store
+     * @param location the file's location, for messages
+     * @return its stripes, in file order
+     * @throws IOException when the footer cannot be read
+     */
+    static List<StripeInformation> stripes(ReadableFile file, String location) throws IOException {
+        try (Reader reader = footer(file, location)) {
+            return reader.getStripes();
+        }
+    }
+
+    /**
+     * Opens a file's footer.
+     *
+     * @param file the file, opened through the server's store
+     * @param location the file's location, for messages
+     * @return the ORC reader of the file
+     * @throws IOException when the footer cannot be read
+     */
+    private static Reader footer(ReadableFile file, String location) throws IOException {
+        Configuration conf = new Configuration(false);
+        OrcConf.IS_SCHEMA_EVOLUTION_CASE_SENSITIVE.setBoolean(conf, false);
+        Path path = new Path("readable:/" + Integer.toHexString(location.hashCode()) + ".orc");
+        ReadableFileSystem fs = new ReadableFileSystem(file, path);
+        fs.setConf(conf);
+        return OrcFile.createReader(path,
+                // Timestamps as their wall clock in UTC, whatever the JVM's zone.
+                OrcFile.readerOptions(conf).filesystem(fs).maxLength(file.length())
+                        .useUTCTimestamp(true));
     }
 
     /**

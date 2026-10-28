@@ -22,6 +22,7 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
+import org.apache.orc.StripeInformation;
 import org.apache.orc.TypeDescription;
 
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
@@ -30,10 +31,14 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 /**
  * Reads the ORC files of one table scan one after the other as one Arrow stream: the requested
  * columns in the requested order, data columns as {@link OrcArrowReader} reads them and partition
- * columns as text, a constant per file from its partition values (NULL when missing). Up to
- * {@code readAhead} files are decoded at once on the executor's threads, each a few batches ahead,
- * and their batches are handed over in file order, so the stream is the same as a file-by-file
- * read. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
+ * columns as text, a constant per file from its partition values (NULL when missing). A file
+ * larger than {@code rangeBytes} is read as consecutive byte ranges, each a group of whole stripes
+ * from the file's footer of at least its size over {@code readAhead}, at most about
+ * {@code rangeBytes} (ORC reads the stripes that start in a range;
+ * the first range starts at 0 and the last is open-ended, so the ranges cover the file whatever
+ * its footer or listed size say). Up to {@code readAhead} ranges are decoded at once on the executor's threads, each a few
+ * batches ahead, and their batches are handed over in file and range order, so the stream is the
+ * same as a file-by-file read. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
  * both set the plugin's context class loader, which Hadoop and ORC load classes from.
  */
 final class OrcTableReader extends ArrowReader {
@@ -71,8 +76,16 @@ final class OrcTableReader extends ArrowReader {
     private final ClassLoader loader;
     private final Executor executor;
     private final int readAhead;
+    private final long rangeBytes;
     private final ArrayDeque<FileRead> reads = new ArrayDeque<>();
+    /** Next file to read. */
     private int next;
+    /** Next byte of file {@code next} to read. */
+    private long nextOffset;
+    /** Whether the ranges of file {@code next} are planned. */
+    private boolean planned;
+    /** Starts of the ranges of file {@code next} after the one at {@code nextOffset}. */
+    private final ArrayDeque<Long> rangeStarts = new ArrayDeque<>();
 
     /**
      * Creates the reader; no file is opened yet.
@@ -86,13 +99,14 @@ final class OrcTableReader extends ArrowReader {
      * @param searchArgument stripe and row group filter, or null
      * @param batchSize rows per batch
      * @param executor runs the decoding of files
-     * @param readAhead files decoded at once, at least 1
+     * @param readAhead ranges decoded at once, at least 1
+     * @param rangeBytes bytes of a file read as one range, at least 1
      * @throws IllegalArgumentException when a requested column is not a column of the table
      */
     OrcTableReader(BufferAllocator allocator, List<TableFile> files, Opener opener,
             List<OrcArrowReader.Column> dataColumns, List<String> partitionColumns,
             List<String> columns, SearchArgument searchArgument, int batchSize,
-            Executor executor, int readAhead) {
+            Executor executor, int readAhead, long rangeBytes) {
         super(allocator);
         this.files = List.copyOf(files);
         this.opener = opener;
@@ -111,6 +125,7 @@ final class OrcTableReader extends ArrowReader {
         this.loader = OrcTableReader.class.getClassLoader();
         this.executor = executor;
         this.readAhead = Math.max(1, readAhead);
+        this.rangeBytes = Math.max(1L, rangeBytes);
     }
 
     @Override
@@ -122,7 +137,7 @@ final class OrcTableReader extends ArrowReader {
             prepareLoadNextBatch();
             while (true) {
                 while (reads.size() < readAhead && next < files.size()) {
-                    FileRead read = new FileRead(files.get(next++));
+                    FileRead read = nextRange();
                     // Queued only once accepted: close waits for every queued read to end.
                     executor.execute(read);
                     reads.add(read);
@@ -189,16 +204,73 @@ final class OrcTableReader extends ArrowReader {
     }
 
     /**
-     * Opens one file.
+     * Takes the next range to read: the next group of stripes of the current file, or the rest of
+     * it (open-ended).
+     *
+     * @return the range's read, not started
+     */
+    private FileRead nextRange() {
+        TableFile file = files.get(next);
+        if (!planned) {
+            planned = true;
+            nextOffset = 0L;
+            rangeStarts.clear();
+            if (file.size() > rangeBytes) {
+                rangeStarts.addAll(plan(file));
+            }
+        }
+        long offset = nextOffset;
+        Long end = rangeStarts.poll();
+        if (end != null) {
+            nextOffset = end;
+            return new FileRead(file, offset, end - offset);
+        }
+        next++;
+        planned = false;
+        return new FileRead(file, offset, Long.MAX_VALUE - offset);
+    }
+
+    /**
+     * Groups a file's stripes into ranges of at least {@code rangeBytes}, or of the file's size over
+     * {@code readAhead} when that is less (but the last).
      *
      * @param file table file
+     * @return the starts of the ranges after the first, ascending; empty when the footer cannot
+     *     be read (the file is then read as one range, whose read reports the failure)
+     */
+    private List<Long> plan(TableFile file) {
+        List<StripeInformation> stripes;
+        try {
+            stripes = OrcArrowReader.stripes(opener.open(file), file.location());
+        } catch (IOException | RuntimeException e) {
+            return List.of();
+        }
+        long target = Math.min(rangeBytes, Math.max(1L, file.size() / readAhead));
+        List<Long> starts = new ArrayList<>();
+        long group = 0L;
+        for (StripeInformation stripe : stripes) {
+            if (group >= target) {
+                starts.add(stripe.getOffset());
+                group = 0L;
+            }
+            group += stripe.getLength();
+        }
+        return starts;
+    }
+
+    /**
+     * Opens a byte range of one file.
+     *
+     * @param file table file
+     * @param offset first byte of the range
+     * @param length bytes in the range
      * @return its reader
      * @throws IOException when it cannot be opened
      */
-    private OrcArrowReader open(TableFile file) throws IOException {
+    private OrcArrowReader open(TableFile file, long offset, long length) throws IOException {
         try {
             return new OrcArrowReader(allocator, opener.open(file), file.location(), dataColumns,
-                    projection, searchArgument, batchSize);
+                    projection, searchArgument, batchSize, offset, length);
         } catch (IOException | RuntimeException e) {
             throw failure(file, e);
         }
@@ -239,23 +311,29 @@ final class OrcTableReader extends ArrowReader {
     }
 
     /**
-     * Decodes one file on the executor into a queue of batches, ended by {@link #END} or by the
-     * file's failure as an {@link IOException}.
+     * Decodes one byte range of a file on the executor into a queue of batches, ended by
+     * {@link #END} or by the file's failure as an {@link IOException}.
      */
     private final class FileRead implements Runnable {
 
         private final TableFile file;
+        private final long offset;
+        private final long length;
         private final BlockingQueue<Object> batches = new ArrayBlockingQueue<>(BATCHES_AHEAD + 1);
         private final CountDownLatch finished = new CountDownLatch(1);
         private volatile boolean cancelled;
 
         /**
-         * Creates the read of a file.
+         * Creates the read of a byte range of a file.
          *
          * @param file table file
+         * @param offset first byte of the range
+         * @param length bytes in the range
          */
-        FileRead(TableFile file) {
+        FileRead(TableFile file, long offset, long length) {
             this.file = file;
+            this.offset = offset;
+            this.length = length;
         }
 
         @Override
@@ -265,7 +343,7 @@ final class OrcTableReader extends ArrowReader {
             thread.setContextClassLoader(loader);
             try {
                 Object last;
-                try (OrcArrowReader reader = open(file)) {
+                try (OrcArrowReader reader = open(file, offset, length)) {
                     VectorSchemaRoot source = reader.getVectorSchemaRoot();
                     while (!cancelled && loadNext(reader)) {
                         VectorSchemaRoot batch = detach(source);

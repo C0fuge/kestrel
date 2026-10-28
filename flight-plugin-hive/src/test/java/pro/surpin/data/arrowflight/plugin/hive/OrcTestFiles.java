@@ -109,12 +109,33 @@ public final class OrcTestFiles {
      */
     public static void writeLineitem(String file, long from, long to, String compression)
             throws IOException {
+        writeLineitem(file, from, to, compression, 0L);
+    }
+
+    /**
+     * Writes rows [from, to) of the lineitem-like table ({@link #LINEITEM}) as an ORC file with
+     * the given stripe size (small sizes give a file of many stripes).
+     *
+     * @param file file to write
+     * @param from first row
+     * @param to row after the last
+     * @param compression ORC compression kind (NONE, ZLIB, SNAPPY, LZ4, LZO, ZSTD)
+     * @param stripeSize stripe size in bytes, 0 for ORC's default
+     * @throws IOException when it cannot be written
+     */
+    public static void writeLineitem(String file, long from, long to, String compression,
+            long stripeSize) throws IOException {
         Path path = Path.of(file);
         Files.createDirectories(path.getParent());
         TypeDescription schema = TypeDescription.fromString(LINEITEM_STRUCT);
+        OrcFile.WriterOptions options = OrcFile.writerOptions(new Configuration(false))
+                .setSchema(schema)
+                .compress(CompressionKind.valueOf(compression.toUpperCase(Locale.ROOT)));
+        if (stripeSize > 0) {
+            options.stripeSize(stripeSize);
+        }
         try (Writer writer = OrcFile.createWriter(new org.apache.hadoop.fs.Path(path.toUri()),
-                OrcFile.writerOptions(new Configuration(false)).setSchema(schema)
-                        .compress(CompressionKind.valueOf(compression.toUpperCase(Locale.ROOT))))) {
+                options)) {
             VectorizedRowBatch batch = schema.createRowBatch();
             for (long r = from; r < to; r++) {
                 fillLineitem(batch.cols, batch.size++, r);
