@@ -115,8 +115,10 @@
 >    4 endpoints 712 -> 792 MB/s, 8 endpoints 579 -> 611, 1 stream unchanged. Zero-copy Flight writes
 >    (`arrow.flight.enable_zero_copy_write`, not used by us) were inconclusive here (+11 % once, worse once).
 >    **Next steps of 22:** (b) the screening repo measures the pre-release with `-DduckDbThreadsUnderLoad=1` and
->    `endpointsPerServer` 4/8 (partial mode); (c) 8 endpoints stay ~20 % below 4 on 2 cores: try capping the DoGets
->    that produce batches at once to the cores (opt-in) and look at per-stream budget waits; (d) zero-copy writes
+>    `endpointsPerServer` 4/8 (partial mode); ~~(c) 8 endpoints stay ~20 % below 4 on 2 cores: try capping the DoGets
+>    that produce batches at once to the cores (opt-in) and look at per-stream budget waits~~ (done 2026-10-28, db66d64, opt-in
+>    `duckDbProducingStreams`, in pre-release `server-1.0.0-9506620bb170`, see Log; screening: measure with value 2 = cores / duckDbThreads at 4/8 endpoints, alone
+>    and with `duckDbThreadsUnderLoad=1`); (d) zero-copy writes
 >    for the DuckDB stream path only (its buffers are fresh per batch), measured on a quiet runner.
 >    Caveat (see the maintainer's S3 tail bug above): fewer threads per query lengthen round-trip-bound S3 reads, so
 >    leave `duckDbThreadsUnderLoad` off on S3 nodes until that bug is understood; it targets CPU-bound local/HDFS scans.
@@ -1578,3 +1580,19 @@
 - 2026-10-28 (plugins lane, FYI core lane): core commit d5d5466 (P1 step 2 (f)) - `ArrowScanRequests.columns` no
   longer takes a multiplication's `*` for `SELECT *` (Arrow-stream tables only, i.e. Hive ORC with
   `hive.orcTables`); stars that may select columns still read every column. Test `ArrowScanRequestsTest` 7/7.
+- 2026-10-28 (cloud session): item 22 (c) (db66d64). Opt-in `duckDbProducingStreams` / `DUCKDB_PRODUCING_STREAMS`
+  (default 0 = no cap): a fair semaphore (`ProducingStreamGate`) that a DoGet holds only while DuckDB executes its
+  query or loads its next batch, released before the client/budget wait (`streamPrepared`, i.e. every DuckDB stream,
+  both result modes); a waiting stream whose client cancels ends with CANCELLED. Found on the way: the test helper's
+  `QueryPlanner` ignored `endpointsPerServer`, so in-process "endpoints" runs of `ParallelScanPerfTest` and
+  `ThreadsUnderLoadIntegrationTest` were one stream (item 22 step 1's numbers came from the external-server pyarrow
+  runs, so they stand); fixed, the integration tests assert the split. Local (4-core box, `taskset -c 0,1`,
+  `duckDbThreads=2`, in-process client sharing the 2 cores, 6 M rows / 16 files, two rounds, median MB/s): off 4 ep
+  352/346, 8 ep 310/330; value 1 326/339, 335/335; value 2 326/371, 381/397 (CPU 6.2/5.8 -> 5.0/4.9 s/GB). So value
+  2 (= cores / duckDbThreads) closes the 8-vs-4 gap here; value 1 is neutral. Tests: `ProducingStreamGateTest`,
+  `ProducingStreamsIntegrationTest` (same answers with cap 1 in both modes, plus one client reading 4 endpoints in
+  turn on one thread), `ConfigAdapterTest`. My push run 40639577758 and package dispatch 40639585513 were cancelled
+  by the plugins lane's pushes (concurrency group); their package run 40641171065 on 9506620 (contains db66d64) is
+  green: pre-release `server-1.0.0-9506620bb170`. Screening: one partial-mode scan in 4/8 endpoints on 2 CPUs with
+  `-DduckDbProducingStreams=2` (alone and with `-DduckDbThreadsUnderLoad=1`) vs `7562a5bdb7b9`. Next: item 22 (d)
+  (zero-copy writes on the DuckDB stream path), or 3b item 17 (e).
