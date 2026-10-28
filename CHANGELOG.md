@@ -91,6 +91,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Iceberg REST catalog tables registered in a Hive metastore (C1 step 3c): on local warehouses
+  `RestCatalogServerConformanceTest` registers the REST catalog's metadata files in the in-process metastore (schema
+  `hms_ice`, hive plugin -> iceberg plugin); answers equal the REST catalog's, partial equal complete. Test only.
 - Iceberg REST catalogs through the server on S3 warehouses (C1 step 3b): `RestCatalogServerConformanceTest` also
   runs for polaris-s3, iceberg-rest-fixture-s3 and lakekeeper-s3, the server reading the tables through the s3 plugin
   (static keys); the iceberg module's `fixture-libs` carry Iceberg's S3FileIO and the AWS SDK. Test only.

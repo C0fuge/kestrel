@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -44,7 +45,9 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * iceberg-rest catalog (schemas rest_*) next to an iceberg-hadoop catalog over a reference
  * warehouse with the same tables, both written by Iceberg Java, under the DuckDB lockdown.
  * Complete answers of every REST table equal the reference's; partial answers equal complete
- * ones; a snapshot with deletes is planned in located parts. Skipped unless
+ * ones; a snapshot with deletes is planned in located parts. On local warehouses the same
+ * metadata files are also registered in an in-process Hive metastore (schema hms_ice, read by
+ * the hive plugin through the iceberg plugin) as a further reference. Skipped unless
  * {@code ICEBERG_REST_IT_URI} names the catalog and {@code ICEBERG_REST_IT_ROOT} its warehouse:
  * a local directory, or an S3 location ({@code s3://bucket/path}, written with Iceberg's
  * S3FileIO and read through the real s3 plugin) with {@code ICEBERG_REST_IT_S3_ENDPOINT},
@@ -62,8 +65,13 @@ class RestCatalogServerConformanceTest {
     /** The built plugins/s3 directory, for S3 warehouses. */
     private static final Path S3_PLUGIN = Path.of("../flight-plugin-s3/target/plugin/s3");
 
+    /** Hive database of the metastore reference. */
+    private static final String HMS = "hms_ice";
+
     @TempDir
     static Path dir;
+    /** Whether the tables are also registered in a Hive metastore. */
+    static boolean metastore;
     static TestFlightServerHelper helper;
 
     @BeforeAll
@@ -120,7 +128,7 @@ class RestCatalogServerConformanceTest {
             writer.put("credential", v);
             envs.put("FLIGHT_ICEBERG_REST_CREDENTIAL", v);
         });
-        IcebergTestTables.writeRest(writer);
+        Map<String, String> metadata = IcebergTestTables.writeRest(writer);
 
         Path plugins = dir.resolve("plugins");
         IcebergTestTables.installPlugin(plugins);
@@ -132,9 +140,27 @@ class RestCatalogServerConformanceTest {
                 }
             }
         }
+        String catalogs = "iceberg-hadoop,iceberg-rest";
+        // A metastore over a local warehouse; the in-process one cannot place tables on S3.
+        metastore = !s3 && HiveTestTables.available();
+        if (metastore) {
+            HiveTestTables.Hms hms = HiveTestTables.hms();
+            hms.call("createDatabase", HMS);
+            for (String table : TABLES) {
+                String file = fileUri(metadata.get(table));
+                hms.call("registerIceberg", HMS, table, file.substring(0, file.indexOf("/metadata/")),
+                        file);
+            }
+            HiveTestTables.installPlugin(plugins);
+            sys.put("arrowflight.hive.uris", hms.uri());
+            sys.put("arrowflight.hive.roots", root);
+            sys.put("arrowflight.hive.metadataTtlSeconds", "0");
+            sys.put("arrowflight.hive.namesTtlSeconds", "0");
+            catalogs += ",hive";
+        }
         Files.createDirectories(dir.resolve("data"));
         ConfigSource source = new ConfigSource(sys::get, new Properties(), envs, null);
-        PluginSettings settings = new PluginSettings(plugins, null, "iceberg-hadoop,iceberg-rest", false);
+        PluginSettings settings = new PluginSettings(plugins, null, catalogs, false);
         helper = TestFlightServerHelper.builder().dataDir(dir.resolve("data").toString())
                 .resultMode("complete")
                 .registry(config -> StoreRegistry.open(config, new Configuration(), "localhost",
@@ -147,6 +173,11 @@ class RestCatalogServerConformanceTest {
         if (helper != null) {
             helper.close();
         }
+    }
+
+    private static String fileUri(String location) {
+        return location.startsWith("/") ? "file:" + location
+                : "file:" + Path.of(URI.create(location)).toString();
     }
 
     private static Optional<String> env(String name) {
@@ -193,6 +224,21 @@ class RestCatalogServerConformanceTest {
         for (String table : List.of("evolved", "deletes", "parted")) {
             FlightInfo info = info("SELECT * FROM rest_ice." + table, "partial");
             assertFalse(info.getEndpoints().get(0).getLocations().isEmpty(), "partial endpoint: " + table);
+        }
+    }
+
+    @Test
+    void metastoreTablesAnswerLikeTheRestCatalog() throws Exception {
+        Assumptions.assumeTrue(metastore, "no metastore reference (S3 warehouse or hive plugin not built)");
+        assertEquals(TABLES, column(helper.sqlClient().getTables(null, HMS, null, null, false),
+                "table_name").stream().sorted().toList());
+        for (String table : TABLES) {
+            String sql = "SELECT * FROM %s." + table;
+            Answer viaRest = answer(sql.formatted("rest_ice"), "complete");
+            Answer viaHms = answer(sql.formatted(HMS), "complete");
+            assertEquals(viaRest.schema(), viaHms.schema(), table);
+            assertEquals(viaRest.rows(), viaHms.rows(), table);
+            assertEquals(viaHms.rows(), answer(sql.formatted(HMS), "partial").rows(), table);
         }
     }
 
