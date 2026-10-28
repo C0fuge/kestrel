@@ -191,7 +191,7 @@ P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** J
     identity + per-token groups, `RangerAuthorization.union`, Basic password, expired/foreign/forged/missing,
     TLS requirement, no mixing with `FLIGHT_BEARER_TOKEN`). Docs: `docs/security/providers.md`, START-NOTES,
     CHANGELOG. **P2 closed** (optional OpenLDAP container test: see Open questions).
-P3. **Spark connector for production (`flight-spark`).** (a) Kerberos on YARN executors: a Spark
+P3. **(moved 2026-10-28 to its own repository - do not change `flight-spark` here; skip this item)** Spark connector for production (`flight-spark`). (a) Kerberos on YARN executors: a Spark
     `HadoopDelegationTokenProvider` that gets a server session on the driver and ships it in the job credentials (today
     every executor does its own SPNEGO and fails without a TGT); (b) build profiles for Spark 3.3/3.4 (check what Hadoop
     3.1.3 clusters usually run) and Spark 4.x (Scala 2.13, JDK 17/21); (c) a proper Spark catalog (namespaces/tables from
@@ -205,9 +205,8 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
     handling: keep it small and coordinate via `STATUS.md` Log; wire change -> Open questions first, opt-in setting.
-P6. Next wave (order may change after the maintainer's answers): Ranger Hive-policy reuse with column masking / row
-    filters; Hive ACID (insert-only first); Iceberg REST catalogs (Polaris, Nessie, Lakekeeper, Unity) with vended
-    credentials; Postgres/MySQL federation; Ozone S3 gateway test; Delta via Delta Kernel Java.
+P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
+    `docs/dev/CATALOGS-STATUS.md`).
 
 ## Open questions
 

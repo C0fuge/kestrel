@@ -171,7 +171,7 @@
 >    per connection), fewer under concurrency. Tests: formula across host profiles (2c/6g container, 4c/16g, 16c/64g,
 >    64c/512g, small `memory.max` with many cores), no OOM in the existing 6 GB container tests; perf in CI on 4 vCPU
 >    (no regression vs today's defaults) - large hosts are measured on the maintainer's stand later.
-> 4. item 18 step 2 - distributed complete mode (answers below; opt-in `distributedComplete`, default false).
+> 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).
 > 6. then the stand rounds of items 15, 16, 19 and the other open items as before.

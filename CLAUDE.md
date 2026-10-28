@@ -61,3 +61,15 @@ above with these differences:
 - Both lanes push to `main`: `git pull --rebase` before every push; resolve `CHANGELOG.md` / root `pom.xml` conflicts by
   keeping both sides. Never rewrite the other lane's commits.
 - A `package=true` pre-release when a plugin changes runtime behaviour, as in the core lane.
+
+## Third and fourth lanes (maintainer, 2026-10-28)
+
+More parallel sessions, same rules as the second lane unless said otherwise:
+- **Lane 3 "distributed"** (item 18, distributed complete mode, plus later cluster items): works on branch
+  `lane/distributed`, never directly on `main`. Lock `docs/dev/LOCK-LANE3`, backlog/Log `docs/dev/LANE3-STATUS.md`
+  (on `main`, so every lane sees it). Each session: `git fetch`, rebase the branch on `origin/main` first, push with
+  `--force-with-lease` (only this lane's branch). When a step is complete and CI is green on the branch, merge it into
+  `main` (rebase-merge, `git pull --rebase` first) with a CHANGELOG line and a `STATUS.md` Log line; a `package=true`
+  pre-release from `main`. Keep steps small so merges stay easy; the core lane may touch the same files.
+- **Lane 4 "catalogs and sources"**: new plugin modules only (catalogs, data sources), on `main`. Lock
+  `docs/dev/LOCK-CATALOGS`, backlog/Log `docs/dev/CATALOGS-STATUS.md`. Same SPI/core limits as the second lane.
