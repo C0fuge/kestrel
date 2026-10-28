@@ -5,7 +5,7 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
-P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet and Iceberg tables and skips ORC; most
+P1. **ORC tables in the Hive catalog.** *(Done 2026-10-28; opt-in `hive.orcTables`.)* Today the Hive plugin reads only Parquet and Iceberg tables and skips ORC; most
     production Hive tables are ORC. DuckDB has no usable ORC reader (the community `orc` extension reads local files
     only, no pushdown, no 1.5.6 build). Build a Java reader: Apache `orc-core` (with `hive-storage-api`) reading from HDFS
     (Kerberos, HA nameservice) and S3 through the existing storage setup, converting stripes to Arrow and handing them to
@@ -110,13 +110,21 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     best of 3, seconds (complete / partial), Parquet vs ORC zlib-zstd: count(*) 0.01 vs 0.08-0.27; Q1-style 0.12
     vs 0.72-0.84 (was 6.6); Q6-style 0.03-0.04 vs 0.36-0.45 (was 6.6); `orderkey < 50000` 0.01 vs 0.02; `SELECT *`
     1.19-1.25 vs 1.51-1.69 (was 7.7). Batch size (4) not tried.
-    **Next step (step 2 (g), then close P1):** (a) a table of one large file gets no read-ahead (parallelism is
-    per file) - split files into stripe ranges (`Reader.Options.range(offset, length)` per group of stripes from
-    `Reader.getStripes()`) and treat each range as a read-ahead unit, keeping file/stripe order; test with one
-    file of several stripes (write with a small `stripeSize`) and `HiveOrcPerfTest -Dhive.orc.perf.files=1`;
-    (b) try `ORC_BATCH_ROWS` 8192/16384 on Q1 (where is the remaining 6x: JFR on Q1 alone - DuckDB's
-    single-stream consumption vs ORC decode); (c) then close P1 (the pre-release of this session already carries
-    (f)) and move to P2.
+    *Step 2 (g) done 2026-10-28 (77a8db9, d13fbb3):* a file larger than a quarter of `ORC_RANGE_BYTES` (32 MiB,
+    so 8 MiB) is planned from its footer (`OrcArrowReader.stripes`, on the stream's thread, once per file) into
+    groups of whole stripes of at least `min(32 MiB, size / readAhead)`; each group is a read-ahead unit
+    (`Reader.Options.range`, ORC reads the stripes that start in it), handed over in file and stripe order. The
+    first range starts at 0 and the last is open-ended, so every stripe is read once whatever the footer or listed
+    size say; an unreadable footer leaves the file one range, whose read reports the failure naming the file.
+    Tests `OrcTableReaderTest` 6/6 (new: one file of >= 8 stripes, ranges per group, listed size right and short,
+    read-ahead 1/3/8; a large broken file). SF1 one file per table, run 40643095396: count(*) 0.07-0.17, Q1-style
+    0.73-0.83, Q6-style 0.37-0.46, `orderkey < 50000` 0.02, `SELECT *` 1.51-1.77 s (Parquet 0.01 / 0.24 / 0.08 /
+    0.01 / 1.23-1.30) = the 4-file numbers of step 2 (f). Batch size: 4096 / 8192 / 16384 rows tried locally
+    (2M rows, 4 files, 4 cores) - differences within run-to-run noise (Q1 0.41-0.53 / 0.45-0.68 / 0.40-0.60 s),
+    kept 4096. The rest of the gap to Parquet (~3-10x on aggregations) is one Arrow stream per table reference
+    consumed by DuckDB (no parallel scan of a stream) plus ORC decoding; closing it would need several streams per
+    table reference (a union of streams, core `ArrowStreamScans`) - not planned; revisit if production queries
+    need it. **P1 closed.**
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
