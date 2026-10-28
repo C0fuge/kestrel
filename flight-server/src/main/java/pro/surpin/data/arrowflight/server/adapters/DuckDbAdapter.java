@@ -64,6 +64,11 @@ public final class DuckDbAdapter implements AutoCloseable {
             TimeUnit.MILLISECONDS.toNanos(100);
     private static final long SESSION_REAP_PERIOD_SECONDS = 15;
     private static final String TEMP_ROOT_PREFIX = "duckdb-";
+    /**
+     * Prefix of the in-memory catalog each session of a shared DuckDB keeps its catalog views
+     * in; client SQL may not name such a catalog or schema (duckDbSharedDatabase).
+     */
+    public static final String SESSION_CATALOG_PREFIX = "flight_session_";
     private final Path tempRoot;
     private final AtomicInteger sessionIds = new AtomicInteger();
     /** Directories DuckDB may read when locked down (as DuckDB sees the paths). */
@@ -98,6 +103,9 @@ public final class DuckDbAdapter implements AutoCloseable {
     /** A function or table name in DuckDB's serialized statement. */
     private static final java.util.regex.Pattern SERIALIZED_NAME = java.util.regex.Pattern.compile(
             "\"(?:function_name|table_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+    /** A catalog or schema qualifier of a table in DuckDB's serialized statement. */
+    private static final java.util.regex.Pattern SERIALIZED_QUALIFIER = java.util.regex.Pattern.compile(
+            "\"(?:catalog_name|schema_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
     /** A string literal in a DuckDB error, possibly cut off before its closing quote. */
     private static final java.util.regex.Pattern SETUP_LITERAL =
             java.util.regex.Pattern.compile("'(?:[^']|'')*(?:'|$)");
@@ -137,6 +145,18 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final Map<String, List<String>> parseCheckCache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(64, 0.75f, true));
     private final ThreadLocal<Session> threadSession;
+    /**
+     * Node-wide threads and memory limit of duckDbSharedDatabase; null when every session is a
+     * DuckDB of its own.
+     */
+    private final DuckDbSizing.Shared shared;
+    /**
+     * The node's DuckDB with duckDbSharedDatabase, set up and locked down once; every session is
+     * a connection to it. Replaced when DuckDB invalidates it; null when the setting is off.
+     */
+    private volatile Connection sharedRoot;
+    /** Guards the replacement of sharedRoot. */
+    private final Object sharedRootLock = new Object();
     /**
      * Second session per thread with duckDbThreadsUnderLoad threads, opened on first use; null
      * when the setting is off.
@@ -414,6 +434,35 @@ public final class DuckDbAdapter implements AutoCloseable {
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
             int threadsUnderLoad, int threadsWhenIdle, int cores, ProducingStreamGate producingGate,
             boolean zeroCopyWrites) {
+        this(appConfig, ioPool, setup, threadsUnderLoad, threadsWhenIdle, cores, producingGate,
+                zeroCopyWrites, null);
+    }
+
+    /**
+     * Creates DuckDB adapter that may run every session on one DuckDB of the node
+     * (duckDbSharedDatabase): the storage setup and the lockdown then run once, threads and
+     * memory limit apply to the node, and each session keeps its catalog views in an in-memory
+     * catalog of its own. duckDbThreadsUnderLoad and duckDbThreadsWhenIdle are off then.
+     *
+     * @param appConfig        server configuration
+     * @param ioPool           shared I/O thread pool for parallel execution
+     * @param setup            setup written by the DuckDbSetupValidator; empty roots disable the
+     *                         lockdown
+     * @param threadsUnderLoad DuckDB threads of the second connection; 0, or not below
+     *                         duckDbThreads, keeps every query on its thread's one connection
+     * @param threadsWhenIdle  DuckDB threads of the connection a query uses when it starts alone
+     *                         on the node, at most the cores; 0, or not above duckDbThreads, is off
+     * @param cores            processors the node's queries share
+     * @param producingGate    gate of the streams inside DuckDB at once
+     * @param zeroCopyWrites   whether result streams hand their buffers to gRPC without a copy
+     * @param shared           node-wide sizing of the shared DuckDB, or null for a DuckDB per
+     *                         session
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
+            int threadsUnderLoad, int threadsWhenIdle, int cores, ProducingStreamGate producingGate,
+            boolean zeroCopyWrites, DuckDbSizing.Shared shared) {
+        this.shared = shared;
         this.producingGate = producingGate;
         this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
@@ -427,18 +476,31 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.duckDbGroups = appConfig.duckDbGroups();
 
         this.tempRoot = createTempRoot(appConfig.duckDbTempDirectory());
-        if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null) {
+        if (shared != null) {
+            // Set up, checked and locked down once; a failure stops the server here.
+            this.sharedRoot = openSharedRoot(true);
+            if (threadsUnderLoad > 0 || threadsWhenIdle > 0) {
+                LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbThreadsUnderLoad,"
+                        + "duckDbThreadsWhenIdle reason=\"threads are node-wide\"", LogUtil.node());
+            }
+            if (appConfig.duckDbStreamingBufferSize() != null) {
+                LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbStreamingBufferSize"
+                        + " reason=\"a per-connection setting, locked before the sessions connect\"",
+                        LogUtil.node());
+            }
+        } else if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null) {
             // An extension file of another DuckDB version (hadoopfs v1.4.5 next to DuckDB 1.5.6)
             // stops the server here instead of failing every query.
             verifyStorageSetup();
         }
         this.threadSession = ThreadLocal.withInitial(() -> openSession(appConfig.duckDbThreads()));
-        this.threadsUnderLoad = threadsUnderLoad > 0 && threadsUnderLoad < appConfig.duckDbThreads()
-                ? threadsUnderLoad : 0;
+        this.threadsUnderLoad = shared == null && threadsUnderLoad > 0
+                && threadsUnderLoad < appConfig.duckDbThreads() ? threadsUnderLoad : 0;
         this.cores = Math.max(1, cores);
         this.loadSession = this.threadsUnderLoad > 0
                 ? ThreadLocal.withInitial(() -> openSession(this.threadsUnderLoad)) : null;
-        this.threadsWhenIdle = threadsWhenIdle(threadsWhenIdle, appConfig.duckDbThreads(), this.cores);
+        this.threadsWhenIdle = shared == null
+                ? threadsWhenIdle(threadsWhenIdle, appConfig.duckDbThreads(), this.cores) : 0;
         this.idleSession = this.threadsWhenIdle > 0
                 ? ThreadLocal.withInitial(() -> openSession(this.threadsWhenIdle)) : null;
         // Flight runs streams on a cached thread pool: its threads end after a minute of
@@ -452,10 +514,12 @@ public final class DuckDbAdapter implements AutoCloseable {
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
         LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} whenIdle={}"
-                + " producingStreams={} zeroCopyWrites={} availableProcessors={}", LogUtil.node(),
-                appConfig.duckDbThreads(), this.threadsUnderLoad, this.threadsWhenIdle,
+                + " producingStreams={} zeroCopyWrites={} availableProcessors={} sharedDatabase={}",
+                LogUtil.node(),
+                shared == null ? appConfig.duckDbThreads() : "shared", this.threadsUnderLoad,
+                this.threadsWhenIdle,
                 producingGate.permits(),
-                zeroCopyWrites, this.cores);
+                zeroCopyWrites, this.cores, shared == null ? "off" : shared.describe());
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);
@@ -495,13 +559,95 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Session openSession(int threads) {
         try {
-            Connection conn = openConnection(false, threads);
-            Session session = new Session(Thread.currentThread(), conn,
-                    appConfig.duckDbStatementCacheSize());
+            Connection root = sharedRoot;
+            Session session;
+            if (root == null) {
+                session = new Session(Thread.currentThread(), openConnection(false, threads),
+                        appConfig.duckDbStatementCacheSize(), null, null);
+            } else {
+                String catalog = SESSION_CATALOG_PREFIX + sessionIds.incrementAndGet();
+                session = new Session(Thread.currentThread(), openSharedConnection(root, catalog),
+                        appConfig.duckDbStatementCacheSize(), root, catalog);
+            }
             allSessions.add(session);
             return session;
         } catch (Exception e) {
             throw new RuntimeException("Failed to create thread-local DuckDB connection", e);
+        }
+    }
+
+    /**
+     * Connects to the node's shared DuckDB with an in-memory catalog of the session's own as the
+     * default, so that its catalog views are not those of other sessions.
+     *
+     * @param root    connection of the shared DuckDB
+     * @param catalog name of the session's catalog
+     * @return connection whose default catalog is the session's
+     * @throws java.sql.SQLException when DuckDB cannot connect or attach
+     */
+    private static Connection openSharedConnection(Connection root, String catalog)
+            throws java.sql.SQLException {
+        Connection conn = root.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
+        try (Statement s = conn.createStatement()) {
+            s.execute("ATTACH ':memory:' AS " + quoteIdentifier(catalog));
+            s.execute("USE " + quoteIdentifier(catalog));
+        } catch (java.sql.SQLException e) {
+            Session.closeQuietly(conn);
+            throw e;
+        }
+        return conn;
+    }
+
+    /**
+     * Opens, sets up and locks down the node's shared DuckDB (duckDbSharedDatabase) with the
+     * node-wide threads and memory limit; spill files go to a directory of its own.
+     *
+     * @param logExtensions whether to log the storage extensions loaded
+     * @return connection that owns the shared DuckDB
+     * @throws IllegalStateException when DuckDB cannot be set up or the lockdown check fails
+     */
+    private Connection openSharedRoot(boolean logExtensions) {
+        try {
+            Connection conn = openConnection(logExtensions, shared.threads(), shared.memoryLimit(),
+                    tempRoot.resolve("shared" + sessionIds.incrementAndGet()));
+            try {
+                if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
+                    LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
+                }
+            } catch (Exception e) {
+                Session.closeQuietly(conn);
+                throw e;
+            }
+            LOGGER.info("node={} duckdb=sharedDatabaseOpened {} statements={}", LogUtil.node(),
+                    shared.describe(), storageSetupStatements.size());
+            return conn;
+        } catch (Exception e) {
+            throw new IllegalStateException("DuckDB cannot be set up for the data store: "
+                    + sanitizeSetupError(e.getMessage()), e instanceof java.sql.SQLException ? null : e);
+        }
+    }
+
+    /**
+     * Opens a new shared DuckDB in place of one DuckDB invalidated; sessions still on the old one
+     * are closed when their threads next ask for a connection. A failure to open is logged and
+     * the old one kept, so later queries fail with DuckDB's error.
+     *
+     * @param invalidated connection of the shared DuckDB that was invalidated
+     */
+    void replaceSharedRoot(Connection invalidated) {
+        synchronized (sharedRootLock) {
+            if (sharedRoot != invalidated) {
+                return;
+            }
+            try {
+                sharedRoot = openSharedRoot(false);
+            } catch (RuntimeException e) {
+                LOGGER.error("node={} duckdb=sharedDatabaseReopenFailed error={}", LogUtil.node(),
+                        firstLine(String.valueOf(e.getMessage())));
+                return;
+            }
+            Session.closeQuietly(invalidated);
+            LOGGER.warn("node={} duckdb=sharedDatabaseReplaced reason=invalidated", LogUtil.node());
         }
     }
 
@@ -514,6 +660,22 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @throws Exception when DuckDB cannot be opened or configured
      */
     private Connection openConnection(boolean logExtensions, int threads) throws Exception {
+        return openConnection(logExtensions, threads, appConfig.duckDbMemoryLimit(),
+                tempRoot.resolve("c" + sessionIds.incrementAndGet()));
+    }
+
+    /**
+     * Opens and configures a DuckDB with the given threads, memory limit and spill directory.
+     *
+     * @param logExtensions whether to log the storage extensions loaded
+     * @param threads       DuckDB threads
+     * @param memoryLimit   DuckDB memory_limit, null or blank = DuckDB's default
+     * @param tempDirectory spill directory of this DuckDB
+     * @return configured connection
+     * @throws Exception when DuckDB cannot be opened or configured
+     */
+    private Connection openConnection(boolean logExtensions, int threads, String memoryLimit,
+            Path tempDirectory) throws Exception {
         Properties props = new Properties();
         if (appConfig.duckDbAllowUnsignedExtensions()) {
             props.setProperty("allow_unsigned_extensions", "true");
@@ -526,7 +688,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         props.setProperty("allow_persistent_secrets", "false");
         Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
         try {
-            configureConnection(conn, logExtensions, threads);
+            configureConnection(conn, logExtensions, threads, memoryLimit, tempDirectory);
         } catch (Exception e) {
             Session.closeQuietly(conn);
             throw e;
@@ -560,21 +722,21 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param logExtensions whether to log the storage extensions loaded, read before the
      *                      lockdown because the extension directory is not readable after it
      * @param threads       DuckDB threads of the connection
+     * @param memLimit      DuckDB memory_limit, null or blank = DuckDB's default
+     * @param tempDirectory spill directory of this DuckDB
      * @throws Exception on configuration failure
      */
-    private void configureConnection(Connection conn, boolean logExtensions, int threads)
-            throws Exception {
+    private void configureConnection(Connection conn, boolean logExtensions, int threads,
+            String memLimit, Path tempDirectory) throws Exception {
         try (Statement s = conn.createStatement()) {
             s.execute("SET threads = " + threads);
-            String memLimit = appConfig.duckDbMemoryLimit();
             if (memLimit != null && !memLimit.isBlank()) {
                 s.execute("SET memory_limit = " + sqlStringLiteral(memLimit));
                 LOGGER.debug("node={} duckdb=memoryLimit limit={}", LogUtil.node(), memLimit);
             }
             // Every connection is a DuckDB instance of its own. They all spill to ".tmp" by default,
             // into files with the same names, and an instance removes that directory when closed.
-            s.execute("SET temp_directory = " + sqlStringLiteral(
-                    tempRoot.resolve("c" + sessionIds.incrementAndGet()).toString()));
+            s.execute("SET temp_directory = " + sqlStringLiteral(tempDirectory.toString()));
             String maxTempSize = appConfig.duckDbMaxTempSize();
             if (maxTempSize != null) {
                 // The cap holds per connection (each is an instance of its own), so the node may
@@ -587,7 +749,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 s.execute("SET preserve_insertion_order = false");
             }
             String streamingBuffer = appConfig.duckDbStreamingBufferSize();
-            if (streamingBuffer != null) {
+            if (streamingBuffer != null && shared == null) {
                 // How far a streamed result may run ahead of the Flight consumer.
                 s.execute("SET streaming_buffer_size = " + sqlStringLiteral(streamingBuffer));
             }
@@ -831,6 +993,15 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the connection that owns the node's shared DuckDB, for tests.
+     *
+     * @return connection of the shared DuckDB, or null when every session is a DuckDB of its own
+     */
+    Connection sharedDatabase() {
+        return sharedRoot;
+    }
+
+    /**
      * Returns the number of open DuckDB connections.
      *
      * @return open connection count
@@ -866,6 +1037,10 @@ public final class DuckDbAdapter implements AutoCloseable {
             LOGGER.warn("node={} duckdb=sessionDropped reason=invalidated thread={} open={} error={}",
                     LogUtil.node(), session.owner.getName(), allSessions.size(),
                     firstLine(String.valueOf(error.getMessage())));
+        }
+        if (session.root != null) {
+            // The whole shared DuckDB is invalidated, not only this session's connection.
+            replaceSharedRoot(session.root);
         }
     }
 
@@ -950,7 +1125,17 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Session session() {
         ThreadLocal<Session> chosen = slotSessions.get();
-        return (chosen != null ? chosen : threadSession).get();
+        ThreadLocal<Session> local = chosen != null ? chosen : threadSession;
+        Session session = local.get();
+        if (session.root != sharedRoot) {
+            // The shared DuckDB was replaced after it was invalidated.
+            local.remove();
+            if (allSessions.remove(session)) {
+                session.close();
+            }
+            session = local.get();
+        }
+        return session;
     }
 
     /**
@@ -1809,7 +1994,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                         views.dataStatements(), views.dropStatements());
                 session.viewsVersion = views.version();
             }
-            requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql);
+            requireNoSessionCatalog(requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
             try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
                 requireQuery(sql, ps);
                 bindParameters(ps, parameters);
@@ -2128,7 +2313,26 @@ public final class DuckDbAdapter implements AutoCloseable {
             return false;
         }
         requireAllowedNames(names);
+        requireNoSessionCatalog(names);
         return true;
+    }
+
+    /**
+     * Refuses names of the sessions' own catalogs when sessions share one DuckDB: a query of one
+     * session may not read the catalog views of another.
+     *
+     * @param names lower-case names a statement uses
+     * @throws IllegalArgumentException when such a name is used
+     */
+    private void requireNoSessionCatalog(List<String> names) {
+        if (shared == null) {
+            return;
+        }
+        for (String name : names) {
+            if (name.startsWith(SESSION_CATALOG_PREFIX)) {
+                throw new IllegalArgumentException("Catalog or schema " + name + " is not allowed");
+            }
+        }
     }
 
     /**
@@ -2148,6 +2352,7 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param names function and table names the text uses
      */
     private void rememberAccepted(String sql, List<String> names) {
+        requireNoSessionCatalog(names);
         if (!QueryCacheLimits.cacheable(sql)) {
             CacheMetrics.oversize(CacheMetrics.Cache.PARSE_CHECK);
             return;
@@ -2218,6 +2423,14 @@ public final class DuckDbAdapter implements AutoCloseable {
         while (m.find()) {
             String name = m.group(1).toLowerCase(java.util.Locale.ROOT);
             if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
+        java.util.regex.Matcher q = SERIALIZED_QUALIFIER.matcher(serialized);
+        while (q.find()) {
+            // Only the qualifiers a shared DuckDB refuses are kept; others are no names to check.
+            String name = q.group(1).toLowerCase(java.util.Locale.ROOT);
+            if (name.startsWith(SESSION_CATALOG_PREFIX) && !names.contains(name)) {
                 names.add(name);
             }
         }
@@ -2341,6 +2554,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         /** Parse check ({@link #PARSE_CHECK_SQL}) prepared on the describe connection. */
         private PreparedStatement describeCheck;
         private final StatementCache statements;
+        /** Connection of the shared DuckDB this session connects to; null for a DuckDB of its own. */
+        private final Connection root;
+        /** The session's catalog in the shared DuckDB; null for a DuckDB of its own. */
+        private final String catalog;
 
         /**
          * Binds a connection to the thread that uses it.
@@ -2348,10 +2565,15 @@ public final class DuckDbAdapter implements AutoCloseable {
          * @param owner         thread the connection belongs to
          * @param conn          DuckDB connection
          * @param maxStatements prepared statements to keep; 0 or less keeps only the one in use
+         * @param root          connection of the shared DuckDB, or null
+         * @param catalog       the session's catalog in the shared DuckDB, or null
          */
-        private Session(Thread owner, Connection conn, int maxStatements) {
+        private Session(Thread owner, Connection conn, int maxStatements, Connection root,
+                String catalog) {
             this.owner = owner;
             this.conn = conn;
+            this.root = root;
+            this.catalog = catalog;
             this.maxStatements = Math.max(1, maxStatements);
             // Upstream's bounded LRU cache; it closes the statements it evicts.
             this.statements = new StatementCache(this.maxStatements);
@@ -2373,6 +2595,15 @@ public final class DuckDbAdapter implements AutoCloseable {
          */
         private void close() {
             statements.closeAll();
+            if (catalog != null) {
+                // The catalog belongs to the shared DuckDB and outlives this connection.
+                try (Statement s = conn.createStatement()) {
+                    s.execute("USE memory");
+                    s.execute("DETACH DATABASE IF EXISTS " + quoteIdentifier(catalog));
+                } catch (Exception e) {
+                    LOGGER.debug("Failed to detach DuckDB session catalog {}", catalog, e);
+                }
+            }
             closeQuietly(conn);
             if (describeCheck != null) {
                 closeQuietly(describeCheck);
@@ -2575,6 +2806,10 @@ public final class DuckDbAdapter implements AutoCloseable {
             session.close();
         }
         allSessions.clear();
+        Connection root = sharedRoot;
+        if (root != null) {
+            Session.closeQuietly(root);
+        }
         deleteRecursively(tempRoot);
     }
 }

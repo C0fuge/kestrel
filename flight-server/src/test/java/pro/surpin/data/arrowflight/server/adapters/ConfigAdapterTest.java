@@ -205,6 +205,27 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void duckDbSharedDatabaseIsOffByDefaultAndSizesTheNode() throws IOException {
+        HostLimits host = new HostLimits(2, 6L << 30, 3L << 30, 2L << 30);
+        assertNull(ConfigAdapter.duckDbShared(source(Map.of(), Map.of()), host));
+        assertNull(ConfigAdapter.duckDbShared(
+                source(Map.of("duckDbSharedDatabase", "false"), Map.of()), host));
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"), ConfigAdapter.duckDbShared(
+                source(Map.of("duckDbSharedDatabase", "true"), Map.of()), host));
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"), ConfigAdapter.duckDbShared(
+                source(Map.of(), Map.of("DUCKDB_SHARED_DATABASE", "TRUE")), host));
+        assertEquals(new DuckDbSizing.Shared(6, "3GB"), ConfigAdapter.duckDbShared(
+                source(Map.of("arrowflight.duckdb.sharedDatabase", "true", "duckDbThreads", "6",
+                        "duckDbMemoryLimit", "3GB"), Map.of()), host));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbShared(
+                        source(Map.of("duckDbSharedDatabase", "yes"), Map.of()), host));
+        assertTrue(e.getMessage().contains("duckDbSharedDatabase"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.duckDbShared(
+                source(Map.of("duckDbSharedDatabase", "true", "duckDbThreads", "-1"), Map.of()), host));
+    }
+
+    @Test
     void distributedCompleteIsOffByDefaultAndRefusesOtherValues() throws IOException {
         assertFalse(ConfigAdapter.distributedComplete(source(Map.of(), Map.of())));
         assertTrue(ConfigAdapter.distributedComplete(

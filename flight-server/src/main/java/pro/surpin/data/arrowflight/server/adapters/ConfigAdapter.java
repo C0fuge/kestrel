@@ -409,6 +409,44 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns the node-wide DuckDB sizing of duckDbSharedDatabase from the system configuration.
+     *
+     * @return node-wide sizing, or null when the setting is off
+     */
+    public static DuckDbSizing.Shared duckDbShared() {
+        return duckDbShared(ConfigSource.system(), HostLimits.detect());
+    }
+
+    /**
+     * Resolves {@code duckDbSharedDatabase} ({@code DUCKDB_SHARED_DATABASE}, default false):
+     * whether every worker connection connects to one DuckDB of the node, with one thread pool
+     * and one memory limit, instead of being a DuckDB of its own. When on, {@code duckDbThreads}
+     * and {@code duckDbMemoryLimit} apply to the node (unset = the cores and the DuckDB budget).
+     *
+     * @param props configuration source
+     * @param host  cores and memory of the host
+     * @return node-wide sizing, or null when the setting is off
+     * @throws IllegalArgumentException for a value other than true or false, or a negative
+     *         thread count
+     */
+    public static DuckDbSizing.Shared duckDbShared(ConfigSource props, HostLimits host) {
+        String value = getStringWithEnv("duckDbSharedDatabase", "arrowflight.duckdb.sharedDatabase",
+                "DUCKDB_SHARED_DATABASE", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("duckDbSharedDatabase must be true or false: " + value);
+        }
+        if (!Boolean.parseBoolean(value)) {
+            return null;
+        }
+        int threads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
+        if (threads < 0) {
+            throw new IllegalArgumentException("duckDbThreads must not be negative: " + threads);
+        }
+        String memoryLimit = getString("duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null, props);
+        return DuckDbSizing.shared(host, threads, memoryLimit);
+    }
+
+    /**
      * Creates the Flight SQL session store from the system configuration.
      *
      * @return session store

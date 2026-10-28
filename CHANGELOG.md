@@ -14,6 +14,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   scan are read as byte ranges decoded in parallel (Avro from the next sync marker, text from the next line start, as
   Hadoop splits them; files over 8 MiB, like ORC files since P1), instead of one thread per file. Same rows in the
   same order; compressed text files and tables with `skip.header.line.count` are still read whole (P4 (d)).
+- Setting `duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false = unchanged): every worker connection
+  connects to one DuckDB of the node (one thread pool and one `memory_limit`; storage setup, secrets and lockdown run
+  once and are checked at startup); each connection keeps the catalog views in an in-memory catalog of its own, and
+  client SQL naming such a `flight_session_<n>` catalog or schema is refused. With it, `duckDbThreads` /
+  `duckDbMemoryLimit` size the node (unset = cores / whole DuckDB budget); `duckDbThreadsUnderLoad`,
+  `duckDbThreadsWhenIdle` and `duckDbStreamingBufferSize` are ignored. A DuckDB invalidated by a FATAL error is
+  replaced as a whole. Manual workflow `tpch-perf.yml` takes `extra` server options, measured and answer-checked
+  against the default (item 22 step 1).
 - Queries of catalog views (Hive views with the opt-in `hive.views`; nothing changes without it): a view named with
   its schema (`FROM h_db.my_view`, also in joins, subqueries and other views) reads its translated query over the
   tables; such queries are always answered completely, also when parts are asked for (one endpoint). Access needs the

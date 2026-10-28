@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -335,6 +335,18 @@ batch; the others wait their turn in arrival order. A stream waiting for its cli
 budget holds no turn, so a client may read endpoints in any order. Try cores / `duckDbThreads`
 (e.g. 1-2 on 2 cores) for many parallel endpoints on few cores; a long aggregation holds its turn
 until its first batch, so keep it off for mixed workloads with heavy queries.
+
+`duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false) runs every Flight worker's
+connection on one DuckDB of the node instead of one DuckDB per connection: one thread pool sized to
+the node, so N parallel streams share the cores instead of starting N x `duckDbThreads` threads, and
+one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
+are checked as before); `duckDbThreads` and `duckDbMemoryLimit` then mean the node's threads and
+memory (unset = the cores and the whole DuckDB budget, at least 1 GiB, at most 80 % of the memory);
+`duckDbThreadsUnderLoad`, `duckDbThreadsWhenIdle` and `duckDbStreamingBufferSize` (a per-connection
+DuckDB setting that the lockdown freezes) are ignored with a WARN. Each connection keeps the catalog
+views in an in-memory catalog of its own (`flight_session_<n>`, made its default), so view versions
+of concurrent queries do not mix; client SQL naming such a catalog or schema is refused. The startup
+line `duckdb=sharedDatabaseOpened` shows the sizing. Opt-in while it is measured (item 22).
 
 `flightBackpressureThresholdBytes` is the most a single Flight stream queues for a slow client;
 `flightOutboundBudgetBytes` (default 0 = a quarter of the JVM's direct memory limit,

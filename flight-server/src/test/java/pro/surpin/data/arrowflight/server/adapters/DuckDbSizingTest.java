@@ -191,4 +191,25 @@ class DuckDbSizingTest {
         assertTrue(host.memoryBytes() > 0);
         assertTrue(host.maxHeapBytes() > 0);
     }
+
+    /**
+     * Verifies duckDbSharedDatabase sizes one DuckDB for the node: the cores as threads and the
+     * whole budget as memory limit (1 GiB floor, 80 % cap), explicit settings for the node.
+     */
+    @Test
+    void sharedDatabaseGetsTheCoresAndTheWholeBudget() {
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"),
+                DuckDbSizing.shared(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB), 0, null));
+        assertEquals(new DuckDbSizing.Shared(8, "8806MiB"),
+                DuckDbSizing.shared(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB), 0, " "));
+        assertEquals(new DuckDbSizing.Shared(4, "6553MiB"),
+                DuckDbSizing.shared(new HostLimits(4, 8 * GIB, 0, 0), 0, null));
+        assertEquals(new DuckDbSizing.Shared(3, "4GB"),
+                DuckDbSizing.shared(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB), 3, " 4GB "));
+        assertEquals(new DuckDbSizing.Shared(8, null),
+                DuckDbSizing.shared(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB), 0, "none"));
+        assertEquals(new DuckDbSizing.Shared(1, null),
+                DuckDbSizing.shared(new HostLimits(0, 0, 0, 0), 0, null));
+        assertEquals("threads=8 memoryLimit=duckdbDefault", new DuckDbSizing.Shared(8, null).describe());
+    }
 }

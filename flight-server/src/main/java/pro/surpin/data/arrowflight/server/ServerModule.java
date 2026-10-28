@@ -268,7 +268,7 @@ public final class ServerModule {
                 ConfigAdapter.duckDbThreadsUnderLoad(), ConfigAdapter.duckDbThreadsWhenIdle(),
                 Runtime.getRuntime().availableProcessors(),
                 new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
-                ConfigAdapter.flightZeroCopyWrites());
+                ConfigAdapter.flightZeroCopyWrites(), ConfigAdapter.duckDbShared());
     }
 
     /**

@@ -30,6 +30,10 @@ on:
         description: "server container memory"
         type: string
         default: "8g"
+      extra:
+        description: "server options of a further configuration measured on this ref, its answers checked against the default's (e.g. -DduckDbSharedDatabase=true; empty = none)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -147,6 +151,9 @@ jobs:
           if [ -n "${{ inputs.baseline }}" ]; then
             measure "baseline" base ""
           fi
+          if [ -n "${{ inputs.extra }}" ]; then
+            measure "extra" head "${{ inputs.extra }}"
+          fi
           cat "$out"
 
       - name: Check
@@ -163,6 +170,12 @@ jobs:
             diff <(sums default) <(sums threads4) | tee -a "$RUNNER_TEMP/check.txt" || true
             exit 1
           fi
+          if [ -n "${{ inputs.extra }}" ] && [ "$(sums default)" != "$(sums extra)" ]; then
+            echo "answers differ with ${{ inputs.extra }}:" | tee -a "$RUNNER_TEMP/check.txt"
+            diff <(sums default) <(sums extra) | tee -a "$RUNNER_TEMP/check.txt" || true
+            exit 1
+          fi
+          echo "extra (${{ inputs.extra || 'none' }}) best total $(best extra) s" | tee -a "$RUNNER_TEMP/check.txt"
           if awk -v d="$d" -v t="$t" 'BEGIN { exit !(d > t * 1.10) }'; then
             echo "default is more than 10 % slower than -DduckDbThreads=4" | tee -a "$RUNNER_TEMP/check.txt"
             exit 1

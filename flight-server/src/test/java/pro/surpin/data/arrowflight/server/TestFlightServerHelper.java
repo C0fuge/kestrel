@@ -95,7 +95,7 @@ public class TestFlightServerHelper implements AutoCloseable {
                     pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
                     b.threadsUnderLoad, b.threadsWhenIdle, b.cores,
                     new ProducingStreamGate(b.producingStreams),
-                    b.zeroCopyWrites);
+                    b.zeroCopyWrites, b.sharedDatabase);
         }
 
         // Services
@@ -223,6 +223,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         private int cores = Runtime.getRuntime().availableProcessors();
         private int producingStreams;
         private boolean zeroCopyWrites;
+        private pro.surpin.data.arrowflight.server.adapters.DuckDbSizing.Shared sharedDatabase;
         private StreamCompression.Settings compression = StreamCompression.Settings.DEFAULT;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
@@ -243,6 +244,9 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder threadsWhenIdle(int t) { this.threadsWhenIdle = t; return this; }
         public Builder producingStreams(int p) { this.producingStreams = p; return this; }
         public Builder zeroCopyWrites(boolean z) { this.zeroCopyWrites = z; return this; }
+        /** Runs every session on one DuckDB of the node (duckDbSharedDatabase) with this sizing. */
+        public Builder sharedDatabase(pro.surpin.data.arrowflight.server.adapters.DuckDbSizing.Shared s) {
+            this.sharedDatabase = s; return this; }
         public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }
 
         public TestFlightServerHelper start() throws Exception {

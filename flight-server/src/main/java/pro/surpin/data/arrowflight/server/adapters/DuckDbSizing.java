@@ -113,6 +113,53 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     }
 
     /**
+     * Node-wide DuckDB threads and memory limit of {@code duckDbSharedDatabase}, where every
+     * worker connection is a connection to one DuckDB of the node.
+     *
+     * @param threads     DuckDB threads of the node
+     * @param memoryLimit DuckDB {@code memory_limit} of the node, null = DuckDB's default
+     */
+    public record Shared(int threads, String memoryLimit) {
+
+        /**
+         * Describes the chosen values for the startup log.
+         *
+         * @return one line of key=value pairs
+         */
+        public String describe() {
+            return "threads=" + threads + " memoryLimit=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit);
+        }
+    }
+
+    /**
+     * Computes the node-wide sizing of one shared DuckDB: the threads are the cores and the
+     * memory limit is the whole DuckDB budget (at least 1 GiB, at most 80 % of the memory).
+     * Explicit settings win and then apply to the node, not to a connection.
+     *
+     * @param host                host limits
+     * @param explicitThreads     configured {@code duckDbThreads}, 0 = unset
+     * @param explicitMemoryLimit configured {@code duckDbMemoryLimit}, null or blank = unset
+     * @return node-wide sizing
+     */
+    public static Shared shared(HostLimits host, int explicitThreads, String explicitMemoryLimit) {
+        int threads = explicitThreads > 0 ? explicitThreads : Math.max(1, host.cores());
+        String memoryLimit;
+        if (explicitMemoryLimit != null && !explicitMemoryLimit.isBlank()) {
+            memoryLimit = MEMORY_LIMIT_NONE.equalsIgnoreCase(explicitMemoryLimit.trim()) ? null
+                    : explicitMemoryLimit.trim();
+        } else if (host.memoryBytes() <= 0) {
+            memoryLimit = null;
+        } else {
+            long memory = host.memoryBytes();
+            long budget = memory - host.maxHeapBytes() - host.maxDirectBytes()
+                    - memory / 100 * HEADROOM_PERCENT;
+            long bytes = Math.min(Math.max(MIN_CONNECTION_BYTES, budget), memory / 100 * MAX_CONNECTION_PERCENT);
+            memoryLimit = Math.max(1, bytes >> 20) + "MiB";
+        }
+        return new Shared(threads, memoryLimit);
+    }
+
+    /**
      * Parses a DuckDB size such as {@code 4GB}, {@code 512MiB} or {@code 1073741824}.
      *
      * @param text size text
