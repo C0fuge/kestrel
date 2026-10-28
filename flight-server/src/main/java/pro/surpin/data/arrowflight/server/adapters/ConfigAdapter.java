@@ -43,6 +43,17 @@ public class ConfigAdapter {
      * @return resolved AppConfig
      */
     public static AppConfig getConfig(ConfigSource props) {
+        return getConfig(props, HostLimits.detect());
+    }
+
+    /**
+     * Resolves the server configuration from a source for a host of the given size.
+     *
+     * @param props configuration source
+     * @param host  cores and memory of the host
+     * @return resolved AppConfig
+     */
+    public static AppConfig getConfig(ConfigSource props, HostLimits host) {
         int ioParallelism = computeIoParallelism(props);
         int numServers = getInt("numServers", "arrowflight.cluster.numServers", 3, props);
         int batchSize = getInt("batchSize", "arrowflight.duckdb.batchSize", 65536, props);
@@ -52,13 +63,8 @@ public class ConfigAdapter {
         int duckDbGroups = getInt("duckDbGroups",
                 "arrowflight.duckdb.groups", Math.min(8, ioParallelism), props);
         String dataDir = getString("dataDir", null, "/data/parquet", props);
-        int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
-        if (duckDbThreads < 0) {
-            throw new IllegalArgumentException("duckDbThreads must not be negative: " + duckDbThreads);
-        }
-        if (duckDbThreads == 0) {
-            duckDbThreads = defaultDuckDbThreads(Runtime.getRuntime().availableProcessors(), dataDir);
-        }
+        DuckDbSizing sizing = duckDbSizing(props, host);
+        int duckDbThreads = sizing.threads();
         String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
                 "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
         boolean duckDbAllowUnsignedExtensions = getBooleanWithEnv("duckDbAllowUnsignedExtensions",
@@ -72,8 +78,7 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.hdfs.shortcircuit", "HDFS_SHORTCIRCUIT", null, props);
         String duckDbHdfsDomainSocketPath = getStringWithEnv("duckDbHdfsDomainSocketPath",
                 "arrowflight.duckdb.hdfs.domainSocketPath", "HDFS_DOMAIN_SOCKET_PATH", null, props);
-        String duckDbMemoryLimit = getString("duckDbMemoryLimit",
-                "arrowflight.duckdb.memoryLimit", null, props);
+        String duckDbMemoryLimit = sizing.memoryLimit();
         boolean metricsEnabled = getBooleanWithEnv("metricsEnabled",
                 "arrowflight.metrics.enabled", "FLIGHT_METRICS_ENABLED", false, props);
         long arrowAllocatorLimitBytes = getLong("arrowAllocatorLimitBytes",
@@ -371,14 +376,42 @@ public class ConfigAdapter {
     }
 
     /**
-     * Returns the DuckDB threads per connection used when duckDbThreads is unset or 0: a quarter
-     * of the cores, between 2 and 8.
+     * Resolves the DuckDB threads and memory limit per connection: {@code duckDbThreads} (0 or
+     * unset = by cores and memory), {@code duckDbMemoryLimit} (unset = the host's DuckDB budget
+     * split between the expected connections, {@code none} = DuckDB's default) and
+     * {@code duckDbMemoryConnections} ({@code DUCKDB_MEMORY_CONNECTIONS}, 0 or unset = cores /
+     * threads, at least 2).
+     *
+     * @param props configuration source
+     * @param host  cores and memory of the host
+     * @return sizing
+     * @throws IllegalArgumentException for a negative thread or connection count
+     */
+    public static DuckDbSizing duckDbSizing(ConfigSource props, HostLimits host) {
+        int threads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
+        if (threads < 0) {
+            throw new IllegalArgumentException("duckDbThreads must not be negative: " + threads);
+        }
+        int connections = getIntWithEnv("duckDbMemoryConnections",
+                "arrowflight.duckdb.memoryConnections", "DUCKDB_MEMORY_CONNECTIONS", 0, props);
+        if (connections < 0) {
+            throw new IllegalArgumentException(
+                    "duckDbMemoryConnections must not be negative: " + connections);
+        }
+        String memoryLimit = getString("duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null, props);
+        String dataDir = getString("dataDir", null, "/data/parquet", props);
+        return DuckDbSizing.compute(host, isObjectStore(dataDir), threads, memoryLimit, connections);
+    }
+
+    /**
+     * Returns the DuckDB threads per connection the cores alone give: a quarter of the cores,
+     * between 2 and 16.
      *
      * @param availableCores processors available to the JVM
      * @return threads per DuckDB connection
      */
     static int defaultDuckDbThreads(int availableCores) {
-        return Math.min(8, Math.max(2, availableCores / 4));
+        return Math.min(DuckDbSizing.MAX_THREADS, Math.max(DuckDbSizing.MIN_THREADS, availableCores / 4));
     }
 
     /**

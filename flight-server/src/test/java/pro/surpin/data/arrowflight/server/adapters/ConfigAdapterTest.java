@@ -46,7 +46,7 @@ class ConfigAdapterTest {
         // so the value is core-count dependent: clamped to [minThreads=8, 64].
         assertTrue(cfg.ioParallelism() >= 8 && cfg.ioParallelism() <= 64,
                 "ioParallelism should be within the formula range, got " + cfg.ioParallelism());
-        assertEquals(ConfigAdapter.defaultDuckDbThreads(Runtime.getRuntime().availableProcessors()),
+        assertEquals(DuckDbSizing.compute(HostLimits.detect(), false, 0, null, 0).threads(),
                 cfg.duckDbThreads());
         assertTrue(cfg.duckDbStreamResults());
         assertFalse(cfg.duckDbExternalFileCache());
@@ -119,7 +119,7 @@ class ConfigAdapterTest {
     /** The code default matches the bundled file: 4 threads without any setting (TUNING.md). */
     @Test
     void duckDbThreadsDefaultsToAQuarterOfTheCoresWithoutAnySetting() throws IOException {
-        int expected = ConfigAdapter.defaultDuckDbThreads(Runtime.getRuntime().availableProcessors());
+        int expected = DuckDbSizing.compute(HostLimits.detect(), false, 0, null, 0).threads();
         AppConfig cfg = ConfigAdapter.getConfig(
                 new ConfigSource(key -> null, new Properties(), Map.of(), null));
         assertEquals(expected, cfg.duckDbThreads());
@@ -200,29 +200,48 @@ class ConfigAdapterTest {
         assertEquals(4, ConfigAdapter.defaultDuckDbThreads(8, "s3n://lake/data"));
         assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "lakefs://repo/main/data"));
         assertEquals(6, ConfigAdapter.defaultDuckDbThreads(24, "s3://lake/data"));
-        assertEquals(8, ConfigAdapter.defaultDuckDbThreads(64, "s3://lake/data"));
+        assertEquals(16, ConfigAdapter.defaultDuckDbThreads(64, "s3://lake/data"));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "/data/parquet"));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "hdfs://nn:8020/data"));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "file:///data/s3://x"));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, null));
-        int cores = Runtime.getRuntime().availableProcessors();
-        assertEquals(Math.max(4, ConfigAdapter.defaultDuckDbThreads(cores)), ConfigAdapter.getConfig(
-                source(Map.of("dataDir", "s3://lake/data"), Map.of())).duckDbThreads());
-        assertEquals(ConfigAdapter.defaultDuckDbThreads(cores), ConfigAdapter.getConfig(
-                source(Map.of("dataDir", "hdfs://nn:8020/data"), Map.of())).duckDbThreads());
+        HostLimits host = new HostLimits(8, 64L << 30, 8L << 30, 8L << 30);
+        assertEquals(4, ConfigAdapter.getConfig(
+                source(Map.of("dataDir", "s3://lake/data"), Map.of()), host).duckDbThreads());
+        assertEquals(2, ConfigAdapter.getConfig(
+                source(Map.of("dataDir", "hdfs://nn:8020/data"), Map.of()), host).duckDbThreads());
         assertEquals(2, ConfigAdapter.getConfig(source(Map.of("dataDir", "s3://lake/data",
                 "duckDbThreads", "2"), Map.of())).duckDbThreads());
     }
 
     @Test
-    void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndEight() {
+    void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndSixteen() {
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(1));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(11));
         assertEquals(3, ConfigAdapter.defaultDuckDbThreads(12));
         assertEquals(4, ConfigAdapter.defaultDuckDbThreads(16));
         assertEquals(8, ConfigAdapter.defaultDuckDbThreads(32));
-        assertEquals(8, ConfigAdapter.defaultDuckDbThreads(128));
+        assertEquals(16, ConfigAdapter.defaultDuckDbThreads(64));
+        assertEquals(16, ConfigAdapter.defaultDuckDbThreads(128));
+    }
+
+    /** Item 19b: memory limit by host size, explicit values win, none keeps DuckDB's default. */
+    @Test
+    void duckDbMemoryLimitDefaultsToTheHostBudgetPerConnection() throws IOException {
+        HostLimits host = new HostLimits(16, 64L << 30, 8L << 30, 4L << 30);
+        AppConfig auto = ConfigAdapter.getConfig(source(Map.of(), Map.of()), host);
+        // 64 - 8 - 4 - 15 % of 64 = ~42.4 GiB over 16 / 4 = 4 connections
+        assertEquals("10854MiB", auto.duckDbMemoryLimit());
+        assertEquals(4, auto.duckDbThreads());
+        assertEquals("8GB", ConfigAdapter.getConfig(
+                source(Map.of("duckDbMemoryLimit", "8GB"), Map.of()), host).duckDbMemoryLimit());
+        assertNull(ConfigAdapter.getConfig(
+                source(Map.of("duckDbMemoryLimit", "none"), Map.of()), host).duckDbMemoryLimit());
+        assertEquals("2713MiB", ConfigAdapter.getConfig(
+                source(Map.of("duckDbMemoryConnections", "16"), Map.of()), host).duckDbMemoryLimit());
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.getConfig(
+                source(Map.of("duckDbMemoryConnections", "-1"), Map.of()), host));
     }
 
     @Test

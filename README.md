@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -290,6 +290,16 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates` |
+
+Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
+`duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
+`memory.max`) or machine minus `-Xmx`, the direct memory limit and 15 % headroom; each connection
+gets budget / `duckDbMemoryConnections` (`DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at
+least 2) as `memory_limit`, at least 1 GiB and at most 80 % of the memory; threads are cores / 4
+between 2 and 16 (at least 4 on `s3://`, `s3a://`, `s3n://`, `lakefs://`), at most one per GiB
+of that limit but never below 2. `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
+the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
+inputs and the chosen values.
 
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per

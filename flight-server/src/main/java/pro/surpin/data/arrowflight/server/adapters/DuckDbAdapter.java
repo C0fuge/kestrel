@@ -522,7 +522,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             String memLimit = appConfig.duckDbMemoryLimit();
             if (memLimit != null && !memLimit.isBlank()) {
                 s.execute("SET memory_limit = " + sqlStringLiteral(memLimit));
-                LOGGER.info("node={} duckdb=memoryLimit limit={}", LogUtil.node(), memLimit);
+                LOGGER.debug("node={} duckdb=memoryLimit limit={}", LogUtil.node(), memLimit);
             }
             // Every connection is a DuckDB instance of its own. They all spill to ".tmp" by default,
             // into files with the same names, and an instance removes that directory when closed.

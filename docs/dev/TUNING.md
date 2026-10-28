@@ -141,7 +141,10 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
   `s3a://`, `s3n://`, `lakefs://`) keeps at least 4: small queries there wait on round trips, and 2 threads lengthened the
   tail (CI screening: p95 +12-21 % at c8/c32 on 4 vCPU; local fake S3 at 2 ms per request: c1 p95 48 -> 35 ms, c8 p95
   77 -> 67 ms at 4 threads). Tables of catalogs on S3 behind a local or HDFS data directory keep the size-aware value;
-  set `duckDbThreads=4` there.
+  set `duckDbThreads=4` there. Since item 19b (2026-10-28) the upper clamp is 16 and the default also follows memory:
+  `memory_limit` per connection = (memory - `-Xmx` - direct - 15 %) / `duckDbMemoryConnections` (cores / threads, at
+  least 2), at least 1 GiB, and threads at most one per GiB of it (never below 2). Large hosts are still to be measured
+  on the stand (16 vs 32 as the clamp).
 - `flightBackpressureThresholdBytes=16777216` (16 MiB, was 256 MiB): no loss measured, and per-stream buffering times the number of
   concurrent streams must fit `MaxDirectMemorySize`; with several endpoints per node the 256 MiB default fails.
 - Keep: `duckDbStreamResults=true`, `duckDbExternalFileCache=false`, `resultMode=complete`, `endpointsPerServer=1`,

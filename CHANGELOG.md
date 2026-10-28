@@ -333,6 +333,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- DuckDB threads and memory by host size (item 19b): with `duckDbMemoryLimit` unset every DuckDB connection now gets
+  `memory_limit` = the node's DuckDB budget (container `memory.max` or physical memory, minus `-Xmx`, direct memory
+  and 15 % headroom) / the connections expected at once (`duckDbMemoryConnections`, default cores / threads, at
+  least 2), at least 1 GiB and at most 80 % of the memory (was unset = DuckDB's 80 % of RAM *per instance*);
+  `duckDbMemoryLimit=none` keeps DuckDB's default, an explicit size wins. The `duckDbThreads` default is cores / 4
+  between 2 and 16 (was 8; S3/lakeFS at least 4 as before), capped at one thread per GiB of the connection's limit
+  but never below 2. Hosts up to 32 cores keep their thread count. Startup line `duckdb=sizing` shows the inputs
+  and the chosen values.
 - Hive ORC tables (`hive.orcTables`): a file larger than 8 MiB is read as several ranges of whole stripes (planned
   from its footer; at least a quarter of the file's size per range when it is large enough, at most about 32 MiB),
   each a read-ahead unit next to the other files' (P1 step 2 (g)), so a table of one large file is decoded in

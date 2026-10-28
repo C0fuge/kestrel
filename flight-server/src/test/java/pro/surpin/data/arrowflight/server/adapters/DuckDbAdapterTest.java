@@ -629,6 +629,24 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Item 19b: the default memory limit is written in MiB, which DuckDB must accept. */
+    @Test
+    void connectionsTakeTheMemoryLimitInMib(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 2,
+                null, false, null, null,
+                null, null, "1536MiB", false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, base.toString(), null, "complete", true, true);
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool,
+                pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()), 0, 1)) {
+            assertEquals("1.5 GiB", setting(adapter.connection(), "memory_limit"));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /**
      * Returns a configuration with two DuckDB threads per connection.
      *
