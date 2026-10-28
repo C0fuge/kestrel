@@ -192,6 +192,90 @@ class OrcArrowReaderTest {
     }
 
     @Test
+    void bulkCopyOfFlatColumnsEqualsTheRowByRowCopy() {
+        // Regression guard of the bulk path: every flat type, with and without NULLs, repeating.
+        // Not a multiple of 8: the last validity byte is partly used.
+        int rows = 4999;
+        for (String hiveType : List.of("tinyint", "smallint", "int", "bigint", "date", "double",
+                "decimal(15,2)", "string", "varchar(20)", "binary")) {
+            TypeDescription type = TypeDescription.fromString(hiveType);
+            for (String shape : List.of("noNulls", "nulls", "repeating", "repeatingNull", "allNull")) {
+                ColumnVector source = type.createRowBatch(TypeDescription.RowBatchVersion.USE_DECIMAL64,
+                        rows).cols[0];
+                for (int r = 0; r < rows; r++) {
+                    setValue(source, r, r * 7919L - 1000);
+                }
+                switch (shape) {
+                    case "nulls" -> {
+                        source.noNulls = false;
+                        for (int r = 0; r < rows; r += 3) {
+                            source.isNull[r] = true;
+                        }
+                    }
+                    case "repeating" -> source.isRepeating = true;
+                    case "repeatingNull" -> {
+                        source.isRepeating = true;
+                        source.noNulls = false;
+                        source.isNull[0] = true;
+                    }
+                    case "allNull" -> {
+                        source.noNulls = false;
+                        java.util.Arrays.fill(source.isNull, true);
+                    }
+                    default -> { }
+                }
+                try (FieldVector bulk = OrcArrowReader.field("c", type).createVector(allocator);
+                        FieldVector rowByRow = OrcArrowReader.field("c", type).createVector(allocator)) {
+                    bulk.allocateNew();
+                    rowByRow.allocateNew();
+                    assertTrue(OrcArrowReader.copyFlat(source, type, bulk, rows), hiveType);
+                    OrcArrowReader.copy(source, type, rowByRow, 0, 0, rows);
+                    bulk.setValueCount(rows);
+                    rowByRow.setValueCount(rows);
+                    for (int r = 0; r < rows; r++) {
+                        String where = hiveType + " " + shape + " row " + r;
+                        assertEquals(rowByRow.isNull(r), bulk.isNull(r), where);
+                        Object expected = rowByRow.getObject(r);
+                        Object actual = bulk.getObject(r);
+                        if (expected instanceof byte[] bytes) {
+                            assertArrayEquals(bytes, (byte[]) actual, where);
+                        } else {
+                            assertEquals(expected == null ? null : expected.toString(),
+                                    actual == null ? null : actual.toString(), where);
+                        }
+                    }
+                    assertEquals(rowByRow.getBufferSize(), bulk.getBufferSize(), hiveType + " " + shape);
+                }
+            }
+        }
+    }
+
+    @Test
+    void typesWithoutABulkPathAreLeftToTheRowByRowCopy() {
+        for (String hiveType : List.of("boolean", "float", "char(3)", "timestamp", "decimal(38,6)",
+                "array<int>", "struct<x:int>")) {
+            TypeDescription type = TypeDescription.fromString(hiveType);
+            ColumnVector source = type.createRowBatch(TypeDescription.RowBatchVersion.USE_DECIMAL64,
+                    10).cols[0];
+            try (FieldVector target = OrcArrowReader.field("c", type).createVector(allocator)) {
+                target.allocateNew();
+                assertTrue(!OrcArrowReader.copyFlat(source, type, target, 10), hiveType);
+            }
+        }
+    }
+
+    private static void setValue(ColumnVector column, int r, long value) {
+        if (column instanceof LongColumnVector longs) {
+            // Decimal64ColumnVector is one too: unscaled, at the column's scale.
+            longs.vector[r] = value;
+        } else if (column instanceof DoubleColumnVector doubles) {
+            doubles.vector[r] = value / 3.0;
+        } else if (column instanceof BytesColumnVector bytes) {
+            bytes.setVal(r, ("v" + value + "\u00e9").repeat(r % 4).getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void readsDecimalsOfEveryWidthAndWidenedScales() throws Exception {
         Path file = dir.resolve("dec.orc");
         TypeDescription schema = TypeDescription.fromString(

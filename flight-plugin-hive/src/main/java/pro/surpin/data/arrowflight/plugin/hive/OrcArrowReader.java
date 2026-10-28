@@ -3,12 +3,21 @@ package pro.surpin.data.arrowflight.plugin.hive;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.DoubleBuffer;
+import java.nio.IntBuffer;
+import java.nio.LongBuffer;
+import java.nio.ShortBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVectorHelper;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DecimalVector;
@@ -174,8 +183,10 @@ final class OrcArrowReader extends ArrowReader {
         root.allocateNew();
         for (int i = 0; i < projected.size(); i++) {
             int index = projected.get(i);
-            copy(batch.cols[index], readerSchema.getChildren().get(index),
-                    root.getVector(i), 0, 0, batch.size);
+            TypeDescription type = readerSchema.getChildren().get(index);
+            if (!copyFlat(batch.cols[index], type, root.getVector(i), batch.size)) {
+                copy(batch.cols[index], type, root.getVector(i), 0, 0, batch.size);
+            }
         }
         root.setRowCount(batch.size);
         return true;
@@ -370,6 +381,170 @@ final class OrcArrowReader extends ArrowReader {
                         + " has no Arrow type");
             }
         }
+    }
+
+    /**
+     * Copies a whole batch of a flat column into a vector just allocated (all NULL) in bulk:
+     * integers, dates, doubles, decimals decoded into longs at the column's scale, strings and
+     * binaries. Other types are left to {@link #copy}.
+     *
+     * @param source ORC column
+     * @param type its ORC type
+     * @param target freshly allocated Arrow vector of {@link #field} for the type
+     * @param count rows of the batch
+     * @return false when the type is left to {@link #copy} (nothing was written)
+     */
+    static boolean copyFlat(ColumnVector source, TypeDescription type, FieldVector target,
+            int count) {
+        switch (type.getCategory()) {
+            case BYTE, SHORT, INT, LONG, DATE -> {
+                long[] values = ((LongColumnVector) source).vector;
+                ByteBuffer data = data(target, count);
+                switch (type.getCategory()) {
+                    case BYTE -> {
+                        for (int i = 0; i < count; i++) {
+                            data.put(i, (byte) values[row(source, i)]);
+                        }
+                    }
+                    case SHORT -> {
+                        ShortBuffer out = data.asShortBuffer();
+                        for (int i = 0; i < count; i++) {
+                            out.put(i, (short) values[row(source, i)]);
+                        }
+                    }
+                    case INT, DATE -> {
+                        IntBuffer out = data.asIntBuffer();
+                        for (int i = 0; i < count; i++) {
+                            out.put(i, (int) values[row(source, i)]);
+                        }
+                    }
+                    default -> {
+                        LongBuffer out = data.asLongBuffer();
+                        if (source.isRepeating) {
+                            for (int i = 0; i < count; i++) {
+                                out.put(i, values[0]);
+                            }
+                        } else {
+                            out.put(values, 0, count);
+                        }
+                    }
+                }
+            }
+            case DOUBLE -> {
+                double[] values = ((DoubleColumnVector) source).vector;
+                DoubleBuffer out = data(target, count).asDoubleBuffer();
+                if (source.isRepeating) {
+                    for (int i = 0; i < count; i++) {
+                        out.put(i, values[0]);
+                    }
+                } else {
+                    out.put(values, 0, count);
+                }
+            }
+            case DECIMAL -> {
+                if (!(source instanceof Decimal64ColumnVector unscaled)
+                        || unscaled.scale != type.getScale()) {
+                    return false;
+                }
+                // 128-bit little-endian: the long, then its sign extension.
+                LongBuffer out = data(target, count).asLongBuffer();
+                for (int i = 0; i < count; i++) {
+                    long value = unscaled.vector[row(source, i)];
+                    out.put(2 * i, value);
+                    out.put(2 * i + 1, value < 0 ? -1L : 0L);
+                }
+            }
+            case STRING, VARCHAR, BINARY -> copyBytes((BytesColumnVector) source,
+                    (BaseVariableWidthVector) target, count);
+            default -> {
+                return false;
+            }
+        }
+        setValid(source, target.getValidityBuffer(), count);
+        return true;
+    }
+
+    /**
+     * Makes room for a batch in a fixed-width vector and views its values little-endian.
+     *
+     * @param target vector
+     * @param count rows
+     * @return the value buffer from row 0
+     */
+    private static ByteBuffer data(FieldVector target, int count) {
+        while (target.getValueCapacity() < count) {
+            target.reAlloc();
+        }
+        ArrowBuf buffer = target.getDataBuffer();
+        return buffer.nioBuffer(0, (int) buffer.capacity()).order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    /**
+     * Copies the values of a batch of a string or binary column, NULLs as empty values.
+     *
+     * @param source ORC column
+     * @param target freshly allocated vector
+     * @param count rows
+     */
+    private static void copyBytes(BytesColumnVector source, BaseVariableWidthVector target,
+            int count) {
+        while (target.getValueCapacity() < count) {
+            target.reallocValidityAndOffsetBuffers();
+        }
+        long total = 0;
+        for (int i = 0; i < count; i++) {
+            int row = row(source, i);
+            if (source.noNulls || !source.isNull[row]) {
+                total += source.length[row];
+            }
+        }
+        if (total > Integer.MAX_VALUE) {
+            throw new IllegalStateException("A batch of " + count + " values holds " + total
+                    + " bytes, more than an Arrow string vector can");
+        }
+        while (target.getDataBuffer().capacity() < total) {
+            target.reallocDataBuffer();
+        }
+        ArrowBuf data = target.getDataBuffer();
+        ArrowBuf offsets = target.getOffsetBuffer();
+        int offset = 0;
+        offsets.setInt(0, 0);
+        for (int i = 0; i < count; i++) {
+            int row = row(source, i);
+            if (source.noNulls || !source.isNull[row]) {
+                int length = source.length[row];
+                data.setBytes(offset, source.vector[row], source.start[row], length);
+                offset += length;
+            }
+            offsets.setInt((long) (i + 1) * BaseVariableWidthVector.OFFSET_WIDTH, offset);
+        }
+        target.setLastSet(count - 1);
+    }
+
+    /**
+     * Marks the non-NULL rows of a batch valid in a validity buffer that is all zeros.
+     *
+     * @param source ORC column
+     * @param validity validity buffer
+     * @param count rows
+     */
+    private static void setValid(ColumnVector source, ArrowBuf validity, int count) {
+        if (source.noNulls || source.isRepeating && !source.isNull[0]) {
+            validity.setOne(0L, count / Byte.SIZE);
+            for (int i = count / Byte.SIZE * Byte.SIZE; i < count; i++) {
+                BitVectorHelper.setBit(validity, i);
+            }
+        } else if (!source.isRepeating) {
+            for (int i = 0; i < count; i++) {
+                if (!source.isNull[i]) {
+                    BitVectorHelper.setBit(validity, i);
+                }
+            }
+        }
+    }
+
+    private static int row(ColumnVector source, int i) {
+        return source.isRepeating ? 0 : i;
     }
 
     /**

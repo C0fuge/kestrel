@@ -268,6 +268,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Hive ORC tables (`hive.orcTables`): batches of integer, date, double, decimal (<= 18 digits), string and binary
+  columns are copied into Arrow in bulk instead of value by value (P1 step 2 (f)). Answers unchanged; local 2M-row
+  lineitem ORC: `SELECT *` 2.3 -> 1.9 s, Q1-style 0.8 -> 0.7 s.
 - Hive plugin, ORC tables: decimals of up to 18 digits are decoded by ORC straight into longs (`USE_DECIMAL64` row
   batches) and copied to Arrow without a `BigDecimal` per value; Q1-style queries over ORC 5-30 % faster
   (SF1 on a CI runner ~5 %, 1M rows locally ~30 %; P1 step 2 (e)). Answers unchanged (new test `OrcArrowReaderTest.readsDecimalsOfEveryWidthAndWidenedScales`).
