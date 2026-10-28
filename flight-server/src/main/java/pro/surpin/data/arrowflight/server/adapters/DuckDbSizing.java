@@ -127,6 +127,35 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     }
 
     /**
+     * Describes how far DuckDB's external file cache ({@code duckDbExternalFileCache=true}) may
+     * grow. DuckDB keeps it in each connection's buffer pool and evicts it within
+     * {@code memory_limit}, but an idle connection keeps what it cached, so the node may hold up
+     * to the limit times its live connections (every Flight worker thread that ran a query, until
+     * its connection is closed); without a limit each connection may cache up to DuckDB's default
+     * of 80 % of the host memory.
+     *
+     * @return one line of key=value pairs for the startup log
+     */
+    public String describeExternalFileCache() {
+        Long limitBytes = memoryLimit == null ? null : parseBytes(memoryLimit);
+        String expected = limitBytes == null ? "unknown" : Long.toString((limitBytes >> 20) * connections);
+        return "perConnection=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit)
+                + " expectedConnections=" + connections + " expectedMiB=" + expected
+                + " memoryMiB=" + (host.memoryBytes() >> 20)
+                + " bound=memoryLimitTimesLiveConnections";
+    }
+
+    /**
+     * Tells whether DuckDB's external file cache has no per-connection bound below DuckDB's own
+     * default (80 % of the host memory per connection), the case that got servers OOM-killed.
+     *
+     * @return true when no {@code memory_limit} is set
+     */
+    public boolean externalFileCacheUnbounded() {
+        return memoryLimit == null;
+    }
+
+    /**
      * Describes the inputs and the chosen values for the startup log.
      *
      * @return one line of key=value pairs

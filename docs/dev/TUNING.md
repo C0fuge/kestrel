@@ -123,7 +123,7 @@ Trino SF10 does not move with any server setting (one stream per node; the time 
 | `duckDbStreamResults` | true / false | false: server OOM on the full scan (3/3 rounds) | true (disqualified: false) |
 | `duckDbStreamingBufferSize` | default / 64 MiB | within noise | default |
 | `duckDbPreserveInsertionOrder` | default / false | within noise (answers still correct with the ORDER BY handling) | default |
-| `duckDbExternalFileCache` | false / true | HDFS: server grows to the container limit and is OOM-killed (8 GB); emulated S3: 40x faster until it is killed (RSS 8.2 GB), answers missing | false (disqualified: true) |
+| `duckDbExternalFileCache` | false / true | HDFS: server grows to the container limit and is OOM-killed (8 GB); emulated S3: 40x faster until it is killed (RSS 8.2 GB), answers missing (these builds had no default `memory_limit`; since item 19b each connection's cache stays within its limit, see item 13 (c)) | false (disqualified: true) |
 | `duckDbStatementCacheSize` | 0 / 64 / 256 | 256 = 64; 0 broke parameterized prepared statements (bug, fixed after these builds as item 0b) | 64 |
 | `duckDbWarmConnections` | 0 / 8 / 32 | within noise | 8 |
 | `resultMode` | complete / partial | partial gives per-file partial answers to JDBC (by design, for Trino re-aggregation) | complete |

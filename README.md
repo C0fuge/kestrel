@@ -301,6 +301,16 @@ of that limit but never below 2. `duckDbMemoryLimit=none` leaves DuckDB's own de
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
 
+`duckDbExternalFileCache=true` (default false) lets DuckDB keep file data read through an extension
+(S3, HDFS) in memory. DuckDB 1.5.6 keeps that cache inside each connection's `memory_limit` and
+evicts it like any other buffer, but an idle connection keeps what it cached until it is closed,
+so a node may hold up to `memory_limit` times its live DuckDB connections (one per Flight worker
+thread that ran a query, plus the `duckDbThreadsUnderLoad` / `duckDbThreadsWhenIdle` ones). With
+the cache on the startup line `duckdb=externalFileCache` names the per-connection bound; with
+`duckDbMemoryLimit=none` (80 % of the memory per connection) the server WARNs
+`duckdb=externalFileCacheUnbounded` - the setup that got servers OOM-killed on the stand. For a
+node-wide bound on S3 / lakeFS use the plugins' read cache (`arrowflight.s3.cacheMegabytes`).
+
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per
 worker). A DoGet that starts while the running DoGets times `duckDbThreads` exceed the node's cores

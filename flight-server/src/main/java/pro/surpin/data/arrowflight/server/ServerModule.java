@@ -23,6 +23,7 @@ import java.util.function.Function;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.adapters.DuckDbSizing;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.HostLimits;
@@ -250,8 +251,18 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
-        LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(),
-                ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect()).describe());
+        DuckDbSizing sizing = ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect());
+        LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(), sizing.describe());
+        if (config.duckDbExternalFileCache()) {
+            if (sizing.externalFileCacheUnbounded()) {
+                LOGGER.warn("node={} duckdb=externalFileCacheUnbounded {} hint=set duckDbMemoryLimit"
+                        + " or leave it unset (not none) so each connection gets a share",
+                        LogUtil.node(), sizing.describeExternalFileCache());
+            } else {
+                LOGGER.info("node={} duckdb=externalFileCache {}", LogUtil.node(),
+                        sizing.describeExternalFileCache());
+            }
+        }
         return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
                 ConfigAdapter.duckDbThreadsUnderLoad(), ConfigAdapter.duckDbThreadsWhenIdle(),
                 Runtime.getRuntime().availableProcessors(),

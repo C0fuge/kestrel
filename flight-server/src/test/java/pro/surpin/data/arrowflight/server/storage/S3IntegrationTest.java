@@ -92,6 +92,7 @@ class S3IntegrationTest {
     private String bucket;
     private int threads = 1;
     private boolean externalFileCache;
+    private String memoryLimit = "512MB";
 
     @BeforeEach
     void setUp() throws Exception {
@@ -643,6 +644,71 @@ class S3IntegrationTest {
             sent.stream().filter(r -> r.method().equals("HEAD")).count()};
     }
 
+    /**
+     * Verifies that DuckDB's external file cache ({@code duckDbExternalFileCache=true}) stays
+     * within the connection's {@code memory_limit} (item 13 (c)): it keeps file data in the
+     * buffer pool and evicts it like any other buffer, so the node-wide bound is
+     * {@code memory_limit} times the live connections. Reads three times the limit, twice, file by
+     * file (a 64 MiB limit is too small for a parallel scan of all files, cache or not).
+     */
+    @Test
+    void theExternalFileCacheStaysWithinTheMemoryLimit() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 8;
+        long rows = 400_000L;
+        long limitBytes = 64L << 20;
+        Path data = dir.resolve("big.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT range AS id, md5(range::VARCHAR) || md5((range + 1)::VARCHAR) AS pad"
+                    + " FROM range(" + rows + ")) TO '" + data + "' (FORMAT parquet, COMPRESSION uncompressed)");
+        }
+        byte[] bytes = Files.readAllBytes(data);
+        assertTrue(files * (long) bytes.length > 3 * limitBytes, "data " + bytes.length + " x " + files);
+        for (int i = 0; i < files; i++) {
+            s3.put(bucket, "flight-it/m/x" + i + ".parquet", bytes);
+        }
+        memoryLimit = "64MiB";
+        externalFileCache = true;
+        threads = 4;
+        open(null);
+        long peak = 0;
+        for (int round = 0; round < 2; round++) {
+            for (int i = 0; i < files; i++) {
+                String one = "SELECT count(*), sum(length(pad)) FROM 's3://" + bucket + "/flight-it/m/x" + i
+                        + ".parquet'";
+                assertArrayEquals(new long[] {rows, 64 * rows}, answer(one));
+                peak = Math.max(peak, externalFileCacheBytes());
+            }
+        }
+        assertTrue(peak > 0, "the cache holds file data");
+        assertTrue(peak <= limitBytes, "cache " + peak + " bytes over the limit " + limitBytes);
+
+        // The last file read is cached: reading it again sends no GET for its data.
+        s3.clearRequests();
+        String last = "SELECT count(*), sum(length(pad)) FROM 's3://" + bucket + "/flight-it/m/x"
+                + (files - 1) + ".parquet'";
+        assertArrayEquals(new long[] {rows, 64 * rows}, answer(last));
+        long gets = s3.requests().stream().filter(r -> r.method().equals("GET")).count();
+        assertTrue(gets < 2, gets + " GETs for a cached file");
+    }
+
+    private long[] answer(String sql) throws SQLException {
+        try (Statement s = duckDb.connection().createStatement(); ResultSet rs = s.executeQuery(sql)) {
+            assertTrue(rs.next());
+            return new long[] {rs.getLong(1), rs.getLong(2)};
+        }
+    }
+
+    private long externalFileCacheBytes() throws SQLException {
+        try (Statement s = duckDb.connection().createStatement();
+                ResultSet rs = s.executeQuery("SELECT memory_usage_bytes FROM duckdb_memory()"
+                        + " WHERE tag = 'EXTERNAL_FILE_CACHE'")) {
+            assertTrue(rs.next());
+            return rs.getLong(1);
+        }
+    }
+
     @Test
     void aQueryAfterAFileWasRewrittenReadsTheNewFile() throws Exception {
         Assumptions.assumeTrue(s3 != null, "fake S3 only");
@@ -756,7 +822,7 @@ class S3IntegrationTest {
 
     private AppConfig config() {
         return new AppConfig(3, 1024, 2, 131072, 0, 1, threads, null, false, null, null, null,
-                null, "512MB", false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
+                null, memoryLimit, false, Integer.MAX_VALUE, 67108864, 60000L, store.root(), null, 32010,
                 5701, 60, 3, 1000, 0, true, externalFileCache, 16, dir.resolve("spill").toString(), null,
                 "complete", true, true);
     }

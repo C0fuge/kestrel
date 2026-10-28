@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +40,25 @@ class DuckDbSizingTest {
         DuckDbSizing s3 = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 true, 0, null, 0);
         assertEquals(4, s3.threads());
+    }
+
+    @Test
+    void externalFileCacheLineNamesTheBoundOrWarnsWithoutOne() {
+        DuckDbSizing sized = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, null, 0);
+        assertFalse(sized.externalFileCacheUnbounded());
+        assertEquals("perConnection=1024MiB expectedConnections=2 expectedMiB=2048 memoryMiB=6144"
+                + " bound=memoryLimitTimesLiveConnections", sized.describeExternalFileCache());
+        DuckDbSizing none = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, DuckDbSizing.MEMORY_LIMIT_NONE, 0);
+        assertTrue(none.externalFileCacheUnbounded());
+        assertTrue(none.describeExternalFileCache().startsWith("perConnection=duckdbDefault"),
+                none.describeExternalFileCache());
+        DuckDbSizing percent = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, "50%", 3);
+        assertFalse(percent.externalFileCacheUnbounded());
+        assertTrue(percent.describeExternalFileCache().contains(" expectedMiB=unknown "),
+                percent.describeExternalFileCache());
     }
 
     @Test

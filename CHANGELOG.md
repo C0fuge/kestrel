@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Startup line `duckdb=externalFileCache perConnection= expectedConnections= expectedMiB= memoryMiB=` when
+  `duckDbExternalFileCache=true`, and a WARN `duckdb=externalFileCacheUnbounded` when it is on without a per-connection
+  `memory_limit` (`duckDbMemoryLimit=none`). Measured on DuckDB 1.5.6: the cache stays within each connection's
+  `memory_limit` (evicted like any buffer), so the node bound is that limit times the live connections; pinned in
+  `S3IntegrationTest.theExternalFileCacheStaysWithinTheMemoryLimit` (item 13 (c)). Default unchanged (off).
 - Distributed complete mode (opt-in `distributedComplete`): an endpoint answer that fails before its schema (peer's
   Flight service down, connection refused) is read from the endpoint's backup locations in order, as clients fail
   over, before the whole query falls back to the single-node path; `DistributedComplete.failovers()` and a
