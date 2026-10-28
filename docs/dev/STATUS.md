@@ -2006,3 +2006,33 @@
   of views get a complete endpoint (`completeAnswerReason`); GetTables lists `VIEW`s, GetTableTypes adds `VIEW` only when
   a catalog shows views. No change without a catalog that lists views (hive `hive.views`). Green in Dev CI run
   40766473788, pre-release `server-1.0.0-9044653333cd`.
+- 2026-10-28 (cloud session, core lane): item 22 shared DuckDB step 1 (4075216): opt-in `duckDbSharedDatabase`
+  (default false, nothing changes without it). One DuckDB per node, opened, set up (storage statements, secrets),
+  locked down and `LockdownCheck`-verified once at startup; every worker session is a `duplicate()` connection to it
+  with an attached `:memory:` catalog `flight_session_<n>` as its default, into which its catalog views go (so view
+  versions of concurrent queries never mix; join views and Arrow streams were already connection-local TEMP views).
+  `duckDbThreads` / `duckDbMemoryLimit` then size the node (unset = cores / whole DuckDB budget, 1 GiB floor, 80 %
+  cap; `DuckDbSizing.shared`); `duckDbThreadsUnderLoad` / `duckDbThreadsWhenIdle` are off and
+  `duckDbStreamingBufferSize` is ignored with a WARN (DuckDB 1.5.6: LOCAL-scope setting, frozen by
+  `lock_configuration` before the sessions connect - checked: every other setting we set is GLOBAL and reaches the
+  duplicates). A FATAL/INTERNAL error replaces the whole shared DuckDB; sessions move over on their next query. The
+  describe connection is still one small DuckDB per worker (step (a)). Tests: `DuckDbSharedDatabaseTest` (one
+  locked-down instance across threads, view isolation of 2 concurrent sessions at different versions, refusal of
+  other sessions' catalogs, replacement, detach on thread end), `SharedDatabaseIntegrationTest` (scan in 4 parallel
+  endpoints, ordered, aggregate, join: same answers on/off in both modes), `DuckDbSizingTest`, `ConfigAdapterTest`.
+  `tpch-perf.yml` input `extra`: run 40774465682 (SF1, 4c/8g) 22/22 same answers with `-DduckDbSharedDatabase=true`,
+  best total 1.89 s vs default 1.90 s. Dev CI: my package run 40774462240 and later ones were cancelled by the other
+  lanes' pushes; push run 40776549317 green and package run 40778373787 green on 80aa61a (contains 4075216),
+  pre-release `server-1.0.0-80aa61a15557`. **Security note:** what one session can reach of another in the shared
+  instance - (1) other sessions' catalogs `flight_session_<n>`: only catalog views (the same node-wide data every
+  session gets), and naming such a catalog or schema is refused by the parse check (`catalog_name` / `schema_name`
+  of the serialized statement; complete and partial paths both run it); (2) TEMP views (join views, Arrow streams):
+  connection-local in DuckDB, not reachable; (3) secrets: one set per node as before (each instance had the same
+  ones), `duckdb_secrets()`/`which_secret` stay refused; (4) settings: `lock_configuration` holds for every
+  connection (tested: `SET threads`, `SET enable_external_access` fail on a session), `allowed_directories` /
+  `enable_external_access=false` are database-wide; (5) DDL/ATTACH: client text must parse as one read-only query
+  (unchanged), so a client cannot create, drop or attach; (6) metadata: `duckdb_databases()` / `duckdb_views()` show
+  other sessions' catalog names and view texts (same text as one's own views); (7) shared resources: memory and spill
+  are one pool, so a heavy query can now press others' memory within the node limit (before: per-instance limits);
+  query logs stay refused (`enable_logging` etc.). Not yet covered: a Ranger-on stand round (step (b)). Next: the
+  screening measures the pre-release with the setting vs without; shared DuckDB steps (a)-(d) in Next steps.
