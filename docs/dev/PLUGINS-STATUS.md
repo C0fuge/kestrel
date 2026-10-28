@@ -564,3 +564,12 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   change (the server does not read catalog views yet). Local (GCS mirror of Central): `SpiTest` 9/9, hive module
   79/79 (new `HiveViewCatalogTest` 3; UTF-8 locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40744052381
   (8410789) green (build, all modules). No pre-release (no runtime change). Next: views part 3 (core), detailed in Next steps.
+- 2026-10-28 (plugins session): P4 step 2 (c) views parts 3 + 4 - queries of catalog views (core commits 74cc484
+  expansion + source access check + partial -> complete, 4ca22c3 GetTables `VIEW` / GetTableTypes; FYI line in
+  STATUS.md Log) and `HiveViewIntegrationTest` (c62e0bb, with docs in `arrowflight.properties` and CHANGELOG). Only
+  servers with `hive.views=true` see a change. Local (GCS mirror of Central): `CatalogViewQueryTest` 5/5,
+  `FlightSqlProducerTest` 31/31, `MetadataUtilsTest`, `HiveViewIntegrationTest` 4/4, Hive Text/Orc/Avro/Catalog
+  integration tests green (Catalog needs `LC_ALL=C.UTF-8`), Checkstyle + SpotBugs clean. CI: push runs 40764016829,
+  40764736076, 40765524515 cancelled by later pushes; Dev CI run 40766473788 (9044653, contains all three commits)
+  green incl. package -> pre-release `server-1.0.0-9044653333cd` (dispatched by another lane; carries this change).
+  Next: P4 (d) perf note + splitting large Avro/text files, see Next steps.

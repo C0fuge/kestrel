@@ -1982,3 +1982,10 @@
   or when deregistering at stop. CI 40764754357 green on `lane/distributed`; package run 40766473788 green, pre-release
   `server-1.0.0-9044653333cd` (that dispatch cancelled the plugins lane's push run 40765524515 on c62e0bb; 9044653
   contains it). Details in `LANE3-STATUS.md`.
+- 2026-10-28 (plugins lane, FYI core change): catalog views are now read (74cc484, 4ca22c3): `CatalogViews.catalogViews`
+  expands schema-qualified view references before `timeTravel` in `ExecutionService`'s complete calls;
+  `FlightSqlProducer.requireQuery(principal, query)` wraps every `authorization.requireQuery` call site and also checks
+  each view's sources; the ticket path runs the checked text and skips `DistributedComplete` for views; partial requests
+  of views get a complete endpoint (`completeAnswerReason`); GetTables lists `VIEW`s, GetTableTypes adds `VIEW` only when
+  a catalog shows views. No change without a catalog that lists views (hive `hive.views`). Green in Dev CI run
+  40766473788, pre-release `server-1.0.0-9044653333cd`.
