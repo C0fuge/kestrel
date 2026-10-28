@@ -311,9 +311,40 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     star, count, GROUP BY partition, nested columns, filters), fingerprints = DuckDB computing the rows, partition
     pruning (1 endpoint), joins Avro x Parquet / Avro x Avro / self-join. Files written by `AvroTestFiles` (hive
     test fixture) in the metastore class loader; avro, commons-compress, commons-io added to `fixture-libs`.
-    *Next (step 2):* (c) `avro.schema.url` (read the schema through the stores, cache per table) and simple views; (d) perf note
-    (text/CSV/JSON/Avro vs Parquet SF1) and splitting large files (Avro at sync markers, uncompressed text at line
-    boundaries).
+    *Step 2 (c) part 4 done 2026-10-28 (8d95ce8, `avro.schema.url`):* the schema file is read through the server's
+    stores when it lies under `hive.roots` (4 MiB at most), kept per location and read again when its size or
+    modification time changes; HTTP URLs and files elsewhere keep the table skipped with a log reason; a literal still
+    wins, as in Hive. Tests in `AvroFormatTest`, `HiveAvroTableTest`.
+    *Step 2 (c) views, part 1 done 2026-10-28 (translator, not wired):* `HiveViewSql.translate(viewExpandedText,
+    declared columns, database -> server schema)` turns a simple view into DuckDB SQL
+    `SELECT CAST("_v0" AS <declared>) AS "<col>", ... FROM (<translated>) AS "_view"("_v0", ...)` plus the list of
+    (database, table) it reads. Whitelist only: backtick identifiers -> double-quoted; tables only as `db`.`t` right
+    after FROM / JOIN / a comma of a FROM list (anything else there - string literal, table function, VALUES, unknown
+    or hidden database, unqualified name - refused: DuckDB would read files or table functions named in FROM), or a
+    parenthesised subquery starting with SELECT; keywords SELECT DISTINCT ALL FROM WHERE GROUP BY HAVING AS AND OR NOT
+    IS NULL TRUE FALSE IN BETWEEN CASE WHEN THEN ELSE END JOIN INNER LEFT RIGHT FULL OUTER CROSS ON UNION LIKE;
+    operators `= <> != == < > <= >= + - ||`, `*` only in `count(*)`; LIKE only with a literal pattern, written with
+    `ESCAPE '\'` (Hive's escape); functions count sum min max coalesce nvl lower/lcase upper/ucase abs year month
+    day/dayofmonth; string literals '...' and "..." with escapes `\' \" \\ \n \t \r \% \_`; integer literals only.
+    Refused (reason in the message): casts (Hive truncates double -> int, DuckDB rounds; text formats of doubles
+    differ), `/ % div` (result types differ), `*` (decimal scale rules differ), decimal/suffixed literals (literal
+    types differ), `[]` (0- vs 1-based), ORDER BY / LIMIT (NULL order differs), WITH, LATERAL VIEW, windows, other
+    functions and keywords, adjacent string literals, `;`, comments left open. Tests: `HiveViewSqlTest` 3 (DuckDB runs
+    the translations: filter + LIKE escape, grouping with declared types, LEFT JOIN + UNION ALL + FROM subquery + IN /
+    BETWEEN, CASE / coalesce / nvl / `||` / `==` / comma join; 30+ refusals; FROM-position safety; quoting of
+    identifiers with quotes and backticks).
+    *Next (step 2 (c) views):* part 2 - SPI 1.5 (own commit, additive): `Catalog.views(schema)` default empty and a
+    record `CatalogView(name, sql, sources, columns, fingerprint)`; hive: `hive.views` opt-in (default false),
+    `HiveTable.classify` keeps skipping views unless on, translate with `schemaPrefix` + shown databases, skip
+    (log reason) when a source table is not shown by the catalog (e.g. ORC without `hive.orcTables`) or the
+    translator refuses; views of views: allowed when the inner view is shown (its SQL is inlined by core). Part 3 -
+    core (small, own commit, STATUS.md Log): expand each reference of a catalog view in a client query into
+    `(<sql>) AS "<view>"` before planning (so `TableReferences` / ArrowStream rewriting, partition pruning and
+    `requireQuery` see the sources), answer queries over views in complete mode (partial: like a
+    `partialReadProblem`), list views in Flight SQL `GetTables` as type `VIEW`; Ranger: require the view **and** every
+    source table (stricter than Hive - Open question). Part 4 - end-to-end test (metastore views over Parquet, ORC and
+    text tables, both modes, Ranger denial on a source). Then (d) perf note (text/CSV/JSON/Avro vs Parquet SF1) and
+    splitting large files (Avro at sync markers, uncompressed text at line boundaries).
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -340,6 +371,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   tools) fail the query: Hive 3.1.3 shows them in the time zone of the HiveServer2 that reads them (or UTC with
   `hive.avro.timestamp.skip.conversion=true`), which the plugin cannot know. Add a setting (e.g.
   `hive.avroTimestampZone`, default unset = fail) if production has such files?
+
+- (P4, views) Ranger semantics for Hive views: Hive (and Ranger's Hive plugin) let a user who may select from a view
+  read it without rights on the tables it reads (definer rights). The plan (step 2 (c) part 3) requires the view
+  **and** every table it reads (invoker rights - stricter, never more access than today). Switch to Hive's semantics
+  (view only) if production relies on views to hide tables?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
@@ -482,3 +518,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   `server-1.0.0-2cfa23eb62f9` (catalogs lane's dispatch 40715095069, package=true, green; contains both commits;
   Avro tables behind the `hive.avroTables` opt-in, default off). Next: P4 `avro.schema.url`, views, perf.
 - 2026-10-28 (maintainer): plugins session 16:18Z ended after 8d95ce8 (avro.schema.url, CI 40725913763 green) without updating this file or releasing LOCK-PLUGINS; lock released by the maintainer. Next session: add the Log line for 8d95ce8 and continue P4.
+- 2026-10-28 (plugins session, recorded by the next session): P4 step 2 (c) part 4 - `avro.schema.url` schema files
+  read through the stores under `hive.roots` (8d95ce8; plugin only, CHANGELOG). CI: run 40725913763 green.
+- 2026-10-28 (plugins session): P4 step 2 (c) views part 1 - `HiveViewSql` translator of simple Hive views to DuckDB
+  SQL, whitelist only, not wired into the catalog yet (5011e8d; plugin only, no SPI or core change, no runtime
+  behaviour change, so no CHANGELOG line or pre-release). Local (Maven through the GCS mirror of Central, since
+  `repo.maven.apache.org` answered 429): `HiveViewSqlTest` 3/3, Checkstyle + SpotBugs clean. CI: Dev CI run
+  40737753002 (queued behind the core lane's dispatch at the time of writing; result below). Open question added: Ranger semantics for views (plan: view and its source tables). Next: views part 2
+  (SPI 1.5 `Catalog.views` + `hive.views` opt-in), see Next steps.
