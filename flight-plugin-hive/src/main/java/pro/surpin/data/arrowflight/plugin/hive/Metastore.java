@@ -77,4 +77,14 @@ interface Metastore extends AutoCloseable {
      */
     @Override
     void close();
+
+    /**
+     * Takes a snapshot of committed writes of a transactional table (Hive 3 metastores).
+     *
+     * @param database database name
+     * @param table table name
+     * @return the table's valid write ids and the snapshot's transactions
+     * @throws IOException when the metastore cannot be read or has no transactions
+     */
+    InsertOnlyDirectories.Snapshot snapshot(String database, String table) throws IOException;
 }

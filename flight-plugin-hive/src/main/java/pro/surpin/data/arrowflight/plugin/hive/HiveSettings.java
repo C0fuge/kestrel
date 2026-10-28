@@ -34,6 +34,8 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  *     read like ORC tables
  * @param avroTables whether Avro tables (AvroSerDe) are shown, read like ORC tables
  * @param views whether simple Hive views are listed as views (over the tables the catalog shows)
+ * @param insertOnlyTables whether insert-only (MM) transactional tables are shown, read at the
+ *     metastore's snapshot of committed writes
  * @param defaultPartitionName the partition value that stands for NULL
  * @param kerberos Kerberos settings, null without Kerberos
  */
@@ -43,7 +45,7 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         boolean framedTransport, String authentication, boolean recursiveDirectories,
         int partitionBatchSize, int listThreads, IcebergTables icebergTables,
         boolean orcTables, boolean textTables, boolean avroTables, boolean views,
-        String defaultPartitionName,
+        boolean insertOnlyTables, String defaultPartitionName,
         Kerberos kerberos) {
 
     /** SASL protection levels the client accepts by default: the strongest the metastore offers. */
@@ -124,6 +126,9 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         keys.add(ConfigKey.of("views", "whether simple Hive views (projections, filters, joins,"
                 + " grouping and unions the plugin can translate to DuckDB SQL) over shown tables"
                 + " are listed as views", "false"));
+        keys.add(ConfigKey.of("insertOnlyTables", "whether insert-only (MM) transactional tables"
+                + " (Hive 3 metastores) are shown, read with the committed writes of the metastore's"
+                + " snapshot taken when a query plans them; full ACID tables stay skipped", "false"));
         keys.add(ConfigKey.of("defaultPartitionName", "partition value that stands for NULL",
                 "__HIVE_DEFAULT_PARTITION__"));
         return List.copyOf(keys);
@@ -184,7 +189,8 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                 atLeast(config, "partitionBatchSize", 500, 1), atLeast(config, "listThreads", 8, 1),
                 iceberg, config.getBoolean("orcTables", false),
                 config.getBoolean("textTables", false), config.getBoolean("avroTables", false),
-                config.getBoolean("views", false), config.get("defaultPartitionName", "__HIVE_DEFAULT_PARTITION__"), kerberos);
+                config.getBoolean("views", false), config.getBoolean("insertOnlyTables", false),
+                config.get("defaultPartitionName", "__HIVE_DEFAULT_PARTITION__"), kerberos);
     }
 
     /**
@@ -294,6 +300,7 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                         + kerberos.clientTicketCache() + ", saslQop=" + kerberos.qop())
                 + ", recursive=" + recursiveDirectories + ", icebergTables=" + icebergTables
                 + ", orcTables=" + orcTables + ", textTables=" + textTables
-                + ", avroTables=" + avroTables + ", views=" + views + "}";
+                + ", avroTables=" + avroTables + ", views=" + views
+                + ", insertOnlyTables=" + insertOnlyTables + "}";
     }
 }

@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.plugin.hive;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -48,6 +49,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
+import pro.surpin.data.arrowflight.spi.storage.DataStore;
 import pro.surpin.data.arrowflight.spi.storage.Located;
 import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 import pro.surpin.data.arrowflight.spi.storage.Stores;
@@ -576,7 +578,8 @@ final class HiveCatalog implements Catalog {
      */
     private Optional<HiveTable> classified(Table table) {
         HiveTable.Classified result = HiveTable.classify(table, settings.roots(), iceberg != null,
-                settings.orcTables(), settings.textTables(), settings.avroTables(), avroUrls);
+                settings.orcTables(), settings.textTables(), settings.avroTables(), avroUrls,
+                settings.insertOnlyTables());
         String name = table.getDbName() + "." + table.getTableName();
         if (result.skipped() != null && logged.add("skip:" + name + ":" + result.skipped())) {
             LOGGER.info("node={} hive=tableSkipped table={} reason='{}'", node, name, result.skipped());
@@ -609,9 +612,12 @@ final class HiveCatalog implements Catalog {
             }
             return iceberg.snapshot(table, now.get().metadataLocation(), null);
         }
+        // Insert-only tables: one snapshot of committed writes for every directory of the table.
+        InsertOnlyDirectories.Snapshot writes = hive.insertOnly()
+                ? metastore.snapshot(hive.database(), hive.name()) : null;
         List<TableFile> files = new ArrayList<>();
         if (hive.partitionColumns().isEmpty()) {
-            files.addAll(list(hive.location(), Map.of()));
+            files.addAll(list(hive.location(), Map.of(), writes));
         } else {
             List<Partition> partitions = partitions(hive);
             Map<String, Map<String, String>> locations = new LinkedHashMap<>();
@@ -631,7 +637,7 @@ final class HiveCatalog implements Catalog {
             if (!outside.isEmpty()) {
                 return Optional.empty();
             }
-            files.addAll(listAll(locations));
+            files.addAll(listAll(locations, writes));
         }
         StringBuilder content = new StringBuilder();
         for (TableFile file : files) {
@@ -905,13 +911,15 @@ final class HiveCatalog implements Catalog {
      * Lists the files of many locations in parallel, keeping the locations' order.
      *
      * @param locations location to its partition values
+     * @param writes snapshot of committed writes (insert-only tables), else null
      * @return files
      * @throws IOException when a location cannot be listed
      */
-    private List<TableFile> listAll(Map<String, Map<String, String>> locations) throws IOException {
+    private List<TableFile> listAll(Map<String, Map<String, String>> locations,
+            InsertOnlyDirectories.Snapshot writes) throws IOException {
         List<Future<List<TableFile>>> futures = new ArrayList<>();
         for (Map.Entry<String, Map<String, String>> entry : locations.entrySet()) {
-            futures.add(listPool.submit(() -> list(entry.getKey(), entry.getValue())));
+            futures.add(listPool.submit(() -> list(entry.getKey(), entry.getValue(), writes)));
         }
         List<TableFile> result = new ArrayList<>();
         try {
@@ -939,25 +947,105 @@ final class HiveCatalog implements Catalog {
      *
      * @param location normalised location under the roots
      * @param values partition values of its files
+     * @param writes snapshot of committed writes (insert-only tables: only the base, deltas or
+     *     original files it chooses), else null
      * @return files, in path order
-     * @throws IOException when the location cannot be listed
+     * @throws IOException when the location cannot be listed, or an insert-only directory cannot
+     *     be read correctly at the snapshot
      */
-    private List<TableFile> list(String location, Map<String, String> values) throws IOException {
+    private List<TableFile> list(String location, Map<String, String> values,
+            InsertOnlyDirectories.Snapshot writes) throws IOException {
         Located located = stores.locate(location);
+        DataStore store = located.store();
+        String prefix = located.relativePath().isEmpty() ? "" : located.relativePath() + "/";
         List<DataFile> files;
+        Set<String> chosen = null;
         try {
-            files = located.store().files(located.relativePath(), settings.recursiveDirectories());
+            files = store.files(located.relativePath(), writes != null || settings.recursiveDirectories());
+            if (writes != null) {
+                chosen = Set.copyOf(chooseInsertOnly(store, located.relativePath(), prefix, files, writes,
+                        location));
+            }
         } catch (FileNotFoundException e) {
             return List.of();
         }
         List<TableFile> result = new ArrayList<>(files.size());
         for (DataFile file : files) {
+            if (chosen != null) {
+                String below = file.relativePath().substring(prefix.length());
+                int slash = below.indexOf('/');
+                if (!chosen.contains(slash < 0 ? below : below.substring(0, slash))) {
+                    continue;
+                }
+            }
             if (file.size() > 0) {
                 result.add(new TableFile(located.store().duckDbUri(file), file.size(),
                         file.modificationTime(), file.hosts(), values, -1L, null));
             }
         }
         return result;
+    }
+
+    /**
+     * Chooses the base, deltas or original files of one insert-only table directory.
+     *
+     * @param store the directory's store
+     * @param directory directory below the store's root
+     * @param prefix the directory with a trailing slash, empty for the root
+     * @param files the directory's visible files at any depth
+     * @param writes snapshot of committed writes
+     * @param location the directory's location, for messages
+     * @return names of the chosen entries directly inside the directory
+     * @throws IOException when it cannot be listed or read correctly at the snapshot
+     */
+    private static List<String> chooseInsertOnly(DataStore store, String directory, String prefix,
+            List<DataFile> files, InsertOnlyDirectories.Snapshot writes, String location)
+            throws IOException {
+        List<InsertOnlyDirectories.Entry> entries = new ArrayList<>();
+        for (String name : store.directories(directory).keySet()) {
+            String plain = name.endsWith("/") ? name.substring(0, name.length() - 1) : name;
+            entries.add(new InsertOnlyDirectories.Entry(plain, true));
+        }
+        for (DataFile file : files) {
+            String below = file.relativePath().substring(prefix.length());
+            if (below.indexOf('/') < 0) {
+                entries.add(new InsertOnlyDirectories.Entry(below, false));
+            }
+        }
+        try {
+            return InsertOnlyDirectories.select(entries, writes.writeIds(), writes.txns(),
+                    base -> compactedBase(store, prefix + base));
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        } catch (IllegalStateException e) {
+            throw new IOException("Insert-only table directory " + location
+                    + " cannot be read at the metastore's snapshot: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Tells whether a base directory was written by the compactor: its {@code _metadata_acid}
+     * file says {@code "dataFormat":"compacted"}.
+     *
+     * @param store the store
+     * @param base the base directory below the store's root
+     * @return true for a compacted base
+     * @throws UncheckedIOException when the file cannot be read
+     */
+    private static boolean compactedBase(DataStore store, String base) {
+        String marker = base + "/_metadata_acid";
+        try {
+            if (!store.exists(marker)) {
+                return false;
+            }
+            ReadableFile file = store.open(marker);
+            byte[] bytes = new byte[(int) Math.min(file.length(), 4096)];
+            file.readFully(0, bytes, 0, bytes.length);
+            String text = new String(bytes, StandardCharsets.UTF_8).replaceAll("\\s", "");
+            return text.contains("\"dataFormat\":\"compacted\"");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /**

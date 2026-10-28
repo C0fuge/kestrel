@@ -87,6 +87,15 @@ final class InsertOnlyDirectories {
     }
 
     /**
+     * A table's write ids and the transactions of one snapshot.
+     *
+     * @param writeIds the table's write ids
+     * @param txns the transactions
+     */
+    record Snapshot(WriteIds writeIds, Txns txns) {
+    }
+
+    /**
      * One child of the directory.
      *
      * @param name file or directory name

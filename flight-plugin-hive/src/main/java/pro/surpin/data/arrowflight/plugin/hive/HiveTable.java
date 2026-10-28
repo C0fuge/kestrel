@@ -33,11 +33,13 @@ import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
  * @param dataColumns data columns with their Hive types (ORC, text and Avro tables), else empty
  * @param textFormat how the files are laid out (text tables), else null
  * @param avroFormat the reader schema (Avro tables), else null
+ * @param insertOnly whether it is an insert-only (MM) transactional table, read at a snapshot of
+ *     committed writes
  */
 record HiveTable(String database, String name, Kind kind, String location,
         List<ColumnSpec> columns, List<String> partitionColumns, String schemaId,
         String metadataLocation, List<OrcArrowReader.Column> dataColumns, TextFormat textFormat,
-        AvroFormat avroFormat) {
+        AvroFormat avroFormat, boolean insertOnly) {
 
     /** How a table is read. */
     enum Kind {
@@ -89,7 +91,7 @@ record HiveTable(String database, String name, Kind kind, String location,
     static Classified classify(Table table, List<String> roots, boolean icebergFormat,
             boolean orcTables, boolean textTables, boolean avroTables) {
         return classify(table, roots, icebergFormat, orcTables, textTables, avroTables,
-                AvroFormat.NO_URLS);
+                AvroFormat.NO_URLS, false);
     }
 
     /**
@@ -102,11 +104,12 @@ record HiveTable(String database, String name, Kind kind, String location,
      * @param textTables whether text tables are shown
      * @param avroTables whether Avro tables are shown
      * @param avroUrls reads {@code avro.schema.url} locations
+     * @param insertOnlyTables whether insert-only transactional tables are shown
      * @return the table, or why it is skipped or hidden
      */
     static Classified classify(Table table, List<String> roots, boolean icebergFormat,
             boolean orcTables, boolean textTables, boolean avroTables,
-            AvroFormat.SchemaReader avroUrls) {
+            AvroFormat.SchemaReader avroUrls, boolean insertOnlyTables) {
         String type = table.getTableType() == null ? "" : table.getTableType();
         Map<String, String> params = table.getParameters() == null ? Map.of() : table.getParameters();
         if (type.toUpperCase(Locale.ROOT).contains("VIEW")) {
@@ -130,7 +133,8 @@ record HiveTable(String database, String name, Kind kind, String location,
                 return hidden(location + " / " + normalized);
             }
             return new Classified(new HiveTable(table.getDbName(), table.getTableName(), Kind.ICEBERG,
-                    location, List.of(), List.of(), "iceberg", normalized, List.of(), null, null), null, null);
+                    location, List.of(), List.of(), "iceberg", normalized, List.of(), null, null, false), null,
+                    null);
         }
         if (params.containsKey("storage_handler")) {
             return skipped("storage handler " + params.get("storage_handler"));
@@ -138,9 +142,16 @@ record HiveTable(String database, String name, Kind kind, String location,
         boolean orc = sd != null && orc(sd);
         boolean text = sd != null && text(sd);
         boolean avro = sd != null && avro(sd);
+        boolean insertOnly = false;
         if ("true".equalsIgnoreCase(params.getOrDefault("transactional", "false"))) {
-            return skipped(orc ? "transactional (ACID) ORC table: not read yet"
-                    : "transactional (ACID) table");
+            if (!"insert_only".equalsIgnoreCase(params.getOrDefault("transactional_properties", ""))) {
+                return skipped(orc ? "transactional (ACID) ORC table: not read yet"
+                        : "transactional (ACID) table");
+            }
+            if (!insertOnlyTables) {
+                return skipped("insert-only transactional table (hive.insertOnlyTables=false)");
+            }
+            insertOnly = true;
         }
         String provider = params.get("spark.sql.sources.provider");
         if (provider != null && !"parquet".equalsIgnoreCase(provider) && !"hive".equalsIgnoreCase(provider)) {
@@ -211,7 +222,7 @@ record HiveTable(String database, String name, Kind kind, String location,
                 : schemaId(table, kind, columns, partitions, format);
         return new Classified(new HiveTable(table.getDbName(), table.getTableName(), kind,
                 location, columns, partitions, schemaId, null, List.copyOf(dataColumns), format,
-                avroFormat), null, null);
+                avroFormat, insertOnly), null, null);
     }
 
     /**

@@ -162,6 +162,49 @@ final class IsolatedHms {
     }
 
     /**
+     * Opens a transaction.
+     *
+     * @return transaction id
+     * @throws Exception on failure
+     */
+    long openTxn() throws Exception {
+        return (Long) call(fixture, "openTxn");
+    }
+
+    /**
+     * Allocates a table's next write id to an open transaction.
+     *
+     * @param txn transaction id
+     * @param db database
+     * @param table table name
+     * @return write id
+     * @throws Exception on failure
+     */
+    long allocateWriteId(long txn, String db, String table) throws Exception {
+        return (Long) call(fixture, "allocateWriteId", txn, db, table);
+    }
+
+    /**
+     * Commits a transaction.
+     *
+     * @param txn transaction id
+     * @throws Exception on failure
+     */
+    void commitTxn(long txn) throws Exception {
+        call(fixture, "commitTxn", txn);
+    }
+
+    /**
+     * Aborts a transaction.
+     *
+     * @param txn transaction id
+     * @throws Exception on failure
+     */
+    void abortTxn(long txn) throws Exception {
+        call(fixture, "abortTxn", txn);
+    }
+
+    /**
      * Starts a TCP proxy in front of the metastore.
      *
      * @return the proxy

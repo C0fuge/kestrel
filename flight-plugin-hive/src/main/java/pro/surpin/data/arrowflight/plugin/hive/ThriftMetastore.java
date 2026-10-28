@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -18,13 +21,17 @@ import javax.security.sasl.SaslException;
 
 import org.apache.hadoop.hive.metastore.api.ClientCapabilities;
 import org.apache.hadoop.hive.metastore.api.ClientCapability;
+import org.apache.hadoop.hive.metastore.api.GetOpenTxnsResponse;
 import org.apache.hadoop.hive.metastore.api.GetTableRequest;
 import org.apache.hadoop.hive.metastore.api.GetTableResult;
 import org.apache.hadoop.hive.metastore.api.GetTablesRequest;
 import org.apache.hadoop.hive.metastore.api.GetTablesResult;
+import org.apache.hadoop.hive.metastore.api.GetValidWriteIdsRequest;
+import org.apache.hadoop.hive.metastore.api.GetValidWriteIdsResponse;
 import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.Table;
+import org.apache.hadoop.hive.metastore.api.TableValidWriteIds;
 import org.apache.hadoop.hive.metastore.api.ThriftHiveMetastore;
 import org.apache.thrift.TApplicationException;
 import org.apache.thrift.TConfiguration;
@@ -209,6 +216,39 @@ final class ThriftMetastore implements Metastore {
         List<Partition> result = callOrMissing("get_partitions_by_names " + database + "." + table,
                 client -> client.get_partitions_by_names(database, table, names));
         return result == null ? List.of() : result;
+    }
+
+    @Override
+    public InsertOnlyDirectories.Snapshot snapshot(String database, String table) throws IOException {
+        GetOpenTxnsResponse open = call("get_open_txns", ThriftHiveMetastore.Client::get_open_txns);
+        List<Long> openIds = open.getOpen_txns() == null ? List.of() : open.getOpen_txns();
+        BitSet abortedBits = open.getAbortedBits() == null ? new BitSet()
+                : BitSet.valueOf(open.getAbortedBits());
+        // Hive 3's ValidReadTxnList form: highWatermark:minOpenTxn:open,ids:aborted,ids.
+        List<String> openTxns = new ArrayList<>();
+        List<String> abortedTxns = new ArrayList<>();
+        for (int i = 0; i < openIds.size(); i++) {
+            (abortedBits.get(i) ? abortedTxns : openTxns).add(String.valueOf(openIds.get(i)));
+        }
+        long minOpenTxn = open.isSetMin_open_txn() ? open.getMin_open_txn() : Long.MAX_VALUE;
+        String validTxns = open.getTxn_high_water_mark() + ":" + minOpenTxn + ":"
+                + String.join(",", openTxns) + ":" + String.join(",", abortedTxns);
+        String name = database + "." + table;
+        GetValidWriteIdsRequest request = new GetValidWriteIdsRequest(
+                new ArrayList<>(List.of(name)), validTxns);
+        GetValidWriteIdsResponse answer = call("get_valid_write_ids " + name,
+                client -> client.get_valid_write_ids(request));
+        if (answer == null || answer.getTblValidWriteIds() == null
+                || answer.getTblValidWriteIds().size() != 1) {
+            throw new IOException("The metastore gave no write ids for " + name);
+        }
+        TableValidWriteIds ids = answer.getTblValidWriteIds().get(0);
+        Set<Long> invalid = new HashSet<>(ids.getInvalidWriteIds() == null ? List.of()
+                : ids.getInvalidWriteIds());
+        return new InsertOnlyDirectories.Snapshot(
+                new InsertOnlyDirectories.WriteIds(ids.getWriteIdHighWaterMark(),
+                        ids.isSetMinOpenWriteId() ? ids.getMinOpenWriteId() : Long.MAX_VALUE, invalid),
+                new InsertOnlyDirectories.Txns(open.getTxn_high_water_mark(), Set.copyOf(openIds)));
     }
 
     /**

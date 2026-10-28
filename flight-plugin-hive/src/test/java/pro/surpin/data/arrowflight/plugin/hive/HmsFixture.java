@@ -18,14 +18,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.metastore.HiveMetaStore;
+import org.apache.hadoop.hive.metastore.api.AbortTxnRequest;
+import org.apache.hadoop.hive.metastore.api.AllocateTableWriteIdsRequest;
+import org.apache.hadoop.hive.metastore.api.ClientCapabilities;
+import org.apache.hadoop.hive.metastore.api.ClientCapability;
+import org.apache.hadoop.hive.metastore.api.CommitTxnRequest;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.hadoop.hive.metastore.api.GetTableRequest;
+import org.apache.hadoop.hive.metastore.api.OpenTxnRequest;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.SerDeInfo;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.ThriftHiveMetastore;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
+import org.apache.hadoop.hive.metastore.txn.TxnDbUtil;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.transport.TSocket;
@@ -240,7 +248,11 @@ public final class HmsFixture {
      */
     public synchronized String addPartition(String db, String table, List<String> values,
             String location, Map<String, String> serdeParameters) throws TException {
-        Table t = client().get_table(db, table);
+        // With capabilities: HMS 3 refuses insert-only tables to clients that do not declare them.
+        GetTableRequest request = new GetTableRequest(db, table);
+        request.setCapabilities(new ClientCapabilities(
+                new ArrayList<>(List.of(ClientCapability.INSERT_ONLY_TABLES))));
+        Table t = client().get_table_req(request).getTable();
         StorageDescriptor sd = t.getSd().deepCopy();
         sd.setLocation(location);
         if (serdeParameters != null) {
@@ -267,6 +279,51 @@ public final class HmsFixture {
     public synchronized void dropPartition(String db, String table, List<String> values)
             throws TException {
         client().drop_partition(db, table, new ArrayList<>(values), false);
+    }
+
+    /**
+     * Opens a transaction.
+     *
+     * @return transaction id
+     * @throws TException on metastore errors
+     */
+    public synchronized long openTxn() throws TException {
+        return client().open_txns(new OpenTxnRequest(1, "test", "localhost")).getTxn_ids().get(0);
+    }
+
+    /**
+     * Allocates a table's next write id to an open transaction.
+     *
+     * @param txn transaction id
+     * @param db database
+     * @param table table name
+     * @return write id
+     * @throws TException on metastore errors
+     */
+    public synchronized long allocateWriteId(long txn, String db, String table) throws TException {
+        AllocateTableWriteIdsRequest request = new AllocateTableWriteIdsRequest(db, table);
+        request.setTxnIds(new ArrayList<>(List.of(txn)));
+        return client().allocate_table_write_ids(request).getTxnToWriteIds().get(0).getWriteId();
+    }
+
+    /**
+     * Commits a transaction.
+     *
+     * @param txn transaction id
+     * @throws TException on metastore errors
+     */
+    public synchronized void commitTxn(long txn) throws TException {
+        client().commit_txn(new CommitTxnRequest(txn));
+    }
+
+    /**
+     * Aborts a transaction.
+     *
+     * @param txn transaction id
+     * @throws TException on metastore errors
+     */
+    public synchronized void abortTxn(long txn) throws TException {
+        client().abort_txn(new AbortTxnRequest(txn));
     }
 
     /**
@@ -412,6 +469,8 @@ public final class HmsFixture {
                 "org.apache.hadoop.hive.metastore.events.EventCleanerTask");
         conf.set("datanucleus.schema.autoCreateAll", "true");
         conf.set("hive.metastore.event.db.notification.api.auth", "false");
+        // Transaction tables (insert-only tables, write ids), as Hive's own tests create them.
+        TxnDbUtil.prepDb(conf);
         Thread server = new Thread(() -> {
             try {
                 HiveMetaStore.startMetaStore(port, null, conf);

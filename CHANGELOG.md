@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Hive plugin: insert-only (MM) transactional tables with the new optional setting `hive.insertOnlyTables=true`
+  (default `false`: skipped as before; Hive 3 metastores). The plugin takes one snapshot of committed writes per plan
+  (`get_open_txns` + `get_valid_write_ids`) and reads in every table/partition directory what Hive reads at that
+  snapshot: the newest usable `base_N`, the committed `delta_x_y[_stmt]` above it, original files only without a
+  base; aborted and open writes and `_tmp` / hidden directories are never read. Layouts that could give wrong rows
+  (`delete_delta_*`, a compacted base newer than the snapshot, multi-write deltas with aborted ids, overlapping
+  deltas) fail the query with a message instead of being read in part. Full ACID tables stay skipped.
 - Hive plugin: large Avro data files and uncompressed text files (text, CSV, JSON tables without header lines) of a
   scan are read as byte ranges decoded in parallel (Avro from the next sync marker, text from the next line start, as
   Hadoop splits them; files over 8 MiB, like ORC files since P1), instead of one thread per file. Same rows in the
