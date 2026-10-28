@@ -25,6 +25,7 @@ public final class HiveTestTables {
     private static final Path MODULE = Path.of("../flight-plugin-hive/target");
     private static final String FIXTURE = "pro.surpin.data.arrowflight.plugin.hive.HmsFixture";
     private static final String ORC = "pro.surpin.data.arrowflight.plugin.hive.OrcTestFiles";
+    private static final String AVRO = "pro.surpin.data.arrowflight.plugin.hive.AvroTestFiles";
     private static ClassLoader loader;
 
     private HiveTestTables() {
@@ -99,6 +100,25 @@ public final class HiveTestTables {
     public static String orcConstant(String name) throws Exception {
         ClassLoader child = loader();
         return (String) inLoader(() -> Class.forName(ORC, true, child).getField(name).get(null));
+    }
+
+    /**
+     * Writes an Avro data file (AvroTestFiles, in the metastore's class loader, where Avro is),
+     * with the writer time zone UTC.
+     *
+     * @param file file to write
+     * @param schemaJson the file's schema
+     * @param codec null, deflate or zstandard
+     * @param rows records of plain Java values (numbers, strings, BigDecimal, lists, maps,
+     *     {@code Object[]} for records)
+     * @throws Exception when it cannot be written
+     */
+    public static void writeAvro(Path file, String schemaJson, String codec, List<Object[]> rows)
+            throws Exception {
+        ClassLoader child = loader();
+        inLoader(() -> Class.forName(AVRO, true, child).getMethod("write", String.class,
+                String.class, String.class, List.class).invoke(null, file.toString(), schemaJson,
+                codec, rows));
     }
 
     /**

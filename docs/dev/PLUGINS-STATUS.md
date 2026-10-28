@@ -272,11 +272,45 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     `HiveTextTableTest` 6 (+1 metastore: hcatalog + serde2 + gzip + NULL partition, OpenX/formats skipped,
     partition with other serde), `HiveTextIntegrationTest` 6 (+1: DuckDB `to_json` rows with `S`/`_col0`/
     unknown keys = Parquet in both modes, fingerprint, join on struct/map).
-    *Next (step 2):* (c) the rest: Avro (`AvroSerDe`; schema from `avro.schema.literal`/`.url` vs columns;
-    DuckDB has an `avro` extension - check it is in ci-assets and reads over our stores, else Java reader via
-    the ORC path), then simple views; (d) perf note (text/CSV/JSON vs Parquet SF1; OpenCSVSerde builds a
-    CSVReader per line as Hive does, JSON builds Java objects per row - measure) and maybe splitting large
-    uncompressed files at line boundaries.
+    *Step 2 (c) part 3 done 2026-10-28 (deb0a99, Avro tables):* opt-in `hive.avroTables` (default false) shows
+    `AvroSerDe` + `AvroContainerInputFormat` tables, read in the plugin (`ReadSpec.ArrowStream("avro")`, both modes,
+    pruning) - DuckDB's `avro` extension not used: Hive's semantics (schema resolution per file, decimal scale from
+    the file's schema, writer time zone) need the Java reader, and no SPI/core change is needed this way. Ported
+    from Hive 3.1.3's sources (`AvroSerDe`, `AvroSerdeUtils.determineSchemaOrThrowException`, `SchemaToTypeInfo`,
+    `TypeInfoToSchema`, `AvroDeserializer`, `AvroGenericRecordReader`). `AvroFormat`: reader schema =
+    `avro.schema.literal` (table params over serde params, `none` = unset) else the columns' schema
+    (`TypeInfoToSchema`: `baseRecord`, fields `[null, T]` default null, inner records `record_<n>`, tinyint/
+    smallint -> int); its Hive types (`SchemaToTypeInfo`: `[null, T]` -> T, enum -> string, fixed -> binary,
+    bytes+decimal -> decimal(p,s), int+date, long+timestamp-millis, string+char/varchar(maxLength), records
+    structs, maps `map<string,..>`) must equal the metastore columns (position, name any case, type), else the
+    table is skipped with a log reason (also: `avro.schema.url`, other unions, null type, recursive records -
+    a record reused outside itself is fine, bad decimal/maxLength props). Schema ID `hive-avro|<schema>|...`.
+    `AvroArrowReader` (Avro 1.12.0 `DataFileReader` + `GenericDatumReader.setExpected(table schema)` over the
+    store's `ReadableFile` through a 1 MiB window): fields by position; strings/enums text; bytes/fixed binary;
+    decimal = unscaled bytes at the scale of the file's own field schema (Hive's `fileSchema`), then
+    `enforcePrecisionScale` to the column (NULL when too wide); char/varchar cut to the file schema's maxLength
+    then the column's (char stripped); date days; timestamp millis UTC -> local time of the file's
+    `writer.time.zone` (Hive 3.1.3 writes it; a file without it fails on its first non-NULL timestamp, see Open
+    questions); a decimal/char/varchar field missing in the file schema fails (Hive does); map key text, HashMap
+    order as Hive. An empty (0-byte) file has no rows. Found on the way: Avro's `DataFileStream.hasNext` returns
+    false on any EOF, so a file cut inside a block was read as shorter - the reader checks
+    `previousSync() == length` at the end and fails otherwise. A partition of another storage format, or (unless a
+    table property names the schema) whose serde literal / columns give another schema (`Schema.equals`, docs
+    ignored), fails the query naming the partition. Codecs null/deflate/snappy (snappy-java 1.1.10.7)/bzip2/
+    zstandard. Dependencies: avro 1.12.0 (jackson excluded), Jackson 2.17.2 now compile (was test-scoped 2.12.0
+    for the test metastore; it runs on 2.17.2), snappy-java. Tests: `AvroFormatTest` 4, `AvroArrowReaderTest` 5
+    (every type + NULLs, projections incl. empty, resolution: int->long, dropped/added/defaulted fields, decimal
+    at the file's scale 3 -> (10,2) rounding and NULL above precision, varchar at the file's maxLength, required
+    field without default, decimal without scale; writer time zones UTC/Tokyo/none/bad; 5 codecs x 5000 rows in
+    many blocks; empty, not-Avro, cut by 20/10/2 bytes), `HiveAvroTableTest` 3 (metastore: opt-in, literal and
+    column tables, tinyint/url/stale skipped, DuckDB reads all 17 types, partitions with NULL partition,
+    partition-only scan, partition with another schema refused).
+    *Next (step 2):* (c) the server end-to-end test for Avro (`HiveAvroIntegrationTest` like
+    `HiveTextIntegrationTest`: packaged plugin, Avro vs Parquet in both modes, joins, pruning - needs avro +
+    snappy-java in the server tests' fixture class loader or files written in the test class path), then
+    `avro.schema.url` (read the schema through the stores, cache per table) and simple views; (d) perf note
+    (text/CSV/JSON/Avro vs Parquet SF1) and splitting large files (Avro at sync markers, uncompressed text at line
+    boundaries).
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -298,6 +332,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
 - (P4, JsonSerDe) an empty line in a JSON table fails the query: Hive 3.1.3's serde fails on it at a file's
   start and otherwise repeats the previous row (it re-parses the reused line buffer - a Hive bug). Skip empty
   lines instead (no row), if production files have them?
+
+- (P4, Avro) timestamps of Avro files without `writer.time.zone` metadata (written by Hive before 3.1 or by other
+  tools) fail the query: Hive 3.1.3 shows them in the time zone of the HiveServer2 that reads them (or UTC with
+  `hive.avro.timestamp.skip.conversion=true`), which the plugin cannot know. Add a setting (e.g.
+  `hive.avroTimestampZone`, default unset = fail) if production has such files?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for

@@ -720,8 +720,9 @@
                     </execution>
                     <!-- target/fixture-libs: the metastore server's libraries for the plugin's
                          and the server's tests, which run it in their own class loader (Hadoop
-                         and slf4j come from the test class path), and orc-core with its
-                         libraries for OrcTestFiles, which writes the server's tests' ORC files. -->
+                         and slf4j come from the test class path), orc-core with its
+                         libraries for OrcTestFiles and Avro for AvroTestFiles, which write the
+                         server's tests' ORC and Avro files. -->
                     <execution>
                         <id>fixture-libs</id>
                         <phase>generate-test-resources</phase>
@@ -730,7 +731,7 @@
                         </goals>
                         <configuration>
                             <includeScope>test</includeScope>
-                            <includeArtifactIds>commons-collections,hive-standalone-metastore,libfb303,jackson-databind,jackson-annotations,jackson-core,dropwizard-metrics-hadoop-metrics2-reporter,guava,protobuf-java,bonecp,HikariCP,commons-dbcp,commons-pool,metrics-core,metrics-jvm,metrics-json,javolution,antlr-runtime,commons-lang3,derby,hive-storage-api,commons-lang,datanucleus-api-jdo,datanucleus-core,datanucleus-rdbms,javax.jdo,transaction-api,orc-core,orc-format,orc-shims,aircompressor,threeten-extra,zstd-jni</includeArtifactIds>
+                            <includeArtifactIds>commons-collections,hive-standalone-metastore,libfb303,jackson-databind,jackson-annotations,jackson-core,dropwizard-metrics-hadoop-metrics2-reporter,guava,protobuf-java,bonecp,HikariCP,commons-dbcp,commons-pool,metrics-core,metrics-jvm,metrics-json,javolution,antlr-runtime,commons-lang3,derby,hive-storage-api,commons-lang,datanucleus-api-jdo,datanucleus-core,datanucleus-rdbms,javax.jdo,transaction-api,orc-core,orc-format,orc-shims,aircompressor,threeten-extra,zstd-jni,avro,commons-compress,commons-io</includeArtifactIds>
                             <outputDirectory>${project.build.directory}/fixture-libs</outputDirectory>
                         </configuration>
                     </execution>
