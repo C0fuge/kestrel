@@ -10,6 +10,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Hive text tables (P4 step 1), opt-in `hive.textTables` (default false; text tables were and stay skipped
+  without it): `STORED AS TEXTFILE` tables of `LazySimpleSerDe` are read by the hive plugin and handed to DuckDB
+  as Arrow streams (the ORC path, both result modes), as Hive reads them: `field.delim` / `serialization.format`,
+  `escape.delim` (+ `serialization.escape.crlf`), `serialization.null.format`, `skip.header.line.count`,
+  `serialization.last.column.takes.rest`, rows ending at LF/CR/CRLF, missing fields NULL, fields that do not read
+  as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
+  columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
+  JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
 - Iceberg REST catalog conformance (C1 step 1): new workflow `catalogs-ci.yml` starts Apache Polaris 1.2.0 (OAuth2
   client credentials, prefix from `/v1/config`) and the Apache Iceberg REST fixture 1.10.0 as containers and runs
   `RestCatalogConformanceTest`: the fixture tables are written through each catalog with Iceberg Java's RESTCatalog

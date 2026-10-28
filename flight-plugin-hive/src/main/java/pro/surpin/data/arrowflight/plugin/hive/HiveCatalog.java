@@ -42,8 +42,9 @@ import pro.surpin.data.arrowflight.spi.storage.Stores;
 
 /**
  * A Hive Metastore as the server sees it: databases are schemas (with an optional prefix),
- * Parquet tables are tables, and so are ORC tables with hive.orcTables (the catalog reads their
- * files itself and hands the rows over as Arrow streams). A table's snapshot is its files now: the files in the table
+ * Parquet tables are tables, and so are ORC tables with hive.orcTables and text tables with
+ * hive.textTables (the catalog reads their files itself and hands the rows over as Arrow
+ * streams). A table's snapshot is its files now: the files in the table
  * location, or for a partitioned table the files in every partition's location as the metastore
  * names them (never guessed from directories), each with its partition values from the
  * metastore. Every location must lie under the catalog's roots before anything below it is
@@ -56,7 +57,7 @@ final class HiveCatalog implements Catalog {
     private static final Logger LOGGER = LoggerFactory.getLogger(HiveCatalog.class);
     /** Tables read per get_table_objects_by_name call. */
     private static final int TABLE_BATCH = 100;
-    /** Rows per Arrow batch of an ORC table's stream. */
+    /** Rows per Arrow batch of an ORC or text table's stream. */
     private static final int ORC_BATCH_ROWS = 4096;
     /** ORC files of one table scan decoded at once (their batches still arrive in file order). */
     private static final int ORC_READ_AHEAD = Math.max(1,
@@ -218,18 +219,25 @@ final class HiveCatalog implements Catalog {
     @Override
     public void exportArrowScan(TableSnapshot snapshot, List<TableFile> files, ArrowScan scan,
             long streamAddress, Object allocator) throws IOException {
-        HiveTable hive = orcTable(snapshot);
-        Map<String, TypeDescription> types = new HashMap<>();
-        for (OrcArrowReader.Column column : hive.orcColumns()) {
-            types.put(column.name(), TypeDescription.fromString(column.hiveType()));
-        }
+        HiveTable hive = streamTable(snapshot);
         BufferAllocator buffers = (BufferAllocator) allocator;
-        OrcTableReader reader;
+        TableFilesReader reader;
         try {
-            reader = new OrcTableReader(buffers, files, this::open, hive.orcColumns(),
-                    hive.partitionColumns(), scan.columns(),
-                    OrcSearchArguments.of(scan.predicates(), types), ORC_BATCH_ROWS, orcPool,
-                    ORC_READ_AHEAD, ORC_RANGE_BYTES);
+            TableFilesReader.Format format;
+            if (hive.kind() == HiveTable.Kind.TEXT) {
+                format = TableFilesReader.text(hive.dataColumns(), hive.textFormat(),
+                        ORC_BATCH_ROWS);
+            } else {
+                Map<String, TypeDescription> types = new HashMap<>();
+                for (OrcArrowReader.Column column : hive.dataColumns()) {
+                    types.put(column.name(), TypeDescription.fromString(column.hiveType()));
+                }
+                format = TableFilesReader.orc(hive.dataColumns(),
+                        OrcSearchArguments.of(scan.predicates(), types), ORC_BATCH_ROWS);
+            }
+            reader = new TableFilesReader(buffers, files, this::open, hive.dataColumns(),
+                    hive.partitionColumns(), scan.columns(), format, orcPool, ORC_READ_AHEAD,
+                    ORC_RANGE_BYTES);
         } catch (IllegalArgumentException e) {
             throw new IOException("Cannot read " + snapshot.name() + ": " + e.getMessage(), e);
         }
@@ -355,7 +363,7 @@ final class HiveCatalog implements Catalog {
      */
     private Optional<HiveTable> classified(Table table) {
         HiveTable.Classified result = HiveTable.classify(table, settings.roots(), iceberg != null,
-                settings.orcTables());
+                settings.orcTables(), settings.textTables());
         String name = table.getDbName() + "." + table.getTableName();
         if (result.skipped() != null && logged.add("skip:" + name + ":" + result.skipped())) {
             LOGGER.info("node={} hive=tableSkipped table={} reason='{}'", node, name, result.skipped());
@@ -402,6 +410,7 @@ final class HiveCatalog implements Catalog {
                     outside.add(String.valueOf(location));
                     continue;
                 }
+                checkTextPartition(hive, partition);
                 locations.put(location, values(hive, partition));
             }
             recordPartitionsOutside(hive, outside);
@@ -424,33 +433,67 @@ final class HiveCatalog implements Catalog {
     }
 
     /**
-     * Tells how the server reads a Parquet or ORC table.
+     * Tells how the server reads a Parquet, ORC or text table.
      *
      * @param hive table
      * @return read specification
      */
     private static ReadSpec readSpec(HiveTable hive) {
-        return hive.kind() == HiveTable.Kind.ORC ? new ReadSpec.ArrowStream("orc")
-                : new ReadSpec.ParquetFiles(false);
+        return switch (hive.kind()) {
+            case ORC -> new ReadSpec.ArrowStream("orc");
+            case TEXT -> new ReadSpec.ArrowStream("text");
+            default -> new ReadSpec.ParquetFiles(false);
+        };
     }
 
     /**
-     * Finds the ORC table of a snapshot with the snapshot's columns.
+     * Refuses a partition of a text table whose files are laid out other than the table says:
+     * Hive reads each partition with its own serde properties, the catalog only with the table's.
+     *
+     * @param hive table
+     * @param partition one of its partitions
+     * @throws IOException when the partition has its own input format, serde or text format
+     */
+    private static void checkTextPartition(HiveTable hive, Partition partition) throws IOException {
+        if (hive.kind() != HiveTable.Kind.TEXT || partition.getSd() == null) {
+            return;
+        }
+        String problem;
+        if (!HiveTable.text(partition.getSd())) {
+            problem = "has another storage format";
+        } else {
+            try {
+                Map<String, String> serde = partition.getSd().getSerdeInfo().getParameters();
+                problem = hive.textFormat().forPartition(serde).equals(hive.textFormat())
+                        ? null : "has other serde properties than the table";
+            } catch (IllegalArgumentException e) {
+                problem = e.getMessage();
+            }
+        }
+        if (problem != null) {
+            throw new IOException("Partition " + partition.getValues() + " of text table "
+                    + hive.qualified() + " " + problem + ": not read");
+        }
+    }
+
+    /**
+     * Finds the ORC or text table of a snapshot with the snapshot's columns.
      *
      * @param snapshot snapshot this catalog returned
      * @return the table
-     * @throws IOException when it is gone, no ORC table or its columns changed
+     * @throws IOException when it is gone, read otherwise or its columns changed
      */
-    private HiveTable orcTable(TableSnapshot snapshot) throws IOException {
+    private HiveTable streamTable(TableSnapshot snapshot) throws IOException {
         for (boolean fresh : new boolean[] {false, true}) {
             Optional<HiveTable> hive = hiveTable(snapshot.name(), fresh);
-            if (hive.isPresent() && hive.get().kind() == HiveTable.Kind.ORC
+            if (hive.isPresent() && (hive.get().kind() == HiveTable.Kind.ORC
+                    || hive.get().kind() == HiveTable.Kind.TEXT)
                     && hive.get().schemaId().equals(snapshot.snapshotId())) {
                 return hive.get();
             }
         }
-        throw new IOException("The ORC table " + snapshot.name() + " is gone or its columns changed"
-                + " since the query was planned");
+        throw new IOException("The table " + snapshot.name() + " is gone or its columns or format"
+                + " changed since the query was planned");
     }
 
     /**

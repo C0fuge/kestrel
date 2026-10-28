@@ -113,7 +113,8 @@ public final class HmsFixture {
      * @param columns {@code name type;name type} (Hive types)
      * @param partitionKeys {@code name type;...}, empty for none
      * @param format "parquet", "text" or "orc"
-     * @param params extra table parameters, or null (with "transactional": a managed table)
+     * @param params extra table parameters, or null (with "transactional": a managed table;
+     *     keys starting with {@code serde:} go to the serde's parameters without the prefix)
      * @throws TException on metastore errors
      */
     public synchronized void createTable(String db, String name, String location, String columns,
@@ -123,10 +124,17 @@ public final class HmsFixture {
         if (!managed) {
             parameters.put("EXTERNAL", "TRUE");
         }
+        StorageDescriptor sd = sd(location, fields(columns), format);
         if (params != null) {
-            parameters.putAll(params);
+            params.forEach((key, value) -> {
+                if (key.startsWith("serde:")) {
+                    sd.getSerdeInfo().putToParameters(key.substring("serde:".length()), value);
+                } else {
+                    parameters.put(key, value);
+                }
+            });
         }
-        Table table = new Table(name, db, "test", 0, 0, 0, sd(location, fields(columns), format),
+        Table table = new Table(name, db, "test", 0, 0, 0, sd,
                 fields(partitionKeys), parameters, null, null,
                 managed ? "MANAGED_TABLE" : "EXTERNAL_TABLE");
         client().create_table(table);
@@ -195,9 +203,28 @@ public final class HmsFixture {
      */
     public synchronized String addPartition(String db, String table, List<String> values,
             String location) throws TException {
+        return addPartition(db, table, values, location, null);
+    }
+
+    /**
+     * Adds a partition with serde parameters of its own.
+     *
+     * @param db database
+     * @param table table name
+     * @param values partition values
+     * @param location partition location, or null for the default
+     * @param serdeParameters the partition's serde parameters, or null for the table's
+     * @return the partition's location as the metastore stores it
+     * @throws TException on metastore errors
+     */
+    public synchronized String addPartition(String db, String table, List<String> values,
+            String location, Map<String, String> serdeParameters) throws TException {
         Table t = client().get_table(db, table);
         StorageDescriptor sd = t.getSd().deepCopy();
         sd.setLocation(location);
+        if (serdeParameters != null) {
+            sd.getSerdeInfo().setParameters(new HashMap<>(serdeParameters));
+        }
         Partition partition = new Partition(new ArrayList<>(values), db, table, 0, 0, sd,
                 new HashMap<>());
         return client().add_partition(partition).getSd().getLocation();

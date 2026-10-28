@@ -123,8 +123,8 @@ class HiveOrcTableTest {
         table.setDbName("d");
         table.setTableName("t");
         List<ColumnSpec> columns = List.of(new ColumnSpec("a", "INTEGER", true, null));
-        assertNotEquals(HiveTable.schemaId(table, HiveTable.Kind.PARQUET, columns, List.of()),
-                HiveTable.schemaId(table, HiveTable.Kind.ORC, columns, List.of()));
+        assertNotEquals(HiveTable.schemaId(table, HiveTable.Kind.PARQUET, columns, List.of(), null),
+                HiveTable.schemaId(table, HiveTable.Kind.ORC, columns, List.of(), null));
     }
 
     @Test

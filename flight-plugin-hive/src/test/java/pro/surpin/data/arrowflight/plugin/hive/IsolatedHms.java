@@ -132,6 +132,23 @@ final class IsolatedHms {
     }
 
     /**
+     * Adds a partition with serde parameters of its own.
+     *
+     * @param db database
+     * @param table table name
+     * @param values partition values
+     * @param location partition location, or null for the default
+     * @param serdeParameters the partition's serde parameters (replacing the table's)
+     * @return the partition's location as the metastore stores it
+     * @throws Exception on metastore errors
+     */
+    String addPartition(String db, String table, List<String> values, String location,
+            Map<String, String> serdeParameters) throws Exception {
+        return (String) call(fixture, "addPartition", db, table, values, location,
+                serdeParameters);
+    }
+
+    /**
      * Starts a TCP proxy in front of the metastore.
      *
      * @return the proxy

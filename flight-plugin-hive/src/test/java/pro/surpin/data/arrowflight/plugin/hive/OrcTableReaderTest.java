@@ -31,7 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 
 /**
- * The stream of an ORC table scan ({@link OrcTableReader}) with files decoded ahead on other
+ * The stream of an ORC table scan ({@link TableFilesReader}) with files decoded ahead on other
  * threads: batches arrive in file order whatever the read-ahead, a file of many stripes is
  * read as byte ranges in order (each stripe once, the whole file even when its listed size is
  * short), closing early frees every buffer and stops the decoding, and a broken file fails the
@@ -74,7 +74,7 @@ class OrcTableReaderTest {
     void batchesArriveInFileOrderWhateverTheReadAhead() throws Exception {
         for (int readAhead : new int[] {1, 3, FILES + 2}) {
             long expected = 0;
-            try (OrcTableReader reader = reader(files, readAhead)) {
+            try (TableFilesReader reader = reader(files, readAhead)) {
                 VectorSchemaRoot root = reader.getVectorSchemaRoot();
                 while (reader.loadNextBatch()) {
                     BigIntVector keys = (BigIntVector) root.getVector("l_orderkey");
@@ -115,7 +115,7 @@ class OrcTableReaderTest {
                             + range;
                     int[] opens = new int[1];
                     long expected = 0;
-                    try (OrcTableReader reader = reader(one, readAhead, range, opens)) {
+                    try (TableFilesReader reader = reader(one, readAhead, range, opens)) {
                         VectorSchemaRoot root = reader.getVectorSchemaRoot();
                         while (reader.loadNextBatch()) {
                             BigIntVector keys = (BigIntVector) root.getVector("l_orderkey");
@@ -140,7 +140,7 @@ class OrcTableReaderTest {
         Files.write(dir.resolve("broken.orc"), "not an ORC file".getBytes(StandardCharsets.UTF_8));
         List<TableFile> broken = List.of(new TableFile("broken.orc", 1L << 30, 0L, Set.of(),
                 Map.of(), -1L, List.of()));
-        try (OrcTableReader reader = reader(broken, 4, 1000L, new int[1])) {
+        try (TableFilesReader reader = reader(broken, 4, 1000L, new int[1])) {
             IOException e = assertThrows(IOException.class, reader::loadNextBatch);
             assertTrue(e.getMessage().contains("broken.orc"), e.getMessage());
         }
@@ -149,7 +149,7 @@ class OrcTableReaderTest {
 
     @Test
     void closingEarlyFreesEveryBatchDecodedAhead() throws Exception {
-        try (OrcTableReader reader = reader(files, FILES)) {
+        try (TableFilesReader reader = reader(files, FILES)) {
             assertTrue(reader.loadNextBatch());
             // Give the other files time to fill their queues.
             Thread.sleep(300);
@@ -164,7 +164,7 @@ class OrcTableReaderTest {
         withBroken.add(new TableFile("broken.orc", 15L, 0L, Set.of(), Map.of(), -1L, List.of()));
         withBroken.addAll(files.subList(2, FILES));
         long[] read = new long[1];
-        try (OrcTableReader reader = reader(withBroken, 4)) {
+        try (TableFilesReader reader = reader(withBroken, 4)) {
             IOException e = assertThrows(IOException.class, () -> {
                 while (reader.loadNextBatch()) {
                     read[0] += reader.getVectorSchemaRoot().getRowCount();
@@ -179,7 +179,7 @@ class OrcTableReaderTest {
     @Test
     void aRejectedReadFailsTheStreamAndClosesAtOnce() throws Exception {
         executor.shutdown();
-        try (OrcTableReader reader = reader(files, 2)) {
+        try (TableFilesReader reader = reader(files, 2)) {
             assertThrows(java.util.concurrent.RejectedExecutionException.class,
                     reader::loadNextBatch);
         }
@@ -199,14 +199,14 @@ class OrcTableReaderTest {
         return groups;
     }
 
-    private OrcTableReader reader(List<TableFile> tableFiles, int readAhead) {
+    private TableFilesReader reader(List<TableFile> tableFiles, int readAhead) {
         return reader(tableFiles, readAhead, Long.MAX_VALUE, new int[1]);
     }
 
-    private OrcTableReader reader(List<TableFile> tableFiles, int readAhead, long rangeBytes,
+    private TableFilesReader reader(List<TableFile> tableFiles, int readAhead, long rangeBytes,
             int[] opens) {
         TestSupport.LocalStore store = new TestSupport.LocalStore(dir.toString());
-        return new OrcTableReader(allocator, tableFiles, file -> {
+        return new TableFilesReader(allocator, tableFiles, file -> {
             synchronized (opens) {
                 opens[0]++;
             }

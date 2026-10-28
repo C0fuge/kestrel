@@ -30,6 +30,7 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param listThreads threads that list partition directories
  * @param icebergTables what to do with Iceberg tables registered in the metastore
  * @param orcTables whether ORC tables are shown, read by the plugin and handed over as Arrow
+ * @param textTables whether text tables (LazySimpleSerDe) are shown, read like ORC tables
  * @param defaultPartitionName the partition value that stands for NULL
  * @param kerberos Kerberos settings, null without Kerberos
  */
@@ -38,7 +39,7 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
         int connectTimeoutMillis, int socketTimeoutMillis, int maxConnections,
         boolean framedTransport, String authentication, boolean recursiveDirectories,
         int partitionBatchSize, int listThreads, IcebergTables icebergTables,
-        boolean orcTables, String defaultPartitionName, Kerberos kerberos) {
+        boolean orcTables, boolean textTables, String defaultPartitionName, Kerberos kerberos) {
 
     /** SASL protection levels the client accepts by default: the strongest the metastore offers. */
     static final String DEFAULT_QOP = "auth-conf,auth-int,auth";
@@ -110,6 +111,8 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                 + " metastore read through the iceberg plugin", "auto"));
         keys.add(ConfigKey.of("orcTables", "whether ORC tables are shown (read by the plugin;"
                 + " transactional ORC tables stay skipped)", "false"));
+        keys.add(ConfigKey.of("textTables", "whether text tables of Hive's default serde"
+                + " (LazySimpleSerDe, STORED AS TEXTFILE) are shown (read by the plugin)", "false"));
         keys.add(ConfigKey.of("defaultPartitionName", "partition value that stands for NULL",
                 "__HIVE_DEFAULT_PARTITION__"));
         return List.copyOf(keys);
@@ -169,6 +172,7 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                 authentication, config.getBoolean("recursiveDirectories", false),
                 atLeast(config, "partitionBatchSize", 500, 1), atLeast(config, "listThreads", 8, 1),
                 iceberg, config.getBoolean("orcTables", false),
+                config.getBoolean("textTables", false),
                 config.get("defaultPartitionName", "__HIVE_DEFAULT_PARTITION__"), kerberos);
     }
 
@@ -278,6 +282,6 @@ record HiveSettings(List<String> uris, List<String> roots, String schemaPrefix,
                         + kerberos.clientKeytab() + ", clientTicketCache="
                         + kerberos.clientTicketCache() + ", saslQop=" + kerberos.qop())
                 + ", recursive=" + recursiveDirectories + ", icebergTables=" + icebergTables
-                + ", orcTables=" + orcTables + "}";
+                + ", orcTables=" + orcTables + ", textTables=" + textTables + "}";
     }
 }
