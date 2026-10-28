@@ -606,4 +606,5 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   Central): hive module 88/88, Checkstyle + SpotBugs clean; `HiveOrcPerfTest` at 400k rows (answers equal Parquet).
   CI: Dev CI push runs 40773505710, 40774236756, 40775370618 cancelled by later pushes; Dev CI run 40776549317
   (80aa61a, contains all four commits) green; perf runs 40774271172, 40775865607, 40776750625 (numbers under P4);
-  package run 40778373787 (package=true, 80aa61a) dispatched. P4 closed; next session: P5.
+  package run 40778373787 (package=true, 80aa61a) green -> pre-release `server-1.0.0-80aa61a15557`. P4 closed;
+  next session: P5.
