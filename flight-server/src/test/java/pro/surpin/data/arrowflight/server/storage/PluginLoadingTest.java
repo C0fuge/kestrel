@@ -120,7 +120,9 @@ class PluginLoadingTest {
 
     @Test
     void newerSpiVersionsAreRefused() throws Exception {
-        for (String spi : List.of("2.0", "1.5", "x")) {
+        String nextMinor = pro.surpin.data.arrowflight.spi.SpiVersion.MAJOR + "."
+                + (pro.surpin.data.arrowflight.spi.SpiVersion.MINOR + 1);
+        for (String spi : List.of("2.0", nextMinor, "x")) {
             rewriteDescriptor("name=fixture\nspi=" + spi + "\nprovides.storage=fixture\n");
             IllegalStateException e = assertThrows(IllegalStateException.class,
                     () -> open("fixture://bucket/data/", false, StoreRegistryTest.emptySource()));
