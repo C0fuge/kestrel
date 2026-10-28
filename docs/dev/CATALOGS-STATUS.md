@@ -59,3 +59,8 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   columns, files, row/delete counts, partial-read problems, DuckDB rows). Test only. Catalogs CI green: run
   40670485477 (earlier failures 40669539591, 40669821302, 40670292342 were CI setup: container uid/permissions,
   DuckDB setting). Dev CI green: run 40672085389 (head c258adf, includes these commits). No open questions.
+- 2026-10-28: C1 step 2a - REST conformance on S3 warehouses (static keys): polaris-s3, iceberg-rest-fixture-s3,
+  lakekeeper-s3 added to `catalogs-ci.yml` (S3 server: moto; `quay.io/minio/minio` now refuses anonymous pulls,
+  first run 40677711018 failed on that). Test only. Catalogs CI green: run 40677907066 (all 5 entries, 3/3 tests
+  each). Dev CI green: run 40677906918 (head bfa1912). Step 2b analysed (DuckDB accepts `CREATE OR REPLACE
+  TEMPORARY SECRET` after lockdown); its core part waits on Open question Q1.
