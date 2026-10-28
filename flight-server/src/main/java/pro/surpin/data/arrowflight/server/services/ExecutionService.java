@@ -189,7 +189,8 @@ public final class ExecutionService {
         try {
             List<Object> values = parameters == null ? List.of()
                     : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
-            String sql = catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null);
+            String sql = catalogViews.arrowStreams(
+                    catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), true), null);
             return duckDbAdapter.describeComplete(allocator, sql, values, catalogViews.current());
         } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;
@@ -236,7 +237,7 @@ public final class ExecutionService {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            String sql = catalogViews.timeTravel(query, false);
+            String sql = catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false);
             CatalogViews.Snapshot views = catalogViews.current();
             try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(),
                     allocator)) {
@@ -256,6 +257,23 @@ public final class ExecutionService {
                 throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Replaces the catalog views a client's SQL names by their queries; the complete-answer
+     * calls do the same, so a text already expanded stays as it is.
+     *
+     * @param query client SQL
+     * @return the expanded SQL and every table and view the views read
+     * @throws IllegalArgumentException when a view cannot be read as written
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public CatalogViews.Expanded catalogViews(String query) {
+        try {
+            return catalogViews.catalogViews(query);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
     }
 
@@ -337,7 +355,8 @@ public final class ExecutionService {
     public Schema completeParameterSchema(String query) {
         try {
             return duckDbAdapter.describeParameters(
-                    catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null),
+                    catalogViews.arrowStreams(catalogViews.timeTravel(
+                            catalogViews.catalogViews(query).sql(), true), null),
                     catalogViews.current());
         } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;

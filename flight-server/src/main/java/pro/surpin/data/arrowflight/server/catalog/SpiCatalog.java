@@ -9,6 +9,7 @@ import pro.surpin.data.arrowflight.server.plugin.ThreadContext;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.AsOf;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -57,6 +58,13 @@ public final class SpiCatalog implements Catalog {
     public List<String> tables(String schema) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return List.copyOf(delegate.tables(schema));
+        }
+    }
+
+    @Override
+    public List<CatalogView> views(String schema) throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return List.copyOf(delegate.views(schema));
         }
     }
 

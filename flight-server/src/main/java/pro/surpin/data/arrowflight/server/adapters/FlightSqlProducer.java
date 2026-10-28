@@ -34,6 +34,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.server.AllowAllAuthorization;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import org.slf4j.MDC;
@@ -50,6 +51,7 @@ import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import pro.surpin.data.arrowflight.server.metrics.ExecutionPathRecorder;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
+import pro.surpin.data.arrowflight.server.services.CatalogViews;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
@@ -268,7 +270,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             }
             ParquetAdapter.validateName(request.schema());
             ParquetAdapter.validateName(request.table());
-            authorization.requireQuery(context == null ? null : context.peerIdentity(),
+            requireQuery(context == null ? null : context.peerIdentity(),
                     "SELECT * FROM " + request.schema() + "." + request.table());
             TableStatisticsService.TableStatistics statistics = queryPlanner.tableStatistics(
                     request.schema(), request.table(), request.columns());
@@ -609,13 +611,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         String failureReason = null;
         try (DuckDbAdapter.QuerySlot slot = executionService.enterQuery()) {
             String user = context == null ? null : context.peerIdentity();
-            authorization.requireQuery(user, query);
+            String expanded = requireQuery(user, query);
             if (state.complete()) {
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);
                 DistributedComplete distributed = distributedComplete;
-                if (distributed == null || state.parameters() != null
+                // A query of catalog views runs as checked: its views replaced by their queries.
+                if (distributed == null || state.parameters() != null || !expanded.equals(query)
                         || !distributed.stream(query, user, listener)) {
-                    executionService.readComplete(allocator, query, state.parameters(), listener, true);
+                    executionService.readComplete(allocator, expanded, state.parameters(), listener,
+                            true);
                 }
             } else {
                 executionService.readParquet(
@@ -752,10 +756,48 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         long t = LogUtil.mark();
         ByteString handle = copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8));
         String query = command.getQuery();
-        authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
+        requireQuery(context == null ? null : context.peerIdentity(), query);
         String qid = qid(handle);
         LogUtil.logTiming(t, "schema.resolveQuery", "qid=" + qid);
         return flightInfoForQuery(query, descriptor, context);
+    }
+
+    /**
+     * Requires access to every table a query reads: the tables it names and, for each catalog
+     * view it names, every table and view that view reads (a view never gives more access than
+     * its tables give).
+     *
+     * @param principal caller identity, or null
+     * @param query client SQL
+     * @return the query with its catalog views replaced by their queries (the query itself when
+     *         it names none)
+     * @throws FlightRuntimeException UNAUTHORIZED when a table may not be read, INVALID_ARGUMENT
+     *         when a view cannot be read as written, UNAVAILABLE when the schemas cannot be listed
+     */
+    private String requireQuery(String principal, String query) {
+        authorization.requireQuery(principal, query);
+        CatalogViews.Expanded expanded;
+        try {
+            expanded = executionService.catalogViews(query);
+        } catch (IllegalArgumentException e) {
+            throw CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage()).withCause(e)
+                    .toRuntimeException();
+        } catch (java.io.UncheckedIOException e) {
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
+        }
+        if (expanded == null || expanded.sources().isEmpty()) {
+            return query;
+        }
+        for (TableName source : expanded.sources()) {
+            if (!authorization.canReadTable(principal, source.schema(), source.table())) {
+                LOGGER.info("node={} query=denied reason='view source {}.{}'", LogUtil.node(),
+                        source.schema(), source.table());
+                throw CallStatus.UNAUTHORIZED.withDescription("Schema or table access denied")
+                        .toRuntimeException();
+            }
+        }
+        return expanded.sql();
     }
 
     /**
@@ -937,6 +979,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      *         rejects: the partial path reports that error)
      */
     private String completeAnswerReason(String query) {
+        if (namesCatalogView(query)) {
+            return "the query reads a catalog view";
+        }
         if (pro.surpin.data.arrowflight.server.services.TimeTravelClause.present(query)) {
             // Endpoints read the snapshot their file entries name: one table, read in parts.
             return queryPlanner.travelledTable(query) != null ? null
@@ -951,6 +996,23 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
         // Catalog tables (Iceberg) whose files cannot be read one by one, and their joins.
         return reason != null ? reason : queryPlanner.catalogCompleteReason(query);
+    }
+
+    /**
+     * Tells whether a query names a view of a catalog; such a view has no files of its own, so
+     * its answer is always computed by one node.
+     *
+     * @param query client SQL
+     * @return true when it names one, or when its views cannot be replaced (the complete path
+     *         reports why)
+     */
+    private boolean namesCatalogView(String query) {
+        try {
+            CatalogViews.Expanded expanded = executionService.catalogViews(query);
+            return expanded != null && !expanded.sources().isEmpty();
+        } catch (RuntimeException e) {
+            return true;
+        }
     }
 
     /**
@@ -1061,7 +1123,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightProducer.CallContext context, FlightProducer.StreamListener<Result> listener) {
         try {
             String query = request.getQuery();
-            authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
+            requireQuery(context == null ? null : context.peerIdentity(), query);
             boolean complete = completeAnswer(context);
             Schema arrowSchema = complete ? completeSchemaFor(query) : schemaForQuery(query);
             Schema parameterSchema = complete ? completeParameterSchemaFor(query) : new Schema(List.of());
@@ -1178,7 +1240,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         if (parameters == null && handle.statementId() != null) {
             parameters = clusterService.recallParameters(handle.statementId());
         }
-        authorization.requireQuery(context == null ? null : context.peerIdentity(), handle.sql());
+        requireQuery(context == null ? null : context.peerIdentity(), handle.sql());
         return flightInfoForQuery(handle.sql(), parameters, descriptor, context);
     }
 
@@ -1202,7 +1264,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightSql.CommandPreparedStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         String query = parseHandle(command.getPreparedStatementHandle()).sql();
-        authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
+        requireQuery(context == null ? null : context.peerIdentity(), query);
         return new SchemaResult(completeAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
     }
 
@@ -1210,7 +1272,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     public SchemaResult getSchemaStatement(FlightSql.CommandStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         String query = command.getQuery();
-        authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
+        requireQuery(context == null ? null : context.peerIdentity(), query);
         LOGGER.debug("getSchemaStatement: {}", query);
         return new SchemaResult(completeAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
     }

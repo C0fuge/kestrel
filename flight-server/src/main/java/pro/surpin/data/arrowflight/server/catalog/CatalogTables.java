@@ -17,6 +17,7 @@ import java.util.regex.Pattern;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.spi.catalog.AsOf;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
@@ -242,6 +243,35 @@ public final class CatalogTables implements AutoCloseable {
             }
         }
         result.sort(String::compareTo);
+        return result;
+    }
+
+    /**
+     * Lists the views of a catalog schema whose names are valid and that read tables or views of
+     * the same catalog only.
+     *
+     * @param schema schema name
+     * @return views, in the catalog's order
+     * @throws IOException when the catalog cannot be read
+     */
+    public List<CatalogView> views(String schema) throws IOException {
+        Optional<Entry> entry = owner(schema);
+        if (entry.isEmpty()) {
+            return List.of();
+        }
+        List<CatalogView> result = new ArrayList<>();
+        for (CatalogView view : entry.get().catalog().views(spelling(schema))) {
+            String reason = !NAME.matcher(view.name()).matches() ? "name"
+                    : view.sources().stream().anyMatch(source -> !owner(source.schema())
+                            .equals(entry)) ? "sourceOfAnotherCatalog" : null;
+            if (reason == null) {
+                result.add(view);
+            } else {
+                warnOnce("view:" + schema + "." + view.name() + ":" + reason, "node={}"
+                        + " catalog=viewSkipped provider={} view='{}' reason={}",
+                        entry.get().provider(), schema + "." + view.name(), reason);
+            }
+        }
         return result;
     }
 

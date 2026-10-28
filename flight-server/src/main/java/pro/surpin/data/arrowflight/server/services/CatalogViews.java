@@ -14,9 +14,11 @@ import pro.surpin.data.arrowflight.server.catalog.ArrowStreamScans;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -28,6 +30,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -99,7 +102,36 @@ public final class CatalogViews {
     /** Most time-travel snapshots kept described. */
     private static final int TRAVEL_CAPACITY = 64;
 
+    /** Most rounds of view replacement (views over views); a catalog nests them less deep. */
+    static final int MAX_VIEW_ROUNDS = 16;
+
+    /**
+     * A view of a catalog as the server shows it.
+     *
+     * @param schema schema name as the server spells it
+     * @param view the catalog's view
+     */
+    private record ShownView(String schema, CatalogView view) {
+    }
+
+    /**
+     * A client's SQL with the catalog views it names replaced by their queries.
+     *
+     * @param sql SQL that reads the views' tables instead of the views
+     * @param sources every table and view the replaced views read, in order of first use; empty
+     *        when the SQL names no view
+     */
+    public record Expanded(String sql, List<TableName> sources) {
+    }
+
     private final ParquetAdapter parquetAdapter;
+    private final Object viewLock = new Object();
+    /** Catalog views: lower-case "schema\0view" to the view. */
+    private Map<String, ShownView> shownViews = Map.of();
+    /** When the catalog views were last listed, or null before the first listing. */
+    private Long viewsListedAtNanos;
+    /** Skip reasons of catalog views already logged. */
+    private final Set<String> loggedViews = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** Described time-travel snapshots, least recently used first. */
     private final Map<String, TravelViews> travel = new java.util.LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -624,6 +656,162 @@ public final class CatalogViews {
         LOGGER.debug("node={} views=arrowStreams references={} describe={}", LogUtil.node(),
                 references.size(), scans == null);
         return TableReferences.rewrite(sql, references, sources);
+    }
+
+    /**
+     * Replaces the references of a client's SQL to views of a catalog (named with their schema,
+     * see {@link TableReferences}) by their queries, {@code (<view query>) AS "<name>"} unless
+     * the client gave an alias, again and again until no view is left (views over views), so
+     * that time travel, Arrow streams and the DuckDB views see only tables. An unqualified view
+     * name is not replaced and fails as a missing table. SQL that names no view of a catalog
+     * schema is returned unchanged without listing views.
+     *
+     * @param sql client SQL
+     * @return the SQL with its views replaced, and what they read
+     * @throws IOException when the schemas cannot be listed
+     * @throws IllegalArgumentException when a view is read at an earlier snapshot or views are
+     *         nested deeper than {@value #MAX_VIEW_ROUNDS}
+     */
+    public Expanded catalogViews(String sql) throws IOException {
+        CatalogTables catalogs = parquetAdapter.catalogTables();
+        if (sql == null || catalogs == null || catalogs.isEmpty()
+                || TableReferences.find(sql, (schema, table) -> parquetAdapter
+                        .isCatalogSchema(schema)).isEmpty()) {
+            return new Expanded(sql, List.of());
+        }
+        Map<String, ShownView> shown = shownViews();
+        if (shown.isEmpty()) {
+            return new Expanded(sql, List.of());
+        }
+        String text = sql;
+        Set<TableName> sources = new LinkedHashSet<>();
+        for (int round = 0;; round++) {
+            for (TimeTravelClause.Reference travelled : TimeTravelClause.find(text)) {
+                List<String> parts = travelled.nameParts();
+                if (parts.size() == 2 && shown.containsKey(viewKey(parts.get(0), parts.get(1)))) {
+                    throw new IllegalArgumentException("Time travel (FOR VERSION/TIMESTAMP AS OF)"
+                            + " is not supported for the view " + String.join(".", parts));
+                }
+            }
+            List<TableReferences.Reference> references = TableReferences.find(text,
+                    (schema, table) -> shown.containsKey(viewKey(schema, table)));
+            if (references.isEmpty()) {
+                break;
+            }
+            if (round == MAX_VIEW_ROUNDS) {
+                throw new IllegalArgumentException("Views nested deeper than " + MAX_VIEW_ROUNDS
+                        + " cannot be read");
+            }
+            List<String> bodies = new ArrayList<>(references.size());
+            for (TableReferences.Reference reference : references) {
+                CatalogView view = shown.get(viewKey(reference.schema(), reference.table())).view();
+                sources.addAll(view.sources());
+                bodies.add("(" + view.sql() + ")" + (reference.aliased() ? ""
+                        : " AS " + DuckDbAdapter.quoteIdentifier(reference.table())));
+            }
+            text = TableReferences.rewrite(text, references, bodies);
+        }
+        LOGGER.debug("node={} views=catalogViews sources={}", LogUtil.node(), sources.size());
+        return new Expanded(text, List.copyOf(sources));
+    }
+
+    /**
+     * Returns the views of every catalog schema, listed again at most once a minute. A view whose
+     * name is also a table of its schema is left out (the table wins), as is one whose query names
+     * a table it does not declare as a source. A catalog that cannot be read keeps the views
+     * listed before; one that fails is not asked again for its other schemas in the same listing.
+     *
+     * @return lower-case "schema\0view" to the view
+     * @throws IOException when the schemas cannot be listed
+     */
+    private Map<String, ShownView> shownViews() throws IOException {
+        synchronized (viewLock) {
+            long now = System.nanoTime();
+            if (viewsListedAtNanos != null && now - viewsListedAtNanos < REFRESH_NANOS) {
+                return shownViews;
+            }
+            CatalogTables catalogs = parquetAdapter.catalogTables();
+            Map<String, ShownView> next = new HashMap<>();
+            Map<CatalogTables.Entry, String> failed = new HashMap<>();
+            for (String schema : parquetAdapter.getSchemas(null).keySet()) {
+                CatalogTables.Entry owner = catalogs.owner(schema).orElse(null);
+                if (owner == null) {
+                    continue;
+                }
+                List<ShownView> found = new ArrayList<>();
+                try {
+                    if (failed.containsKey(owner)) {
+                        throw new IllegalStateException(failed.get(owner));
+                    }
+                    List<CatalogView> views = catalogs.views(schema);
+                    Set<String> tableNames = new java.util.HashSet<>();
+                    if (!views.isEmpty()) {
+                        for (String table : catalogs.tables(schema)) {
+                            tableNames.add(table.toLowerCase(Locale.ROOT));
+                        }
+                    }
+                    for (CatalogView view : views) {
+                        String reason = tableNames.contains(view.name().toLowerCase(Locale.ROOT))
+                                ? "nameOfTable" : undeclaredSource(view);
+                        if (reason == null) {
+                            found.add(new ShownView(schema, view));
+                        } else if (loggedViews.add(schema + "." + view.name() + ":" + reason)) {
+                            LOGGER.warn("node={} views=skipView view={}.{} reason='{}'",
+                                    LogUtil.node(), schema, view.name(), reason);
+                        }
+                    }
+                } catch (IOException | RuntimeException e) {
+                    failed.putIfAbsent(owner, String.valueOf(e.getMessage()));
+                    found.clear();
+                    for (ShownView kept : shownViews.values()) {
+                        if (kept.schema().equals(schema)) {
+                            found.add(kept);
+                        }
+                    }
+                    LOGGER.warn("node={} views=keepViews schema={} views={} reason=catalog"
+                            + " error='{}'", LogUtil.node(), schema, found.size(), e.getMessage());
+                }
+                for (ShownView view : found) {
+                    next.put(viewKey(schema, view.view().name()), view);
+                }
+            }
+            shownViews = Map.copyOf(next);
+            viewsListedAtNanos = now;
+            return shownViews;
+        }
+    }
+
+    /**
+     * Tells why a view's query cannot be shown: it names a table in a FROM position that is not
+     * among its declared sources (which the server checks access to).
+     *
+     * @param view the view
+     * @return reason, or null when every table it names is declared
+     */
+    static String undeclaredSource(CatalogView view) {
+        Set<String> declared = new java.util.HashSet<>();
+        for (TableName source : view.sources()) {
+            declared.add(viewKey(source.schema(), source.table()));
+        }
+        for (TableReferences.Reference reference : TableReferences.find(view.sql(),
+                (schema, table) -> true)) {
+            if (!declared.contains(viewKey(reference.schema(), reference.table()))) {
+                return "reads " + reference.schema() + "." + reference.table()
+                        + ", which is not a declared source";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds the key of a view or table name.
+     *
+     * @param schema schema name in any case
+     * @param name view or table name in any case
+     * @return lower-case "schema\0name"
+     */
+    private static String viewKey(String schema, String name) {
+        return (schema + "\u0000" + name).toLowerCase(Locale.ROOT);
     }
 
     /**

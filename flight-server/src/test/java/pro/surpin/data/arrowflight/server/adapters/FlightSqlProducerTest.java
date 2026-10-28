@@ -5,11 +5,13 @@ import pro.surpin.data.arrowflight.server.model.HandleState;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import pro.surpin.data.arrowflight.server.model.QueryPlan;
+import pro.surpin.data.arrowflight.server.services.CatalogViews;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
 import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
 import pro.surpin.data.arrowflight.server.services.TableStatisticsService;
+import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightInfo;
@@ -100,6 +102,92 @@ class FlightSqlProducerTest {
         verify(executionService, never()).readParquet(any(), anyString(), any(), any(),
                 anyBoolean(), any());
         verify(clusterService).releaseEndpointLoad(handle.toByteArray(), state);
+    }
+
+    /** Requires access to every table a catalog view reads, not only to the view. */
+    @Test
+    void viewSourcesAreChecked() throws Exception {
+        String query = "select * from h.people_view";
+        ExecutionService executionService = mock(ExecutionService.class);
+        when(executionService.catalogViews(query)).thenReturn(new CatalogViews.Expanded(
+                "select * from (SELECT 1 FROM \"h\".\"secret\") AS \"people_view\"",
+                List.of(new TableName("h", "secret"))));
+        FlightAuthorization authorization = mock(FlightAuthorization.class);
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        when(context.peerIdentity()).thenReturn("alice@EXAMPLE.COM");
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                mock(ClusterService.class), authorization, "complete");
+        FlightSql.CommandStatementQuery command = FlightSql.CommandStatementQuery
+                .newBuilder().setQuery(query).build();
+        assertEquals(FlightStatusCode.UNAUTHORIZED,
+                org.junit.jupiter.api.Assertions.assertThrows(FlightRuntimeException.class,
+                        () -> producer.getFlightInfoStatement(command, context,
+                                FlightDescriptor.command(new byte[]{1}))).status().code());
+        verify(authorization).requireQuery("alice@EXAMPLE.COM", query);
+        verify(authorization).canReadTable("alice@EXAMPLE.COM", "h", "secret");
+        verify(executionService, never()).completeSchema(any(), anyString(), any());
+        // A view that cannot be read as written is the client's error.
+        when(executionService.catalogViews(query)).thenThrow(
+                new IllegalArgumentException("Time travel is not supported for the view"));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT,
+                org.junit.jupiter.api.Assertions.assertThrows(FlightRuntimeException.class,
+                        () -> producer.getFlightInfoStatement(command, context,
+                                FlightDescriptor.command(new byte[]{1}))).status().code());
+    }
+
+    /** Runs a saved complete ticket of a view as checked: its views replaced, on this node. */
+    @Test
+    void savedViewTicketRunsTheCheckedText() throws Exception {
+        ByteString handle = ByteString.copyFromUtf8("saved-view");
+        String query = "select * from h.people_view";
+        String expanded = "select * from (SELECT 1 FROM \"h\".\"people\") AS \"people_view\"";
+        ClusterService clusterService = mock(ClusterService.class);
+        HandleState state = HandleState.forCompleteAnswer(query, null);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        ExecutionService executionService = mock(ExecutionService.class);
+        when(executionService.catalogViews(query)).thenReturn(new CatalogViews.Expanded(expanded,
+                List.of(new TableName("h", "people"))));
+        FlightAuthorization authorization = mock(FlightAuthorization.class);
+        when(authorization.canReadTable("bob", "h", "people")).thenReturn(true);
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        when(context.peerIdentity()).thenReturn("bob");
+        FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService, authorization);
+        producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                .setStatementHandle(handle).build(), context, listener);
+        verify(executionService).readComplete(any(), eq(expanded), any(), any(), eq(true));
+        verify(listener, never()).error(any());
+    }
+
+    /** Answers a query of a catalog view asked for in parts completely: a view has no files. */
+    @Test
+    void partialViewQueryIsAnsweredCompletely() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "select id from h.people_view";
+        Schema schema = new Schema(List.of(Field.nullable("id", new ArrowType.Int(64, true))));
+        when(executionService.catalogViews(query)).thenReturn(new CatalogViews.Expanded(
+                "select id from (SELECT 1 AS id FROM \"h\".\"people\") AS \"people_view\"",
+                List.of(new TableName("h", "people"))));
+        when(executionService.completeSchema(allocator, query, null)).thenReturn(schema);
+        when(queryPlanner.planComplete(query, null)).thenReturn(new QueryPlan(List.of(), -1L, -1L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "partial");
+        producer.getFlightInfoStatement(FlightSql.CommandStatementQuery
+                .newBuilder().setQuery(query).build(), mock(FlightProducer.CallContext.class),
+                FlightDescriptor.command(new byte[]{1}));
+        verify(executionService).completeSchema(allocator, query, null);
+        verify(executionService, never()).resultSchema(any(), anyString());
+        verify(queryPlanner).planComplete(query, null);
+        verify(queryPlanner, never()).plan(anyString());
     }
 
     /** Omits schemas denied by Ranger from metadata discovery. */
