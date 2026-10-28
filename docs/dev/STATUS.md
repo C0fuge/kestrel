@@ -493,7 +493,7 @@
    `server-1.0.0-b7be8d166498`, see Log): a partial query of one table with one clause
    and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; (b) Iceberg tables registered in a Hive
    Metastore (`TableFormat` needs an `asOf`); ~~(c) snapshots that cannot be read file by file (deletion vectors,
-   renamed nested fields) are refused~~ (done 2026-10-28, 411e804, see Log: read by `iceberg_scan(...,
+   renamed nested fields) are refused~~ (done 2026-10-28, 411e804, in pre-release `server-1.0.0-2cfa23eb62f9`, see Log: read by `iceberg_scan(...,
    snapshot_from_id => )`, which on DuckDB 1.5.6 uses the snapshot's schema; refused only when DuckDB's columns differ
    from the snapshot's declared ones). **Stand:** one travelled snapshot of a table with deletion vectors (v3, if the
    stand's writers produce them) vs Spark's answer. For the coordinator: Trino plugin / StarRocks connector may forward the clause.
@@ -1835,3 +1835,20 @@
   cut tests of `DistributedClusterIntegrationTest`): it matches the intent - a cut before the peer's schema fails
   over and merges, after it falls back, and the answer stays exact either way. Package run 40715095069 green,
   pre-release `server-1.0.0-2cfa23eb62f9`. Details in `LANE3-STATUS.md`.
+- 2026-10-28 (cloud session): stage 3 still waits on the screening, so backlog item 3 (c) (411e804): Iceberg time
+  travel to snapshots that cannot be read file by file (deletion vectors, renamed nested fields, columns without field
+  ID, other `completeReason`s) is no longer refused: `CatalogViews.travelSource` reads them with
+  `iceberg_scan('<metadata>', snapshot_from_id => <id>)` (equality deletes get the all-columns wrapper as for current
+  snapshots), and `requireDeclaredColumns` refuses the snapshot unless DuckDB's DESCRIBE equals the snapshot's
+  declared columns (names + `typeof(CAST(NULL AS <declared>))`, nested field names included) - never an answer with
+  another schema. Checked on DuckDB 1.5.6: both snapshots of the `nested` fixture (before / after `st.b` -> `st.c`)
+  read with their own field names, complete and partial mode, hadoop and REST catalogs
+  (`IcebergCatalogIntegrationTest`, was an assertion that the clause is refused). Found while testing: the SPI's
+  `snapshotId` is `<iceberg id>.<schema id>`, so the Iceberg id is parsed out (a decimal literal would be rounded at
+  schema id >= 5); regression in `CatalogViewsIcebergSourceTest`. Not covered: deletion vectors (no v3 DV fixture;
+  the current-snapshot views already rely on iceberg_scan for them) - stand check in item 3. Log line
+  `views=icebergSnapshotRead`. CI: my push run 40710205300 and package dispatch 40710223962 were cancelled by other
+  lanes' pushes (shared concurrency group); push run 40712744776 on 2cfa23e (contains 411e804) green, the package
+  dispatch 40715095069 on 2cfa23e green, pre-release `server-1.0.0-2cfa23eb62f9`. Next: the screening's numbers
+  (items 21/22/19b/17 (e)), then the stand rounds; code candidates: item 3 (b) (time travel for Iceberg tables in a
+  Hive Metastore - plugin + SPI `TableFormat.asOf`, overlaps the plugins lane), item 1b libs pruning (needs a stand).
