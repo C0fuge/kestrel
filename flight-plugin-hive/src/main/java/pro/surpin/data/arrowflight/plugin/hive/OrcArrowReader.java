@@ -37,6 +37,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.vector.BytesColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.ColumnVector;
+import org.apache.hadoop.hive.ql.exec.vector.Decimal64ColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.DecimalColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.DoubleColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.ListColumnVector;
@@ -47,6 +48,7 @@ import org.apache.hadoop.hive.ql.exec.vector.TimestampColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
 import org.apache.hadoop.hive.ql.io.sarg.PredicateLeaf;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
+import org.apache.hadoop.hive.serde2.io.HiveDecimalWritable;
 import org.apache.orc.OrcConf;
 import org.apache.orc.OrcFile;
 import org.apache.orc.Reader;
@@ -71,6 +73,7 @@ final class OrcArrowReader extends ArrowReader {
     /** Hive 1.x ORC files name their columns by position. */
     private static final Pattern POSITIONAL = Pattern.compile("_col\\d+");
     private static final long MICROS_PER_SECOND = 1_000_000L;
+    private static final int MAX_LONG_PRECISION = 18;
 
     private final TypeDescription readerSchema;
     private final List<Integer> projected;
@@ -146,7 +149,9 @@ final class OrcArrowReader extends ArrowReader {
             throw new IOException("Cannot read " + location + " as " + readerSchema + ": "
                     + e.getMessage(), e);
         }
-        this.batch = readerSchema.createRowBatch(batchSize);
+        // Decimals of up to 18 digits are decoded straight into longs (no HiveDecimal per value).
+        this.batch = readerSchema.createRowBatch(TypeDescription.RowBatchVersion.USE_DECIMAL64,
+                batchSize);
         reader.close();
     }
 
@@ -299,9 +304,27 @@ final class OrcArrowReader extends ArrowReader {
                             length);
                 }
                 case DECIMAL -> {
-                    BigDecimal value = ((DecimalColumnVector) source).vector[row].getHiveDecimal()
-                            .bigDecimalValue().setScale(type.getScale(), RoundingMode.UNNECESSARY);
-                    ((DecimalVector) target).setSafe(out, value);
+                    if (source instanceof Decimal64ColumnVector unscaled) {
+                        long value = unscaled.vector[row];
+                        if (unscaled.scale == type.getScale()) {
+                            ((DecimalVector) target).setSafe(out, value);
+                        } else {
+                            ((DecimalVector) target).setSafe(out, BigDecimal.valueOf(value,
+                                    unscaled.scale).setScale(type.getScale(), RoundingMode.UNNECESSARY));
+                        }
+                        continue;
+                    }
+                    HiveDecimalWritable decimal = ((DecimalColumnVector) source).vector[row];
+                    if (type.getPrecision() <= MAX_LONG_PRECISION
+                            && decimal.precision() <= type.getPrecision()
+                            && decimal.scale() <= type.getScale()) {
+                        // Fits a long: the unscaled value at the column's scale, no BigDecimal.
+                        ((DecimalVector) target).setSafe(out, decimal.serialize64(type.getScale()));
+                    } else {
+                        BigDecimal value = decimal.getHiveDecimal().bigDecimalValue()
+                                .setScale(type.getScale(), RoundingMode.UNNECESSARY);
+                        ((DecimalVector) target).setSafe(out, value);
+                    }
                 }
                 case TIMESTAMP, TIMESTAMP_INSTANT -> {
                     TimestampColumnVector times = (TimestampColumnVector) source;

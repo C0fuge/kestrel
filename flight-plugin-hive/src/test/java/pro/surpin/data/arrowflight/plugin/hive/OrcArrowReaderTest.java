@@ -192,6 +192,55 @@ class OrcArrowReaderTest {
     }
 
     @Test
+    void readsDecimalsOfEveryWidthAndWidenedScales() throws Exception {
+        Path file = dir.resolve("dec.orc");
+        TypeDescription schema = TypeDescription.fromString(
+                "struct<a:decimal(18,4),b:decimal(38,6),c:decimal(10,2),d:decimal(9,0)>");
+        long[] unscaled = {0L, 1L, -1L, 999_999_999_999_999_999L, -123_456_789_012_345L};
+        try (Writer writer = OrcFile.createWriter(hadoopPath(file),
+                OrcFile.writerOptions(new Configuration(false)).setSchema(schema))) {
+            VectorizedRowBatch batch = schema.createRowBatch();
+            for (int r = 0; r < unscaled.length; r++) {
+                ((DecimalColumnVector) batch.cols[0]).set(r,
+                        HiveDecimal.create(BigDecimal.valueOf(unscaled[r], 4)));
+                ((DecimalColumnVector) batch.cols[1]).set(r, HiveDecimal.create(
+                        BigDecimal.valueOf(unscaled[r], 6).multiply(BigDecimal.TEN.pow(12))));
+                ((DecimalColumnVector) batch.cols[2]).set(r,
+                        HiveDecimal.create(BigDecimal.valueOf(unscaled[r] % 10_000_000_000L, 2)));
+                ((DecimalColumnVector) batch.cols[3]).set(r,
+                        HiveDecimal.create(BigDecimal.valueOf(unscaled[r] % 1_000_000_000L)));
+            }
+            batch.cols[3].noNulls = false;
+            batch.cols[3].isNull[1] = true;
+            batch.size = unscaled.length;
+            writer.addRowBatch(batch);
+        }
+        // c and d widened by the metastore's declaration: decimal(10,2) -> (14,4), (9,0) -> (12,3).
+        List<OrcArrowReader.Column> columns = List.of(new OrcArrowReader.Column("a", "decimal(18,4)"),
+                new OrcArrowReader.Column("b", "decimal(38,6)"),
+                new OrcArrowReader.Column("c", "decimal(14,4)"),
+                new OrcArrowReader.Column("d", "decimal(12,3)"));
+        try (OrcArrowReader reader = reader(file, columns, List.of("a", "b", "c", "d"), null)) {
+            VectorSchemaRoot root = reader.getVectorSchemaRoot();
+            assertTrue(reader.loadNextBatch());
+            assertEquals(unscaled.length, root.getRowCount());
+            for (int r = 0; r < unscaled.length; r++) {
+                assertEquals(BigDecimal.valueOf(unscaled[r], 4), root.getVector("a").getObject(r));
+                assertEquals(BigDecimal.valueOf(unscaled[r], 6).multiply(BigDecimal.TEN.pow(12))
+                        .setScale(6), root.getVector("b").getObject(r));
+                assertEquals(BigDecimal.valueOf(unscaled[r] % 10_000_000_000L, 2).setScale(4),
+                        root.getVector("c").getObject(r));
+                Object d = root.getVector("d").getObject(r);
+                if (r == 1) {
+                    assertNull(d);
+                } else {
+                    assertEquals(BigDecimal.valueOf(unscaled[r] % 1_000_000_000L).setScale(3), d);
+                }
+            }
+        }
+    }
+
+    @Test
     void refusesUnknownProjectedColumns() throws Exception {
         Path file = dir.resolve("all.orc");
         writeAllTypes(file, ALL_TYPES);

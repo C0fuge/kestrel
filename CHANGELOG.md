@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- `HiveOrcPerfTest` (perf tag) and the manual workflow `hive-orc-perf.yml` (P1 step 2 (e)): a lineitem-like Hive
+  table (SF1 size by default) as Parquet and as ORC (zlib, zstd) through the server with the hive plugin, best of 3
+  per query and result mode; complete answers of the ORC tables must equal the Parquet table's. Test only.
 - DuckDB threads under load (item 22, also item 21 (b) option 3), opt-in: `duckDbThreadsUnderLoad` /
   `arrowflight.duckdb.threadsUnderLoad` / `DUCKDB_THREADS_UNDER_LOAD` (default 0 = off, unchanged). Each Flight
   worker gets a second DuckDB connection with that many threads, opened on first use; a DoGet that starts while the
@@ -254,6 +257,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Hive plugin, ORC tables: decimals of up to 18 digits are decoded by ORC straight into longs (`USE_DECIMAL64` row
+  batches) and copied to Arrow without a `BigDecimal` per value; Q1-style queries over ORC about 30 % faster
+  (P1 step 2 (e)). Answers unchanged (new test `OrcArrowReaderTest.readsDecimalsOfEveryWidthAndWidenedScales`).
 - Less CPU per small query (item 21, step 1): GetFlightInfo of a complete answer on a node alone in its cluster no
   longer reads the server registry and heartbeat maps (it checked the node count on every query over local
   directories); the per-DoGet `executionPath=` event is written as text instead of through a Jackson tree (same
