@@ -1977,3 +1977,8 @@
   Maven note: `./mvnw` fails (Maven 3.10.0 download), `/opt/maven/bin/mvn` 3.9.11 works; `-DargLine=...` system
   properties do not reach the forked tests here, pass `-Dperf.*` directly on the mvn line. Next: the maintainer's
   answer on the item 22 question; meanwhile the screening's numbers and the stand rounds.
+- 2026-10-28 (lane 3 session): D3 step 2b merged into `main` (9044653): no wait for a silent member when a backup node
+  moves an endpoint's load reservation, when publishing/repairing the inventory and ticket secret (all-member maps),
+  or when deregistering at stop. CI 40764754357 green on `lane/distributed`; package run 40766473788 green, pre-release
+  `server-1.0.0-9044653333cd` (that dispatch cancelled the plugins lane's push run 40765524515 on c62e0bb; 9044653
+  contains it). Details in `LANE3-STATUS.md`.

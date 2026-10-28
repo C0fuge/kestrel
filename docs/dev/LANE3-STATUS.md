@@ -24,9 +24,7 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
     refreshed by the heartbeat thread instead of blocking map reads; keep `hazelcast.max.no.heartbeat.seconds` as is.
     - ~~Step 1: planning reads~~ *done 2026-10-28 (a110a22, see Log):* `ClusterView`.
     - ~~Step 2: writes~~ *done 2026-10-28 (aef0a7a, see Log):* deferred writes in `ClusterService`.
-    - Step 2b (optional): `claimEndpointLoad` (background already), `close()` deregistration and the
-      `registerLocalFiles` / repair puts of the all-backup maps still wait for a silent member; only the shutdown
-      of a node during a crash would be late.
+    - ~~Step 2b: remaining writes~~ *done 2026-10-28 (see Log):* claim, inventory/secret puts, `close()`.
     - Step 3 (optional): `fileLocations(false)` (local disks) still uses `entrySet`, which waits; plans there fail
       anyway when a node is lost, so only the error is late.
 
@@ -130,3 +128,23 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   catalogs lane's push) green, pre-release `server-1.0.0-0f8eb5e5f65c`. Next: D3 step
   2b is optional; D3 otherwise complete - next lane-3 item to be set by the maintainer (or D2 observed gap: force
   the after-first-batch cut path).
+- 2026-10-28 (lane 3 session, 7th): lock 20:26Z. D3 step 2b done (9044653, rebase-merged into `main`): the remaining
+  waits for a silent member. `claimEndpointLoad` (a backup node moving an endpoint's load reservation) goes through
+  `writeOrDefer` on the reservation key, so `claimEndpointLoadLater` completes at once and the end of the stream
+  (`FlightSqlProducer` joins the claim before the release) no longer waits; the release of the same key queues behind
+  the move and finds the moved reservation. The inventory / ticket-secret maps keep a copy on every member, so their
+  puts wait for any silent member: `registerLocalFiles` defers with `ALL_MEMBERS_BACKUP_COUNT`
+  (`HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT` now public), the heartbeat's inventory repair and secret
+  `putIfAbsent` are skipped while any replica is silent (adopting the cluster's secret, a read, still runs), and this
+  node's own pending inventory counts as published in `hasFileInventory` (else plans failed with "not published").
+  `close()` skips the deregistration whose entries sit on a silent member (the others drop the node when its member
+  leaves). Tests: `ClusterServiceTest` +3 (all three fail on the old code). Local: `ClusterServiceTest` 50/50,
+  `ClusterViewTest`, `ClusterMemberLossIntegrationTest` (iptables, root) 2/2, `DistributedClusterIntegrationTest`,
+  `DistributedCompleteIntegrationTest` green. Seen once locally: `ClusterMemberLossIntegrationTest` failed to bind
+  a Hazelcast port from `freePort()` (port taken between release and bind, as the plugins lane saw in
+  `DistributedClusterIntegrationTest`) - test-side race, not this change; candidate fix: retry the member start on a
+  BindException. CI 40764754357 green on the branch (35085cc); on `main` package=true run 40766473788 on 9044653 green
+  (it cancelled my push run 40766410121 and the plugins lane's push run 40765524515 on c62e0bb, which 9044653
+  contains), pre-release `server-1.0.0-9044653333cd`. Next: D3 step 3 (optional, `fileLocations(false)`), or the D2
+  observed gap (force the after-first-batch cut path), or the Hazelcast test-port race; next lane-3 item otherwise
+  to be set by the maintainer.
