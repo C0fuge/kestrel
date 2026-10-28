@@ -89,6 +89,16 @@
 > and without `-DduckDbThreadsUnderLoad=1` vs upstream native (2 CPUs); see Open question "Item 21 (b)" for turning
 > it on by default on small nodes. Next code step of 21 if a gap remains: none server-side known (see "Item 21 (d)");
 > then item 22 / 19b step 2 / 16 as listed.
+>
+> *(2) item 22, 2026-10-28 late (cloud session, no code change, see Log):* no server-side Java cut left on the scan
+> path. JFR of 8 partial-mode endpoints on 2 cores: 91 % of the DoGet threads' native samples sit in DuckDB's
+> `getNextArrayStream` (the batch itself), the Java side (C-data import + Flight `putNext` copy) is a small share and
+> the copy is already removable (`flightZeroCopyWrites`). The remaining gap to upstream is DuckDB's thread pools: one
+> per worker connection (ours) vs one shared pool (upstream S5) - see the new Open question "Item 22: one DuckDB
+> scheduler". The in-process A/B on this box was noise-bound (two default runs 166-206 MB/s at 4/8 endpoints; the
+> opt-in combinations fell inside that spread), so the decision stays with the screening's runs of the opt-ins already
+> in the pre-releases. *(3) 19b step 2* was done before (fd9f62f, `duckDbThreadsWhenIdle`). *(4) item 16 decided:*
+> no default change (see item 16). Next core code step: the Open question above, if the maintainer wants it.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
@@ -277,8 +287,9 @@
 >    Then: step 2 = node-to-node DoGet of the partial endpoints + merge in a DuckDB of the planning node behind an
 >    opt-in setting (`distributedComplete`, default false), fallback to today's path on any refusal or peer error
 >    before the first batch; step 3 = cluster integration test (3 nodes, answers = single-node answers).
-> 6. item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged). *Local check done 2026-10-27
->    (see item 16): no default change - `false` is slower, 64 MiB within noise; the stand round decides.*
+> 6. ~~item 16 - single-stream scan opt-ins as defaults for plain scans (only if answers unchanged).~~ *Local check done 2026-10-27
+>    (see item 16): no default change - `false` is slower, 64 MiB within noise. Decided 2026-10-28 from the existing
+>    numbers (maintainer's queue (4)): defaults stay, both remain opt-ins.*
 > 7. ~~item 19 (new) - size-aware `duckDbThreads` default (cores/4, clamped 2..8); default change approved as part of stage 2.~~
 >    Code done 2026-10-27 (04e5580, package run 40536373045 green, pre-release `server-1.0.0-04e558056068`; see Log): unset or 0 = cores / 4 between 2 and 8, explicit values
 >    unchanged, startup line `duckdb=threads perConnection= availableProcessors=`. **Stand:** check the startup line on the
@@ -665,8 +676,27 @@
     full lineitem SF10, complete mode) at the default threads with `-DduckDbStreamingBufferSize=64MiB` vs unset and
     `-DduckDbPreserveInsertionOrder=false` vs unset, 3 rounds; also RSS. Adopt the 64 MiB buffer as default only if x1 gains
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
+    **Decided 2026-10-28 (maintainer's queue (4): "decision from the existing numbers"): no default change, item 16
+    closed.** The numbers: stand campaign (`TUNING.md` settings table: both within noise), local 1.5.6
+    check (`false` 4-35 % slower, 64 MiB +5-15 %, below the 15 % bar). Both stay opt-ins
+    (`duckDbPreserveInsertionOrder=false`, `duckDbStreamingBufferSize=64MiB`) for single-client bulk reads; a later
+    stand round may reopen it only with x1 > +15 % at no RSS cost. The single-stream gap to upstream (1510 vs ~950
+    MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 22: one DuckDB scheduler (2026-10-28, core lane).** Every worker connection is its own in-memory DuckDB with
+  its own thread pool, so N parallel streams start N x `duckDbThreads` threads on the node (plain DuckDB JDBC on 2
+  cores: 4 instances x 2 threads ~830 MB/s at 2.1-2.6 s CPU/GB, x 1 thread ~1270 MB/s at 1.5); upstream shares one
+  database (S5), i.e. one pool sized to the cores. The opt-ins `duckDbThreadsUnderLoad`, `duckDbProducingStreams`
+  and `flightZeroCopyWrites` only approximate that. S5 was rejected because our catalog views, secrets, temp
+  directory and lockdown are per instance. A design that keeps the isolation: one shared database per node with
+  per-connection `TEMP` views (connection-local in DuckDB) and per-query names for anything else, secrets and
+  lockdown set once for the node, the spill cap global; `memory_limit` and `threads` become node-wide (simpler
+  than 19b's per-connection split). It is a large change of security-relevant code (lockdown, secrets) and of the
+  meaning of existing settings, so: build it as an opt-in (`duckDbSharedDatabase`, default false) behind its own
+  tests (view isolation between concurrent sessions, lockdown checks, same answers), or leave item 22 to the
+  screening's numbers of the existing opt-ins? Maintainer's call; nothing is built yet.
 
 - **Item 19b expected connections (2026-10-28, core lane).** The default `memory_limit` divides the DuckDB budget by
   `duckDbMemoryConnections` = cores / threads (at least 2), i.e. the queries that fill the cores - not by the worker
@@ -1935,3 +1965,15 @@
   package run 40756881178 (green), pre-release `server-1.0.0-936b2d7c366c`. Screening: load test on it with and without
   `-DduckDbThreadsUnderLoad=1`. Next: maintainer queue (2) item 22, (3) 19b step 2, (4) item 16.
 - 2026-10-28 (maintainer, CI build tracking 2cfa23eb62f9): local small p50 -22-28 %, scan x8 +15 %, cluster 22/22 with distributedComplete; small flag S3 TPC-H SF1 JDBC total 1.14 (rounds 1.21 1.05 1.14). 2cfa23e predates the 19b thread-floor fix (9efe670) - recheck on the next tracked build (a110a22 / 936b2d7); a bug only if it stays.
+- 2026-10-28 (cloud session, core lane): maintainer's queue items (2)-(4), docs only (no runtime change, no CI run, no
+  pre-release). (2) item 22: JFR of one partial-mode scan in 8 endpoints on 2 cores (`ParallelScanPerfTest`,
+  in-process client): 91 % of the DoGet threads' native samples are DuckDB's own `getNextArrayStream`; the Java part
+  (C-data import, Flight copy - the latter removable by `flightZeroCopyWrites`) is small, so no server-side Java cut
+  is left. A/B of the opt-ins on this 4-core box (`taskset -c 0,1`, 3 runs each) was noise-bound: two default runs
+  166-206 MB/s at 4/8 endpoints, `duckDbThreadsUnderLoad=1` 172/229, + `duckDbProducingStreams=2` 195/223, +
+  `flightZeroCopyWrites` 231/198 - the screening's runs decide. The structural gap (one DuckDB thread pool per
+  worker connection vs upstream's shared one) is now Open question "Item 22: one DuckDB scheduler" with an opt-in
+  design. (3) 19b step 2 was already done (fd9f62f). (4) item 16 closed: no default change (see item 16). Local
+  Maven note: `./mvnw` fails (Maven 3.10.0 download), `/opt/maven/bin/mvn` 3.9.11 works; `-DargLine=...` system
+  properties do not reach the forked tests here, pass `-Dperf.*` directly on the mvn line. Next: the maintainer's
+  answer on the item 22 question; meanwhile the screening's numbers and the stand rounds.
