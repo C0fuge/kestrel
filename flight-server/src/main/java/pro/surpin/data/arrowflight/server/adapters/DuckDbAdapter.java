@@ -158,6 +158,14 @@ public final class DuckDbAdapter implements AutoCloseable {
     /** Guards the replacement of sharedRoot. */
     private final Object sharedRootLock = new Object();
     /**
+     * The node's DuckDB for describing queries with duckDbSharedDatabase: it reads no files, and
+     * every session describes in a catalog of its own in it. Replaced when DuckDB invalidates
+     * it; null when every session has a describe DuckDB of its own.
+     */
+    private volatile Connection describeRoot;
+    /** Guards the replacement of describeRoot. */
+    private final Object describeRootLock = new Object();
+    /**
      * Second session per thread with duckDbThreadsUnderLoad threads, opened on first use; null
      * when the setting is off.
      */
@@ -479,6 +487,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (shared != null) {
             // Set up, checked and locked down once; a failure stops the server here.
             this.sharedRoot = openSharedRoot(true);
+            this.describeRoot = openDescribeRoot();
             if (threadsUnderLoad > 0 || threadsWhenIdle > 0) {
                 LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbThreadsUnderLoad,"
                         + "duckDbThreadsWhenIdle reason=\"threads are node-wide\"", LogUtil.node());
@@ -648,6 +657,43 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             Session.closeQuietly(invalidated);
             LOGGER.warn("node={} duckdb=sharedDatabaseReplaced reason=invalidated", LogUtil.node());
+        }
+    }
+
+    /**
+     * Opens the node's describe DuckDB (duckDbSharedDatabase).
+     *
+     * @return connection that owns the describe DuckDB
+     * @throws IllegalStateException when DuckDB cannot be opened
+     */
+    private static Connection openDescribeRoot() {
+        try {
+            return openDescribeConnection();
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("DuckDB for describing queries cannot be opened", e);
+        }
+    }
+
+    /**
+     * Opens a new describe DuckDB in place of one DuckDB invalidated; sessions still on the old
+     * one reconnect on their next describe. A failure to open is logged and the old one kept.
+     *
+     * @param invalidated connection of the describe DuckDB that was invalidated
+     */
+    void replaceDescribeRoot(Connection invalidated) {
+        synchronized (describeRootLock) {
+            if (describeRoot != invalidated) {
+                return;
+            }
+            try {
+                describeRoot = openDescribeRoot();
+            } catch (RuntimeException e) {
+                LOGGER.error("node={} duckdb=describeDatabaseReopenFailed error={}", LogUtil.node(),
+                        firstLine(String.valueOf(e.getMessage())));
+                return;
+            }
+            Session.closeQuietly(invalidated);
+            LOGGER.warn("node={} duckdb=describeDatabaseReplaced reason=invalidated", LogUtil.node());
         }
     }
 
@@ -1002,6 +1048,15 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the connection that owns the node's describe DuckDB, for tests.
+     *
+     * @return connection of the describe DuckDB, or null when every session has one of its own
+     */
+    Connection describeDatabase() {
+        return describeRoot;
+    }
+
+    /**
      * Returns the number of open DuckDB connections.
      *
      * @return open connection count
@@ -1023,6 +1078,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (!invalidatesDatabase(error)) {
             return;
         }
+        Connection describedOn = session.describeRoot;
         if (Thread.currentThread() == session.owner) {
             ThreadLocal<Session> chosen = slotSessions.get();
             if (chosen != null && chosen.get() == session) {
@@ -1041,6 +1097,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (session.root != null) {
             // The whole shared DuckDB is invalidated, not only this session's connection.
             replaceSharedRoot(session.root);
+        }
+        if (describedOn != null) {
+            // The error does not tell which of the two DuckDBs it came from.
+            replaceDescribeRoot(describedOn);
         }
     }
 
@@ -2266,8 +2326,20 @@ public final class DuckDbAdapter implements AutoCloseable {
     private Connection describeConnection(Session session, String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
+        Connection root = describeRoot;
+        if (session.describeConn != null && session.describeRoot != root) {
+            // The node's describe DuckDB was replaced after it was invalidated.
+            session.closeDescribe();
+        }
         if (session.describeConn == null) {
-            session.describeConn = openDescribeConnection();
+            if (root == null) {
+                session.describeConn = openDescribeConnection();
+            } else {
+                String catalog = SESSION_CATALOG_PREFIX + sessionIds.incrementAndGet();
+                session.describeConn = openSharedConnection(root, catalog);
+                session.describeRoot = root;
+                session.describeCatalog = catalog;
+            }
         }
         Connection conn = session.describeConn;
         if (session.describeVersion != views.version()) {
@@ -2547,8 +2619,15 @@ public final class DuckDbAdapter implements AutoCloseable {
         private final int maxStatements;
         private long viewsVersion = Long.MIN_VALUE;
         private List<String> viewDrops = List.of();
-        /** Separate DuckDB with empty views for describing queries; opened on first use. */
+        /**
+         * DuckDB connection with empty views for describing queries, its own DuckDB or one to the
+         * node's describe DuckDB; opened on first use.
+         */
         private Connection describeConn;
+        /** Connection of the node's describe DuckDB describeConn connects to, or null. */
+        private Connection describeRoot;
+        /** The session's catalog in the node's describe DuckDB, or null. */
+        private String describeCatalog;
         private long describeVersion = Long.MIN_VALUE;
         private List<String> describeDrops = List.of();
         /** Parse check ({@link #PARSE_CHECK_SQL}) prepared on the describe connection. */
@@ -2597,19 +2676,46 @@ public final class DuckDbAdapter implements AutoCloseable {
             statements.closeAll();
             if (catalog != null) {
                 // The catalog belongs to the shared DuckDB and outlives this connection.
-                try (Statement s = conn.createStatement()) {
-                    s.execute("USE memory");
-                    s.execute("DETACH DATABASE IF EXISTS " + quoteIdentifier(catalog));
-                } catch (Exception e) {
-                    LOGGER.debug("Failed to detach DuckDB session catalog {}", catalog, e);
-                }
+                detachQuietly(conn, catalog);
             }
             closeQuietly(conn);
+            closeDescribe();
+        }
+
+        /**
+         * Closes the describe connection, detaching its catalog from the node's describe DuckDB;
+         * the next describe opens it again.
+         */
+        private void closeDescribe() {
             if (describeCheck != null) {
                 closeQuietly(describeCheck);
+                describeCheck = null;
             }
             if (describeConn != null) {
+                if (describeCatalog != null) {
+                    detachQuietly(describeConn, describeCatalog);
+                }
                 closeQuietly(describeConn);
+                describeConn = null;
+            }
+            describeRoot = null;
+            describeCatalog = null;
+            describeVersion = Long.MIN_VALUE;
+            describeDrops = List.of();
+        }
+
+        /**
+         * Detaches a session catalog from the DuckDB a connection shares, logging a failure.
+         *
+         * @param conn connection to a shared DuckDB
+         * @param name the session's catalog
+         */
+        private static void detachQuietly(Connection conn, String name) {
+            try (Statement s = conn.createStatement()) {
+                s.execute("USE memory");
+                s.execute("DETACH DATABASE IF EXISTS " + quoteIdentifier(name));
+            } catch (Exception e) {
+                LOGGER.debug("Failed to detach DuckDB session catalog {}", name, e);
             }
         }
 
@@ -2809,6 +2915,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         Connection root = sharedRoot;
         if (root != null) {
             Session.closeQuietly(root);
+        }
+        Connection describe = describeRoot;
+        if (describe != null) {
+            Session.closeQuietly(describe);
         }
         deleteRecursively(tempRoot);
     }

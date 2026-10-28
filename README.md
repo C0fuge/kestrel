@@ -345,8 +345,11 @@ memory (unset = the cores and the whole DuckDB budget, at least 1 GiB, at most 8
 `duckDbThreadsUnderLoad`, `duckDbThreadsWhenIdle` and `duckDbStreamingBufferSize` (a per-connection
 DuckDB setting that the lockdown freezes) are ignored with a WARN. Each connection keeps the catalog
 views in an in-memory catalog of its own (`flight_session_<n>`, made its default), so view versions
-of concurrent queries do not mix; client SQL naming such a catalog or schema is refused. The startup
-line `duckdb=sharedDatabaseOpened` shows the sizing. Opt-in while it is measured (item 22).
+of concurrent queries do not mix; client SQL naming such a catalog or schema is refused. Queries are
+described (prepare, GetFlightInfo) in a second node-wide DuckDB that reads no files (1 thread,
+256 MB, external access off, as the per-connection describe DuckDB before), again in a catalog of
+its own per connection. The startup line `duckdb=sharedDatabaseOpened` shows the sizing. Opt-in
+while it is measured (item 22).
 
 `flightBackpressureThresholdBytes` is the most a single Flight stream queues for a slow client;
 `flightOutboundBudgetBytes` (default 0 = a quarter of the JVM's direct memory limit,

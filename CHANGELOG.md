@@ -17,6 +17,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   decode only the requested columns (others are skipped through Avro's resolver, so a file that does not resolve
   still fails as in Hive). Text tables parse plain decimals (up to 18 digits), `yyyy-mm-dd` dates and ASCII strings
   without intermediate objects (about 2.5x faster on a Q1-style column set, same values) (P4 (d)).
+- With `duckDbSharedDatabase`, queries are described in one node-wide describe DuckDB (reads no files, 1 thread,
+  256 MB, as before) with a catalog per worker connection, instead of one small describe DuckDB per worker; replaced
+  as a whole when invalidated (item 22 shared DuckDB step (a)).
 - Setting `duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false = unchanged): every worker connection
   connects to one DuckDB of the node (one thread pool and one `memory_limit`; storage setup, secrets and lockdown run
   once and are checked at startup); each connection keeps the catalog views in an in-memory catalog of its own, and

@@ -178,6 +178,108 @@ class DuckDbSharedDatabaseTest {
         }
     }
 
+    /**
+     * Verifies sessions describe in catalogs of their own in one describe DuckDB of the node:
+     * concurrent describes over different view versions keep their own column types, and the
+     * describe DuckDB reads no files, also inside the data directory.
+     */
+    @Test
+    void sessionsDescribeInOneDescribeDatabase(@TempDir Path dir) throws Exception {
+        Path data = Files.createDirectories(dir.resolve("data"));
+        try (Connection free = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = free.createStatement()) {
+            s.execute("COPY (SELECT 42 AS x) TO '" + data.resolve("t.parquet") + "' (FORMAT parquet)");
+        }
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = sharedAdapter(List.of(data.toString()), List.of())) {
+            Connection describeRoot = adapter.describeDatabase();
+            assertNotNull(describeRoot);
+            CyclicBarrier round = new CyclicBarrier(2);
+            List<Future<String>> types = new ArrayList<>();
+            for (CatalogViews.Snapshot views : List.of(views(1L, 10), textViews(2L))) {
+                types.add(workers.submit(() -> {
+                    StringBuilder seen = new StringBuilder();
+                    for (int i = 0; i < 10; i++) {
+                        round.await(30, TimeUnit.SECONDS);
+                        // A new text each round, so that every round describes in DuckDB.
+                        seen.append(adapter.describeComplete(allocator,
+                                "SELECT price FROM s.t WHERE id > " + i, views)
+                                .getFields().get(0).getType()).append(';');
+                        assertEquals(1, adapter.describeParameters(
+                                "SELECT price FROM s.t WHERE id = ? + " + i, views).getFields().size());
+                    }
+                    round.await(30, TimeUnit.SECONDS);
+                    // Both sessions' describe catalogs are attached while both threads live.
+                    long attached;
+                    try (Statement s = describeRoot.createStatement(); ResultSet rs = s.executeQuery(
+                            "SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '"
+                                    + DuckDbAdapter.SESSION_CATALOG_PREFIX + "%'")) {
+                        assertTrue(rs.next());
+                        attached = rs.getLong(1);
+                    }
+                    round.await(30, TimeUnit.SECONDS);
+                    return seen + "|" + attached;
+                }));
+            }
+            String[] first = types.get(0).get(60, TimeUnit.SECONDS).split("\\|");
+            String[] second = types.get(1).get(60, TimeUnit.SECONDS).split("\\|");
+            assertEquals("Decimal(6, 1, 128);".repeat(10), first[0]);
+            assertEquals("Utf8;".repeat(10), second[0]);
+            assertEquals("2", first[1]);
+            assertEquals("2", second[1]);
+            assertSame(describeRoot, adapter.describeDatabase());
+
+            // The query connection reads the file; the describe DuckDB does not.
+            String direct = "SELECT x FROM read_parquet('" + data.resolve("t.parquet") + "')";
+            assertEquals("42", single(adapter.connection(), direct));
+            assertThrows(java.sql.SQLException.class,
+                    () -> adapter.describeComplete(allocator, direct, views(1L, 10)));
+            try (Statement s = describeRoot.createStatement()) {
+                assertThrows(java.sql.SQLException.class,
+                        () -> s.execute("SET enable_external_access = true"));
+            }
+        } finally {
+            workers.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies that after the describe DuckDB is replaced (as when DuckDB invalidates it) a
+     * session describes on the new one with its views set up again, and that an ended thread's
+     * describe catalog is detached.
+     */
+    @Test
+    void replacedDescribeDatabaseAndEndedThreads() throws Exception {
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = sharedAdapter(List.of(), List.of())) {
+            CatalogViews.Snapshot views = views(1L, 10);
+            assertEquals(1, adapter.describeComplete(allocator, "SELECT price FROM s.t", views)
+                    .getFields().size());
+            Connection root = adapter.describeDatabase();
+            adapter.replaceDescribeRoot(root);
+            assertNotSame(root, adapter.describeDatabase());
+            assertTrue(root.isClosed());
+            // A new text, so the description cache does not answer it.
+            assertEquals(2, adapter.describeComplete(allocator, "SELECT id, price FROM s.t", views)
+                    .getFields().size());
+            Connection current = adapter.describeDatabase();
+            adapter.replaceDescribeRoot(root);
+            assertSame(current, adapter.describeDatabase());
+
+            ExecutorService worker = Executors.newSingleThreadExecutor();
+            worker.submit(() -> adapter.describeComplete(allocator, "SELECT id FROM s.t", views))
+                    .get(30, TimeUnit.SECONDS);
+            worker.shutdown();
+            assertTrue(worker.awaitTermination(30, TimeUnit.SECONDS));
+            String catalogs = "SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '"
+                    + DuckDbAdapter.SESSION_CATALOG_PREFIX + "%'";
+            assertEquals("2", single(current, catalogs));
+            adapter.closeSessionsOfEndedThreads();
+            assertEquals("1", single(current, catalogs));
+        }
+    }
+
     /** Verifies the setting is off by default: no shared DuckDB and session catalogs not refused. */
     @Test
     void offByDefault() throws Exception {
@@ -185,6 +287,7 @@ class DuckDbSharedDatabaseTest {
         try (RootAllocator allocator = new RootAllocator();
                 DuckDbAdapter adapter = new DuckDbAdapter(config(), ioPool)) {
             assertNull(adapter.sharedDatabase());
+            assertNull(adapter.describeDatabase());
             // A missing catalog, as before: DuckDB's error, not the shared mode's refusal.
             assertThrows(java.sql.SQLException.class, () -> answer(adapter, allocator,
                     "SELECT * FROM " + DuckDbAdapter.SESSION_CATALOG_PREFIX + "1.s.t", views(1L, 10)));
@@ -247,6 +350,22 @@ class DuckDbSharedDatabaseTest {
                                 + " CAST(NULL AS DECIMAL(6,1)) AS price WHERE false",
                         "CREATE OR REPLACE VIEW main.t AS SELECT * FROM s.t"),
                 List.of("DROP VIEW IF EXISTS main.t", "DROP SCHEMA IF EXISTS s CASCADE"));
+    }
+
+    /**
+     * Builds view definitions s.t over ids and prices as text.
+     *
+     * @param version views version
+     * @return view definitions
+     */
+    private static CatalogViews.Snapshot textViews(long version) {
+        return new CatalogViews.Snapshot(version,
+                List.of("CREATE SCHEMA IF NOT EXISTS s",
+                        "CREATE OR REPLACE VIEW s.t AS SELECT * FROM (VALUES (1, 'a')) v(id, price)"),
+                List.of("CREATE SCHEMA IF NOT EXISTS s",
+                        "CREATE OR REPLACE VIEW s.t AS SELECT CAST(NULL AS INTEGER) AS id,"
+                                + " CAST(NULL AS VARCHAR) AS price WHERE false"),
+                List.of("DROP SCHEMA IF EXISTS s CASCADE"));
     }
 
     /**
