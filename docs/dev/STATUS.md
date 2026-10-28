@@ -54,8 +54,11 @@
 >    Flight SQL session option `arrow-compression`~~; ~~(d) START-NOTES text + the patched JDBC driver change
 >    described for the coordinator~~ (done 2026-10-28, see Log; the driver itself lives in a client repo);
 >    ~~(e) pyarrow / ADBC C++/Go answer checks in CI~~ (done 2026-10-28, `CompressionClientsIntegrationTest`; ADBC C++
->    is not a separate Python package - pyarrow Flight is the C++ client); (f) parallel per-buffer compression within
->    a batch and the `tc netem` 10 ms / 1 Gbit CI perf test (MB/s, CPU) vs upstream's 264 MB/s.
+>    is not a separate Python package - pyarrow Flight is the C++ client); ~~(f) parallel per-buffer compression within
+>    a batch and the `tc netem` 10 ms / 1 Gbit CI perf test~~ (done 2026-10-28, cadd1ac, pre-release
+>    `server-1.0.0-cadd1aca9c23`; `flightCompressionThreads`, workflow `compression-perf.yml`: zstd 429 MB/s vs plain 90
+>    at 10 ms / 1 Gbit on synthetic lineitem, ratio 4.9 - see Log). **Item 20 done**; open follow-up: lz4 reads
+>    by Java clients are bound by commons-compress's decoder (~180 MB/s), pyarrow/ADBC are not.
 > 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
 >    ~50 (both CPU-bound from 8 clients); c1 latency is already ours. So this is CPU per query, not waiting: profile one
 >    query end to end under 8-32 clients (async-profiler or JFR in a 2-CPU container), list where the CPU goes
@@ -1421,3 +1424,20 @@
   service file merged; the driver already sends unknown URL properties as headers, so `?arrow-compression=zstd`
   is enough) - for the coordinator, the driver repo is not touched here. Push run 40609399809 green (server 831
   tests, 2 skipped as before = the new test ran). Next: item 20 (f), then item 21.
+- 2026-10-28 (cloud session): item 20 step (f) done (cadd1ac + b492228), item 20 closed. The buffers of a large
+  compressed batch are compressed side by side by the stream's thread plus up to `flightCompressionThreads` - 1
+  helper threads shared by all streams (`StreamCompression.ParallelWork`, daemon pool, idle threads end after 30 s;
+  only buffers >= 128 KiB earn a helper; largest first; the stream waits for all, so no extra batch is held and the
+  outbound budget (0f) is unchanged; on a codec error every buffer is released and the error is thrown). Default
+  0 = one thread per core, at most 8; 1 = serial as before; batches are byte for byte the serial ones. Only clients
+  that ask for compression are affected (no wire or default change for others). Tests: `StreamCompressionTest`
+  (parallel batch == serial batch for zstd and lz4 and decodes; failure releases all buffers; rejected helpers;
+  settings), integration tests run the parallel path by default. New perf test `CompressionThroughputPerfTest`
+  (one complete-mode stream, 3 M lineitem-like rows, best of 3; Arrow MB/s, process CPU, ratio) and manual
+  workflow `compression-perf.yml` (unthrottled, then `tc netem delay 10ms rate 1gbit` on lo = 20 ms RTT). Run
+  40613018399 on 4 cores, throttled: plain 90 MB/s, zstd 429 MB/s (serial and parallel equal: link-bound, ~88 MB/s
+  on the wire), lz4 178; unthrottled: plain 640, zstd 473 serial -> 645 parallel, lz4 187 (Java client's
+  commons-compress lz4 decoder is the bottleneck). Caveat: the synthetic data compresses 4.9x; real TPC-H lineitem
+  will be lower, so the screening repo's number decides the 264 MB/s goal. Locally (4 cores, no netem) zstd 209 ->
+  314 MB/s. Package run 40611555433 green (push run 40611545280 superseded), pre-release `server-1.0.0-cadd1aca9c23`;
+  first perf run 40611557966 failed to fork (`surefire:test` skipped the JaCoCo argLine, fixed in b492228). Next: item 21.
