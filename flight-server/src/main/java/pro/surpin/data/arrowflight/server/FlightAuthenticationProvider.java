@@ -4,6 +4,7 @@ import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 import org.apache.hadoop.conf.Configuration;
 
 import java.io.IOException;
+import java.util.Set;
 
 /** Supplies a Flight request authenticator and its startup requirements. */
 public interface FlightAuthenticationProvider extends AutoCloseable {
@@ -37,6 +38,18 @@ public interface FlightAuthenticationProvider extends AutoCloseable {
      * @return true when policy engines can identify individual callers
      */
     boolean establishesIdentity();
+
+    /**
+     * Returns the groups the provider itself knows for an identity it authenticated, for policy
+     * checks; they are added to the groups of the Hadoop group mapping.
+     *
+     * @param identity peer identity this provider established
+     * @return provider groups, empty when the provider has none
+     * @throws RuntimeException when the groups cannot be determined; policy checks then deny
+     */
+    default Set<String> groups(String identity) {
+        return Set.of();
+    }
 
     @Override
     default void close() {

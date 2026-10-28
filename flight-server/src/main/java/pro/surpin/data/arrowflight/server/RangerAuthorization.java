@@ -10,6 +10,7 @@ import org.apache.ranger.plugin.service.RangerBasePlugin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -61,6 +62,19 @@ public final class RangerAuthorization implements FlightAuthorization {
      * @return Ranger authorization provider
      */
     static RangerAuthorization fromSettings(Map<String, String> environment) {
+        return fromSettings(environment, identity -> Set.of());
+    }
+
+    /**
+     * Creates a Ranger plugin from deployment settings, adding the authentication provider's groups
+     * to those of the Hadoop group mapping.
+     *
+     * @param environment deployment settings
+     * @param providerGroups groups the authentication provider knows for an identity
+     * @return Ranger authorization provider
+     */
+    static RangerAuthorization fromSettings(Map<String, String> environment,
+            Function<String, Set<String>> providerGroups) {
         String serviceName = environment.get("RANGER_SERVICE_NAME");
         if (serviceName == null || serviceName.isBlank()) {
             throw new IllegalArgumentException("RANGER_SERVICE_NAME is required for Ranger policies");
@@ -91,8 +105,28 @@ public final class RangerAuthorization implements FlightAuthorization {
         RangerBasePlugin plugin = new RangerBasePlugin(config);
         plugin.setResultProcessor(new RangerDefaultAuditHandler());
         plugin.init();
-        return new RangerAuthorization(plugin, principal -> Set.copyOf(
-                UserGroupInformation.createRemoteUser(principal).getGroups()));
+        return new RangerAuthorization(plugin, union(providerGroups, principal -> Set.copyOf(
+                UserGroupInformation.createRemoteUser(principal).getGroups())));
+    }
+
+    /**
+     * Combines two group resolvers; a failure of either fails the lookup.
+     *
+     * @param providerGroups groups from the authentication provider
+     * @param mappedGroups groups from the Hadoop group mapping
+     * @return resolver of both groups
+     */
+    static Function<String, Set<String>> union(Function<String, Set<String>> providerGroups,
+            Function<String, Set<String>> mappedGroups) {
+        return principal -> {
+            Set<String> provided = providerGroups.apply(principal);
+            if (provided.isEmpty()) {
+                return mappedGroups.apply(principal);
+            }
+            Set<String> all = new HashSet<>(provided);
+            all.addAll(mappedGroups.apply(principal));
+            return Set.copyOf(all);
+        };
     }
 
     /**

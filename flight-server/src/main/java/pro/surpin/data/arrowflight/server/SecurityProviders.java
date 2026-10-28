@@ -2,6 +2,8 @@ package pro.surpin.data.arrowflight.server;
 
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.function.Function;
 
 /** Selects built-in or ServiceLoader security providers from deployment settings. */
 final class SecurityProviders {
@@ -35,10 +37,22 @@ final class SecurityProviders {
      * @return configured provider
      */
     static FlightAuthorization authorization(Map<String, String> environment) {
+        return authorization(environment, identity -> Set.of());
+    }
+
+    /**
+     * Selects an authorization provider that also sees the authentication provider's groups.
+     *
+     * @param environment deployment settings
+     * @param providerGroups groups the authentication provider knows for an identity
+     * @return configured provider
+     */
+    static FlightAuthorization authorization(Map<String, String> environment,
+            Function<String, Set<String>> providerGroups) {
         String name = authorizationName(environment);
         return switch (name) {
             case "allow-all" -> new AllowAllAuthorization();
-            case "ranger" -> RangerAuthorization.fromSettings(environment);
+            case "ranger" -> RangerAuthorization.fromSettings(environment, providerGroups);
             default -> customAuthorization(name).create(environment);
         };
     }

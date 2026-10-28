@@ -156,7 +156,7 @@ public class HadoopArrowFlightServer {
         component = DaggerServerComponent.builder()
                 .serverModule(new ServerModule(hazelcastHosts,
                         flightSecurity.location(localhost, port).getUri().toString(),
-                        storageHost, hadoopConfig))
+                        storageHost, hadoopConfig, flightSecurity.authentication()::groups))
                 .build();
 
         // Opens the data directory before joining the cluster: storage this build cannot read

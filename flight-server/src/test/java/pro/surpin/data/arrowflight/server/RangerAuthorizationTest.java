@@ -12,7 +12,11 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -83,5 +87,70 @@ class RangerAuthorizationTest {
                 assertThrows(FlightRuntimeException.class,
                         () -> authorization.requireQuery("alice@EXAMPLE.COM",
                                 "SELECT * FROM orders")).status().code());
+    }
+
+    /**
+     * Builds a plugin that allows exactly the requests a predicate accepts.
+     *
+     * @param allows decision on the Ranger user and groups
+     * @return mocked plugin
+     */
+    private static RangerBasePlugin plugin(java.util.function.BiPredicate<String, Set<String>> allows) {
+        RangerBasePlugin plugin = mock(RangerBasePlugin.class);
+        when(plugin.getServiceDef()).thenReturn(mock(RangerServiceDef.class));
+        when(plugin.isAccessAllowed(any(RangerAccessRequest.class))).thenAnswer(call -> {
+            RangerAccessRequest request = call.getArgument(0);
+            RangerAccessResult result = mock(RangerAccessResult.class);
+            when(result.getIsAllowed()).thenReturn(allows.test(request.getUser(), request.getUserGroups()));
+            return result;
+        });
+        return plugin;
+    }
+
+    /** Provider groups are added to the mapped groups; without provider groups the mapping alone counts. */
+    @Test
+    void addsProviderGroupsToMappedGroups() {
+        Map<String, Set<String>> provided = new HashMap<>(Map.of("alice", Set.of("bi-users", "analysts")));
+        Function<String, Set<String>> groups = RangerAuthorization.union(
+                identity -> provided.getOrDefault(identity, Set.of()), identity -> Set.of("analysts", "staff"));
+        assertEquals(Set.of("bi-users", "analysts", "staff"), groups.apply("alice"));
+        assertEquals(Set.of("analysts", "staff"), groups.apply("bob"));
+
+        RangerAuthorization authorization = new RangerAuthorization(
+                plugin((user, userGroups) -> userGroups.contains("bi-users")), groups);
+        assertTrue(authorization.canReadTable("alice", "sales", "orders"));
+        assertFalse(authorization.canReadTable("bob", "sales", "orders"));
+    }
+
+    /** A provider that cannot tell the groups denies instead of evaluating with fewer groups. */
+    @Test
+    void providerGroupFailureDenies() {
+        RangerAuthorization authorization = new RangerAuthorization(plugin((user, userGroups) -> true),
+                RangerAuthorization.union(identity -> {
+                    throw new IllegalStateException("directory down");
+                }, identity -> Set.of()));
+        assertFalse(authorization.canSeeSchema("alice", "sales"));
+        assertFalse(authorization.canReadTable("alice", "sales", "orders"));
+    }
+
+    /**
+     * A login name from a password provider (LDAP) gets the decision of the Kerberos principal of the
+     * same user: the same Ranger user and, with a provider that adds no groups, the same groups.
+     */
+    @Test
+    void passwordLoginGetsTheKerberosPrincipalsDecision() {
+        UserGroupInformation.setConfiguration(new Configuration());
+        Map<String, Set<String>> mapping = Map.of("alice", Set.of("analysts"));
+        RangerAuthorization authorization = new RangerAuthorization(
+                plugin((user, userGroups) -> user.equals("alice") || userGroups.contains("analysts")),
+                RangerAuthorization.union(identity -> Set.of(), principal -> mapping.getOrDefault(
+                        UserGroupInformation.createRemoteUser(principal).getShortUserName(), Set.of())));
+        for (String table : List.of("orders", "rates")) {
+            assertEquals(authorization.canReadTable("alice@EXAMPLE.COM", "sales", table),
+                    authorization.canReadTable("alice", "sales", table));
+        }
+        assertTrue(authorization.canReadTable("alice", "sales", "orders"));
+        assertFalse(authorization.canReadTable("mallory", "sales", "orders"));
+        assertFalse(authorization.canReadTable("mallory@EXAMPLE.COM", "sales", "orders"));
     }
 }

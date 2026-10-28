@@ -14,9 +14,11 @@ import org.apache.hadoop.conf.Configuration;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
@@ -52,6 +54,7 @@ public final class ServerModule {
     private final String serverUri;
     private final String localStorageHost;
     private final Configuration hadoopConfig;
+    private final Function<String, Set<String>> providerGroups;
 
     /**
      * Creates module with runtime parameters.
@@ -63,10 +66,26 @@ public final class ServerModule {
      */
     public ServerModule(String[] hazelcastHosts, String serverUri,
             String localStorageHost, Configuration hadoopConfig) {
+        this(hazelcastHosts, serverUri, localStorageHost, hadoopConfig, identity -> Set.of());
+    }
+
+    /**
+     * Creates module with runtime parameters and the authentication provider's groups.
+     *
+     * @param hazelcastHosts cluster seed hosts
+     * @param serverUri      this server's URI
+     * @param localStorageHost HDFS DataNode host colocated with this server
+     * @param hadoopConfig   Hadoop configuration
+     * @param providerGroups groups the authentication provider knows for an identity
+     */
+    public ServerModule(String[] hazelcastHosts, String serverUri,
+            String localStorageHost, Configuration hadoopConfig,
+            Function<String, Set<String>> providerGroups) {
         this.hazelcastHosts = hazelcastHosts;
         this.serverUri = serverUri;
         this.localStorageHost = localStorageHost;
         this.hadoopConfig = hadoopConfig;
+        this.providerGroups = providerGroups;
     }
 
     /**
@@ -333,7 +352,7 @@ public final class ServerModule {
     @Provides
     @Singleton
     FlightAuthorization authorization() {
-        return SecurityProviders.authorization(System.getenv());
+        return SecurityProviders.authorization(System.getenv(), providerGroups);
     }
 
     /**
