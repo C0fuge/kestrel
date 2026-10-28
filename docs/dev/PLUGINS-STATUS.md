@@ -131,6 +131,32 @@ P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** J
     (JWKS URL with cache, issuer/audience, user and groups claims). The resulting identity must flow to Ranger checks
     exactly like a Kerberos principal. Tests: OpenLDAP container and a local JWKS in CI; negative cases (bad password,
     expired token, wrong audience). Document in START-NOTES. Wire behaviour: new providers only, existing ones unchanged.
+    *Step 1 done 2026-10-28 (LDAP login):* module `flight-auth-ldap` (after `flight-server`, which it takes as
+    `provided` and imports as BOM for gRPC/Netty versions; runs on the server class path, `auth/ldap/*`, not in the
+    plugin loader - the auth SPI is `FlightAuthenticationProviderFactory` via ServiceLoader). `FLIGHT_AUTH_PROVIDER=
+    ldap`: Basic user:password -> UnboundID LDAP SDK 7.0.3 simple bind (DN template, or search with optional service
+    account + `FLIGHT_LDAP_USER_ATTRIBUTE`), ldaps / StartTLS with host name verification, clear text only with
+    `FLIGHT_LDAP_ALLOW_PLAINTEXT`, servers tried in order; reply carries a signed session bearer (`LdapSessionToken`,
+    HMAC like the Kerberos sessions, own `ldap1` version tag, `FLIGHT_LDAP_SESSION_SECRET` shared by nodes,
+    `FLIGHT_LDAP_SESSION_MINUTES` default 10); outage -> UNAVAILABLE, bad credentials -> UNAUTHENTICATED; login
+    names restricted to `[\p{L}\p{N}._@-]{1,256}`, empty passwords refused. Identity = login name (or attribute) ->
+    Ranger via `createRemoteUser(name).getShortUserName()` (= the name) and Hadoop group mapping. Tests (25, unit,
+    in-process UnboundID `InMemoryDirectoryServer` with keytool-made certs instead of an OpenLDAP container):
+    `LdapDirectoryTest` 11 (template/StartTLS, search/LDAPS, ambiguous, AD-style filter, anonymous search, bad
+    service account, failover + unreachable, untrusted cert, wrong host name with a positive control by IP, server
+    without StartTLS, plaintext opt-in), `LdapFlightLoginTest` 3 (real TLS FlightServer via `FlightSecurity.
+    fromSettings`: `authenticateBasicToken` -> bearer -> peer identity; bad/empty password, forged bearer, no
+    credential; TLS required, no mixing with `FLIGHT_BEARER_TOKEN`), `LdapSettingsTest` 5, `LdapSessionTokenTest` 3,
+    `LdapFlightAuthenticatorTest` 3. Docs: `docs/security/providers.md` (settings table), START-NOTES; release asset
+    `flight-auth-<v>-<sha>.tar.zst` (dev-ci `package`).
+    *Next (step 2):* groups from the provider into Ranger (LDAP group search `FLIGHT_LDAP_GROUP_SEARCH_BASE` /
+    `_FILTER` with `{0}` user, `{1}` user DN, name attribute; later the JWT groups claim). Needs a small core hook,
+    own commit + STATUS.md Log line: e.g. an optional `FlightAuthenticationProvider.groups(String identity)` (default
+    empty = Hadoop group mapping as today) that `RangerAuthorization`'s group resolver consults first (union or
+    replace - decide, probably union), or groups carried in the session token. Also a Ranger test with a stubbed
+    plugin showing an LDAP identity gets the same decision as the Kerberos principal `alice@REALM`. *Step 3:* JWT
+    provider (`flight-auth-jwt`, nimbus-jose-jwt; JWKS URL cache, issuer/audience/expiry/skew, user + groups claims;
+    local JWKS in the test). Optional: an OpenLDAP container test in CI (`real-services`) if the maintainer wants it.
 P3. **Spark connector for production (`flight-spark`).** (a) Kerberos on YARN executors: a Spark
     `HadoopDelegationTokenProvider` that gets a server session on the driver and ships it in the job credentials (today
     every executor does its own SPNEGO and fails without a TGT); (b) build profiles for Spark 3.3/3.4 (check what Hadoop
