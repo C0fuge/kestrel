@@ -73,16 +73,23 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     the exported stream = the same 6000 rows computed in DuckDB SQL, all 12 types incl. decimal/date/timestamp/
     char/list/struct/map with NULLs, JVM zone America/Los_Angeles; partitions; partition-only scan; row-group
     skipping; broken / outside file), `OrcSearchArgumentsTest` 2/2.
-    *Step 2 (d) in progress 2026-10-28 (86af8f9):* `HiveOrcIntegrationTest` 5/5 locally; CI + package pending.
-    **Next step (step 2 (d)):** end-to-end through the server with the packaged plugin (plugin dir, `share=hadoop,
-    arrow`): extend `HiveCatalogIntegrationTest` (flight-server) with ORC tables written in the test (orc-core is
-    not on the server's test classpath: write the files in the hive plugin's test jar fixture, which the server's
-    tests already load in their own class loader for `HmsFixture`, or add orc-core as a server test dependency)
-    and `hive.orcTables=true`: both result modes (partial: planner tickets -> endpoint streams; complete: joins of
-    an ORC and a Parquet table, `count(*)`, group by a partition column, filters on data columns), answers equal
-    to the same data in Parquet; confirm the zstd-jni risk (ORC file written with zstd compression read in the
-    server JVM, which has its own zstd-jni). Then a `package=true` pre-release (runtime behaviour of the plugin
-    changes with the opt-in) and the perf note (SF1 lineitem ORC vs Parquet, manual).
+    *Step 2 (d) done 2026-10-28 (86af8f9):* `HiveOrcIntegrationTest` (flight-server) runs the server with the
+    packaged plugin (`plugins/hive`, `share=hadoop,arrow`) and `hive.orcTables=true`: ORC tables `hvorc.flat`
+    (2 files) and `hvorc.items` (partitioned by region, a file per compression kind ZLIB/ZSTD/SNAPPY/LZ4/NONE, a
+    NULL partition) next to Parquet tables of the same rows; whole-table fingerprints = DuckDB computing the rows;
+    8 queries (star, count, group by partition, nested columns, filters on BIGINT/VARCHAR/DECIMAL/DATE, IS NULL,
+    empty result) equal to Parquet in both modes (schema and rows); partition pruning (1 endpoint); joins ORC x
+    Parquet, ORC x ORC, ORC self-join (complete). zstd-jni risk checked: the server's own `Zstd` (server class
+    path) works before and after the plugin decodes ZSTD ORC files - no conflict. ORC files are written by
+    `OrcTestFiles` (hive test fixture, shared with `HiveOrcTableTest`) in the metastore's class loader; orc-core,
+    orc-format, orc-shims, aircompressor, threeten-extra, zstd-jni added to the hive module's `fixture-libs`.
+    Pre-release `server-1.0.0-3fbf5b28b186` (run 40627574196, package=true).
+    **Next step (step 2 (e), last of P1):** the perf note - SF1 lineitem in ORC vs Parquet through the server
+    (complete and partial, `count(*)`, a few TPC-H Q1/Q6-style aggregations; zstd and zlib ORC). Not possible in
+    the session without data: either a manual workflow (generate lineitem with DuckDB's `tpch` extension from
+    `ci-assets`, write ORC with `OrcTestFiles`-style code or `COPY ... (FORMAT orc)` is not available in DuckDB,
+    so a small Java generator in the hive test jar, `perf` tag) or ask the maintainer to run it locally. Then
+    close P1 and start P2.
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -161,3 +168,9 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   (`HiveOrcTableTest` 6, `OrcSearchArgumentsTest` 2, `OrcArrowReaderTest` 5, `HiveCatalogTest` 11, Kerberos 5),
   Checkstyle + SpotBugs clean. CI: run 40621078865 (2e4d2d9) green, all modules. No package release yet: planned after the
   end-to-end tests of step 2 (d) (default behaviour unchanged).
+- 2026-10-28 (plugins session): P1 step 2 (d) - ORC Hive tables end to end through the server (86af8f9, tests and
+  test fixtures only: `HiveOrcIntegrationTest` 5/5, `OrcTestFiles`; hive `fixture-libs` gets orc-core & co.; no
+  core, SPI or plugin main code change). Local: `HiveOrcIntegrationTest` 5/5, `HiveCatalogIntegrationTest` 7 (+1
+  skip, UTF-8 locale), hive module 29/29 + Checkstyle + SpotBugs. CI: run 40627574196 (3fbf5b2, dispatched with
+  package=true; the push's head was `[skip ci]`) green; pre-release `server-1.0.0-3fbf5b28b186` carries the
+  `hive.orcTables` opt-in (default off). zstd-jni of server and plugin coexist. Next: P1 perf note (step 2 (e)).
