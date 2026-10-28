@@ -148,6 +148,19 @@
 >    reach). **Screening:** the cache run again (`cacheMegabytes=1024`) on the pre-release: peak RSS (expect ~1 GB
 >    less), SF10 with `always` and with `reuse` vs off, repeated small queries p95 with both. See Open question
 >    "Read cache admission default".
+> 3c. item 19b (new, maintainer 2026-10-28) - **DuckDB threads and memory by host size (cores AND memory).** Today:
+>    threads = cores / 4 clamped 2..8 (S3/lakeFS >= 4), `duckDbMemoryLimit` unset (DuckDB default = 80 % of RAM *per
+>    instance*, and we run one instance per worker connection -> no real bound). Production hosts are large (many cores,
+>    a lot of RAM): the cap of 8 leaves them idle, and the memory side is uncontrolled. Make the defaults depend on both:
+>    read the limits the JVM really has (cgroup/container cores and `memory.max`, else physical RAM); DuckDB budget =
+>    memory - `-Xmx` - direct memory - headroom (~15 %); per-connection `memory_limit` = budget / expected concurrent
+>    connections (worker pool / `maxConnections`), at least 1 GB; threads per query = min(cores-based value,
+>    memory_limit / ~1 GB per thread (DuckDB's guidance for joins/aggregates)), with the upper clamp raised for big hosts
+>    (e.g. 16, maybe 32 - measure). Explicit settings always win; one startup line with the inputs and the chosen values.
+>    Step 2 (opt-in): adaptive threads per query - a heavy query gets more threads when the node is idle (`SET threads`
+>    per connection), fewer under concurrency. Tests: formula across host profiles (2c/6g container, 4c/16g, 16c/64g,
+>    64c/512g, small `memory.max` with many cores), no OOM in the existing 6 GB container tests; perf in CI on 4 vCPU
+>    (no regression vs today's defaults) - large hosts are measured on the maintainer's stand later.
 > 4. item 18 step 2 - distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).
