@@ -25,8 +25,7 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
     - ~~Step 1: planning reads~~ *done 2026-10-28 (a110a22, see Log):* `ClusterView`.
     - ~~Step 2: writes~~ *done 2026-10-28 (aef0a7a, see Log):* deferred writes in `ClusterService`.
     - ~~Step 2b: remaining writes~~ *done 2026-10-28 (see Log):* claim, inventory/secret puts, `close()`.
-    - Step 3 (optional): `fileLocations(false)` (local disks) still uses `entrySet`, which waits; plans there fail
-      anyway when a node is lost, so only the error is late.
+    - ~~Step 3: `fileLocations(false)` (local disks)~~ *done 2026-10-28 (a9f6def, see Log):* local inventory copy.
 
 ## Log
 
@@ -148,3 +147,19 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   contains), pre-release `server-1.0.0-9044653333cd`. Next: D3 step 3 (optional, `fileLocations(false)`), or the D2
   observed gap (force the after-first-batch cut path), or the Hazelcast test-port race; next lane-3 item otherwise
   to be set by the maintainer.
+- 2026-10-28 (lane 3 session, 8th): lock 21:28Z. D3 step 3 done (a9f6def, rebase-merged into `main`): plans on local
+  disks (`fileLocations(false)`) read the whole inventory map (`entrySet`), which waited for a silent member until
+  Hazelcast dropped it. `ClusterService` now keeps a local copy of every inventory (`inventoryMirror`: each full read
+  plus the map's entry events, `InventoryListener`) and, while the cluster view knows a silent member, reads the
+  inventories on members that answer by key (`readKeys`) and takes those on the silent member's partitions from the
+  copy (this node's own from `localInventory`); a member's inventory on a silent partition that was never seen here
+  falls back to the full read, so no node's files drop from a plan (files only the silent node holds still fail the
+  plan, "No live Flight node owns required shard", now at once). Tests: `ClusterServiceTest` +3 (two fail on the old
+  code), `ClusterMemberLossIntegrationTest.crashedMemberWhoseAddressVanishedDoesNotHoldLocalDiskPlans` (iptables; on
+  the old code the read waited until the member was dropped). Local: `ClusterServiceTest` 53/53, `ClusterViewTest`,
+  `ClusterMemberLossIntegrationTest` 7/7 (root), checkstyle + spotbugs clean. CI 40773266160 green on the branch
+  (a17f3d8); on `main` my push run and package dispatch on a9f6def were cancelled by the plugins lane's pushes (same
+  concurrency group); Dev CI 40776549317 green on 80aa61a (contains a9f6def); my package=true dispatch 40778284369 on 80aa61a was
+  cancelled by another lane's simultaneous dispatch on the same commit, whose run 40778373787 is green: pre-release
+  `server-1.0.0-80aa61a15557` contains a9f6def. D3 is complete. Next (no maintainer item yet): the Hazelcast test-port race (retry a member start on a
+  BindException from `freePort()`), or the D2 observed gap (force the after-first-batch cut path).
