@@ -10,6 +10,8 @@ import java.util.Set;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
@@ -34,14 +36,15 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.5", SpiVersion.current());
+        assertEquals("1.6", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
         assertTrue(SpiVersion.supports("1.3"));
         assertTrue(SpiVersion.supports("1.4"));
         assertTrue(SpiVersion.supports("1.5"));
-        assertFalse(SpiVersion.supports("1.6"));
+        assertTrue(SpiVersion.supports("1.6"));
+        assertFalse(SpiVersion.supports("1.7"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -168,5 +171,24 @@ class SpiTest {
                 null, new ReadSpec.ArrowStream("orc"));
         assertThrows(UnsupportedOperationException.class, () -> catalog.exportArrowScan(snapshot,
                 List.of(), new ArrowScan(List.of("a"), null), 0L, null));
+        assertEquals(List.of(), catalog.views("s"));
+    }
+
+    @Test
+    void catalogViewsCheckTheirParts() {
+        List<TableName> sources = new java.util.ArrayList<>(List.of(new TableName("s", "t")));
+        List<ColumnSpec> columns = new java.util.ArrayList<>(
+                List.of(new ColumnSpec("a", "INTEGER", true, null)));
+        CatalogView view = new CatalogView("v", "SELECT 1", sources, columns, "f");
+        sources.clear();
+        columns.clear();
+        assertEquals(1, view.sources().size());
+        assertEquals(1, view.columns().size());
+        assertThrows(IllegalArgumentException.class,
+                () -> new CatalogView("v", "SELECT 1", List.of(), view.columns(), "f"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new CatalogView("v", "SELECT 1", view.sources(), List.of(), "f"));
+        assertThrows(NullPointerException.class,
+                () -> new CatalogView("v", null, view.sources(), view.columns(), "f"));
     }
 }

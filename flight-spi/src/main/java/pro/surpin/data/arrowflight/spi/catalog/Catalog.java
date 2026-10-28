@@ -68,6 +68,19 @@ public interface Catalog extends AutoCloseable {
     }
 
     /**
+     * Lists the views of a schema the catalog can show. A view's name is never also a table name
+     * of the schema ({@link #tables} lists tables only). The default has none.
+     *
+     * @param schema schema name
+     * @return views, empty for an unknown schema
+     * @throws IOException when the catalog cannot be read
+     * @since SPI 1.6
+     */
+    default List<CatalogView> views(String schema) throws IOException {
+        return List.of();
+    }
+
+    /**
      * Returns the snapshot of a table at an earlier point (time travel), planned with the columns
      * that snapshot was written with. Another node pins it through {@link #pinned} like the
      * current one. A point the table has no snapshot for (an unknown or expired snapshot ID, an
