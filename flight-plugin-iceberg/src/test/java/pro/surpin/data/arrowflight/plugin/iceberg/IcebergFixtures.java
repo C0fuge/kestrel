@@ -28,6 +28,7 @@ import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.data.GenericRecord;
@@ -80,19 +81,31 @@ public final class IcebergFixtures {
     public static Map<String, String> write(String warehouse) throws IOException {
         HadoopCatalog catalog = catalog(warehouse);
         try {
-            Map<String, String> result = new LinkedHashMap<>();
-            result.put("types", metadata(types(catalog)));
-            result.put("evolved", metadata(evolved(catalog)));
-            result.put("parted", metadata(parted(catalog)));
-            result.put("deletes", metadata(deletes(catalog)));
-            result.put("nested", metadata(nested(catalog)));
-            result.put("empty", metadata(catalog.createTable(id("empty"), new Schema(
-                    required(1, "id", Types.LongType.get())), PartitionSpec.unpartitioned(),
-                    Map.of("format-version", "2"))));
-            return result;
+            return write(catalog);
         } finally {
             catalog.close();
         }
+    }
+
+    /**
+     * Writes all test tables through any Iceberg catalog (a REST catalog in the conformance
+     * tests) whose namespace {@link #NAMESPACE} exists.
+     *
+     * @param catalog catalog
+     * @return table name to its current metadata file
+     * @throws IOException when a file cannot be written
+     */
+    static Map<String, String> write(Catalog catalog) throws IOException {
+        Map<String, String> result = new LinkedHashMap<>();
+        result.put("types", metadata(types(catalog)));
+        result.put("evolved", metadata(evolved(catalog)));
+        result.put("parted", metadata(parted(catalog)));
+        result.put("deletes", metadata(deletes(catalog)));
+        result.put("nested", metadata(nested(catalog)));
+        result.put("empty", metadata(catalog.createTable(id("empty"), new Schema(
+                required(1, "id", Types.LongType.get())), PartitionSpec.unpartitioned(),
+                Map.of("format-version", "2"))));
+        return result;
     }
 
     /**
@@ -145,7 +158,7 @@ public final class IcebergFixtures {
         return ((HasTableOperations) table).operations().current().metadataFileLocation();
     }
 
-    private static Table types(HadoopCatalog catalog) throws IOException {
+    private static Table types(Catalog catalog) throws IOException {
         Schema schema = new Schema(
                 required(1, "id", Types.LongType.get()),
                 optional(2, "b", Types.BooleanType.get()),
@@ -204,7 +217,7 @@ public final class IcebergFixtures {
         return t;
     }
 
-    private static Table evolved(HadoopCatalog catalog) throws IOException {
+    private static Table evolved(Catalog catalog) throws IOException {
         Schema v1 = new Schema(
                 required(1, "id", Types.IntegerType.get()),
                 optional(2, "name", Types.StringType.get()),
@@ -231,7 +244,7 @@ public final class IcebergFixtures {
         return t;
     }
 
-    private static Table parted(HadoopCatalog catalog) throws IOException {
+    private static Table parted(Catalog catalog) throws IOException {
         Schema schema = new Schema(
                 required(1, "id", Types.LongType.get()),
                 optional(2, "region", Types.StringType.get()),
@@ -257,7 +270,7 @@ public final class IcebergFixtures {
         return t;
     }
 
-    private static Table deletes(HadoopCatalog catalog) throws IOException {
+    private static Table deletes(Catalog catalog) throws IOException {
         Schema schema = new Schema(
                 required(1, "id", Types.LongType.get()),
                 optional(2, "name", Types.StringType.get()));
@@ -297,7 +310,7 @@ public final class IcebergFixtures {
         return t;
     }
 
-    private static Table nested(HadoopCatalog catalog) throws IOException {
+    private static Table nested(Catalog catalog) throws IOException {
         Schema schema = new Schema(
                 required(1, "id", Types.LongType.get()),
                 optional(2, "st", Types.StructType.of(

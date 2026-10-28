@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Iceberg REST catalog conformance (C1 step 1): new workflow `catalogs-ci.yml` starts Apache Polaris 1.2.0 (OAuth2
+  client credentials, prefix from `/v1/config`) and the Apache Iceberg REST fixture 1.10.0 as containers and runs
+  `RestCatalogConformanceTest`: the fixture tables are written through each catalog with Iceberg Java's RESTCatalog
+  and must look to the `iceberg-rest` catalog exactly as the same tables in a Hadoop-layout warehouse (names,
+  columns, files, row and delete counts, partial-read problems, DuckDB `iceberg_scan` rows). Test only, no runtime
+  change.
 - OIDC / Knox JWT bearer tokens (P2 step 3), new optional module `flight-auth-jwt`, `FLIGHT_AUTH_PROVIDER=jwt`
   (existing providers unchanged; release asset `flight-auth-...` now also holds `auth/jwt/`): every call's bearer JWT
   is verified with nimbus-jose-jwt 10.10 against the issuer's JWKS (`FLIGHT_JWT_JWKS_URL`, HTTPS only, cached and

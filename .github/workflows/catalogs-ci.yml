@@ -1,0 +1,122 @@
+# Lane 4 (catalogs and sources): conformance of the iceberg plugin's REST path against real
+# Iceberg REST catalogs started as containers (RestCatalogConformanceTest; docs/dev/CATALOGS-STATUS.md
+# item C1). Test-only credentials, generated or fixed for the throw-away containers.
+name: Catalogs CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "flight-plugin-iceberg/**"
+      - "flight-spi/**"
+      - "tools/ci/**"
+      - ".github/workflows/catalogs-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalogs-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  iceberg-rest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        catalog: [ polaris, iceberg-rest-fixture ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: DuckDB iceberg/avro extensions (ci-assets, else extensions.duckdb.org)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DUCKDB_VERSION: v1.5.6
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/duckdb-ext"
+          mkdir -p "$ext"
+          if gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+              --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"; then
+            tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$ext"
+          else
+            dir="$ext/${DUCKDB_VERSION}/linux_amd64"
+            mkdir -p "$dir"
+            for name in iceberg avro; do
+              curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz" \
+                | gunzip > "$dir/${name}.duckdb_extension"
+            done
+          fi
+          iceberg=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/iceberg.duckdb_extension" | head -n 1)
+          test -n "$iceberg" || { echo "no ${DUCKDB_VERSION}/linux_amd64/iceberg.duckdb_extension"; exit 1; }
+          echo "ICEBERG_EXT_DIR=$(dirname "$(dirname "$(dirname "$iceberg")")")" >> "$GITHUB_ENV"
+
+      # The catalog's warehouse is a local directory mounted at the same path in the container,
+      # so the test (writer and plugin) and the catalog see the same files.
+      - name: Start ${{ matrix.catalog }}
+        run: |
+          set -euo pipefail
+          wh="$RUNNER_TEMP/rest-wh"
+          mkdir -p "$wh"
+          chmod 777 "$wh"
+          echo "ICEBERG_REST_IT_ROOT=$wh" >> "$GITHUB_ENV"
+          case "${{ matrix.catalog }}" in
+            polaris)
+              secret=$(openssl rand -hex 16)
+              echo "::add-mask::$secret"
+              docker run -d --name catalog -p 8181:8181 -v "$wh:$wh" \
+                -e "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,$secret" \
+                -e polaris.realm-context.realms=POLARIS \
+                -e 'polaris.features."ALLOW_INSECURE_STORAGE_TYPES"=true' \
+                -e 'polaris.features."SUPPORTED_CATALOG_STORAGE_TYPES"=["FILE"]' \
+                -e polaris.readiness.ignore-severe-issues=true \
+                apache/polaris:1.2.0-incubating
+              tools/ci/polaris-setup.sh http://localhost:8181 root "$secret" conformance "$wh"
+              {
+                echo "ICEBERG_REST_IT_URI=http://localhost:8181/api/catalog"
+                echo "ICEBERG_REST_IT_WAREHOUSE=conformance"
+                echo "ICEBERG_REST_IT_CREDENTIAL=root:$secret"
+                echo "ICEBERG_REST_IT_SCOPE=PRINCIPAL_ROLE:ALL"
+              } >> "$GITHUB_ENV"
+              ;;
+            iceberg-rest-fixture)
+              docker run -d --name catalog -p 8181:8181 -v "$wh:$wh" \
+                -e "CATALOG_WAREHOUSE=file://$wh" \
+                -e CATALOG_IO__IMPL=org.apache.iceberg.hadoop.HadoopFileIO \
+                apache/iceberg-rest-fixture:1.10.0
+              for _ in $(seq 60); do curl -fsS http://localhost:8181/v1/config && break; sleep 2; done
+              echo "ICEBERG_REST_IT_URI=http://localhost:8181" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Conformance test
+        run: |
+          set -euo pipefail
+          ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-iceberg -am
+          ./mvnw test -pl flight-plugin-iceberg -Dtest=RestCatalogConformanceTest \
+            -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
+          # A skipped conformance test is a failure here.
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          s = ET.parse("flight-plugin-iceberg/target/surefire-reports/"
+                       "TEST-pro.surpin.data.arrowflight.plugin.iceberg.RestCatalogConformanceTest.xml").getroot()
+          tests, skipped = int(s.get("tests")), int(s.get("skipped"))
+          print(f"conformance: {tests} tests, {skipped} skipped")
+          assert tests == 3 and skipped == 0, "conformance tests skipped"
+          EOF
+
+      - name: Catalog log
+        if: failure()
+        run: docker logs catalog 2>&1 | tail -200
