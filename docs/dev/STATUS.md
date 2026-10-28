@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **Bug first (maintainer, 2026-10-28, from the CI screening's build tracking, `results/BUILDS.md` /
+> `track-d22cdaccb4e1`): S3 small queries got slower in the tail.** `d22cdaccb4e1` vs `7562a5bdb7b9`, same runner, 4 vCPU,
+> 3/3 rounds: p95 at 8 and 32 clients +12-21 % (JDBC c32 p95 1.21, JDBC c8 p95 1.12, ADBC c8 p95 1.20) while p50 is
+> 0.65-0.91 and local disk is not affected. Prime suspect: the size-aware `duckDbThreads` default (item 19: 4 vCPU -> 2
+> threads vs 4 before) - S3 reads are round-trip bound, fewer threads per query = longer tails (item 19 already flagged
+> this). Check by an A/B with `-DduckDbThreads=4` on the same build (perf test with fake S3 latency, 8/32 clients); if
+> confirmed, make the default per store (S3/remote stores keep >= 4) or otherwise restore the tail without losing the
+> local-disk gains; else bisect between 7562a5b and d22cdac. Take this before continuing item 22 (finish the current
+> step of 22 first if you are in the middle of it).
+
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
 > four-server comparison in the public CI screening repo (identical containers: 2 CPUs, 6 GB, `-Xmx3g`, direct 2g; reports
