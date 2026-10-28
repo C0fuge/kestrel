@@ -136,6 +136,18 @@ C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), fr
       a unit test that the refused list equals the `duckdb_functions()` diff of the bundled extension, so a new
       extension version cannot add an unrefused function. Partial mode: file list from `delta_list_files`
       (DVs need the scan, so tables with DVs complete-mode only or refused in partial, to decide). Probe HDFS.
+    - Ozone done (2026-10-28): Apache Ozone 2.0.0's S3 gateway as an S3 backend: `tools/ci/ozone-s3.sh` (SCM, OM,
+      one datanode, S3 gateway as containers on a private network, gateway on localhost:9000; non-secure, so any
+      key, as moto; replication ONE; ready in ~50 s locally) and `catalogs-ci.yml` entry
+      `iceberg-rest-fixture-ozone-s3` (the fixture's S3FileIO, the test's writer, the s3 plugin and DuckDB httpfs
+      all on Ozone). Plugin test 3/3, server test 4/4 (the HMS reference skipped as on every S3 entry) pass
+      locally, unchanged code. Ozone's gateway answers unsigned requests with 403 (readiness check takes any HTTP
+      answer).
+    - **Next, not blocked by Q5 (probe only):** Delta on HDFS. Plan: in the `delta` job start a single-node HDFS
+      (Docker Hub `apache/hadoop:3.4.1`, namenode + datanode, `hdfs dfs -put` the fixtures), then in
+      `DuckDbDeltaProbe` (new optional arg/env `PROBE_HDFS_ROOT`) `LOAD` hadoopfs (ci-assets tar) + delta and try
+      `delta_scan('hdfs://localhost:8020/delta/plain')` before/after the lockdown; record the error (expected:
+      delta-kernel has no hdfs object store). If unreadable, the plugin refuses `hdfs://` Delta roots clearly.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
     reader allows.
 
@@ -230,3 +242,9 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   existing `refuseFunctions`). Catalogs CI: runs 40750693235, 40751237504, 40751817639 (delta job green in each,
   later runs add checks; 40751817639 all 8 jobs green). Dev CI: push runs cancelled by newer pushes; run
   40751852380 (workflow_dispatch, head 0f8eb5e) still running at session end (change is tools/ci + workflow only).
+- 2026-10-28: C3 Ozone part - Apache Ozone 2.0.0's S3 gateway as an S3 backend (`tools/ci/ozone-s3.sh`,
+  `catalogs-ci.yml` entry `iceberg-rest-fixture-ozone-s3`): both REST conformance tests pass on it unchanged. Test
+  only. Catalogs CI green: run 40770759266 (all 9 jobs). Dev CI run 40770759218 (head c29bb31) still running at
+  session end (change is tools/ci + workflow only). Q1, Q4, Q5 still open (no answer yet), so C1 step 2b, C2 step 2
+  and the Delta plugin stay unbuilt; C4 waits on P4 (plugins lane, views part (d) next). Next: Delta-on-HDFS probe
+  (C3 note above).
