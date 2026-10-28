@@ -1893,3 +1893,11 @@
   simple Hive views under the opt-in `hive.views`. The server does not read them yet; the plugins lane's next step
   (P4 views part 3, see PLUGINS-STATUS.md) expands view references in `CatalogViews` before `timeTravel`, checks
   view sources in `requireQuery`, lists views in GetTables - small core commits, announced here.
+- 2026-10-28 (cloud session, core lane): every numbered core item waits on the screening or the stand, so took the
+  additive half of Open question "Reservation TTL of unread endpoints" (3-node S3 finding (b)): new setting
+  `flightLoadReservationSeconds` / `FLIGHT_LOAD_RESERVATION_SECONDS` (default 600 = unchanged, below 1 refused) for the
+  node-load reservations of planned endpoints, also when a backup node claims one (a29a0a4; tests in
+  `ClusterServiceTest`, `ConfigAdapterTest`; README "Cancelling a plan", `arrowflight.properties`). Dev CI run
+  40746317500 green. No pre-release (default unchanged). Stand (optional): 3-node S3 with
+  `-DflightLoadReservationSeconds=120` - abandoned plans stop skewing placement after 2 min. Next: as before (the
+  screening's numbers on `server-1.0.0-a110a2279437`, then the stand rounds; code candidate 1b libs pruning).
