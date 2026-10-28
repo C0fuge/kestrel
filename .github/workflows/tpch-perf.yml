@@ -2,8 +2,8 @@
 # 2026-10-28): generates TPC-H SF<sf> as Parquet, starts this ref's server alone in a container
 # limited to 4 CPUs and 8 GB (-Xmx3g, direct 2g: the stand profile whose 2 default threads made
 # SF10 1.35-1.7x slower), once with the default DuckDB sizing and once with -DduckDbThreads=4, and
-# optionally a baseline build; TpchPerfTest runs the 22 queries (one warm-up pass, then <rounds>).
-# Fails when the default's best total is more than 10 % above the -DduckDbThreads=4 one, or when a
+# optionally a baseline build; TpchPerfTest runs the 22 queries (one warm-up pass, then <rounds>)
+# and checks each answer's row count against DuckDB's own run at generation time. Fails when the default's best total is more than 10 % above the -DduckDbThreads=4 one, or when a
 # query answers differently. Not part of Dev CI.
 name: TPC-H perf
 
@@ -92,13 +92,21 @@ jobs:
               db.execute(f"COPY {t} TO '{os.path.join(data, t, 'data.parquet')}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
           # Qualify the tables: a table name right after FROM, JOIN or a comma of a FROM list.
           pattern = re.compile(r"(\b(?:from|join)\s+|,\s*)(" + "|".join(tables) + r")\b", re.IGNORECASE)
+          # DuckDB's q11 has the SF1 fraction 0.0001 (its threshold is too high above SF1); the spec's is 0.0001 / SF.
           for nr, q in db.execute("SELECT query_nr, query FROM tpch_queries()").fetchall():
+              if nr == 11:
+                  assert "0.0001000000" in q or "0.0001" in q, q
+                  q = q.replace("0.0001000000", "0.0001").replace("0.0001", f"{0.0001 / sf:.10f}")
+              rows = len(db.execute(q).fetchall())
               with open(os.path.join(queries, f"q{nr:02d}.sql"), "w") as f:
                   f.write(pattern.sub(lambda m: m.group(1) + "tpch." + m.group(2), q))
+              with open(os.path.join(queries, f"q{nr:02d}.rows"), "w") as f:
+                  f.write(str(rows))
+              print(f"q{nr:02d} duckdb rows {rows}")
           db.close()
           os.remove(os.path.join(tmp, "gen.duckdb"))
           EOF
-          du -sh "$RUNNER_TEMP/data/tpch"; ls "$RUNNER_TEMP/queries" | wc -l
+          du -sh "$RUNNER_TEMP/data/tpch"; ls "$RUNNER_TEMP"/queries/*.sql | wc -l
           grep -c 'tpch\.' "$RUNNER_TEMP"/queries/*.sql | head -n 3
 
       - name: Measure

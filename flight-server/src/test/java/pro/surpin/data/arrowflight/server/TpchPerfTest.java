@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -35,8 +36,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * one unmeasured pass, then {@code -Dperf.rounds} (default 2) measured passes, and prints one
  * line per query and pass ({@code q01 r1 1234.5 ms rows 4 sum <checksum>}) plus one
  * {@code total r<n> <seconds> s} line per pass. The checksum is order-independent with
- * floating-point values rounded, so runs with other thread counts can be compared. Asserts only
- * that every query answers with rows.
+ * floating-point values rounded, so runs with other thread counts can be compared. Asserts the
+ * row count of every answer: the one in {@code qNN.rows} next to the query when present, else
+ * at least one row.
  */
 @Tag("perf")
 class TpchPerfTest {
@@ -58,8 +60,11 @@ class TpchPerfTest {
         }
         assertTrue(!files.isEmpty(), "no .sql files in " + queriesDir);
         List<String> sqls = new ArrayList<>();
+        List<Long> expectedRows = new ArrayList<>();
         for (Path f : files) {
             sqls.add(Files.readString(f, StandardCharsets.UTF_8).trim().replaceAll(";\\s*$", ""));
+            Path rows = f.resolveSibling(f.getFileName().toString().replace(".sql", ".rows"));
+            expectedRows.add(Files.exists(rows) ? Long.parseLong(Files.readString(rows).trim()) : -1L);
         }
         int rounds = Integer.parseInt(System.getProperty("perf.rounds", "2"));
         FlightCallHeaders headers = new FlightCallHeaders();
@@ -78,7 +83,11 @@ class TpchPerfTest {
                     long nanos = System.nanoTime() - t0;
                     total += nanos;
                     String name = files.get(i).getFileName().toString().replace(".sql", "");
-                    assertTrue(answer[0] > 0, name + " answered no rows");
+                    if (expectedRows.get(i) >= 0) {
+                        assertEquals(expectedRows.get(i).longValue(), answer[0], name + " rows");
+                    } else {
+                        assertTrue(answer[0] > 0, name + " answered no rows");
+                    }
                     System.out.printf(Locale.ROOT, "%s r%d %9.1f ms rows %d sum %016x%n",
                             name, r, nanos / 1e6, answer[0], answer[1]);
                 }
