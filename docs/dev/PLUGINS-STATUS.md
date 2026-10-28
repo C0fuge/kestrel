@@ -97,15 +97,26 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     First fix ca47448: `USE_DECIMAL64` batches (decimals <= 18 digits decoded into longs) - Q1 at 1M rows locally
     2.0 -> 1.4 s, but at SF1 (run 40633767991) only ~5 %: Q1 6.26-6.58, Q6 6.20-6.47, `SELECT *`
     7.3-7.6 s, count(*) 0.37-0.51 - decimals are not the main cost.
-    **Next step (step 2 (f), ORC scan speed, then close P1):** profile one Q6 at SF1 (JFR: `jcmd <ForkedBooter
-    pid> JFR.start` while `HiveOrcPerfTest` runs; `-DargLine` did not produce a recording). Suspects, in order:
-    (1) Q6 (4 columns) costs as much as `SELECT *` (16 columns) - check that `ArrowScanRequests` really projects
-    the endpoint's columns for these queries (a debug log of the `ArrowScan` columns); (2) the row-at-a-time
-    `OrcArrowReader.copy` (switch per value, `setSafe`) -> per-column loops over primitive arrays with
-    `isRepeating`/`noNulls` fast paths, strings via one `ArrowBuf` copy; (3) one stream per table reference ->
-    several streams (one per file group) unioned so DuckDB scans in parallel (`registerArrowStream` per stream +
-    `UNION ALL` view; core `ArrowStreamScans` change, own commit); (4) batch size (`HiveCatalog.ORC_BATCH_ROWS` = 4096) -> try larger. Target:
-    within ~3-5x of Parquet for Q1/Q6. Then a `package=true` pre-release and close P1.
+    *Step 2 (f) done 2026-10-28:* profiled (JFR via `jcmd` on the surefire fork; the hive-module reader alone
+    via an in-test `jdk.jfr.Recording`). Findings and fixes: (1) **the main cost** - `ArrowScanRequests` took any
+    `*` for `SELECT *`, so Q1/Q6 (`l_extendedprice * l_discount`) streamed all 16 columns; a star between two
+    values is now a product (core d5d5466, regression test `aProductReadsOnlyItsColumns`; stars that may select
+    columns - `t.*`, `DISTINCT ON (a) *`, `* EXCLUDE`, next to a comment - still read all); (2) bulk copy of flat
+    columns into Arrow (dfad426, `OrcArrowReader.copyFlat`; the per-value `setSafe` was ~60 % of the reader's
+    time); (3) files of a scan decoded up to `min(4, cores)` at once, 2 batches ahead each, handed over in file
+    order (cc1230c, `OrcTableReader.FileRead`, pool `hive-orc-read-*`; plugin only, no core `ArrowStreamScans`
+    change needed). Also: the perf test's JVM ran with the jacoco agent and `-ea` (~40 % slower Java path, not
+    Parquet's) - `hive-orc-perf.yml` now runs without them (9506620). SF1 on a 4-core runner, run 40641173349,
+    best of 3, seconds (complete / partial), Parquet vs ORC zlib-zstd: count(*) 0.01 vs 0.08-0.27; Q1-style 0.12
+    vs 0.72-0.84 (was 6.6); Q6-style 0.03-0.04 vs 0.36-0.45 (was 6.6); `orderkey < 50000` 0.01 vs 0.02; `SELECT *`
+    1.19-1.25 vs 1.51-1.69 (was 7.7). Batch size (4) not tried.
+    **Next step (step 2 (g), then close P1):** (a) a table of one large file gets no read-ahead (parallelism is
+    per file) - split files into stripe ranges (`Reader.Options.range(offset, length)` per group of stripes from
+    `Reader.getStripes()`) and treat each range as a read-ahead unit, keeping file/stripe order; test with one
+    file of several stripes (write with a small `stripeSize`) and `HiveOrcPerfTest -Dhive.orc.perf.files=1`;
+    (b) try `ORC_BATCH_ROWS` 8192/16384 on Q1 (where is the remaining 6x: JFR on Q1 alone - DuckDB's
+    single-stream consumption vs ORC decode); (c) then close P1 (the pre-release of this session already carries
+    (f)) and move to P2.
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -198,3 +209,14 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   40633748155 (ca47448) green, SF1 perf re-run 40633767991 green (~5 % gain at SF1, numbers in P1).
   No pre-release: `hive.orcTables` is opt-in and answers are unchanged; one is planned when P1 closes.
 
+- 2026-10-28 (plugins session): P1 step 2 (f) - ORC scan speed. Profiled: Q1/Q6 streamed all 16 columns because
+  `ArrowScanRequests` took a multiplication's `*` for `SELECT *` (core fix d5d5466, own commit, FYI line in
+  STATUS.md Log); then bulk copy of flat columns into Arrow (dfad426) and per-file read-ahead in `OrcTableReader`
+  (cc1230c, up to min(4, cores) files at once, file order kept); `hive-orc-perf.yml` without jacoco/`-ea`
+  (9506620). Local: hive module 36/36 (new `OrcTableReaderTest` 4, `OrcArrowReaderTest` 8), `ArrowScanRequestsTest`
+  7, ArrowStream* tests, `HiveOrcIntegrationTest` 5/5, `HiveCatalogIntegrationTest` 7 (+1 skip), Checkstyle +
+  SpotBugs clean. CI: Dev CI run 40641171065 (9506620, package=true) green, pre-release `server-1.0.0-9506620bb170`
+  (ORC opt-in default off; answers unchanged); push run 40640386236 (dfad426) cancelled by the newer push. SF1 perf
+  runs 40640401475 (dfad426, still with jacoco: Q1 1.5, Q6 0.8, `SELECT *` 4.0 s) and 40641173349 (9506620:
+  Q1 0.72-0.84 vs Parquet 0.12, Q6 0.36-0.45 vs 0.03, `SELECT *` 1.5-1.7 vs 1.2; before 6.6 / 6.6 / 7.7).
+  Next: step 2 (g) stripe-range read-ahead for single-file tables, batch size, then close P1.

@@ -1575,3 +1575,6 @@
   40635098385 green, pre-release `server-1.0.0-4bb6441569be`; push run 40635080394 cancelled (concurrency group).
   Screening: S3 small queries c8/c32 vs `7562a5bdb7b9`, local disk unchanged. New Open question "S3 thread default".
   Next: item 22 (b)-(d) per stage 3 order (or 3b item 17 (e)).
+- 2026-10-28 (plugins lane, FYI core lane): core commit d5d5466 (P1 step 2 (f)) - `ArrowScanRequests.columns` no
+  longer takes a multiplication's `*` for `SELECT *` (Arrow-stream tables only, i.e. Hive ORC with
+  `hive.orcTables`); stars that may select columns still read every column. Test `ArrowScanRequestsTest` 7/7.
