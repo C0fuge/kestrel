@@ -427,4 +427,6 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
 - 2026-10-28 (plugins session): P4 step 2 (c) part 2 - Hive JsonSerDe tables (hcatalog + serde2) under
   `hive.textTables` (b17866c; plugin only + tests, comment lines in `arrowflight.properties`; new plugin dependency
   `jackson-core-asl` 1.9.13 = Hive's parser; CHANGELOG). Local: hive module 59/59 + Checkstyle + SpotBugs,
-  `HiveTextIntegrationTest` 6/6. CI: pending (dispatch package=true).
+  `HiveTextIntegrationTest` 6/6. CI: Dev CI run 40689263636 (f73de96, package=true; push head was `[skip ci]`)
+  green (build + package), pre-release `server-1.0.0-f73de96b8773` (JSON tables behind the `hive.textTables` opt-in,
+  default off). Next: P4 step 2 (c) Avro, then views; (d) perf.
