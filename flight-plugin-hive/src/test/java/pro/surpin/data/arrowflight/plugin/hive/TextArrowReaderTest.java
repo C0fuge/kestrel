@@ -37,7 +37,7 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 
 /**
  * One Hive text file read as Hive's LazySimpleSerDe reads it: delimiters, escapes, NULL text,
- * header lines, missing and extra fields, line ends, compression, projections.
+ * header lines, missing and extra fields, line ends, compression, projections, byte ranges.
  */
 @Tag("unit")
 class TextArrowReaderTest {
@@ -439,6 +439,61 @@ class TextArrowReaderTest {
             row[(Integer) cells[i]] = (String) cells[i + 1];
         }
         return String.join("|", row);
+    }
+
+    @Test
+    void byteRangesReadEveryLineOnce() throws Exception {
+        String text = "1\u0001a\n2\u0001bb\r\n\r\n3\u0001ccc\r4\u0001\r\r\n"
+                + "5\u0001" + "x".repeat(40) + "\n\n6\u0001f\r\n7\u0001g";
+        byte[] data = bytes(text);
+        TextFormat format = format(Map.of());
+        List<String> whole = read(data, format, List.of("i", "s"), "f.txt", COLUMNS);
+        assertEquals(10, whole.size());
+        for (int split = 1; split < data.length; split++) {
+            List<String> rows = new ArrayList<>(readRange(data, format, "f.txt", 0, split));
+            rows.addAll(readRange(data, format, "f.txt", split, Long.MAX_VALUE - split));
+            assertEquals(whole, rows, "split at " + split);
+        }
+        for (int step = 1; step <= data.length; step++) {
+            List<String> rows = new ArrayList<>();
+            List<Long> starts = TableFilesReader.evenStarts(data.length, step);
+            long offset = 0;
+            for (long start : starts) {
+                rows.addAll(readRange(data, format, "f.txt", offset, start - offset));
+                offset = start;
+            }
+            rows.addAll(readRange(data, format, "f.txt", offset, Long.MAX_VALUE - offset));
+            assertEquals(whole, rows, "ranges of " + step);
+        }
+    }
+
+    @Test
+    void compressedFilesAndHeaderLinesAreReadFromTheirStartOnly() {
+        assertTrue(TextArrowReader.splittable("hdfs://nn/t/000000_0"));
+        assertTrue(TextArrowReader.splittable("s3a://b/t/part.csv"));
+        assertTrue(!TextArrowReader.splittable("hdfs://nn/t/000000_0.gz"));
+        assertTrue(!TextArrowReader.splittable("hdfs://nn/t/000000_0.BZ2"));
+        byte[] data = bytes("1\u0001a\n2\u0001b\n");
+        assertThrows(IllegalArgumentException.class,
+                () -> readRange(data, format(Map.of()), "f.txt.gz", 2, 10));
+        TextFormat header = TextFormat.of(Map.of(), Map.of("skip.header.line.count", "1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> readRange(data, header, "f.txt", 2, 10));
+    }
+
+    private List<String> readRange(byte[] data, TextFormat format, String name, long offset,
+            long length) throws IOException {
+        List<String> rows = new ArrayList<>();
+        try (TextArrowReader reader = new TextArrowReader(allocator, file(data), name, COLUMNS,
+                List.of("i", "s"), format, 2, offset, length)) {
+            VectorSchemaRoot root = reader.getVectorSchemaRoot();
+            while (reader.loadNextBatch()) {
+                for (int r = 0; r < root.getRowCount(); r++) {
+                    rows.add(render(root.getVector(0), r) + "|" + render(root.getVector(1), r));
+                }
+            }
+        }
+        return rows;
     }
 
     private static TextFormat format(Map<String, String> serde) {

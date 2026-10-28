@@ -44,7 +44,9 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * milliseconds since 1970 UTC shown in the file's {@code writer.time.zone} (a file without
  * it fails on its first timestamp: Hive shows those in the time zone of the server reading
  * them). A decimal, char or varchar the file's schema lacks fails, as in Hive. An empty file
- * has no rows; a file cut short fails.
+ * has no rows; a file cut short fails. A file may be read as byte ranges, as Hadoop's Avro
+ * record reader splits it: a range reads the blocks whose preceding sync marker starts in it,
+ * so the ranges of a file read every block once.
  */
 final class AvroArrowReader extends ArrowReader {
 
@@ -62,6 +64,10 @@ final class AvroArrowReader extends ArrowReader {
     private final DataFileReader<GenericRecord> reader;
     private final ZoneId writerZone;
     private final long fileLength;
+    /** First byte of the range read. */
+    private final long offset;
+    /** End of the range: blocks whose sync marker starts at or after it belong to the next range. */
+    private final long end;
     private GenericRecord record;
     private long rowNumber;
 
@@ -80,7 +86,30 @@ final class AvroArrowReader extends ArrowReader {
     AvroArrowReader(BufferAllocator allocator, ReadableFile file, String location,
             List<OrcArrowReader.Column> columns, List<String> projection, AvroFormat format,
             int batchSize) throws IOException {
+        this(allocator, file, location, columns, projection, format, batchSize, 0L,
+                Long.MAX_VALUE);
+    }
+
+    /**
+     * Opens a byte range of a file: the blocks whose preceding sync marker starts in it.
+     *
+     * @param allocator allocator of the batches
+     * @param file the file
+     * @param location its location, for messages
+     * @param columns the table's data columns, in the reader schema's order
+     * @param projection data columns to read, in output order
+     * @param format the table's reader schema
+     * @param batchSize rows per batch
+     * @param offset first byte of the range
+     * @param length bytes in the range
+     * @throws IOException when the file is not an Avro data file or names a bad time zone
+     */
+    AvroArrowReader(BufferAllocator allocator, ReadableFile file, String location,
+            List<OrcArrowReader.Column> columns, List<String> projection, AvroFormat format,
+            int batchSize, long offset, long length) throws IOException {
         super(allocator);
+        this.offset = offset;
+        this.end = length > Long.MAX_VALUE - offset ? Long.MAX_VALUE : offset + length;
         this.location = location;
         this.batchSize = batchSize;
         this.projection = List.copyOf(projection);
@@ -131,6 +160,13 @@ final class AvroArrowReader extends ArrowReader {
             byte[] zone = reader.getMeta(WRITER_TIME_ZONE);
             this.writerZone = zone == null ? null
                     : ZoneId.of(new String(zone, StandardCharsets.UTF_8));
+            if (offset > 0) {
+                reader.sync(offset);
+            }
+        } catch (IOException | AvroRuntimeException e) {
+            reader.close();
+            throw new IOException("Cannot read " + location + " from byte " + offset + ": "
+                    + e.getMessage(), e);
         } catch (DateTimeException e) {
             reader.close();
             throw new IOException("Can't parse writer time zone stored in file metadata of "
@@ -153,7 +189,8 @@ final class AvroArrowReader extends ArrowReader {
                             writerFields[i], readerFields[i], types[i]));
                 }
             } catch (IOException | RuntimeException e) {
-                throw new IOException("Record " + rowNumber + " of " + location
+                throw new IOException("Record " + rowNumber
+                        + (offset == 0 ? "" : " after byte " + offset) + " of " + location
                         + " is not read as Hive reads it: " + e.getMessage(), e);
             }
             rows++;
@@ -166,15 +203,19 @@ final class AvroArrowReader extends ArrowReader {
     }
 
     /**
-     * Tells whether the file has another record; at its end, checks that the last block ended
-     * at the end of the file (Avro's reader takes a file cut inside a block's header for its
-     * end).
+     * Tells whether the range has another record; at the file's end, checks that the last block
+     * ended at the end of the file (Avro's reader takes a file cut inside a block's header for
+     * its end).
      *
      * @return true when a record follows
      * @throws IOException when the file cannot be read or is cut short
      */
     private boolean hasNext() throws IOException {
         try {
+            // Between blocks the sync point is the next block's marker; at the file's end its length.
+            if (end != Long.MAX_VALUE && reader.pastSync(end)) {
+                return false;
+            }
             if (reader.hasNext()) {
                 return true;
             }

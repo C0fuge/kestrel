@@ -39,7 +39,10 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * the first range starts at 0 and the last is open-ended, so the ranges cover the file whatever
  * its footer or listed size say). Up to {@code readAhead} ranges are decoded at once on the executor's threads, each a few
  * batches ahead, and their batches are handed over in file and range order, so the stream is the
- * same as a file-by-file read; a text or Avro file is one range. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
+ * same as a file-by-file read. A large Avro file or uncompressed text file (of a table without
+ * header lines) is split the same way into ranges of equal size, which its reader reads from the
+ * next sync marker or line start on ({@link AvroArrowReader}, {@link TextArrowReader}); a
+ * compressed text file is one range. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
  * both set the plugin's context class loader, which Hadoop and ORC load classes from.
  */
 final class TableFilesReader extends ArrowReader {
@@ -362,7 +365,8 @@ final class TableFilesReader extends ArrowReader {
     }
 
     /**
-     * Reads Hive text files, each as one range.
+     * Reads Hive text files: an uncompressed file of a table without header lines as ranges
+     * ending anywhere (each reads the lines starting in it), others each as one range.
      *
      * @param dataColumns the table's data columns
      * @param textFormat how the files are laid out
@@ -379,25 +383,29 @@ final class TableFilesReader extends ArrowReader {
 
             @Override
             public boolean splits() {
-                return false;
+                return true;
             }
 
             @Override
             public List<Long> rangeStarts(ReadableFile file, String location, long target) {
-                return List.of();
+                if (textFormat.headerLines() > 0 || !TextArrowReader.splittable(location)) {
+                    return List.of();
+                }
+                return evenStarts(file.length(), target);
             }
 
             @Override
             public ArrowReader open(BufferAllocator allocator, ReadableFile file, String location,
                     List<String> projection, long offset, long length) throws IOException {
                 return new TextArrowReader(allocator, file, location, dataColumns, projection,
-                        textFormat, batchSize);
+                        textFormat, batchSize, offset, length);
             }
         };
     }
 
     /**
-     * Reads the data files of a Hive Avro table, each as one range.
+     * Reads the data files of a Hive Avro table as ranges ending anywhere (each reads the blocks
+     * whose sync marker starts in it).
      *
      * @param dataColumns the table's data columns
      * @param avroFormat the table's reader schema
@@ -414,21 +422,37 @@ final class TableFilesReader extends ArrowReader {
 
             @Override
             public boolean splits() {
-                return false;
+                return true;
             }
 
             @Override
             public List<Long> rangeStarts(ReadableFile file, String location, long target) {
-                return List.of();
+                return evenStarts(file.length(), target);
             }
 
             @Override
             public ArrowReader open(BufferAllocator allocator, ReadableFile file, String location,
                     List<String> projection, long offset, long length) throws IOException {
                 return new AvroArrowReader(allocator, file, location, dataColumns, projection,
-                        avroFormat, batchSize);
+                        avroFormat, batchSize, offset, length);
             }
         };
+    }
+
+    /**
+     * Plans ranges of equal size over a file whose reader finds its own record boundaries.
+     *
+     * @param length the file's length
+     * @param target bytes of a range, at least 1
+     * @return the starts of the ranges after the first, ascending
+     */
+    static List<Long> evenStarts(long length, long target) {
+        long step = Math.max(1L, target);
+        List<Long> starts = new ArrayList<>();
+        for (long start = step; start < length; start += step) {
+            starts.add(start);
+        }
+        return starts;
     }
 
     /**

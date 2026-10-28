@@ -210,6 +210,47 @@ class AvroArrowReaderTest {
     }
 
     @Test
+    void byteRangesReadEveryBlockOnce() throws IOException {
+        String table = "{\"type\":\"record\",\"name\":\"t\",\"fields\":[{\"name\":\"i\",\"type\":"
+                + "\"int\"},{\"name\":\"s\",\"type\":[\"null\",\"string\"]}]}";
+        Schema schema = AvroFormat.parse(table);
+        AvroFormat format = AvroFormat.of(Map.of(), Map.of(AvroFormat.LITERAL, table),
+                AvroFormatTest.columns("i int;s string"));
+        GenericRecord[] rows = new GenericRecord[600];
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i < rows.length; i++) {
+            rows[i] = new GenericData.Record(schema);
+            rows[i].put("i", i);
+            rows[i].put("s", i % 7 == 0 ? null : "row " + i);
+            expected.add(i + "|" + (i % 7 == 0 ? "null" : "row " + i));
+        }
+        for (CodecFactory codec : List.of(CodecFactory.nullCodec(), CodecFactory.deflateCodec(6))) {
+            byte[] data = write(schema, Map.of(), codec, rows);
+            for (int split = 1; split < data.length; split++) {
+                List<String> read = new ArrayList<>(read(data, format, 0, split));
+                read.addAll(read(data, format, split, Long.MAX_VALUE - split));
+                assertEquals(expected, read, codec + " split at " + split);
+            }
+            for (int step : new int[] {1, 7, 100, 1000, 2048, data.length}) {
+                List<String> read = new ArrayList<>();
+                long offset = 0;
+                for (long start : TableFilesReader.evenStarts(data.length, step)) {
+                    read.addAll(read(data, format, offset, start - offset));
+                    offset = start;
+                }
+                read.addAll(read(data, format, offset, Long.MAX_VALUE - offset));
+                assertEquals(expected, read, codec + " ranges of " + step);
+            }
+            // The range holding the file's end still notices a file cut short.
+            byte[] cut = Arrays.copyOf(data, data.length - 10);
+            read(cut, format, 0, cut.length / 2);
+            IOException e = assertThrows(IOException.class, () -> read(cut, format,
+                    cut.length / 2, Long.MAX_VALUE - cut.length / 2));
+            assertTrue(e.getMessage().contains("cut short"), e.getMessage());
+        }
+    }
+
+    @Test
     void emptyAndBrokenFiles() throws IOException {
         String table = "{\"type\":\"record\",\"name\":\"t\",\"fields\":[{\"name\":\"i\",\"type\":"
                 + "\"int\"}]}";
@@ -258,15 +299,25 @@ class AvroArrowReaderTest {
         return out.toByteArray();
     }
 
+    private List<String> read(byte[] data, AvroFormat format, long offset, long length)
+            throws IOException {
+        return read(data, format, "i int;s string", List.of("i", "s"), offset, length);
+    }
+
     private List<String> read(byte[] data, AvroFormat format, String columnSpec,
             List<String> projection) throws IOException {
+        return read(data, format, columnSpec, projection, 0L, Long.MAX_VALUE);
+    }
+
+    private List<String> read(byte[] data, AvroFormat format, String columnSpec,
+            List<String> projection, long offset, long length) throws IOException {
         List<OrcArrowReader.Column> columns = new ArrayList<>();
         for (FieldSchema column : AvroFormatTest.columns(columnSpec)) {
             columns.add(new OrcArrowReader.Column(column.getName(), column.getType()));
         }
         List<String> rows = new ArrayList<>();
         try (AvroArrowReader reader = new AvroArrowReader(allocator, file(data), "test.avro", columns,
-                projection, format, 1000)) {
+                projection, format, 1000, offset, length)) {
             VectorSchemaRoot root = reader.getVectorSchemaRoot();
             while (reader.loadNextBatch()) {
                 for (int r = 0; r < root.getRowCount(); r++) {

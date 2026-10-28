@@ -59,13 +59,20 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * {@code JsonSerDe} parses it, a line it fails on fails the read. Files ending in {@code .gz},
  * {@code .deflate} or {@code .bz2} are decompressed as Hadoop's codecs write them; other compressed files ({@code .snappy},
  * {@code .lz4}, {@code .zst}, {@code .lzo}, {@code .br}) are refused. The Arrow types are the
- * ones of {@link OrcArrowReader#field}, which DuckDB reads as the declared types.
+ * ones of {@link OrcArrowReader#field}, which DuckDB reads as the declared types. An
+ * uncompressed file may be read as byte ranges ({@link #splittable}), as Hadoop's
+ * {@code LineRecordReader} splits it: a range reads the lines that start in it (a range after
+ * the first skips the line it starts inside of; the line a range ends inside of is read to its
+ * end), so the ranges of a file read every line once.
  */
 final class TextArrowReader extends ArrowReader {
 
     /** Longest line read (Hadoop has no limit; this keeps a broken file from taking the heap). */
     static final int MAX_LINE_BYTES = 64 << 20;
     private static final int BUFFER_BYTES = 1 << 16;
+    /** File name suffixes of compressed text, read or refused. */
+    private static final String[] COMPRESSED_SUFFIXES = {".gz", ".deflate", ".bz2", ".snappy",
+        ".lz4", ".zst", ".lzo", ".lzo_deflate", ".br"};
 
     private final String location;
     private final TextFormat format;
@@ -92,6 +99,14 @@ final class TextArrowReader extends ArrowReader {
     private final JsonRows json;
     /** Lines read so far, header lines included. */
     private long lineNumber;
+    /** First byte of the range read. */
+    private final long offset;
+    /** End of the range: lines starting at or after it belong to the next range. */
+    private final long end;
+    /** File position of the next byte {@link #in} returns. */
+    private long streamPosition;
+    /** Whether the line the range starts inside of is still to be skipped. */
+    private boolean partialLineSkipped;
 
     /**
      * Opens a file.
@@ -109,7 +124,38 @@ final class TextArrowReader extends ArrowReader {
     TextArrowReader(BufferAllocator allocator, ReadableFile file, String location,
             List<OrcArrowReader.Column> columns, List<String> projection, TextFormat format,
             int batchSize) throws IOException {
+        this(allocator, file, location, columns, projection, format, batchSize, 0L,
+                Long.MAX_VALUE);
+    }
+
+    /**
+     * Opens a byte range of a file: the lines that start in it.
+     *
+     * @param allocator allocator of the batches
+     * @param file the file, opened through the server's store
+     * @param location the file's location, for messages and its compression suffix
+     * @param columns the table's data columns as {@code name -> Hive type}, in table order
+     * @param projection names of the columns to read, in output order
+     * @param format how the table's files are laid out
+     * @param batchSize rows per batch
+     * @param offset first byte of the range; above 0 only for a {@link #splittable} file of a
+     *     table without header lines
+     * @param length bytes in the range
+     * @throws IOException when the file's compression is not read
+     * @throws IllegalArgumentException when a projected column is unknown or of a type not
+     *     read, or the range starts after 0 in a file that is not split
+     */
+    TextArrowReader(BufferAllocator allocator, ReadableFile file, String location,
+            List<OrcArrowReader.Column> columns, List<String> projection, TextFormat format,
+            int batchSize, long offset, long length) throws IOException {
         super(allocator);
+        if (offset > 0 && (!splittable(location) || format.headerLines() > 0)) {
+            throw new IllegalArgumentException("Text file " + location
+                    + " is compressed or has header lines: it is read from its start only");
+        }
+        this.offset = offset;
+        this.end = length > Long.MAX_VALUE - offset ? Long.MAX_VALUE : offset + length;
+        this.partialLineSkipped = offset == 0;
         this.location = location;
         this.format = format;
         this.batchSize = batchSize;
@@ -138,7 +184,27 @@ final class TextArrowReader extends ArrowReader {
         this.fieldStarts = new int[columnCount];
         this.fieldEnds = new int[columnCount];
         this.json = format.json() == null ? null : new JsonRows(format.json(), columns);
-        this.in = decompressed(new BufferedInputStream(new FileStream(file), BUFFER_BYTES), location);
+        // A range after the first starts a byte early: the line it skips ends at that byte or later.
+        this.streamPosition = offset == 0 ? 0L : offset - 1;
+        this.in = decompressed(new BufferedInputStream(new FileStream(file, streamPosition),
+                BUFFER_BYTES), location);
+    }
+
+    /**
+     * Tells whether a file can be read as byte ranges: one without a compression suffix (a
+     * compressed stream is read from its start).
+     *
+     * @param location the file's location
+     * @return true when ranges may start inside it
+     */
+    static boolean splittable(String location) {
+        String name = location.substring(location.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+        for (String suffix : COMPRESSED_SUFFIXES) {
+            if (name.endsWith(suffix)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -211,6 +277,13 @@ final class TextArrowReader extends ArrowReader {
     @Override
     public boolean loadNextBatch() throws IOException {
         prepareLoadNextBatch();
+        if (!partialLineSkipped) {
+            partialLineSkipped = true;
+            if (!readLine(false)) {
+                return false;
+            }
+            lineNumber = 0;
+        }
         if (!headerSkipped) {
             headerSkipped = true;
             for (int i = 0; i < format.headerLines(); i++) {
@@ -265,19 +338,33 @@ final class TextArrowReader extends ArrowReader {
     }
 
     /**
-     * Reads the next line into {@link #line}, without its end: a line feed, a carriage return,
-     * or both.
+     * Reads the next line of the range into {@link #line}, without its end: a line feed, a
+     * carriage return, or both.
      *
-     * @return false at the end of the file
+     * @return false at the end of the file or of the range
      * @throws IOException when the file cannot be read or a line is too long
      */
     private boolean readLine() throws IOException {
+        return readLine(true);
+    }
+
+    /**
+     * Reads the next line into {@link #line}, without its end.
+     *
+     * @param inRange whether a line starting at or after the range's end ends the read
+     * @return false at the end of the file (or of the range)
+     * @throws IOException when the file cannot be read or a line is too long
+     */
+    private boolean readLine(boolean inRange) throws IOException {
         lineLength = 0;
         if (pendingCarriageReturn) {
             pendingCarriageReturn = false;
             if (fill() && buffer[bufferPosition] == '\n') {
                 bufferPosition++;
             }
+        }
+        if (inRange && streamPosition - (bufferLimit - bufferPosition) >= end) {
+            return false;
         }
         if (!fill()) {
             return false;
@@ -315,6 +402,7 @@ final class TextArrowReader extends ArrowReader {
             }
             bufferPosition = 0;
             bufferLimit = n;
+            streamPosition += n;
         }
         return true;
     }
@@ -408,9 +496,18 @@ final class TextArrowReader extends ArrowReader {
                 JsonRows.write(root.getVector(i), types[i], row, values[positions[i]]);
             }
         } catch (IOException | RuntimeException e) {
-            throw new IOException("Line " + lineNumber + " of " + location
+            throw new IOException("Line " + lineNumber + where() + " of " + location
                     + " is not a row Hive's JsonSerDe reads: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Names where line numbers count from, for messages.
+     *
+     * @return empty for the file's start, else the range's first byte
+     */
+    private String where() {
+        return offset == 0 ? "" : " after byte " + offset;
     }
 
     /**
@@ -739,16 +836,17 @@ final class TextArrowReader extends ArrowReader {
         return raw;
     }
 
-    /** Reads a {@link ReadableFile} from its start. */
+    /** Reads a {@link ReadableFile} from a position on. */
     private static final class FileStream extends InputStream {
 
         private final ReadableFile file;
         private final long length;
         private long position;
 
-        FileStream(ReadableFile file) {
+        FileStream(ReadableFile file, long position) {
             this.file = file;
             this.length = file.length();
+            this.position = position;
         }
 
         @Override
