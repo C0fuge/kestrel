@@ -131,6 +131,16 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   only reads it on DoGet); no SetSessionOptions call is needed. Without (1) such a URL fails on the first
   compressed batch instead of answering wrong. Check: same answers with and without the property on a query of a
   few MB, and `arrowflight_flight_compressed_batches_total` rising.
+- Generic Flight clients (opt-in `plainFlightCommands=true` / `FLIGHT_PLAIN_COMMANDS=true`, P5): clients that speak
+  plain Arrow Flight, not Flight SQL, may send a command descriptor with SQL text or a path descriptor naming a table
+  (`schema.table`). ClickHouse: `SELECT ... FROM arrowFlight('flight-host:32010', 'sales.orders')` (path, its
+  default; user and password - 4 arguments, or a named collection, which also has `enable_ssl` / `ssl_ca` for TLS -
+  go as a Basic handshake whose bearer ClickHouse then sends, as the LDAP provider's Basic login expects; checked
+  with ClickHouse over TLS in CI, `ClickHouseLdapLoginTest`), or `... arrowFlight('flight-host:32010', 'sales.orders WHERE day >= ''2026-01-01''') SETTINGS
+  arrow_flight_request_descriptor_type = 'command'` - ClickHouse then sends `SELECT * FROM <second argument>`, so
+  the filter runs on the server. ClickHouse reads every endpoint over its one connection; the answer is complete
+  (one endpoint) unless the client sends `x-flight-result-mode: partial`. Checked with ClickHouse 26.8 and pyarrow in
+  CI (`GenericFlightClientsIntegrationTest`).
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) stays a cluster member until Hazelcast drops
   it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>` on every node;

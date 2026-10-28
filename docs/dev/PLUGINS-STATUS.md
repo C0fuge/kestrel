@@ -403,6 +403,38 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
     handling: keep it small and coordinate via `STATUS.md` Log; wire change -> Open questions first, opt-in setting.
+    *Step 1 done 2026-10-28 (core 5e9ac98, test a802c41):* opt-in `plainFlightCommands` (`FLIGHT_PLAIN_COMMANDS`,
+    default false = such descriptors refused as before; additive, see Open questions). ClickHouse's client read from
+    its sources (`StorageArrowFlight`, `ArrowFlightSource`, `ArrowFlightConnection`, master 2026-10): GetSchema, then
+    GetFlightInfo and DoGet on every endpoint over its one connection (locations ignored); descriptor
+    `Path({dataset})` by default, `Command("SELECT * FROM " + dataset)` with `arrow_flight_request_descriptor_type =
+    'command'`; 4 arguments / named collection -> `AuthenticateBasicToken` and the returned bearer on every call.
+    Server: `PlainFlightCommands.query(descriptor)` - a command whose bytes parse as a protobuf `Any` with a Flight
+    SQL type URL stays Flight SQL (null); otherwise strict UTF-8 SQL text (blank / malformed -> INVALID_ARGUMENT); a
+    path = 1-3 plain identifiers (`[A-Za-z_][A-Za-z0-9_]{0,127}`, dotted or as elements) -> `SELECT * FROM a.b`
+    (anything else INVALID_ARGUMENT, so a path cannot inject SQL or name a table function). `FlightSqlProducer`
+    overrides `getFlightInfo` / `getSchema`: plain query -> `requireQuery` (Ranger + view sources, as Flight SQL
+    statements) -> `flightInfoForQuery(..., complete)` with complete unless the client sends
+    `x-flight-result-mode: partial` (a generic client concatenates endpoints, so partial answers of an aggregate
+    would be wrong rows); tickets are the usual statement tickets (DoGet unchanged). Tests: `PlainFlightCommandsTest`
+    3, `FlightSqlProducerTest` +2 (off -> refused without a Ranger call; Ranger denies text and path in both calls
+    before describing; complete by default on a `partial` server, parts on request, Flight SQL keeps the default),
+    `ConfigAdapterTest` +1, `PlainFlightCommandsIntegrationTest` 5 (Java FlightClient: aggregate -> 1 row on a
+    partial-default server, path dotted/elements/SQL = whole table, GetSchema = FlightInfo schema, parts on request,
+    refusals, Flight SQL unchanged, off), `GenericFlightClientsIntegrationTest` 2 (pyarrow plain Flight: path,
+    SQL text, aggregate; ClickHouse 26.8.36.3 `clickhouse local` in Docker: path and command mode with a WHERE in
+    the dataset; answers = DuckDB over the same files, incl. NULLs, DECIMAL, DATE). Dev CI pulls the ClickHouse
+    image (failed pull skips that test). Docs: README, `arrowflight.properties`, START-NOTES, CHANGELOG.
+    *Step 2 done 2026-10-28 (test only):* `ClickHouseLdapLoginTest` (flight-auth-ldap, integration, needs
+    `-Dclickhouse.it.image`): a TLS Flight server through `FlightSecurity` with `FLIGHT_AUTH_PROVIDER=ldap`
+    (in-memory directory, keytool certificate with SAN localhost) and a producer that answers with the caller's
+    identity; ClickHouse 26.8 `clickhouse local` with a named collection (`use_basic_authentication`, `enable_ssl`,
+    `ssl_ca` = the mounted PEM) reads `alice  42`: GetSchema, GetFlightInfo (path `[sales.orders]`) and DoGet all
+    arrive as alice on the session bearer from the Basic handshake; a wrong password fails in ClickHouse ("Failed to
+    authenticate") before any call reaches the producer. No code change was needed.
+    *Next step (3):* DuckDB's ADBC path (Flight SQL already; a short check that DuckDB's `adbc_scanner` community
+    extension - or `adbc_driver_flightsql` through DuckDB's Python `arrow` scan - reads a table is enough), then close
+    P5. ClickHouse `INSERT` (DoPut) stays unsupported (read-only server; it fails as before).
 P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
     `docs/dev/CATALOGS-STATUS.md`).
 
@@ -431,6 +463,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   view **and** every table and view it reads, for queries and for GetTables (invoker rights - stricter, never more
   access than today). Switch to Hive's semantics
   (view only) if production relies on views to hide tables?
+
+- (P5, decided as additive - tell if not) `plainFlightCommands` accepts descriptors that today are refused
+  (INVALID_ARGUMENT), only when the setting is on; Flight SQL commands are recognised by their protobuf type URL and
+  unchanged. Plain answers default to complete regardless of `resultMode`, since generic clients concatenate
+  endpoints. Should a path also accept quoted / non-ASCII table names (today plain identifiers only)?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
