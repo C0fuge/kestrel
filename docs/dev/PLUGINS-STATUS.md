@@ -224,12 +224,31 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     columns skip the table. Tests: `TextValuesTest` 4, `TextArrowReaderTest` 6, `HiveTextTableTest` 3
     (metastore: opt-in, DuckDB reads the stream as the declared types incl. a gzip file, partitions with header
     and NULL partition, partition with its own serde refused, footer/nested skipped).
-    *Next (step 2):* (a) end-to-end through the server (`HiveOrcIntegrationTest`-like, text vs Parquet of the
-    same rows, both modes, partition pruning); (b) nested columns (collection delimiter `colelction.delim` /
-    `collection.delim` default \002, map keys `mapkey.delim` \003, nesting levels 4+ as Hive's
-    `LazySerDeParameters` separators); (c) OpenCSVSerde (all columns strings; separatorChar, quoteChar,
-    escapeChar) and JsonSerDe (`org.apache.hive.hcatalog.data.JsonSerDe`), then Avro, then views; (d) perf note
-    (text vs Parquet SF1) and maybe splitting large uncompressed files at line boundaries.
+    *Step 2 (a)+(b) done 2026-10-28:* (a) dd9175e `HiveTextIntegrationTest` (server, packaged plugin, real
+    metastore): text tables (Hive defaults with a gzip file; partitioned, `,` + header + `''` NULL) answer like
+    the same rows in Parquet, both modes, filters, GROUP BY partition, joins text/Parquet, partition pruning (1
+    endpoint). (b) acb87cb nested columns: `TextFormat` separators per level (`collection.delim`, else Hive's
+    misspelt `colelction.delim`, default 2; `mapkey.delim` default 3; levels 3-7 bytes 4-8; part of the schema
+    ID; refused when non-ASCII, CR/LF or equal to the escape); `TextArrowReader` splits recursively as
+    `LazyArray` / `LazyMap` / `LazyStruct`: array/struct use their level's separator and children level+1, a
+    map entries at its level, key/value at level+1, children level+2; empty field = empty array/map; entry
+    without key separator = NULL value; NULL / unreadable keys dropped, first of equal keys kept (DuckDB
+    refuses both anyway); struct fields by position, missing NULL, `last.column.takes.rest` also applies to
+    nested structs (Hive passes the serde params to every struct). Skipped: unions, non-primitive map keys,
+    > 7 levels (Hive's `extend.nesting.levels` not read). Tests: `TextArrowReaderTest` 7 (new nested test),
+    `HiveTextTableTest` 4 (DuckDB reads list/map/struct from the stream), `HiveTextIntegrationTest` 4 with
+    array/struct/map columns.
+    *Step 2 (c) part 1 done 2026-10-28 (OpenCSVSerde):* `CsvLayout` (opencsv 2.3 `CSVReader` per line, the
+    serde's constructor choice: 3-arg when escapeChar is the default `"`, so the escape is the backslash);
+    `TextFormat.csv` (+ `csv` component, in the schema ID; header lines, footer refused; table params win);
+    `HiveTable.csv(sd)`, a partition with the other serde fails the query; non-string columns skip the table
+    (Hive-created tables store `string` for all columns). Tests: `TextArrowReaderTest` 8 (opencsv semantics:
+    quotes, doubled quotes, escapes dropped before other chars, unclosed quote drops the field, empty line,
+    U+FFFD), `HiveTextTableTest` 5, `HiveTextIntegrationTest` 5 (`openCsvSerdeTablesAnswerInBothModes`).
+    *Next (step 2):* (c) the rest: JsonSerDe (`org.apache.hive.hcatalog.data.JsonSerDe`; check how Hive 3.1.3
+    maps JSON values to column types, case-insensitive keys, malformed lines), then Avro, then views; (d) perf
+    note (text vs Parquet SF1; OpenCSVSerde builds a CSVReader per line as Hive does - measure) and maybe
+    splitting large uncompressed files at line boundaries.
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -243,6 +262,10 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   need a PEM public key setting, and several issuers (e.g. Keycloak + Entra) a list - add if production needs them.
   An OpenLDAP container test in CI (`real-services`) for the LDAP provider - only if wanted (UnboundID in-memory
   directory covers the protocol paths today).
+
+- (P4, OpenCSVSerde) tables whose metastore columns are typed (`int`, ...) are skipped: Hive reads every column of
+  the serde as string, so the plugin would have to announce strings for declared ints (Trino refuses such tables,
+  Hive-created ones store `string`). Read them as strings instead, or cast like Spark does? Skipped until decided.
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
