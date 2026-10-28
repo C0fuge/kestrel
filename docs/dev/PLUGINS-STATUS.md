@@ -149,14 +149,32 @@ P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** J
     credential; TLS required, no mixing with `FLIGHT_BEARER_TOKEN`), `LdapSettingsTest` 5, `LdapSessionTokenTest` 3,
     `LdapFlightAuthenticatorTest` 3. Docs: `docs/security/providers.md` (settings table), START-NOTES; release asset
     `flight-auth-<v>-<sha>.tar.zst` (dev-ci `package`).
-    *Next (step 2):* groups from the provider into Ranger (LDAP group search `FLIGHT_LDAP_GROUP_SEARCH_BASE` /
-    `_FILTER` with `{0}` user, `{1}` user DN, name attribute; later the JWT groups claim). Needs a small core hook,
-    own commit + STATUS.md Log line: e.g. an optional `FlightAuthenticationProvider.groups(String identity)` (default
-    empty = Hadoop group mapping as today) that `RangerAuthorization`'s group resolver consults first (union or
-    replace - decide, probably union), or groups carried in the session token. Also a Ranger test with a stubbed
-    plugin showing an LDAP identity gets the same decision as the Kerberos principal `alice@REALM`. *Step 3:* JWT
-    provider (`flight-auth-jwt`, nimbus-jose-jwt; JWKS URL cache, issuer/audience/expiry/skew, user + groups claims;
-    local JWKS in the test). Optional: an OpenLDAP container test in CI (`real-services`) if the maintainer wants it.
+    *Step 2 done 2026-10-28 (groups into Ranger):* core 6af7b87 (own commit, STATUS.md Log line):
+    `FlightAuthenticationProvider.groups(identity)` (default `Set.of()`); `RangerAuthorization.union(provider,
+    mapping)` = provider groups + Hadoop group mapping (decided: union; a throwing provider makes the check deny,
+    `RangerAuthorization` already fails closed on runtime exceptions); wired via `SecurityProviders.authorization(env,
+    groups)` and a new 5-arg `ServerModule` constructor fed by `flightSecurity.authentication()::groups` (4-arg kept).
+    Plugin e70d80b: opt-in `FLIGHT_LDAP_GROUP_SEARCH_BASE`, `_FILTER` (default `(|(member={1})(uniqueMember={1})
+    (memberUid={0}))`, `{0}` identity, `{1}` user DN, both escaped; filter validated at start),
+    `FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE` (default `cn`); `FLIGHT_LDAP_BIND_DN` now also allowed in template mode when a
+    group search is set. Groups read at the login (service account if set, else as the user), cached per identity
+    for the session lifetime (`LdapGroupCache`, max 10000 entries); a bearer on a node without the entry triggers one
+    lookup (identity -> DN: template, or search by filter / `FLIGHT_LDAP_USER_ATTRIBUTE`; service account or
+    anonymous) in the authenticator, failure -> UNAVAILABLE "LDAP group lookup failed"; > 1000 groups, no single
+    entry, missing base -> failure, never fewer groups. Tests: module 35 (`LdapDirectoryTest` 15 incl. groupOfNames /
+    groupOfUniqueNames / posixGroup (test schema extended with RFC 2307 posixGroup), custom filter + attribute,
+    failures; `LdapGroupCacheTest` 3; `LdapFlightAuthenticatorTest` 4 incl. other-node lookup and outage;
+    `LdapSettingsTest` 6; `LdapFlightLoginTest` 4 incl. groups through `FlightSecurity` + `union`), core
+    `RangerAuthorizationTest` 6 (union, provider failure denies, LDAP name `alice` = Kerberos `alice@EXAMPLE.COM`
+    decision). Docs: `docs/security/providers.md`, START-NOTES, CHANGELOG.
+    *Next (step 3):* JWT provider (`flight-auth-jwt`, nimbus-jose-jwt; JWKS URL with cache and refresh on unknown
+    `kid`, issuer/audience/expiry/nbf with skew, allowed algorithms (no `none`, no HS* with a JWKS), user claim
+    (default `sub`, e.g. `preferred_username`/`upn`) and groups claim -> `groups(identity)` cached per identity like
+    `LdapGroupCache` (or carried in each call's token - tokens are sent on every call, so groups can come from the
+    token itself: map identity -> groups of the last verified token); local JWKS over HTTPS in the test; negative
+    cases expired / wrong audience / wrong issuer / unknown key / alg none). Bearer pass-through: each call carries
+    the JWT (no session token needed). Optional: an OpenLDAP container test in CI (`real-services`) if the
+    maintainer wants it.
 P3. **Spark connector for production (`flight-spark`).** (a) Kerberos on YARN executors: a Spark
     `HadoopDelegationTokenProvider` that gets a server session on the driver and ships it in the job credentials (today
     every executor does its own SPNEGO and fails without a TGT); (b) build profiles for Spark 3.3/3.4 (check what Hadoop
