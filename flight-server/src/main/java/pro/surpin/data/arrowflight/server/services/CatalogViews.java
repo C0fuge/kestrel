@@ -9,8 +9,11 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.catalog.ArrowScanRequests;
+import pro.surpin.data.arrowflight.server.catalog.ArrowStreamScans;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
@@ -72,6 +75,9 @@ public final class CatalogViews {
     private record TableViews(String fingerprint, String data, String empty) {
     }
 
+    /** Marks a catalog table read as Arrow streams: no view, each reference reads a stream. */
+    private static final TableViews ARROW_STREAM = new TableViews("arrowStream", null, null);
+
     /**
      * SELECTs of a time-travel snapshot.
      *
@@ -97,6 +103,8 @@ public final class CatalogViews {
     private final Map<String, TableViews> tables = new HashMap<>();
     /** Catalog schemas without views because their catalog failed: schema to error. */
     private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Catalog tables read as Arrow streams: lower-case "schema\0table" to the stored names. */
+    private volatile Map<String, List<String>> streamTables = Map.of();
     private Snapshot snapshot;
     private long refreshedAtNanos;
     /** Data version of the store the snapshot was built from (null when unknown). */
@@ -148,6 +156,7 @@ public final class CatalogViews {
         List<String> empty = new ArrayList<>();
         List<String> drops = new ArrayList<>();
         Map<String, TableViews> seen = new HashMap<>();
+        Map<String, List<String>> streams = new HashMap<>();
         // Table name in lower case (DuckDB ignores case) -> schemas that have it.
         Map<String, List<String>> owners = new TreeMap<>();
         Map<String, String> spelling = new HashMap<>();
@@ -214,6 +223,11 @@ public final class CatalogViews {
                     if (views == null) {
                         continue;
                     }
+                    if (views == ARROW_STREAM) {
+                        seen.put(key, views);
+                        streams.put(key.toLowerCase(Locale.ROOT), List.of(schema, table));
+                        continue;
+                    }
                 } else {
                     List<DataFile> files = parquetAdapter.tableFiles(schema, table);
                     if (files.isEmpty()) {
@@ -252,6 +266,7 @@ public final class CatalogViews {
         }
         tables.clear();
         tables.putAll(seen);
+        streamTables = Map.copyOf(streams);
         long version = (data.hashCode() * 31L) + empty.hashCode();
         if (snapshot == null || snapshot.version() != version) {
             snapshot = new Snapshot(version, List.copyOf(data), List.copyOf(empty),
@@ -331,6 +346,14 @@ public final class CatalogViews {
                 return null;
             }
             TableSnapshot snapshot = resolved.get().snapshot();
+            if (snapshot.read() instanceof ReadSpec.ArrowStream) {
+                if (snapshot.columns().isEmpty()) {
+                    LOGGER.warn("node={} views=skipTable table={}.{} reason=noColumns",
+                            LogUtil.node(), schema, table);
+                    return null;
+                }
+                return ARROW_STREAM;
+            }
             String fingerprint = "catalog:" + snapshot.fingerprint();
             if (previous != null && previous.fingerprint().equals(fingerprint)) {
                 return previous;
@@ -453,6 +476,97 @@ public final class CatalogViews {
                     + (reference.aliased() ? "" : " AS " + DuckDbAdapter.quoteIdentifier(table)));
         }
         return TimeTravelClause.rewrite(sql, references, bodies::get);
+    }
+
+    /**
+     * Replaces the references of a client's SQL to catalog tables read as Arrow streams (named
+     * with their schema, see {@link TableReferences}) by a source of their own: for a run, one
+     * stream per reference with the columns the query names (all of them when it may read the
+     * whole row) and, when the query reads only that one table, the simple conditions of its
+     * WHERE clause as hints; for describing, the declared columns and no rows. Such tables have
+     * no view, so a reference that is not replaced fails as a missing table. SQL without such a
+     * reference is returned unchanged.
+     *
+     * @param sql client SQL (time-travel clauses already replaced)
+     * @param scans the query's streams, or null to describe
+     * @return SQL DuckDB can run; a run must prepare it once and never cache it
+     * @throws java.io.UncheckedIOException when a catalog cannot be read
+     * @throws IOException when a catalog cannot open a stream
+     * @throws SQLException when DuckDB refuses a stream or the views cannot be refreshed
+     */
+    public String arrowStreams(String sql, ArrowStreamScans scans) throws IOException, SQLException {
+        current();
+        Map<String, List<String>> streams = streamTables;
+        if (streams.isEmpty()) {
+            return sql;
+        }
+        List<TableReferences.Reference> references = TableReferences.find(sql,
+                (schema, table) -> streams.containsKey((schema + "\u0000" + table)
+                        .toLowerCase(Locale.ROOT)));
+        if (references.isEmpty()) {
+            return sql;
+        }
+        Map<String, CatalogTables.Resolved> resolved = new HashMap<>();
+        List<String> sources = new ArrayList<>(references.size());
+        String filter = references.size() == 1 && scans != null
+                ? singleTableFilter(sql, references.get(0)) : null;
+        for (TableReferences.Reference reference : references) {
+            String key = (reference.schema() + "\u0000" + reference.table()).toLowerCase(Locale.ROOT);
+            List<String> names = streams.get(key);
+            CatalogTables.Resolved table = resolved.get(key);
+            if (table == null) {
+                try {
+                    table = parquetAdapter.catalogTables().current(names.get(0), names.get(1))
+                            .orElseThrow(() -> new IllegalArgumentException("Catalog Error: Table "
+                                    + names.get(0) + "." + names.get(1) + " does not exist"));
+                } catch (IOException e) {
+                    // A catalog outage, not the client's SQL (UNAVAILABLE).
+                    throw new java.io.UncheckedIOException(e);
+                }
+                if (!(table.snapshot().read() instanceof ReadSpec.ArrowStream)) {
+                    throw new IllegalStateException("The catalog of " + names.get(0) + "."
+                            + names.get(1) + " changed how it is read; run the query again");
+                }
+                resolved.put(key, table);
+            }
+            TableSnapshot snapshot = table.snapshot();
+            String source;
+            if (scans == null || snapshot.files().isEmpty()) {
+                source = declaredColumnsSource(snapshot);
+            } else {
+                ArrowScan scan = ArrowScanRequests.of(snapshot, sql, filter, reference.wholeRow());
+                source = scans.source(table.entry().catalog(), snapshot, snapshot.files(), scan);
+            }
+            sources.add(source + (reference.aliased() ? ""
+                    : " AS " + DuckDbAdapter.quoteIdentifier(reference.table())));
+        }
+        LOGGER.debug("node={} views=arrowStreams references={} describe={}", LogUtil.node(),
+                references.size(), scans == null);
+        return TableReferences.rewrite(sql, references, sources);
+    }
+
+    /**
+     * Returns the WHERE clause of a query that reads one table and nothing else, for the hints of
+     * that table's stream: a filter of a join, a union or a subquery may not hold for its rows.
+     *
+     * @param sql client SQL
+     * @param reference the query's only reference to a stream table
+     * @return the WHERE clause as the query parser renders it, or null
+     */
+    static String singleTableFilter(String sql, TableReferences.Reference reference) {
+        if (!TableReferences.singleSelect(sql)) {
+            return null;
+        }
+        try {
+            ParquetQueryParser pq = ParquetQueryParser.parse(sql);
+            if (pq.isJoin || !reference.schema().equalsIgnoreCase(pq.schema)
+                    || !reference.table().equalsIgnoreCase(pq.table)) {
+                return null;
+            }
+            return pq.filter;
+        } catch (RuntimeException e) {
+            return null;   // no hints: DuckDB applies every filter anyway
+        }
     }
 
     /**

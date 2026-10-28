@@ -129,6 +129,9 @@ public final class ArrowStreamScans implements AutoCloseable {
      */
     @Override
     public void close() throws SQLException {
+        if (streams.isEmpty()) {
+            return;
+        }
         SQLException error = null;
         try (Statement statement = connection.createStatement()) {
             for (String name : streams.keySet()) {

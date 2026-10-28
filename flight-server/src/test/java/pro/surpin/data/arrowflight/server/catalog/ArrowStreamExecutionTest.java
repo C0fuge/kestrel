@@ -175,7 +175,7 @@ class ArrowStreamExecutionTest {
         }
     }
 
-    private static AppConfig config() {
+    static AppConfig config() {
         return new AppConfig(
                 3, 100, 1, 131072, 0, 1, 1,
                 null, false, null, null,
@@ -184,8 +184,8 @@ class ArrowStreamExecutionTest {
     }
 
     /** Collects the rows an execution streams, columns separated by |. */
-    private static final class RowsListener implements FlightProducer.ServerStreamListener {
-        private final List<String> rows = new ArrayList<>();
+    static final class RowsListener implements FlightProducer.ServerStreamListener {
+        final List<String> rows = new ArrayList<>();
         private VectorSchemaRoot root;
 
         @Override

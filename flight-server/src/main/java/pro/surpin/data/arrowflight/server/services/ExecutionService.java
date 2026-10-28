@@ -179,8 +179,8 @@ public final class ExecutionService {
         try {
             List<Object> values = parameters == null ? List.of()
                     : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
-            return duckDbAdapter.describeComplete(allocator,
-                    catalogViews.timeTravel(query, true), values, catalogViews.current());
+            String sql = catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null);
+            return duckDbAdapter.describeComplete(allocator, sql, values, catalogViews.current());
         } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;
         } catch (Exception e) {
@@ -226,9 +226,19 @@ public final class ExecutionService {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            duckDbAdapter.streamComplete(allocator, catalogViews.timeTravel(query, false), values,
-                    catalogViews.current(), listener,
-                    startListener);
+            String sql = catalogViews.timeTravel(query, false);
+            CatalogViews.Snapshot views = catalogViews.current();
+            try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(),
+                    allocator)) {
+                String streamed = catalogViews.arrowStreams(sql, scans);
+                if (scans.size() > 0) {
+                    duckDbAdapter.streamCompleteOnce(allocator, streamed, values, views, listener,
+                            startListener);
+                } else {
+                    duckDbAdapter.streamComplete(allocator, streamed, values, views, listener,
+                            startListener);
+                }
+            }
         } catch (java.sql.SQLException e) {
             String message = String.valueOf(e.getMessage());
             if (isQueryError(message)) {
@@ -284,7 +294,8 @@ public final class ExecutionService {
      */
     public Schema completeParameterSchema(String query) {
         try {
-            return duckDbAdapter.describeParameters(catalogViews.timeTravel(query, true),
+            return duckDbAdapter.describeParameters(
+                    catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null),
                     catalogViews.current());
         } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
             throw e;

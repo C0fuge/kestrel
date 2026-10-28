@@ -1505,19 +1505,71 @@ public final class DuckDbAdapter implements AutoCloseable {
         checkSingleQuery(session, sql);
         PreparedStatement ps = session.statement(sql);
         requireQuery(sql, ps);
+        bindParameters(ps, parameters);
+        // Not streamSql: its parse check would take a statement from the cache, and a cache of
+        // one statement would close this bound one ("Parameter count mismatch").
+        streamPrepared(allocator, sql, ps, listener, startListener);
+    }
+
+    /**
+     * Runs a client's query with parameter values over the catalog views once and streams the
+     * complete answer, for SQL that reads Arrow streams registered on this thread's connection:
+     * the statement is prepared for this run alone (never cached), its parse check is not
+     * remembered, and a failure is not retried.
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param sql           SQL with its stream sources
+     * @param parameters    values of the query's parameters, in order
+     * @param views         current view definitions
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @throws Exception on refusal, query or stream failure
+     */
+    public void streamCompleteOnce(BufferAllocator allocator, String sql, List<Object> parameters,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            boolean startListener) throws Exception {
+        Session session = threadSession.get();
+        try {
+            if (session.viewsVersion != views.version()) {
+                session.viewDrops = applyViews(session.conn, session.viewDrops,
+                        views.dataStatements(), views.dropStatements());
+                session.viewsVersion = views.version();
+            }
+            requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql);
+            try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
+                requireQuery(sql, ps);
+                bindParameters(ps, parameters);
+                streamPrepared(allocator, sql, ps, listener, startListener);
+            }
+        } catch (ChangedFileBeforeStart e) {
+            throw e.error;
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Sets the values of a statement's parameters, first clearing those of an earlier run.
+     *
+     * @param ps         prepared statement
+     * @param parameters values, in order
+     * @throws IllegalArgumentException when the number of values does not fit the statement
+     * @throws java.sql.SQLException when a value cannot be set
+     */
+    private static void bindParameters(PreparedStatement ps, List<Object> parameters)
+            throws java.sql.SQLException {
         int expected = ps.getParameterMetaData().getParameterCount();
         if (expected != parameters.size()) {
             throw new IllegalArgumentException("The query has " + expected + " parameter(s), "
                     + parameters.size() + " value(s) were sent");
         }
-        // The statement is cached per thread: values of an earlier execution must not remain.
+        // A cached statement keeps the values of an earlier execution otherwise.
         ps.clearParameters();
         for (int i = 0; i < parameters.size(); i++) {
             ps.setObject(i + 1, parameters.get(i));
         }
-        // Not streamSql: its parse check would take a statement from the cache, and a cache of
-        // one statement would close this bound one ("Parameter count mismatch").
-        streamPrepared(allocator, sql, ps, listener, startListener);
     }
 
     /**

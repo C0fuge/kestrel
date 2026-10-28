@@ -44,6 +44,7 @@ public final class ArrowScanRequests {
     /** A column reference as jOOQ renders it with quoted names: "c" or "t"."c". */
     private static final Pattern COLUMN = Pattern.compile("^(?:\"[^\"]*\"\\.)*\"([^\"]*)\"$");
     /** {@code count(*)}, whose star names no column. */
+    private static final Pattern COLUMNS_EXPRESSION = Pattern.compile("(?i)\\bcolumns\\s*\\(");
     private static final Pattern COUNT_STAR = Pattern.compile("(?i)count\\s*\\(\\s*\\*\\s*\\)");
     private static final Set<String> INTEGERS = Set.of("TINYINT", "SMALLINT", "INTEGER", "BIGINT");
     private static final DSLContext RENDER = DSL.using(SQLDialect.DEFAULT,
@@ -63,11 +64,30 @@ public final class ArrowScanRequests {
      * @throws IllegalArgumentException when the snapshot declares no columns
      */
     public static ArrowScan of(TableSnapshot snapshot, String sql, String filter) {
+        return of(snapshot, sql, filter, false);
+    }
+
+    /**
+     * Builds the scan of one table reference of a query, with all declared columns when the
+     * query may read the whole row.
+     *
+     * @param snapshot snapshot with its declared columns
+     * @param sql the query's SQL, with the table's source under any name that is no column
+     * @param filter the query's WHERE clause as the query parser rendered it, or null
+     * @param allColumns whether every declared column is read whatever the SQL names
+     * @return columns and predicate hints
+     * @throws IllegalArgumentException when the snapshot declares no columns
+     */
+    public static ArrowScan of(TableSnapshot snapshot, String sql, String filter,
+            boolean allColumns) {
         if (snapshot.columns().isEmpty()) {
             throw new IllegalArgumentException("The catalog declares no columns for "
                     + snapshot.name());
         }
-        return new ArrowScan(columns(snapshot, sql), predicates(snapshot, filter));
+        List<String> columns = allColumns
+                ? snapshot.columns().stream().map(ColumnSpec::name).toList()
+                : columns(snapshot, sql);
+        return new ArrowScan(columns, predicates(snapshot, filter));
     }
 
     /**
@@ -81,7 +101,8 @@ public final class ArrowScanRequests {
         List<String> declared = snapshot.columns().stream().map(ColumnSpec::name).toList();
         Set<String> named = new LinkedHashSet<>();
         boolean star = identifiers(COUNT_STAR.matcher(sql).replaceAll("count()"), named);
-        if (star) {
+        // COLUMNS('regex') selects columns by a pattern the names do not show.
+        if (star || COLUMNS_EXPRESSION.matcher(sql).find()) {
             return declared;
         }
         List<String> result = new ArrayList<>();

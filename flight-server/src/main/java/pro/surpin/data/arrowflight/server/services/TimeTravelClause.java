@@ -29,7 +29,7 @@ public final class TimeTravelClause {
     /** Cheap test before tokenizing: no clause without these words. */
     private static final Pattern AS_OF = Pattern.compile("(?i)\\bas\\s+of\\b");
     /** Words after a table reference that start the next clause instead of naming an alias. */
-    private static final Set<String> NOT_ALIAS = Set.of("WHERE", "JOIN", "INNER", "LEFT", "RIGHT",
+    static final Set<String> NOT_ALIAS = Set.of("WHERE", "JOIN", "INNER", "LEFT", "RIGHT",
             "FULL", "OUTER", "CROSS", "NATURAL", "POSITIONAL", "ASOF", "ANTI", "SEMI", "LATERAL",
             "ON", "USING", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "EXCEPT",
             "INTERSECT", "WINDOW", "QUALIFY", "FETCH", "TABLESAMPLE", "PIVOT", "UNPIVOT",
@@ -64,9 +64,18 @@ public final class TimeTravelClause {
         }
     }
 
-    private enum Kind { WORD, QUOTED, STRING, NUMBER, DOT, MINUS, OTHER }
+    /** Token kinds. */
+    enum Kind { WORD, QUOTED, STRING, NUMBER, DOT, MINUS, OTHER }
 
-    private record Token(Kind kind, int start, int end, String text) {
+    /**
+     * One token of a SQL text.
+     *
+     * @param kind kind
+     * @param start offset of its first character
+     * @param end offset after its last character
+     * @param text its text
+     */
+    record Token(Kind kind, int start, int end, String text) {
     }
 
     private TimeTravelClause() {
@@ -260,17 +269,36 @@ public final class TimeTravelClause {
                 && word(tokens.get(i + 2), "AS") && word(tokens.get(i + 3), "OF");
     }
 
-    private static boolean word(Token token, String text) {
+    /**
+     * Tells whether a token is a given keyword.
+     *
+     * @param token token
+     * @param text keyword
+     * @return true when the token is that word, in any case
+     */
+    static boolean word(Token token, String text) {
         return token.kind() == Kind.WORD && token.text().equalsIgnoreCase(text);
     }
 
-    private static boolean identifier(Token token) {
+    /**
+     * Tells whether a token can name a table or an alias.
+     *
+     * @param token token
+     * @return true for a quoted identifier or a word that starts no clause
+     */
+    static boolean identifier(Token token) {
         return (token.kind() == Kind.WORD
                 && !NOT_ALIAS.contains(token.text().toUpperCase(Locale.ROOT)))
                 || token.kind() == Kind.QUOTED;
     }
 
-    private static String unquote(Token token) {
+    /**
+     * Returns the text of an identifier or string literal without its quotes.
+     *
+     * @param token token
+     * @return unquoted text
+     */
+    static String unquote(Token token) {
         if (token.kind() == Kind.QUOTED) {
             return token.text().substring(1, token.text().length() - 1).replace("\"\"", "\"");
         }
@@ -287,7 +315,7 @@ public final class TimeTravelClause {
      * @param sql SQL text
      * @return tokens
      */
-    private static List<Token> tokens(String sql) {
+    static List<Token> tokens(String sql) {
         List<Token> tokens = new ArrayList<>();
         int n = sql.length();
         int i = 0;
