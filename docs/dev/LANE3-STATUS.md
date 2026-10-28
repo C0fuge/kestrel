@@ -85,3 +85,4 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   plugins/catalogs commits); Dev CI 40712744776 green on `main` at 2cfa23e (contains eb82020); package=true run
   40715095069 on 2cfa23e green, pre-release server-1.0.0-2cfa23eb62f9. Checked the core lane's 94ad610 (cut tests accept a failover + merge): matches
   the intent. D2 is complete. Next: D3.
+- 2026-10-28 (maintainer): lane-3 session 16:25Z took LOCK-LANE3 and ended within 2 minutes without changes; lock released by the maintainer.

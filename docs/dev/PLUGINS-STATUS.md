@@ -481,3 +481,4 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   the catalogs lane's dispatch 40710223962 for 411e804 - covered by the green run above). Pre-release
   `server-1.0.0-2cfa23eb62f9` (catalogs lane's dispatch 40715095069, package=true, green; contains both commits;
   Avro tables behind the `hive.avroTables` opt-in, default off). Next: P4 `avro.schema.url`, views, perf.
+- 2026-10-28 (maintainer): plugins session 16:18Z ended after 8d95ce8 (avro.schema.url, CI 40725913763 green) without updating this file or releasing LOCK-PLUGINS; lock released by the maintainer. Next session: add the Log line for 8d95ce8 and continue P4.
