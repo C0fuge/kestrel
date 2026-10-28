@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**
+> Under container limits 4c/8g, 8c/16g, 16c/24g (ADBC + raw Flight, HDFS SF10, 3 rounds, 22/22, 0 OOM): `duckdb=sizing`
+> correctly reports container cores/memory, but chooses threads 2/2/3 (16c/24g cut from 4 to 3 by the 1-thread-per-GiB
+> cap at 3942 MiB) -> TPC-H SF10 17.95/17.94/13.43 s vs 7562a5bdb7b9 (4 threads) 10.71/10.73/9.92. With 4 threads and the
+> 1 GiB limit: 10.11 s -> the memory limit is neutral (RSS 3.2-3.9 GB both), the thread count is the cause. t8/t16: SF10
+> -23/-20 % but small queries at 8/32 clients p50 1.6-3x worse, RSS +27 % at t16. Fix: thread floor 4 by default
+> (max(4, cores/4), at most 16), drop or soften the per-GiB thread cap (e.g. only when memory_limit < 1 GiB x 4), keep
+> the default per-connection memory_limit; more threads for heavy queries only via the adaptive step 2 (opt-in). Add
+> a unit test for the three profiles above and a CI perf check that SF10 at 4 vCPU is not slower than with
+> `-DduckDbThreads=4`. Package pre-release; the screening repo and the stand re-measure it.
+
 > ~~**Bug first (maintainer, 2026-10-28 11:30, CI build tracking `track-4bb6441569be`): small local ADBC tail at 8 clients.**~~
 > *Investigated 2026-10-28 (cloud session, see Log): not a server regression - a CPU-quota effect.* Under `docker --cpus=2`
 > (CFS quota, as the screening runs) c8 latency is bimodal in **both** builds: p50 11-15 ms, p95 59-63 ms (queries that
@@ -1815,3 +1826,4 @@
   Next: the screening's numbers (items 21/22/19b/17 (e)), then the stand rounds; other code candidates: item 3 (c)
   (check `iceberg_scan(..., snapshot_from_id =>)` on 1.5.6 for the refused snapshots), item 1b libs pruning (risky
   without a stand: Ranger needs Jersey).
+- 2026-10-28 (maintainer, laptop stand p19b): 19b step 1 measured vs 7562a5bdb7b9 under container limits (4c/8g, 8c/16g, 16c/24g, -Xmx3g, direct 2g; ADBC + raw Flight, HDFS SF10 + S3 pair, 3 rounds each, 0 OOM, 22/22). `duckdb=sizing` shows container cores/memory. Chosen threads 2/2/3, memory_limit 1024/2201/3942 MiB. SF10 17.95/17.94/13.43 s vs 10.71/10.73/9.92 (1.35-1.7x slower); 4 threads + 1 GiB limit 10.11 s (limit neutral, RSS unchanged 3.2-3.9 GB). t8/t16 SF10 -23/-20 % but small c8/c32 p50 1.6-3x worse, RSS +27 % at t16. -> bug-first note.
