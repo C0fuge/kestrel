@@ -286,3 +286,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   `server-1.0.0-7f308a6cdb4d` with the `flight-auth` asset (opt-in provider; existing auth unchanged). That dispatch
   cancelled the core lane's run 40651083243 (78a2720, same concurrency group); 40651658732 includes 78a2720 and is
   green. Next: step 2 (provider groups into Ranger, small core hook), then step 3 (JWT).
+- 2026-10-28 (plugins session): P2 step 2 - provider groups into Ranger. Core 6af7b87 (own commit, FYI line in
+  STATUS.md Log: `FlightAuthenticationProvider.groups(identity)`, default none; Ranger groups = provider groups +
+  Hadoop group mapping, a failing provider denies) and plugin e70d80b (opt-in `FLIGHT_LDAP_GROUP_SEARCH_BASE` /
+  `_FILTER` / `FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE`, `LdapGroupCache`; CHANGELOG, providers.md, START-NOTES). Local:
+  flight-auth-ldap 35/35, `RangerAuthorizationTest` 6, `SecurityProvidersTest` 4, `FlightSecurityTest` 3,
+  Checkstyle + SpotBugs clean (server and module). CI: Dev CI run 40656572265 (e70d80b, package=true) green,
+  pre-release `server-1.0.0-e70d80bb7995` (group search opt-in; existing auth unchanged); push run 40656558867
+  cancelled by that dispatch. Next: step 3 (JWT provider).

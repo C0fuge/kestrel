@@ -1656,3 +1656,7 @@
   7f308a6 (concurrency group), which includes 78a2720 and is green (build + package): pre-release
   `server-1.0.0-7f308a6cdb4d` carries this change. Screening: `-DflightZeroCopyWrites=true` vs off at 1/4/8
   endpoints (MB/s, CPU, peak RSS). Next: item 18 step 2 (distributed complete mode).
+- 2026-10-28 (plugins lane, FYI): core 6af7b87 - `FlightAuthenticationProvider.groups(identity)` (default none) and
+  `RangerAuthorization.union`: Ranger's groups are the auth provider's groups plus the Hadoop group mapping (built-in
+  providers add none, so unchanged); `ServerModule` got a 5-arg constructor (4-arg kept). Used by flight-auth-ldap
+  group search (P2 step 2). Dev CI 40656572265 green, pre-release `server-1.0.0-e70d80bb7995`.
