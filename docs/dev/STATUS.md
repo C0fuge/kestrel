@@ -171,7 +171,7 @@
 >    per connection), fewer under concurrency. Tests: formula across host profiles (2c/6g container, 4c/16g, 16c/64g,
 >    64c/512g, small `memory.max` with many cores), no OOM in the existing 6 GB container tests; perf in CI on 4 vCPU
 >    (no regression vs today's defaults) - large hosts are measured on the maintainer's stand later.
->    *Step 1 done 2026-10-28 (a9e43ca, see Log):* `DuckDbSizing` + `HostLimits` (cgroup v2/v1 `memory.max`, JVM total
+>    *Step 1 done 2026-10-28 (a9e43ca, package run 40673683569 green, pre-release `server-1.0.0-a9e43ca5e296`; see Log):* `DuckDbSizing` + `HostLimits` (cgroup v2/v1 `memory.max`, JVM total
 >    memory, `-Xmx`, direct limit); `memory_limit` per connection = budget / `duckDbMemoryConnections` (default cores /
 >    threads, at least 2), >= 1 GiB, <= 80 % of memory; threads cores / 4 in 2..16 (S3 >= 4), <= 1 per GiB, >= 2;
 >    `duckDbMemoryLimit=none` = old behaviour; startup line `duckdb=sizing`. **Next of 19b:** screening on the
@@ -1727,3 +1727,18 @@
   (c258adf, plugin only; core: one comment line in `arrowflight.properties`). Its push cancelled lane 3's dispatch
   40671772031 (738d1e7, same concurrency group); the plugins dispatch 40672085389 (package=true, includes 738d1e7)
   is green, pre-release `server-1.0.0-c258adf27dc9`.
+- 2026-10-28 (cloud session): item 19b step 1 done (a9e43ca): DuckDB threads and memory by host size. New
+  `HostLimits` (cores, container `memory.max` (cgroup v2, else v1) or the JVM's total memory, `-Xmx`, direct limit) and
+  `DuckDbSizing`: with `duckDbMemoryLimit` unset each connection gets `memory_limit` = (memory - heap - direct - 15 %)
+  / `duckDbMemoryConnections` (new, `DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at least 2), at least 1 GiB,
+  at most 80 % of memory, written in MiB (DuckDB 1.5.6 accepts it, `DuckDbAdapterTest`); `duckDbMemoryLimit=none` =
+  DuckDB's default as before. `duckDbThreads` default: cores / 4 in 2..16 (clamp was 8; S3/lakeFS >= 4), at most one
+  per GiB of the connection limit (explicit or default), never below 2 - hosts up to 32 cores keep their thread count.
+  Startup line `duckdb=sizing threads= memoryLimit= coreThreads= connections= budgetMiB= cores= memoryMiB= heapMiB=
+  directMiB=`; the per-connection memoryLimit log is now debug. Profiles in `DuckDbSizingTest` (2c/6g -> 2 threads,
+  1024MiB; 4c/16g -> 2, ~2.8 GiB; 16c/64g -> 4; 64c/512g -> 16, ~110 GiB; 64c/24g -> 3; unknown memory -> unset).
+  Not measured locally (no perf change on <= 32 cores by threads; memory cap new everywhere). Push run 40673675988
+  cancelled by the package dispatch 40673683569 (build + package green), pre-release `server-1.0.0-a9e43ca5e296`.
+  Screening: TPC-H SF10 + load test on the 2c/6g container vs `7562a5bdb7b9` (1 GiB per connection now; see Open
+  question "Item 19b expected connections"). Next: 19b step 2 (adaptive threads, opt-in) after the screening's
+  numbers, or item 17 (a).
