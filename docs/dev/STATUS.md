@@ -1701,3 +1701,11 @@
   there. New Open question "Quota tails". Dev CI push run 40661672025 on 4843cca green; push run on 4b47b0c cancelled
   by the plugins lane, their dispatch 40665594250 on 1b3a7bb (contains it) green. No pre-release (no runtime change).
   Next: item 19b (3c, maintainer's new item) or the next stage-3 item per the order above.
+- 2026-10-28 (lane 3 session): item 18 step 2 (lane 3 D1) merged into `main` (738d1e7): opt-in `distributedComplete`
+  (default false) - complete answers of mergeable shapes are merged on the planning node from its partial endpoints,
+  read from the nodes as the client's user (signed header `x-kestrel-internal-identity`, live members only). Core
+  files touched: `FlightSqlProducer.getStreamStatement` (complete branch), `ExecutionService.readArrowParts`,
+  `ClusterService.internalCallIdentity/liveServerUris`, `FlightSecurity.configure`, `HadoopArrowFlightServer`,
+  `ServerComponent`, `CompleteAnswerMerge` (output names; ORDER BY qualified with `merged.`). Branch CI run
+  40670031954 green. Details in `docs/dev/LANE3-STATUS.md`.
+
