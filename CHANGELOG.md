@@ -466,6 +466,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   view: the first plan waits at most 1 s for the silent member, later plans not at all; its node is left out of plans
   (not removed from the pool) until any operation on its partitions answers or it leaves the cluster, and its keys take
   the last values read (refreshed at every heartbeat). `hazelcast.max.no.heartbeat.seconds` stays 10 (item D3).
+- Cluster: writes no longer wait for such a node either (item D3 step 2). A write whose key lives on a member that stopped
+  answering (its owner, or the synchronous backup the write waits for up to 5 s) runs in the background: load changes
+  (counted in this node's plans at once), endpoint load reservations and their releases (in order per key), handles,
+  prepared-statement parameters, pool removals and the heartbeat (one pending at a time). The heartbeat thread
+  refreshes the cluster view first and skips repairs it cannot do now; a live node whose heartbeat entry sits on the
+  silent member is no longer dropped as stale. Measured with an iptables DROP: 40 load-tracked tickets with their
+  releases and heartbeats in 65-88 ms (before: the first write on the silent member's partitions waited until
+  Hazelcast dropped it, up to 10 s; a write whose backup alone was silent waited the 5 s backup timeout).
 - DuckDB threads and memory by host size (item 19b): with `duckDbMemoryLimit` unset every DuckDB connection now gets
   `memory_limit` = the node's DuckDB budget (container `memory.max` or physical memory, minus `-Xmx`, direct memory
   and 15 % headroom) / the connections expected at once (`duckDbMemoryConnections`, default cores / threads, at

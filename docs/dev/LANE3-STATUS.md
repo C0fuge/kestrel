@@ -23,10 +23,10 @@ D2. Item 18 step 3 - cluster integration test, then a perf test.
 D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d follow-up): plan from a local cluster snapshot
     refreshed by the heartbeat thread instead of blocking map reads; keep `hazelcast.max.no.heartbeat.seconds` as is.
     - ~~Step 1: planning reads~~ *done 2026-10-28 (a110a22, see Log):* `ClusterView`.
-    - Step 2: writes that still wait for a silent member's partitions: this node's heartbeat put (other nodes then drop
-      a live node as stale for a few seconds), `addLoad` / `subtractLoad` computes, load-tracked ticket reservations
-      (`createEndpointHandle`), `storeHandle`. Idea: skip or defer (async, local delta applied at once) writes whose
-      key owner is unresponsive; measure with the iptables test (partial-mode plan with load tracking).
+    - ~~Step 2: writes~~ *done 2026-10-28 (aef0a7a, see Log):* deferred writes in `ClusterService`.
+    - Step 2b (optional): `claimEndpointLoad` (background already), `close()` deregistration and the
+      `registerLocalFiles` / repair puts of the all-backup maps still wait for a silent member; only the shutdown
+      of a node during a crash would be late.
     - Step 3 (optional): `fileLocations(false)` (local disks) still uses `entrySet`, which waits; plans there fail
       anyway when a node is lost, so only the error is late.
 
@@ -109,4 +109,22 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   CI 40739303087 green on the branch (3871f94). On `main`: my package=true dispatch 40741178454 on a110a22 cancelled
   the plugins lane's dispatch 40739820098 on 929b544 (same concurrency group; a110a22 contains 929b544); it is
   green, pre-release `server-1.0.0-a110a2279437` (contains 929b544 too). Next: D3 step 2 (writes).
-
+- 2026-10-28 (lane 3 session, 6th): lock 18:25Z. D3 step 2 done (aef0a7a, rebase-merged into `main`): cluster map
+  writes whose key lives on a member the cluster view found unresponsive go to a background writer
+  (`ClusterService.writeOrDefer`, thread `flight-cluster-write`; `deferredWrites()`): `addLoad`/`subtractLoad`
+  (pending deltas counted in `allServerLoads` at once), ticket load reservations and releases (same key keeps its
+  order: later writes of a key with deferred writes queue too), `storeHandle`, `removeHandle`, `rememberParameters`,
+  pool removals, the heartbeat (`beat()`, at most one pending, writes the time it runs). The heartbeat thread runs
+  `refreshView` before the beat; `repairClusterState` skips entries whose owner is silent; `filterLiveServers` keeps
+  a member whose heartbeat entry is on the silent member (its value ages) instead of dropping it as stale. Found by
+  the iptables test: a put whose *backup* replica is the silent member waits Hazelcast's backup timeout (5.5 s for
+  one ticket, its release 3 s) - the public API names the owner only, so `HazelcastAdapter` reads the partition
+  replicas from the internal partition table (`InternalPartitionService`, Hazelcast 5.7.0) and
+  `ClusterView.replicaUnresponsive(key, backupCount)` checks owner + first backup (map default backupCount 1).
+  Measured locally (iptables DROP, 3 runs): 40 load-tracked tickets + addLoad + release + beat in 65-88 ms, ~106
+  writes deferred; loads back to 0 after the member was dropped. Tests: `ClusterServiceTest` (+4),
+  `ClusterViewTest` (+1), `ClusterMemberLossIntegrationTest.crashedMemberWhoseAddressVanishedHoldsNoWritesOfPlansOrHeartbeats`.
+  Rebased once over the core lane's a29a0a4 (`flightLoadReservationSeconds`, conflict in `createEndpointHandle`,
+  kept both). CI green on the branch: 40748318034 (044256e), 40750101323 (ab93926, after the rebase). Next: D3 step
+  2b is optional; D3 otherwise complete - next lane-3 item to be set by the maintainer (or D2 observed gap: force
+  the after-first-batch cut path).
