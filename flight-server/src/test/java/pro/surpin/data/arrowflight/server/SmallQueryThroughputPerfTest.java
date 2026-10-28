@@ -36,7 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * Measures small single-table queries under load (item 21): queries per second, latency and the
  * CPU spent per query from 1, 8 and 32 clients running point lookups and filtered counts the way
- * stock JDBC/ADBC clients do (prepare, GetFlightInfo, DoGet, close). Also prints the CPU time per
+ * stock JDBC/ADBC clients do (prepare, GetFlightInfo, DoGet, close), or as plain statements
+ * ({@code -Dperf.client=statement}: GetFlightInfo, DoGet). Also prints the CPU time per
  * query by thread group, so the server's share can be told from the in-process clients'. Run it
  * pinned to few cores (for example {@code taskset -c 0,1}) to see the CPU-bound case. Prints the
  * numbers; asserts only the answers.
@@ -80,12 +81,14 @@ class SmallQueryThroughputPerfTest {
             FlightCallHeaders headers = new FlightCallHeaders();
             headers.insert("x-flight-result-mode", mode);
             CallOption header = new HeaderCallOption(headers);
-            System.out.printf(Locale.ROOT, "== mode %s, duckDbThreads %s, %d cores, %d s per step%n",
-                    mode, threads > 0 ? threads : "default", Runtime.getRuntime().availableProcessors(),
-                    seconds);
-            run(client, header, 8, Math.max(3, seconds / 3), false);
+            boolean statements = "statement".equals(System.getProperty("perf.client", "prepared"));
+            System.out.printf(Locale.ROOT,
+                    "== mode %s, client %s, duckDbThreads %s, %d cores, %d s per step%n",
+                    mode, statements ? "statement" : "prepared", threads > 0 ? threads : "default",
+                    Runtime.getRuntime().availableProcessors(), seconds);
+            run(client, header, statements, 8, Math.max(3, seconds / 3), false);
             for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-                run(client, header, Integer.parseInt(clients.strip()), seconds, true);
+                run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
             }
         }
     }
@@ -95,13 +98,15 @@ class SmallQueryThroughputPerfTest {
      *
      * @param client Flight SQL client
      * @param header result-mode header
+     * @param statements whether to run plain statements (GetFlightInfo, DoGet) instead of
+     *                   prepared ones (prepare, GetFlightInfo, DoGet, close)
      * @param clients concurrent clients
      * @param seconds duration
      * @param print whether to print the step (false for warm-up)
      * @throws Exception on failure
      */
-    private static void run(FlightSqlClient client, CallOption header, int clients, int seconds,
-            boolean print) throws Exception {
+    private static void run(FlightSqlClient client, CallOption header, boolean statements,
+            int clients, int seconds, boolean print) throws Exception {
         AtomicInteger names = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(clients,
                 r -> new Thread(r, "perf-client-" + names.incrementAndGet()));
@@ -123,15 +128,12 @@ class SmallQueryThroughputPerfTest {
                         String sql = (i & 1) == 0
                                 ? "SELECT * FROM s.orders WHERE o_orderkey = " + k
                                 : "SELECT count(*) FROM s.orders WHERE o_orderkey < " + k;
-                        long rows = 0;
-                        try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
-                            FlightInfo info = prepared.execute(header);
-                            for (FlightEndpoint endpoint : info.getEndpoints()) {
-                                try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
-                                    while (stream.next()) {
-                                        rows += stream.getRoot().getRowCount();
-                                    }
-                                }
+                        long rows;
+                        if (statements) {
+                            rows = read(client, client.execute(sql, header), header);
+                        } else {
+                            try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
+                                rows = read(client, prepared.execute(header), header);
                             }
                         }
                         assertEquals(1, rows, sql);
@@ -170,6 +172,27 @@ class SmallQueryThroughputPerfTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /**
+     * Reads every endpoint of a query's answer.
+     *
+     * @param client Flight SQL client
+     * @param info the query's flight info
+     * @param header result-mode header
+     * @return rows read
+     * @throws Exception on failure
+     */
+    private static long read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
+        long rows = 0;
+        for (FlightEndpoint endpoint : info.getEndpoints()) {
+            try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
+                while (stream.next()) {
+                    rows += stream.getRoot().getRowCount();
+                }
+            }
+        }
+        return rows;
     }
 
     /**

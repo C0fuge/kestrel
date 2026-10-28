@@ -79,9 +79,13 @@
 >    **Next steps of 21:** (b) `duckDbThreads=1` gives another ~9 % at c8 on 2 CPUs (c1 unchanged locally) but the
 >    lockdown (`lock_configuration`) forbids changing threads per query under load - Open question; (c) the storage
 >    the screening repo uses for the load test (local vs HDFS/S3): over HDFS every query also opens files through
->    hadoopfs (not profiled here) - measure on the stand / screening which part is storage; (d) the remaining
->    DoGet prepare (0.8 ms) and the 4 gRPC calls per query (stock JDBC/ADBC pattern) - look at what upstream's path
->    does per query and whether a plain-statement (CommandStatementQuery) client is cheaper.
+>    hadoopfs (not profiled here) - measure on the stand / screening which part is storage; ~~(d) the remaining
+>    DoGet prepare and the 4 gRPC calls per query~~ (measured 2026-10-28, see Log: the server's own Java work is now
+>    ~0.2 ms of ~6 ms CPU per query at c32; the rest is DuckDB's own prepare + execute + Arrow export (~4 ms, same as
+>    plain DuckDB JDBC on one connection) and the describe of each new text (~0.5 ms); plain statements are 10-15 %
+>    more q/s than prepare/execute/close. No server cut left on this path short of the Open question (b) or fewer
+>    describes - see Open question "Item 21 (d)"). **Next for 21:** wait for the screening's numbers on
+>    `server-1.0.0-881b7c62b373` (with and without `-DduckDbThreads=1`) before more work here; meanwhile item 22.
 > 3. item 22 (new) - **one scan in 4-8 parallel streams.** Upstream 807-823 MB/s vs ours 463-502 MB/s on 2 CPUs (at about
 >    twice our memory; one stream is a tie). Find why (per-stream DuckDB work, batch size, copies between DuckDB's Arrow
 >    output and the Flight stream, the per-stream budget of 0f, endpoint split of S6) and close the gap. Goal >= 750 MB/s
@@ -534,6 +538,20 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Item 21 (d): what is left per small query is DuckDB (2026-10-28).** Measured locally (2 CPUs, the perf test's
+  point lookup / filtered count over 4 local Parquet files): plain DuckDB JDBC on one connection, new text each
+  time, costs ~3.5-4 ms CPU per query with Arrow export (prepare ~0.5 of it); ours costs ~4.5 ms in the Flight
+  executor threads (that DuckDB work + ~0.5 ms describing the new text over the empty views) + ~0.4 ms gRPC/netty.
+  JFR: no Java hot spot left in our code (sampled frames outside DuckDB are scattered, < 5 % in total). Not
+  helping: `parquet_metadata_cache` for local files, Arrow batch size, profiling/progress settings. Remaining
+  levers, each needing a decision: (1) `duckDbThreads=1` on small-query nodes (question (b) above; at c1 the
+  second DuckDB thread doubles the CPU per query: ~15 vs ~6 ms); (2) clients sending plain statements
+  (GetFlightInfo + DoGet) instead of prepare/execute/close: +10-15 % q/s at c8/c32, a client-side change
+  (patched JDBC driver / ADBC usage), not a server one; (3) skipping the describe run for texts whose schema
+  DuckDB's prepare already gives (scalar types only) - saves ~0.3 ms (~5 %) but the Arrow schema then comes from
+  our own type mapping instead of DuckDB's export, a wire-visible risk; recommendation: not worth it. If the
+  screening still shows a gap after (1), the gap is DuckDB per-query cost on its runner, not our server path.
 
 - **Item 21 (b): DuckDB threads under load (2026-10-28).** On 2 CPUs with 8-32 small queries at once, `duckDbThreads=1`
   instead of the default 2 saves ~1.4 ms CPU per query (+9 % q/s at c8, local; heavy single queries lose their second
@@ -1484,3 +1502,11 @@
   `duckDbThreads=1` is +9 % at c8 locally. Push run 40618147100 cancelled in favour of package run 40618153054
   (green), pre-release `server-1.0.0-881b7c62b373` for the screening repo (suggest also a round with
   `-DduckDbThreads=1`). Next: item 21 (c)/(d), or item 22 if the screening shows the gap closed.
+- 2026-10-28 (cloud session): item 21 (d), measurement only. `SmallQueryThroughputPerfTest` got
+  `-Dperf.client=statement` (plain GetFlightInfo + DoGet). Local, `taskset -c 0,1`, JaCoCo off: prepared c1/c8/c32
+  118/276/317 q/s (CPU 12.4/6.7/6.0 ms per query), statement 135/316/350 (10.3/5.9/5.4). JFR (jcmd-started; the
+  surefire fork never dumps on exit) + a standalone DuckDB JDBC bench: the Flight executor's ~4.5 ms per query is
+  DuckDB prepare + execute + Arrow export (~4 ms, same as plain DuckDB) + the describe of the new text (~0.5 ms);
+  no Java hot spot left. No server change; findings and the remaining levers in Open question "Item 21 (d)".
+  Test-only change, CI run: see next line. Next: item 22 (one scan in 4-8 parallel streams) while the screening
+  measures `server-1.0.0-881b7c62b373`.

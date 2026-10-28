@@ -10,6 +10,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- `SmallQueryThroughputPerfTest` (perf tag) can run plain statements (`-Dperf.client=statement`: GetFlightInfo +
+  DoGet) besides the stock prepared pattern, to compare the two client patterns (item 21 (d)). Test only.
 - ORC tables in the Hive catalog, opt-in (P1 step 2 (c)): with `hive.orcTables=true`
   (`arrowflight.hive.orcTables`, default false: ORC tables stay skipped as before) the hive plugin shows ORC tables
   and reads their files itself (orc-core through the server's stores), one Arrow stream per table reference with only
