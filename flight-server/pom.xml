@@ -72,6 +72,7 @@
         <duckdb.version>1.5.6.0</duckdb.version>
         <iceberg.it.extensionDir></iceberg.it.extensionDir>
         <python.it.executable></python.it.executable>
+        <clickhouse.it.image></clickhouse.it.image>
         <spark.version>3.5.9</spark.version>
         <grpc.version>1.84.2</grpc.version>
         <netty.version>4.2.19.Final</netty.version>
@@ -631,6 +632,8 @@
                         <iceberg.it.extensionDir>${iceberg.it.extensionDir}</iceberg.it.extensionDir>
                         <!-- CompressionClientsIntegrationTest: a Python with pyarrow and adbc-driver-flightsql -->
                         <python.it.executable>${python.it.executable}</python.it.executable>
+                        <!-- GenericFlightClientsIntegrationTest: a ClickHouse image run with Docker -->
+                        <clickhouse.it.image>${clickhouse.it.image}</clickhouse.it.image>
                         <!-- LibsSetTest: the libraries of the libs-set and server-classpath executions -->
                         <libs.set.dir>${project.build.directory}/libs</libs.set.dir>
                         <libs.set.serverClasspath>${project.build.directory}/server-runtime.classpath</libs.set.serverClasspath>

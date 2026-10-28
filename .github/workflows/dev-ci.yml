@@ -89,6 +89,18 @@ jobs:
           "$RUNNER_TEMP/py/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
           echo "PYTHON_IT=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
 
+      # GenericFlightClientsIntegrationTest: ClickHouse's arrowFlight table function reads plain
+      # Flight descriptors (P5). A failed pull skips that test instead of failing the build.
+      - name: ClickHouse image
+        run: |
+          image=clickhouse/clickhouse-server:26.8
+          if docker pull -q "$image" || docker pull -q "mirror.gcr.io/$image"; then
+            docker image inspect "$image" > /dev/null 2>&1 || image="mirror.gcr.io/$image"
+            echo "CLICKHOUSE_IT=$image" >> "$GITHUB_ENV"
+          else
+            echo "::warning::ClickHouse image not pulled; its test is skipped"
+          fi
+
       - name: Build, all tests (no perf / real-services), Checkstyle, SpotBugs
         run: >
           ./mvnw clean verify checkstyle:check spotbugs:check
@@ -96,6 +108,7 @@ jobs:
           -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"
           -Dpython.it.executable="$PYTHON_IT"
+          -Dclickhouse.it.image="$CLICKHOUSE_IT"
 
       - name: Test summary
         if: always()
