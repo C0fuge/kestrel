@@ -9,7 +9,9 @@
  * With PROBE_S3_ENDPOINT (host:port), PROBE_S3_KEY, PROBE_S3_SECRET and PROBE_S3_ROOT (s3://bucket/prefix/, the
  * same tables uploaded there) the S3 path is probed too. A copy of table t outside the allowed directories
  * (PROBE_OUTSIDE_DIR locally, PROBE_S3_OUTSIDE on S3) checks that the lockdown holds for the extension's own
- * I/O. The connection is set up as the server sets up a query connection (in-memory secrets, LOAD by path,
+ * I/O. With PROBE_HDFS_ROOT (hdfs://host:port/dir/, the same tables put there) and hadoopfs.duckdb_extension in the
+ * extension directory, the HDFS path is probed as well (item C3: does delta-kernel read hdfs:// through hadoopfs?).
+ * The connection is set up as the server sets up a query connection (in-memory secrets, LOAD by path,
  * secrets, then allowed_directories + no extension autoload + enable_external_access=false +
  * lock_configuration=true). Every result is printed and appended to $GITHUB_STEP_SUMMARY when set. Exit status
  * 1 when loading or the plain read before the lockdown fails; everything else is only recorded ("GETS THROUGH"
@@ -64,6 +66,9 @@ public final class DuckDbDeltaProbe {
         String s3Root = env("PROBE_S3_ROOT");
         boolean s3 = !s3Endpoint.isEmpty() && !s3Root.isEmpty();
         secretValue = env("PROBE_S3_SECRET");
+        String hdfsRoot = env("PROBE_HDFS_ROOT");
+        Path hadoopfs = extDir.resolve("hadoopfs.duckdb_extension");
+        boolean hdfs = !hdfsRoot.isEmpty() && Files.exists(hadoopfs);
         String local = fixtures + "/";
         Properties props = new Properties();
         props.setProperty("allow_unsigned_extensions", "true");
@@ -74,6 +79,7 @@ public final class DuckDbDeltaProbe {
                     + " FROM duckdb_functions()");
             boolean ready = must("setup", "load httpfs", c,
                     "LOAD " + lit(extDir.resolve("httpfs.duckdb_extension").toString()))
+                    && (!hdfs || must("hdfs", "load hadoopfs", c, "LOAD " + lit(hadoopfs.toString())))
                     && must("setup", "load delta", c,
                             "LOAD " + lit(extDir.resolve("delta.duckdb_extension").toString()));
             if (!ready) {
@@ -84,7 +90,7 @@ public final class DuckDbDeltaProbe {
                     + " duckdb_functions() WHERE function_name NOT IN (SELECT function_name FROM fn_before))");
             query("setup", "settings", c, "SELECT name, value FROM duckdb_settings() WHERE name LIKE '%delta%'");
             query("setup", "version", c, "SELECT extension_name, extension_version FROM duckdb_extensions()"
-                    + " WHERE loaded AND extension_name IN ('delta', 'httpfs')");
+                    + " WHERE loaded AND extension_name IN ('delta', 'httpfs', 'hadoopfs')");
             if (s3) {
                 must("s3", "secret", c, "CREATE TEMPORARY SECRET s3_probe (TYPE s3, KEY_ID "
                         + lit(env("PROBE_S3_KEY")) + ", SECRET " + lit(secretValue) + ", ENDPOINT " + lit(s3Endpoint)
@@ -93,11 +99,24 @@ public final class DuckDbDeltaProbe {
             mustQuery("local", "read before lockdown", c, answer("delta_scan(" + lit(local + "t") + ")", ""),
                     lookup(expected, "t", ""));
             query("local", "attach before lockdown", c, "ATTACH " + lit(local + "t") + " AS att_t (TYPE delta)");
+            if (hdfs) {
+                // Control: hadoopfs itself reads the table's Parquet files; then the same table through delta.
+                must("hdfs", "read_parquet (hadoopfs control)", c, "SELECT count(*) FROM read_parquet("
+                        + lit(hdfsRoot + "t/*.parquet") + ")");
+                query("hdfs", "log listing (hadoopfs control)", c, "SELECT count(*) FROM glob("
+                        + lit(hdfsRoot + "t/_delta_log/*.json") + ")");
+                check("hdfs", "read before lockdown", c, answer("delta_scan(" + lit(hdfsRoot + "t") + ")", ""),
+                        lookup(expected, "t", ""));
+                query("hdfs", "attach before lockdown", c, "ATTACH " + lit(hdfsRoot + "t")
+                        + " AS att_hdfs (TYPE delta)");
+                query("hdfs", "list files before lockdown", c, "SELECT count(*) FROM delta_list_files("
+                        + lit(hdfsRoot + "t") + ")");
+            }
             query("local", "attach pinned before lockdown", c, "ATTACH " + lit(local + "tt")
                     + " AS att_tt (TYPE delta, PIN_SNAPSHOT)");
 
             // The server's lockdown of a query connection (DuckDbAdapter.configureConnection).
-            String allowed = lit(local) + (s3 ? ", " + lit(s3Root) : "");
+            String allowed = lit(local) + (s3 ? ", " + lit(s3Root) : "") + (hdfs ? ", " + lit(hdfsRoot) : "");
             must("setup", "lockdown", c, "SET allowed_directories = [" + allowed + "]");
             must("setup", "lockdown", c, "SET autoinstall_known_extensions = false");
             must("setup", "lockdown", c, "SET autoload_known_extensions = false");
@@ -109,8 +128,11 @@ public final class DuckDbDeltaProbe {
             if (s3) {
                 roots.add(s3Root);
             }
+            if (hdfs) {
+                roots.add(hdfsRoot);
+            }
             for (String root : roots) {
-                String where = root.startsWith("s3://") ? "s3" : "local";
+                String where = root.startsWith("s3://") ? "s3" : root.startsWith("hdfs://") ? "hdfs" : "local";
                 for (String[] e : expected) {
                     String table = e[0];
                     String version = "";
@@ -141,6 +163,11 @@ public final class DuckDbDeltaProbe {
                         + " (TYPE delta)");
             }
             query("local", "attached read", c, answer("att_t", ""));
+            if (hdfs) {
+                query("hdfs", "attached read", c, answer("att_hdfs", ""));
+                query("hdfs", "read_parquet after lockdown (hadoopfs control)", c, "SELECT count(*) FROM"
+                        + " read_parquet(" + lit(hdfsRoot + "t/*.parquet") + ")");
+            }
             query("local", "pinned attached read", c, answer("att_tt", ""));
             query("local", "attach version option", c, "ATTACH " + lit(local + "tt")
                     + " AS att_v (TYPE delta, VERSION 1)");

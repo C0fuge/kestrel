@@ -353,7 +353,8 @@ jobs:
 
   # Item C3 step 1: DuckDB's delta extension under the server's lockdown, on Delta tables written by
   # Spark + delta-spark (tools/ci/delta-fixtures.py: partitions, deletion vectors, column mapping,
-  # checkpoints, versions, schema evolution, types), local and on S3 (moto); results in the job summary.
+  # checkpoints, versions, schema evolution, types), local, on S3 (moto) and on HDFS (single node, read
+  # through our hadoopfs build); results in the job summary.
   delta:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -378,6 +379,8 @@ jobs:
           tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
           cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension" | head -n 1)" \
             "$ext/httpfs.duckdb_extension"
+          cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)" \
+            "$ext/hadoopfs.duckdb_extension"
           name=delta
           if ! gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
               --pattern "${name}-${DUCKDB_VERSION}-linux_amd64.duckdb_extension" --dir "$RUNNER_TEMP"; then
@@ -434,15 +437,29 @@ jobs:
             echo "PROBE_S3_OUTSIDE=s3://lake/outside/"
           } >> "$GITHUB_ENV"
 
+      - name: HDFS copy of the fixtures
+        run: |
+          set -euo pipefail
+          tools/ci/hdfs-single.sh "$DELTA_FIXTURES" /delta
+          echo "PROBE_HDFS_ROOT=hdfs://localhost:8020/delta/" >> "$GITHUB_ENV"
+
+      # In an Ubuntu 20.04 JDK container: the hadoopfs build links libssl.so.1.1 (not on ubuntu-latest).
       - name: Probe
         run: |
           set -euo pipefail
           ./mvnw dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
-          java -cp "$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar" \
-            tools/ci/DuckDbDeltaProbe.java "$DELTA_EXT_DIR" "$DELTA_FIXTURES"
+          jar="$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar"
+          docker run --rm --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD/tools/ci:/probe:ro" \
+            -v "$jar:/duckdb.jar:ro" -e GITHUB_STEP_SUMMARY -e PROBE_S3_ENDPOINT -e PROBE_S3_KEY \
+            -e PROBE_S3_SECRET -e PROBE_S3_ROOT -e PROBE_S3_OUTSIDE -e PROBE_OUTSIDE_DIR -e PROBE_HDFS_ROOT \
+            eclipse-temurin:17-jdk-focal bash -c 'apt-get update -qq > /dev/null \
+              && apt-get install -y -qq libxml2 > /dev/null \
+              && java -cp /duckdb.jar /probe/DuckDbDeltaProbe.java "$0" "$1"' "$DELTA_EXT_DIR" "$DELTA_FIXTURES"
           echo "outside after the probe:"; find "$PROBE_OUTSIDE_DIR" -maxdepth 2 | sort
           echo "fixtures root after the probe:"; ls "$DELTA_FIXTURES"
 
-      - name: S3 log
+      - name: S3 and HDFS logs
         if: failure()
-        run: tail -50 "$RUNNER_TEMP/s3.log"
+        run: |
+          tail -50 "$RUNNER_TEMP/s3.log"
+          docker exec hdfs bash -c 'tail -30 /var/log/hadoop/*.out' || true
