@@ -164,6 +164,7 @@ class DistributedClusterIntegrationTest {
             assertEquals(alone, answer(query), query);
             assertEquals(1, distributed.mergedAnswers(), "merged from endpoint answers: " + query);
             assertEquals(0, distributed.fallbacks(), query);
+            assertTrue(distributed.peerBytes() > 0, "peer bytes counted: " + query);
             useDistributed(null);
         }
     }

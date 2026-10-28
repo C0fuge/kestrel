@@ -64,6 +64,8 @@ public final class DistributedComplete implements AutoCloseable {
     private final Map<URI, FlightClient> clients = new ConcurrentHashMap<>();
     private final AtomicLong merged = new AtomicLong();
     private final AtomicLong fallbacks = new AtomicLong();
+    private final AtomicLong peerBytes = new AtomicLong();
+    private final AtomicLong peerWaitNanos = new AtomicLong();
 
     /**
      * Creates the distributed path of complete answers.
@@ -159,12 +161,16 @@ public final class DistributedComplete implements AutoCloseable {
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
             } finally {
+                peerBytes.addAndGet(answers.bytesRead());
+                peerWaitNanos.addAndGet(answers.waitNanos());
                 answers.close();
             }
             client.flushStart();
             merged.incrementAndGet();
-            LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} query='{}'",
-                    LogUtil.node(), endpoints.size(), (System.nanoTime() - start) / 1_000_000, query);
+            LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
+                    + " peerWaitMs={} query='{}'", LogUtil.node(), endpoints.size(),
+                    (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
+                    answers.waitNanos() / 1_000_000, query);
             return true;
         } catch (Exception e) {
             cancel(streams);
@@ -197,6 +203,24 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public long fallbacks() {
         return fallbacks.get();
+    }
+
+    /**
+     * Counts the Arrow body bytes read from endpoint answers since start.
+     *
+     * @return bytes
+     */
+    public long peerBytes() {
+        return peerBytes.get();
+    }
+
+    /**
+     * Sums the time the merges waited for the next batch of an endpoint answer since start.
+     *
+     * @return nanoseconds
+     */
+    public long peerWaitNanos() {
+        return peerWaitNanos.get();
     }
 
     /**
@@ -356,6 +380,7 @@ public final class DistributedComplete implements AutoCloseable {
         private final Schema schema;
         private int current;
         private long bytes;
+        private long waitNanos;
 
         /**
          * Creates the reader over endpoint streams of one schema.
@@ -375,7 +400,10 @@ public final class DistributedComplete implements AutoCloseable {
             prepareLoadNextBatch();
             while (current < streams.size()) {
                 FlightStream stream = streams.get(current);
-                if (stream.next()) {
+                long waitStart = System.nanoTime();
+                boolean next = stream.next();
+                waitNanos += System.nanoTime() - waitStart;
+                if (next) {
                     try (ArrowRecordBatch batch = new VectorUnloader(stream.getRoot()).getRecordBatch()) {
                         bytes += batch.computeBodyLength();
                         loadRecordBatch(batch);
@@ -390,6 +418,15 @@ public final class DistributedComplete implements AutoCloseable {
         @Override
         public long bytesRead() {
             return bytes;
+        }
+
+        /**
+         * Sums the time spent waiting for the next batch of an endpoint answer.
+         *
+         * @return nanoseconds
+         */
+        long waitNanos() {
+            return waitNanos;
         }
 
         @Override

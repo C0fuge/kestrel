@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Distributed complete mode: `DistributedCompletePerfTest` (`perf`, item 18 step 3, D2 (b)) - three nodes, Q1/Q6-like
+  aggregates, wide DISTINCT, ORDER BY LIMIT, wide GROUP BY and wide rows with `distributedComplete` off vs on (wall
+  time, peer MB, peer wait); `DistributedComplete.peerBytes()` / `peerWaitNanos()` and `peerBytes=` / `peerWaitMs=` in
+  its `merged` log line.
 - S3 / lakeFS read cache disk tier (item 17 (a)), opt-in: `arrowflight.s3.cacheDiskPath` (absolute directory, default
   empty = memory only) + `arrowflight.s3.cacheDiskMegabytes` (size cap; both needed, and `cacheMegabytes` > 0); same
   keys under `arrowflight.lakefs.`. Blocks read from S3 are also written (one background writer, queue of 64 blocks,
