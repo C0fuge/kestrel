@@ -7,6 +7,7 @@ import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ResultModeMiddleware;
+import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
 import pro.surpin.data.arrowflight.server.adapters.StreamCompression;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
@@ -91,7 +92,7 @@ public class TestFlightServerHelper implements AutoCloseable {
                     new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
             duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
                     pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
-                    b.threadsUnderLoad, b.cores);
+                    b.threadsUnderLoad, b.cores, new ProducingStreamGate(b.producingStreams));
         }
 
         // Services
@@ -104,7 +105,9 @@ public class TestFlightServerHelper implements AutoCloseable {
         location = Location.forGrpcInsecure("localhost", flightPort);
         clusterService = new ClusterService(hazelcastAdapter, appConfig,
                 location.getUri().toString());
-        queryPlanner = new QueryPlanner(parquetAdapter, clusterService);
+        // endpointsPerServer as the server reads it (tests set it as a system property).
+        queryPlanner = new QueryPlanner(parquetAdapter, clusterService,
+                QueryPlanner.DEFAULT_BACKUP_LOCATIONS, appConfig.endpointsPerServer());
 
         executionService = new ExecutionService(parquetAdapter, duckDbAdapter,
                 metadataService, appConfig,
@@ -178,6 +181,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         private int threads = 1;
         private int threadsUnderLoad;
         private int cores = Runtime.getRuntime().availableProcessors();
+        private int producingStreams;
         private StreamCompression.Settings compression = StreamCompression.Settings.DEFAULT;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
@@ -191,6 +195,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder flightPort(int p) { this.flightPort = p; return this; }
         public Builder threads(int t) { this.threads = t; return this; }
         public Builder threadsUnderLoad(int t, int c) { this.threadsUnderLoad = t; this.cores = c; return this; }
+        public Builder producingStreams(int p) { this.producingStreams = p; return this; }
         public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }
 
         public TestFlightServerHelper start() throws Exception {

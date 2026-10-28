@@ -10,6 +10,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Cap on the streams inside DuckDB at once (item 22 (c)), opt-in: `duckDbProducingStreams` /
+  `arrowflight.duckdb.producingStreams` / `DUCKDB_PRODUCING_STREAMS` (default 0 = no cap, unchanged). A DoGet holds
+  one of N turns (handed out in arrival order) only while DuckDB runs its query or computes its next batch, never while
+  it waits for the client or the outbound budget, so endpoints a client reads in turn cannot block each other; a client
+  that goes away while its stream waits ends the wait with CANCELLED. On 2 cores (`duckDbThreads=2`, in-process
+  client on the same cores, 6 M-row table, two rounds) one partial-mode scan in 8 endpoints went 310/330 -> 381/397
+  MB/s at value 2 (CPU 6.2/5.8 -> 5.0/4.9 s/GB), 4 endpoints 352/346 -> 326/371; value 1 was neutral.
+  `ParallelScanPerfTest` takes `-Dperf.producingStreams` and prints the waits.
 - `HiveOrcPerfTest` (perf tag) and the manual workflow `hive-orc-perf.yml` (P1 step 2 (e)): a lineitem-like Hive
   table (SF1 size by default) as Parquet and as ORC (zlib, zstd) through the server with the hive plugin, best of 3
   per query and result mode; complete answers of the ORC tables must equal the Parquet table's. Test only.
@@ -315,6 +323,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- Tests: `TestFlightServerHelper` ignored `endpointsPerServer`, so in-process partial-mode scans were always one
+  endpoint (`ParallelScanPerfTest` endpoint runs and `ThreadsUnderLoadIntegrationTest` measured one stream); the
+  integration tests now assert the split. Test only.
 - S3 small queries: longer tail since the size-aware `duckDbThreads` default (item 19; 4 vCPU -> 2 threads). With
   `duckDbThreads` unset or 0 and `dataDir` on `s3://`, `s3a://`, `s3n://` or `lakefs://` the default is now at least
   4 (the value before item 19; larger hosts keep cores / 4, at most 8); local and HDFS data directories are unchanged,

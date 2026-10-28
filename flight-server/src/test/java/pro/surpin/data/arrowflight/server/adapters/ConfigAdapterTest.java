@@ -142,6 +142,21 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbThreadsUnderLoad"), e.getMessage());
     }
 
+    @Test
+    void duckDbProducingStreamsIsOffByDefaultAndRefusesNegativeValues() throws IOException {
+        assertEquals(0, ConfigAdapter.duckDbProducingStreams(source(Map.of(), Map.of())));
+        assertEquals(2, ConfigAdapter.duckDbProducingStreams(
+                source(Map.of("duckDbProducingStreams", "2"), Map.of())));
+        assertEquals(1, ConfigAdapter.duckDbProducingStreams(
+                source(Map.of("arrowflight.duckdb.producingStreams", "1"), Map.of())));
+        assertEquals(3, ConfigAdapter.duckDbProducingStreams(
+                source(Map.of(), Map.of("DUCKDB_PRODUCING_STREAMS", "3"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbProducingStreams(
+                        source(Map.of("duckDbProducingStreams", "-1"), Map.of())));
+        assertTrue(e.getMessage().contains("duckDbProducingStreams"), e.getMessage());
+    }
+
     /**
      * Regression for the S3 small-query tail (2026-10-28): on object stores the default keeps at
      * least 4 threads, local and HDFS data directories keep the size-aware default, an explicit

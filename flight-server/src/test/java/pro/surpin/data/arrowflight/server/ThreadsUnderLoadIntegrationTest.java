@@ -96,6 +96,9 @@ class ThreadsUnderLoadIntegrationTest {
             List<String> out = new ArrayList<>();
             for (String sql : QUERIES) {
                 FlightInfo info = client.execute(sql, header);
+                if ("partial".equals(mode) && sql.equals(QUERIES.get(0))) {
+                    assertEquals(FILES, info.getEndpoints().size(), "endpoints of the scan");
+                }
                 List<Future<List<String>>> parts = new ArrayList<>();
                 for (FlightEndpoint endpoint : info.getEndpoints()) {
                     parts.add(pool.submit(() -> read(client, endpoint, header)));

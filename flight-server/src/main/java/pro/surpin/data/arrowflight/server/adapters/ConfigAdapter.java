@@ -249,6 +249,33 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns duckDbProducingStreams from the system configuration.
+     *
+     * @return streams that may produce batches in DuckDB at once, 0 = no cap
+     */
+    public static int duckDbProducingStreams() {
+        return duckDbProducingStreams(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code duckDbProducingStreams} ({@code DUCKDB_PRODUCING_STREAMS}): how many Flight
+     * streams of a node may be inside DuckDB running their query or computing their next batch
+     * at once; the others wait their turn. Default 0 = no cap.
+     *
+     * @param props configuration source
+     * @return streams, 0 = no cap
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int duckDbProducingStreams(ConfigSource props) {
+        int streams = getIntWithEnv("duckDbProducingStreams", "arrowflight.duckdb.producingStreams",
+                "DUCKDB_PRODUCING_STREAMS", 0, props);
+        if (streams < 0) {
+            throw new IllegalArgumentException("duckDbProducingStreams must not be negative: " + streams);
+        }
+        return streams;
+    }
+
+    /**
      * Creates the Flight SQL session store from the system configuration.
      *
      * @return session store

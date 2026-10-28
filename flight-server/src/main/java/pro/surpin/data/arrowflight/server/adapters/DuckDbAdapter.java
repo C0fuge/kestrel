@@ -150,6 +150,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final AtomicLong queriesUnderLoad = new AtomicLong();
     private final int threadsUnderLoad;
     private final int cores;
+    /** Caps the streams inside DuckDB at once (duckDbProducingStreams); off by default. */
+    private final ProducingStreamGate producingGate;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     /** hadoopfs settings the loaded extension does not know, warned about once. */
     private final Set<String> unknownHdfsSettings = ConcurrentHashMap.newKeySet();
@@ -339,6 +341,25 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
             int threadsUnderLoad, int cores) {
+        this(appConfig, ioPool, setup, threadsUnderLoad, cores, ProducingStreamGate.OFF);
+    }
+
+    /**
+     * Creates DuckDB adapter with duckDbThreadsUnderLoad and a cap on the streams that produce
+     * batches at once.
+     *
+     * @param appConfig        server configuration
+     * @param ioPool           shared I/O thread pool for parallel execution
+     * @param setup            setup written by the DuckDbSetupValidator; empty roots disable the
+     *                         lockdown
+     * @param threadsUnderLoad DuckDB threads of the second connection; 0, or not below
+     *                         duckDbThreads, keeps every query on its thread's one connection
+     * @param cores            processors the node's queries share
+     * @param producingGate    gate of the streams inside DuckDB at once
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
+            int threadsUnderLoad, int cores, ProducingStreamGate producingGate) {
+        this.producingGate = producingGate;
         this.readableRoots = setup.roots();
         this.storageSetupStatements = setup.statements();
         this.redactor = setup.redactor();
@@ -371,8 +392,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.sessionReaper.scheduleWithFixedDelay(this::closeSessionsOfEndedThreads,
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
-        LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} availableProcessors={}",
-                LogUtil.node(), appConfig.duckDbThreads(), this.threadsUnderLoad, this.cores);
+        LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} producingStreams={}"
+                + " availableProcessors={}", LogUtil.node(), appConfig.duckDbThreads(),
+                this.threadsUnderLoad, producingGate.permits(), this.cores);
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);
@@ -893,6 +915,15 @@ public final class DuckDbAdapter implements AutoCloseable {
         return queriesUnderLoad.get();
     }
 
+    /**
+     * Returns the gate that caps the streams producing batches at once.
+     *
+     * @return gate, {@link ProducingStreamGate#OFF} without duckDbProducingStreams
+     */
+    public ProducingStreamGate producingGate() {
+        return producingGate;
+    }
+
     /** A query's place in the node's running-query count; see {@link #enterQuery()}. */
     @FunctionalInterface
     public interface QuerySlot extends AutoCloseable {
@@ -1038,7 +1069,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         ListenerReadiness listenerReadiness = new ListenerReadiness(
                 listener, appConfig.flightListenerReadyTimeoutMillis(), ps, sessionReaper);
         boolean started = false;
-        try (org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
+        try (ProducingStreamGate.Pass pass = enterGate(listener);
+                org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
             started = true;
@@ -1048,7 +1080,7 @@ public final class DuckDbAdapter implements AutoCloseable {
 
             int batchesSent = 0;
             long rowsSent = 0;
-            while (reader.loadNextBatch()) {
+            while (loadNextBatch(reader, pass)) {
                 int rows = duckRoot.getRowCount();
                 if (rows == 0) {
                     continue;
@@ -1099,6 +1131,41 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw e;
         } finally {
             listenerReadiness.disarm();
+        }
+    }
+
+    /**
+     * Opens the stream's pass of the producing-stream gate and takes its permit: DuckDB runs the
+     * query (and, for a materialised result, all of it) when it is executed.
+     *
+     * @param listener Flight stream listener, for cancellation while waiting
+     * @return pass holding a permit (none when the gate is off)
+     * @throws InterruptedException if the thread is interrupted while waiting
+     */
+    private ProducingStreamGate.Pass enterGate(
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener)
+            throws InterruptedException {
+        ProducingStreamGate.Pass pass = producingGate.pass(listener::isCancelled);
+        pass.enter();
+        return pass;
+    }
+
+    /**
+     * Lets DuckDB compute the next batch while holding a permit of the producing-stream gate,
+     * which is given back before the batch waits for the client.
+     *
+     * @param reader DuckDB's Arrow reader
+     * @param pass   the stream's pass
+     * @return whether a batch was loaded
+     * @throws Exception on query failure, interruption or cancellation while waiting
+     */
+    private static boolean loadNextBatch(ArrowReader reader, ProducingStreamGate.Pass pass)
+            throws Exception {
+        pass.enter();
+        try {
+            return reader.loadNextBatch();
+        } finally {
+            pass.leave();
         }
     }
 

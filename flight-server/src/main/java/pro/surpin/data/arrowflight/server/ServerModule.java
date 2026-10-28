@@ -24,6 +24,7 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.FlightSqlProducer;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -230,7 +231,8 @@ public final class ServerModule {
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
         return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
-                ConfigAdapter.duckDbThreadsUnderLoad(), Runtime.getRuntime().availableProcessors());
+                ConfigAdapter.duckDbThreadsUnderLoad(), Runtime.getRuntime().availableProcessors(),
+                new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()));
     }
 
     /**
