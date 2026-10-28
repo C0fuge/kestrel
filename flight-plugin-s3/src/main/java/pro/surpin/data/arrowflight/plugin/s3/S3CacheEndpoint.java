@@ -64,7 +64,9 @@ import java.util.function.LongSupplier;
  * the cache passes through without pushing out what small queries read again. Missed blocks are
  * streamed from S3 straight into the cache's pieces, never buffered whole per GET. There is one
  * endpoint per plugin class loader: the lakefs plugin, which bundles this code, runs its own
- * ({@code arrowflight_lakefs_cache_*}).
+ * ({@code arrowflight_lakefs_cache_*}). With a disk tier ({@link S3DiskCache}), blocks read from S3
+ * are also written to a local directory and a block missing from memory is read from its file
+ * (and kept in memory again) before S3 is asked.
  */
 final class S3CacheEndpoint {
 
@@ -83,6 +85,8 @@ final class S3CacheEndpoint {
     private final HttpServer server;
     private final ExecutorService handlers;
     private final S3BlockCache cache;
+    /** Disk tier, or null. */
+    private final S3DiskCache disk;
     private final long checkNanos;
     private final LongSupplier nanoClock;
     private final String node;
@@ -195,6 +199,26 @@ final class S3CacheEndpoint {
      */
     S3CacheEndpoint(long capacityBytes, int checkSeconds, String node, LongSupplier nanoClock, String kind,
             boolean admitOnReuse) throws IOException {
+        this(capacityBytes, checkSeconds, node, nanoClock, kind, admitOnReuse, null);
+    }
+
+    /**
+     * Starts an endpoint of a plugin, choosing how blocks are admitted and whether a disk tier
+     * backs the memory.
+     *
+     * @param capacityBytes bytes the cache holds at most in memory
+     * @param checkSeconds seconds an object's version is trusted before it is looked up again
+     * @param node node name, for logs
+     * @param nanoClock monotonic clock in nanoseconds
+     * @param kind plugin whose stores read through it ({@code s3}, {@code lakefs}): names its log
+     *        lines, settings and metrics
+     * @param admitOnReuse keep a missed block only when it was missed before within the cache's
+     *        reach (each tier its own); false keeps every block read
+     * @param diskSettings directory and size of the disk tier, or null for none
+     * @throws IOException when no loopback port can be bound or the disk tier cannot be opened
+     */
+    S3CacheEndpoint(long capacityBytes, int checkSeconds, String node, LongSupplier nanoClock, String kind,
+            boolean admitOnReuse, S3DiskCache.Settings diskSettings) throws IOException {
         this.kind = Objects.requireNonNull(kind, "kind");
         if (checkSeconds < 0) {
             throw new IllegalArgumentException("arrowflight." + kind + ".cacheCheckSeconds must be >= 0: "
@@ -205,7 +229,16 @@ final class S3CacheEndpoint {
         this.checkNanos = TimeUnit.SECONDS.toNanos(checkSeconds);
         this.node = Objects.requireNonNull(node, "node");
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
-        this.server = HttpServer.create(new InetSocketAddress(InetAddress.getByAddress(new byte[] {127, 0, 0, 1}), 0), 64);
+        this.disk = diskSettings == null ? null : new S3DiskCache(diskSettings, kind, admitOnReuse);
+        try {
+            this.server = HttpServer.create(new InetSocketAddress(InetAddress.getByAddress(new byte[] {127, 0, 0, 1}),
+                    0), 64);
+        } catch (IOException | RuntimeException e) {
+            if (disk != null) {
+                disk.close();
+            }
+            throw e;
+        }
         this.handlers = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "s3-cache");
             t.setDaemon(true);
@@ -233,7 +266,7 @@ final class S3CacheEndpoint {
      */
     static Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
             S3Client client, S3Settings settings, PluginMetrics pluginMetrics) throws IOException {
-        return register(capacityBytes, checkSeconds, node, root, client, settings, pluginMetrics, "s3", false);
+        return register(capacityBytes, checkSeconds, node, root, client, settings, pluginMetrics, "s3", false, null);
     }
 
     /**
@@ -250,23 +283,29 @@ final class S3CacheEndpoint {
      * @param pluginMetrics where the endpoint publishes its metrics while it runs
      * @param kind plugin of the store ({@code s3}, {@code lakefs}), set by the first registration
      * @param admitOnReuse keep a missed block only on its second miss within the cache's reach
+     * @param diskSettings directory and size of the disk tier, or null for none; set by the first
+     *        registration
      * @return route; closing it unregisters the data directory, the last close stops the endpoint
      * @throws IOException when the endpoint cannot be started
      */
     static synchronized Route register(long capacityBytes, int checkSeconds, String node, S3Uri root,
-            S3Client client, S3Settings settings, PluginMetrics pluginMetrics, String kind, boolean admitOnReuse)
-            throws IOException {
+            S3Client client, S3Settings settings, PluginMetrics pluginMetrics, String kind, boolean admitOnReuse,
+            S3DiskCache.Settings diskSettings) throws IOException {
         if (shared == null) {
-            shared = new S3CacheEndpoint(capacityBytes, checkSeconds, node, System::nanoTime, kind, admitOnReuse);
+            shared = new S3CacheEndpoint(capacityBytes, checkSeconds, node, System::nanoTime, kind, admitOnReuse,
+                    diskSettings);
             shared.metrics = pluginMetrics.register(shared::samples);
             LOGGER.info("node={} {}=cacheOpen endpoint=127.0.0.1:{} capacityBytes={} blockBytes={} checkSeconds={}"
-                    + " admitOnReuse={}", node, kind, shared.port(), capacityBytes, BLOCK_BYTES, checkSeconds,
-                    admitOnReuse);
+                    + " admitOnReuse={} diskPath={} diskCapacityBytes={}", node, kind, shared.port(), capacityBytes,
+                    BLOCK_BYTES, checkSeconds, admitOnReuse, diskSettings == null ? "" : diskSettings.path(),
+                    diskSettings == null ? 0 : diskSettings.capacityBytes());
         } else if (shared.cache.capacityBytes() != capacityBytes
                 || shared.checkNanos != TimeUnit.SECONDS.toNanos(checkSeconds)
-                || shared.cache.admitOnReuse() != admitOnReuse) {
-            LOGGER.warn("node={} {}=cacheSettingsIgnored capacityBytes={} checkSeconds={} admitOnReuse={} (the"
-                    + " running cache keeps its own)", node, kind, capacityBytes, checkSeconds, admitOnReuse);
+                || shared.cache.admitOnReuse() != admitOnReuse
+                || !Objects.equals(shared.disk == null ? null : shared.disk.settings(), diskSettings)) {
+            LOGGER.warn("node={} {}=cacheSettingsIgnored capacityBytes={} checkSeconds={} admitOnReuse={}"
+                    + " disk={} (the running cache keeps its own)", node, kind, capacityBytes, checkSeconds,
+                    admitOnReuse, diskSettings);
         }
         return shared.route(root, client, settings);
     }
@@ -310,13 +349,22 @@ final class S3CacheEndpoint {
     }
 
     /**
+     * Returns the disk tier.
+     *
+     * @return disk tier, or null when the cache is in memory only
+     */
+    S3DiskCache disk() {
+        return disk;
+    }
+
+    /**
      * Describes the cache's use so far.
      *
      * @return statistics line; {@code joined} counts blocks a request took from another request's
      *         read instead of reading them from S3 itself
      */
     String stats() {
-        return cache.stats() + " joined=" + joined.get();
+        return cache.stats() + " joined=" + joined.get() + (disk == null ? "" : " " + disk.stats());
     }
 
     /**
@@ -327,7 +375,7 @@ final class S3CacheEndpoint {
     List<MetricSample> samples() {
         S3BlockCache.Use use = cache.use();
         String prefix = "arrowflight_" + kind + "_cache_";
-        return List.of(
+        List<MetricSample> samples = new ArrayList<>(List.of(
                 MetricSample.gauge(prefix + "capacity_bytes",
                         "Most bytes the S3 read cache holds", cache.capacityBytes()),
                 MetricSample.gauge(prefix + "used_bytes",
@@ -350,7 +398,28 @@ final class S3CacheEndpoint {
                         "HEAD requests the S3 read cache sent to S3", s3Lookups.get()),
                 MetricSample.counter(prefix + "not_admitted_total",
                         "Missed blocks the S3 read cache read but did not keep (admission on reuse)",
-                        use.notAdmitted()));
+                        use.notAdmitted())));
+        if (disk != null) {
+            S3DiskCache.Use d = disk.use();
+            String p = prefix + "disk_";
+            samples.addAll(List.of(
+                    MetricSample.gauge(p + "capacity_bytes", "Most bytes the S3 read cache's disk tier holds",
+                            d.capacityBytes()),
+                    MetricSample.gauge(p + "used_bytes", "Bytes of block files in the disk tier", d.usedBytes()),
+                    MetricSample.gauge(p + "blocks", "Block files in the disk tier", d.blocks()),
+                    MetricSample.counter(p + "hits_total", "Blocks read from the disk tier instead of S3", d.hits()),
+                    MetricSample.counter(p + "misses_total", "Blocks the disk tier did not hold when asked",
+                            d.misses()),
+                    MetricSample.counter(p + "writes_total", "Blocks written to the disk tier", d.writes()),
+                    MetricSample.counter(p + "evictions_total", "Block files deleted to make room", d.evictions()),
+                    MetricSample.counter(p + "dropped_total",
+                            "Blocks not written because the disk tier's write queue was full", d.dropped()),
+                    MetricSample.counter(p + "errors_total",
+                            "Block files that failed to write or read or did not match their checksum", d.errors()),
+                    MetricSample.counter(p + "not_admitted_total",
+                            "Blocks the disk tier did not write (admission on reuse)", d.notAdmitted())));
+        }
+        return samples;
     }
 
     /** Stops the endpoint. */
@@ -361,6 +430,9 @@ final class S3CacheEndpoint {
         LOGGER.info("node={} {}=cacheClosed {}", node, kind, stats());
         server.stop(0);
         handlers.shutdownNow();
+        if (disk != null) {
+            disk.close();
+        }
     }
 
     /**
@@ -620,8 +692,9 @@ final class S3CacheEndpoint {
     }
 
     /**
-     * Reads the blocks this request claimed from S3, consecutive ones together, caching each and
-     * handing it to the requests waiting for it; a failure is handed to them too.
+     * Reads the blocks this request claimed from the disk tier, else from S3 (consecutive ones
+     * together), caching each and handing it to the requests waiting for it; a failure is handed
+     * to them too.
      *
      * @param route route of the request
      * @param key object key
@@ -638,14 +711,28 @@ final class S3CacheEndpoint {
     private void readOwn(Route route, String key, Version version, long first, S3BlockCache.Block[] blocks,
             S3BlockCache.BlockKey[] keys, List<CompletableFuture<S3BlockCache.Block>> reads, boolean[] mine)
             throws ChangedException, NoSuchFileException, StorageException {
+        if (disk != null) {
+            for (int b = 0; b < blocks.length; b++) {
+                if (mine[b]) {
+                    S3BlockCache.Block block = disk.get(keys[b]);
+                    if (block != null) {
+                        // Read again: kept in memory whatever the admission.
+                        cache.put(keys[b], block);
+                        blocks[b] = block;
+                        reads.get(b).complete(block);
+                    }
+                }
+            }
+        }
         int i = 0;
         while (i < blocks.length) {
-            if (!mine[i]) {
+            if (!mine[i] || blocks[i] != null) {
                 i++;
                 continue;
             }
             int end = i;
-            while (end + 1 < blocks.length && mine[end + 1] && end + 1 - i < MAX_BLOCKS_PER_READ) {
+            while (end + 1 < blocks.length && mine[end + 1] && blocks[end + 1] == null
+                    && end + 1 - i < MAX_BLOCKS_PER_READ) {
                 end++;
             }
             long from = (first + i) * BLOCK_BYTES;
@@ -658,6 +745,9 @@ final class S3CacheEndpoint {
                     S3BlockCache.Block block = S3BlockCache.Block.read(in, length);
                     s3ReadBytes.addAndGet(length);
                     cache.offer(keys[b], block);
+                    if (disk != null) {
+                        disk.offer(keys[b], block);
+                    }
                     blocks[b] = block;
                     reads.get(b).complete(block);
                 }

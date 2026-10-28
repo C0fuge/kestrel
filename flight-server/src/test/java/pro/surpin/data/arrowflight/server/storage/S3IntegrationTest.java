@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -556,6 +557,71 @@ class S3IntegrationTest {
         Matcher skipped = Pattern.compile("\narrowflight_s3_cache_not_admitted_total (\\S+)\n").matcher(metrics);
         assertTrue(skipped.find(), metrics);
         assertTrue(Double.parseDouble(skipped.group(1)) > 0, metrics);
+    }
+
+    /**
+     * Verifies the read cache's disk tier ({@code arrowflight.s3.cacheDiskPath} /
+     * {@code cacheDiskMegabytes}): with a memory tier far smaller than the data, a repeated scan
+     * reads no data from S3, the answers stay right and the block files are deleted when the
+     * store closes.
+     */
+    @Test
+    void theReadCacheDiskTierServesWhatTheMemoryDropped() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 4;
+        int perFile = 40_000;
+        Path data = dir.resolve("disk.parquet");
+        StringBuilder list = new StringBuilder();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < files; i++) {
+                s.execute("COPY (SELECT " + i * perFile + " + range AS id, md5(range::VARCHAR) AS pad FROM range("
+                        + perFile + ")) TO '" + data + "' (FORMAT parquet, ROW_GROUP_SIZE 10000)");
+                s3.put(bucket, "flight-it/m/x" + i + ".parquet", Files.readAllBytes(data));
+                list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                        .append("/flight-it/m/x").append(i).append(".parquet'");
+            }
+        }
+        long rows = (long) files * perFile;
+        String scan = "SELECT count(*), count(DISTINCT pad) FROM read_parquet([" + list + "])";
+        Path diskDir = dir.resolve("disk-cache");
+        plugin.properties.put("arrowflight.s3.cacheMegabytes", "1");
+        plugin.properties.put("arrowflight.s3.cacheDiskPath", diskDir.toString());
+        plugin.properties.put("arrowflight.s3.cacheDiskMegabytes", "64");
+        threads = 4;
+        open(null);
+        assertTrue(requestsOf(scan, rows)[0] > 0, "first run reads from S3");
+        // Blocks are written in the background: wait until the count of written blocks settles.
+        double written = -1;
+        for (int i = 0; i < 100; i++) {
+            double now = metric("arrowflight_s3_cache_disk_writes_total");
+            if (now > 0 && now == written) {
+                break;
+            }
+            written = now;
+            Thread.sleep(100);
+        }
+        assertTrue(written > 0, MetricsService.render());
+        assertEquals(0, requestsOf(scan, rows)[0], "second run: answered from memory and disk");
+        assertTrue(metric("arrowflight_s3_cache_disk_hits_total") > 0, MetricsService.render());
+        try (Stream<Path> walk = Files.walk(diskDir)) {
+            assertTrue(walk.anyMatch(p -> p.toString().endsWith(".blk")), "block files on disk");
+        }
+        reopen();
+        try (Stream<Path> walk = Files.walk(diskDir)) {
+            assertEquals(0, walk.filter(p -> p.toString().endsWith(".blk")).count(), "deleted at close");
+        }
+    }
+
+    /**
+     * Reads one metric from the Prometheus text.
+     *
+     * @param name metric name
+     * @return its value, or -1 when it is not shown
+     */
+    private static double metric(String name) {
+        Matcher m = Pattern.compile("\n" + name + " (\\S+)\n").matcher(MetricsService.render());
+        return m.find() ? Double.parseDouble(m.group(1)) : -1;
     }
 
     /**

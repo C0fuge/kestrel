@@ -94,6 +94,16 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   of more data than the cache (TPC-H SF10 lineitem in a 1 GiB cache) passes through without pushing out what small
   queries read again; a repeated query is then served from the cache from its third run on. Counter
   `not_admitted_total`, `notAdmitted=` in the `s3=cacheClosed` line, `admitOnReuse=` in `s3=cacheOpen`.
+- Read cache disk tier (opt-in, s3 and lakefs, 2026-10-28): `arrowflight.s3.cacheDiskPath=<absolute dir>` +
+  `arrowflight.s3.cacheDiskMegabytes=<MiB>` (both, with `cacheMegabytes` > 0; `arrowflight.lakefs.` the same) put a
+  second, larger tier of the cache on a local disk: blocks read from S3 are also written there in the background
+  and answered from their files once memory dropped them. Use a local disk (not NFS) with that much free space; a
+  `s3=cacheDiskSmall` WARN at start says when it has less. The directory is the server's own: its block files are
+  deleted at start and at stop (other files are left alone), a second server on the same directory fails to start
+  (lock `s3-cache.lock`); s3 and lakefs may share one path. The block files hold table data in the clear (their
+  directory `<path>/s3-cache` is mode 700) - put the directory where only the server user can read. Every read is checked against a
+  CRC-32C kept in memory, so a damaged file is read from S3 again (`arrowflight_s3_cache_disk_errors_total`).
+  Metrics `arrowflight_s3_cache_disk_*`; `diskHits=` etc. in the `s3=cacheClosed` line.
 - lakeFS read cache (opt-in, `arrowflight.lakefs.cacheMegabytes` / `arrowflight.lakefs.cacheCheckSeconds` /
   `arrowflight.lakefs.cacheAdmission`, same
   meaning and defaults): DuckDB reads the lakeFS S3 gateway through the same kind of loopback cache, for the whole

@@ -3,6 +3,8 @@ package pro.surpin.data.arrowflight.plugin.s3;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.IOException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -15,7 +17,7 @@ import pro.surpin.data.arrowflight.spi.storage.StoreContext;
 /**
  * One store's way through the node-wide S3 read cache, for plugins built on this one (lakefs):
  * opens the route from the plugin's {@code cacheMegabytes} / {@code cacheCheckSeconds} /
- * {@code cacheAdmission} settings
+ * {@code cacheAdmission} / {@code cacheDiskPath} / {@code cacheDiskMegabytes} settings
  * and describes the DuckDB secret that reads through it.
  */
 public final class S3ReadCache implements AutoCloseable {
@@ -28,6 +30,10 @@ public final class S3ReadCache implements AutoCloseable {
     public static final int DEFAULT_CACHE_CHECK_SECONDS = 10;
     /** Which missed blocks the read cache keeps: {@code always} or {@code reuse}. */
     public static final String CACHE_ADMISSION_KEY = "cacheAdmission";
+    /** Directory of the read cache's disk tier; empty = no disk tier. */
+    public static final String CACHE_DISK_PATH_KEY = "cacheDiskPath";
+    /** Size of the read cache's disk tier in MiB. */
+    public static final String CACHE_DISK_MEGABYTES_KEY = "cacheDiskMegabytes";
     /** The read cache keys of a plugin namespace. */
     public static final List<ConfigKey> CONFIG_KEYS = List.of(
             ConfigKey.of(CACHE_MEGABYTES_KEY, "MiB of the node-wide S3 read cache DuckDB reads through"
@@ -36,7 +42,10 @@ public final class S3ReadCache implements AutoCloseable {
                     + " before it checks it on S3 again", Integer.toString(DEFAULT_CACHE_CHECK_SECONDS)),
             ConfigKey.of(CACHE_ADMISSION_KEY, "Which blocks read from S3 the read cache keeps: always, or"
                     + " reuse = only a block read again soon (scans larger than the cache pass through)",
-                    "always"));
+                    "always"),
+            ConfigKey.of(CACHE_DISK_PATH_KEY, "Local directory of a second, larger read cache tier on disk"
+                    + " (needs cacheMegabytes > 0 and cacheDiskMegabytes); empty = memory only", ""),
+            ConfigKey.of(CACHE_DISK_MEGABYTES_KEY, "MiB of block files the disk tier holds at most", "0"));
 
     private final S3CacheEndpoint.Route route;
 
@@ -61,6 +70,8 @@ public final class S3ReadCache implements AutoCloseable {
             S3Settings settings) {
         long bytes = cacheBytes(kind, context.config().getInt(CACHE_MEGABYTES_KEY, 0),
                 Runtime.getRuntime().maxMemory());
+        S3DiskCache.Settings disk = diskSettings(kind, context.config().get(CACHE_DISK_PATH_KEY, ""),
+                context.config().getInt(CACHE_DISK_MEGABYTES_KEY, 0), bytes);
         if (bytes == 0) {
             return Optional.empty();
         }
@@ -70,7 +81,7 @@ public final class S3ReadCache implements AutoCloseable {
             route = S3CacheEndpoint.register(bytes,
                     context.config().getInt(CACHE_CHECK_SECONDS_KEY, DEFAULT_CACHE_CHECK_SECONDS),
                     context.nodeName(), root, client, settings, context.metrics(), kind,
-                    admitOnReuse);
+                    admitOnReuse, disk);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("Cannot start the S3 read cache: " + e.getMessage(), e);
         }
@@ -99,6 +110,47 @@ public final class S3ReadCache implements AutoCloseable {
                     + (maxHeapBytes >> 20) + " MiB): the cache lives on the heap; raise -Xmx or lower the cache");
         }
         return bytes;
+    }
+
+    /**
+     * Checks the disk tier's settings.
+     *
+     * @param kind plugin name, for the message
+     * @param path {@code arrowflight.<kind>.cacheDiskPath}, empty = no disk tier
+     * @param megabytes {@code arrowflight.<kind>.cacheDiskMegabytes}
+     * @param memoryBytes size of the memory tier, 0 = cache off
+     * @return the disk tier's settings, or null for none
+     * @throws IllegalArgumentException when only one of path and size is set, the size is not
+     *         positive, the path is not absolute or the memory tier is off
+     */
+    static S3DiskCache.Settings diskSettings(String kind, String path, int megabytes, long memoryBytes) {
+        String prefix = "arrowflight." + kind + ".";
+        String p = path == null ? "" : path.trim();
+        if (p.isEmpty()) {
+            if (megabytes != 0) {
+                throw new IllegalArgumentException(prefix + CACHE_DISK_MEGABYTES_KEY + "=" + megabytes + " needs "
+                        + prefix + CACHE_DISK_PATH_KEY);
+            }
+            return null;
+        }
+        if (megabytes <= 0) {
+            throw new IllegalArgumentException(prefix + CACHE_DISK_PATH_KEY + " needs " + prefix
+                    + CACHE_DISK_MEGABYTES_KEY + " > 0: " + megabytes);
+        }
+        if (memoryBytes == 0) {
+            throw new IllegalArgumentException(prefix + CACHE_DISK_PATH_KEY + " needs " + prefix
+                    + CACHE_MEGABYTES_KEY + " > 0 (the disk tier backs the memory tier)");
+        }
+        Path dir;
+        try {
+            dir = Path.of(p);
+        } catch (InvalidPathException e) {
+            throw new IllegalArgumentException(prefix + CACHE_DISK_PATH_KEY + " is not a path: " + p, e);
+        }
+        if (!dir.isAbsolute()) {
+            throw new IllegalArgumentException(prefix + CACHE_DISK_PATH_KEY + " must be an absolute path: " + p);
+        }
+        return new S3DiskCache.Settings(dir.normalize(), (long) megabytes << 20);
     }
 
     /**

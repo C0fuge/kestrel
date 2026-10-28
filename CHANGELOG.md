@@ -10,6 +10,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3 / lakeFS read cache disk tier (item 17 (a)), opt-in: `arrowflight.s3.cacheDiskPath` (absolute directory, default
+  empty = memory only) + `arrowflight.s3.cacheDiskMegabytes` (size cap; both needed, and `cacheMegabytes` > 0); same
+  keys under `arrowflight.lakefs.`. Blocks read from S3 are also written (one background writer, queue of 64 blocks,
+  dropped when full) to files under `<path>/<plugin>-cache/`, least recently used deleted beyond the cap; a block the
+  memory tier no longer holds is read from its file before S3 and kept in memory again. Each file's CRC-32C is checked
+  on read (a damaged, short or deleted file is a miss read from S3, never an answer); files of an earlier run are
+  deleted at start and all at close; a lock file `<path>/<plugin>-cache.lock` refuses a second server on the same
+  directory; directory mode 700. `cacheAdmission=reuse` applies to each tier with its own reach. Metrics
+  `arrowflight_s3_cache_disk_*` (capacity/used bytes, blocks, hits, misses, writes, evictions, dropped, errors,
+  not_admitted), `disk...=` counts in the `s3=cacheClosed` line, `diskPath=` / `diskCapacityBytes=` in `s3=cacheOpen`.
 - Hive text tables (P4 step 1), opt-in `hive.textTables` (default false; text tables were and stay skipped
   without it): `STORED AS TEXTFILE` tables of `LazySimpleSerDe` are read by the hive plugin and handed to DuckDB
   as Arrow streams (the ORC path, both result modes), as Hive reads them: `field.delim` / `serialization.format`,
