@@ -78,7 +78,7 @@ jobs:
 
       - name: Measure
         run: |
-          set -uo pipefail
+          set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
           measure() { # label, jars, docker cpu option, extra server options
             local label=$1 jars=$2 cpu=$3 opts=$4
@@ -90,7 +90,11 @@ jobs:
               -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
               --port 32010 --hosts 127.0.0.1 > /dev/null
-            for i in $(seq 120); do docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' && break; sleep 1; done
+            for i in $(seq 120); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
+            if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
+              echo "$label: server did not start" >> "$out"; docker logs srv 2>&1 | tail -n 30; docker rm -f srv > /dev/null
+              return
+            fi
             docker logs srv 2>&1 | grep -o 'duckdb=threads perConnection=[0-9]*' | head -n 1 | sed "s/^/$label: /" >> "$out"
             taskset -c 2,3 ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
               -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=SmallQueryThroughputPerfTest \
