@@ -499,8 +499,8 @@
    the snapshot's own files, deletes and columns); partial mode answers such queries completely. Follow-ups (optional):
    ~~(a) partial mode in parts~~ - done 2026-10-27 (b7be8d1, package run 40582448194 green, pre-release
    `server-1.0.0-b7be8d166498`, see Log): a partial query of one table with one clause
-   and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; (b) Iceberg tables registered in a Hive
-   Metastore (`TableFormat` needs an `asOf`); ~~(c) snapshots that cannot be read file by file (deletion vectors,
+   and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; ~~(b) Iceberg tables registered in a Hive
+   Metastore (`TableFormat` needs an `asOf`)~~ (done 2026-10-28, SPI 1.5 `TableFormat.asOf`, see Log); ~~(c) snapshots that cannot be read file by file (deletion vectors,
    renamed nested fields) are refused~~ (done 2026-10-28, 411e804, in pre-release `server-1.0.0-2cfa23eb62f9`, see Log: read by `iceberg_scan(...,
    snapshot_from_id => )`, which on DuckDB 1.5.6 uses the snapshot's schema; refused only when DuckDB's columns differ
    from the snapshot's declared ones). **Stand:** one travelled snapshot of a table with deletion vectors (v3, if the
@@ -1867,3 +1867,22 @@
   1 s wait, last values read, a silent member's node left out of plans until it answers or is dropped). Core files:
   `ClusterService`, `HazelcastAdapter`, new `adapters/ClusterView`. Writes to a silent member's partitions still wait
   (D3 step 2). Details in `LANE3-STATUS.md`.
+- 2026-10-28 (cloud session): stage 3 still waits on the screening, so backlog item 3 (b): Iceberg time travel for
+  Iceberg tables registered in a Hive Metastore. SPI 1.5 (fa3dc0c, own commit): `TableFormat.asOf(table,
+  metadataLocation, point)` (default refuses), delegated by `SpiTableFormat`. Plugins (27d9b32): `IcebergTableFormat`
+  plans the snapshot with `TimeTravel.find` / `schemaOf` like the iceberg catalogs; `HiveCatalog.asOf` sends Iceberg
+  tables to it (a snapshot ID is tried in the listed metadata file first, then the metastore's current one; tags,
+  branches, instants always fresh) and refuses other Hive tables ("only Iceberg tables of the metastore keep snapshot
+  history"); hive descriptor now `spi=1.5` (it was 1.1 while already using 1.4 methods). Test:
+  `HiveCatalogIntegrationTest.icebergTablesOfTheMetastoreTravelInTime` (version and timestamp = DuckDB's
+  `iceberg_scan` of the earlier metadata file, complete = partial, 2 rows fewer than now; unknown snapshot and a
+  Parquet Hive table refused, both modes); ran locally with the ci-assets 1.5.6 extensions (Hive 8/8, Iceberg 12/12).
+  CI: my package dispatch 40737948663 on 27d9b32 failed `PluginLoadingTest.newerSpiVersionsAreRefused` (it used
+  1.5 as "newer"; now MAJOR.(MINOR+1), 929b544) and once `DistributedClusterIntegrationTest.startCluster` (Hazelcast
+  port already in use - a port collision, not this change; lane 3: watch for a repeat); dispatch 40739820098 on 929b544
+  was cancelled by lane 3's push; lane 3's package dispatch 40741178454 on a110a22 (contains all of the above) green,
+  pre-release `server-1.0.0-a110a2279437`. Note for the coordinator: the maintainer's package dispatch 40736052279 (19b
+  fix) was cancelled by a plugins-lane push (shared concurrency group); `server-1.0.0-a110a2279437` contains the 19b fix
+  (9efe670) - measure that one for the 19b bug note. Next: the
+  screening's numbers (items 21/22/19b/17 (e)) on that pre-release, then the stand rounds; code candidate: item 1b libs
+  pruning (needs a stand).
