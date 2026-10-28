@@ -27,6 +27,7 @@ import org.apache.avro.file.SeekableInput;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericFixed;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.ResolvingDecoder;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
 import org.apache.orc.TypeDescription;
 
@@ -143,7 +144,11 @@ final class AvroArrowReader extends ArrowReader {
             this.writerZone = null;
             return;
         }
-        GenericDatumReader<GenericRecord> datums = new GenericDatumReader<>();
+        boolean[] read = new boolean[columns.size()];
+        for (int position : positions) {
+            read[position] = true;
+        }
+        GenericDatumReader<GenericRecord> datums = new ProjectingReader(readerSchema, read);
         datums.setExpected(readerSchema);
         try {
             this.reader = new DataFileReader<>(new Input(file), datums);
@@ -200,6 +205,52 @@ final class AvroArrowReader extends ArrowReader {
         }
         root.setRowCount(rows);
         return rows > 0;
+    }
+
+    /**
+     * Decodes only the projected fields of a record and skips the others through the resolving
+     * decoder, which fails on them as a read would (a missing field without default, a union
+     * branch the table lacks). Fields whose reader type has a float or double or a nested
+     * record are read anyway: a skip cannot widen an int or float written into them, nor follow
+     * a nested record's writer field order.
+     */
+    private static final class ProjectingReader extends GenericDatumReader<GenericRecord> {
+
+        /** The table's record; nested records are read whole. */
+        private final Schema table;
+        private final boolean[] read;
+
+        ProjectingReader(Schema table, boolean[] read) {
+            this.table = table;
+            this.read = read.clone();
+        }
+
+        @Override
+        protected void readField(Object record, Schema.Field field, Object oldDatum,
+                ResolvingDecoder in, Object state) throws IOException {
+            if (record instanceof GenericRecord row && row.getSchema() == table
+                    && !read[field.pos()] && skippable(field.schema())) {
+                skip(field.schema(), in);
+            } else {
+                super.readField(record, field, oldDatum, in, state);
+            }
+        }
+
+        /**
+         * Tells whether a reader type can be skipped through the resolving decoder.
+         *
+         * @param schema the field's reader type
+         * @return false when it holds a float, double or record
+         */
+        static boolean skippable(Schema schema) {
+            return switch (schema.getType()) {
+                case FLOAT, DOUBLE, RECORD -> false;
+                case UNION -> schema.getTypes().stream().allMatch(ProjectingReader::skippable);
+                case ARRAY -> skippable(schema.getElementType());
+                case MAP -> skippable(schema.getValueType());
+                default -> true;
+            };
+        }
     }
 
     /**

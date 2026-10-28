@@ -210,6 +210,56 @@ class AvroArrowReaderTest {
     }
 
     @Test
+    void eachProjectionReadsTheSameValuesAsTheWholeRow() throws IOException {
+        String file = "{\"type\":\"record\",\"name\":\"t\",\"fields\":["
+                + "{\"name\":\"e\",\"type\":\"long\"},{\"name\":\"a\",\"type\":\"int\"},"
+                + "{\"name\":\"c\",\"type\":{\"type\":\"record\",\"name\":\"c\",\"fields\":["
+                + "{\"name\":\"y\",\"type\":\"string\"},{\"name\":\"x\",\"type\":\"int\"}]}},"
+                + "{\"name\":\"d\",\"type\":\"bytes\"},"
+                + "{\"name\":\"u\",\"type\":[\"null\",\"int\"]},"
+                + "{\"name\":\"l\",\"type\":{\"type\":\"array\",\"items\":\"int\"}}]}";
+        // Fields in another order, promotions (int -> double, bytes -> string, int -> long in a
+        // list), a nested record in another field order, a field the file lacks.
+        String table = "{\"type\":\"record\",\"name\":\"t\",\"fields\":["
+                + "{\"name\":\"a\",\"type\":\"double\"},{\"name\":\"d\",\"type\":\"string\"},"
+                + "{\"name\":\"c\",\"type\":{\"type\":\"record\",\"name\":\"c\",\"fields\":["
+                + "{\"name\":\"x\",\"type\":\"int\"},{\"name\":\"y\",\"type\":\"string\"}]}},"
+                + "{\"name\":\"u\",\"type\":[\"null\",\"int\"]},"
+                + "{\"name\":\"l\",\"type\":{\"type\":\"array\",\"items\":\"long\"}},"
+                + "{\"name\":\"z\",\"type\":[\"null\",\"string\"],\"default\":null},"
+                + "{\"name\":\"e\",\"type\":\"long\"}]}";
+        String spec = "a double;d string;c struct<x:int,y:string>;u int;"
+                + "l array<bigint>;z string;e bigint";
+        Schema schema = AvroFormat.parse(file);
+        Schema nested = schema.getField("c").schema();
+        GenericRecord[] rows = new GenericRecord[300];
+        for (int i = 0; i < rows.length; i++) {
+            GenericRecord c = new GenericData.Record(nested);
+            c.put("y", "y" + i);
+            c.put("x", -i);
+            rows[i] = new GenericData.Record(schema);
+            rows[i].put("e", i * 1_000_000_000L);
+            rows[i].put("a", i);
+            rows[i].put("c", c);
+            rows[i].put("d", ByteBuffer.wrap(("d" + i).getBytes(StandardCharsets.UTF_8)));
+            rows[i].put("u", i % 3 == 0 ? null : i);
+            rows[i].put("l", List.of(i, i + 1));
+        }
+        byte[] data = write(schema, Map.of(), null, rows);
+        List<String> names = List.of("a", "d", "c", "u", "l", "z", "e");
+        AvroFormat format = AvroFormat.of(Map.of(), Map.of(AvroFormat.LITERAL, table),
+                AvroFormatTest.columns(spec));
+        List<String> whole = read(data, format, spec, names);
+        assertEquals("1.0|d1|{x=-1, y=y1}|1|[1, 2]|null|1000000000", whole.get(1));
+        for (int c = 0; c < names.size(); c++) {
+            List<String> one = read(data, format, spec, List.of(names.get(c)));
+            for (int r = 0; r < rows.length; r++) {
+                assertEquals(whole.get(r).split("\\|")[c], one.get(r), names.get(c) + " row " + r);
+            }
+        }
+    }
+
+    @Test
     void byteRangesReadEveryBlockOnce() throws IOException {
         String table = "{\"type\":\"record\",\"name\":\"t\",\"fields\":[{\"name\":\"i\",\"type\":"
                 + "\"int\"},{\"name\":\"s\",\"type\":[\"null\",\"string\"]}]}";

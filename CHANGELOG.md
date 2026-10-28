@@ -13,7 +13,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Hive plugin: large Avro data files and uncompressed text files (text, CSV, JSON tables without header lines) of a
   scan are read as byte ranges decoded in parallel (Avro from the next sync marker, text from the next line start, as
   Hadoop splits them; files over 8 MiB, like ORC files since P1), instead of one thread per file. Same rows in the
-  same order; compressed text files and tables with `skip.header.line.count` are still read whole (P4 (d)).
+  same order; compressed text files and tables with `skip.header.line.count` are still read whole. Avro records
+  decode only the requested columns (others are skipped through Avro's resolver, so a file that does not resolve
+  still fails as in Hive) (P4 (d)).
 - Setting `duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false = unchanged): every worker connection
   connects to one DuckDB of the node (one thread pool and one `memory_limit`; storage setup, secrets and lockdown run
   once and are checked at startup); each connection keeps the catalog views in an in-memory catalog of its own, and
