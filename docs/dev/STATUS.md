@@ -481,9 +481,11 @@
    ~~(a) partial mode in parts~~ - done 2026-10-27 (b7be8d1, package run 40582448194 green, pre-release
    `server-1.0.0-b7be8d166498`, see Log): a partial query of one table with one clause
    and nothing else (no join, subquery, set operation) is planned in parts on the travelled snapshot; (b) Iceberg tables registered in a Hive
-   Metastore (`TableFormat` needs an `asOf`); (c) snapshots that cannot be read file by file (deletion vectors,
-   renamed nested fields) are refused — `iceberg_scan(..., snapshot_from_id => )` could read them if DuckDB 1.4.5 picks
-   the snapshot's schema (check first). For the coordinator: Trino plugin / StarRocks connector may forward the clause.
+   Metastore (`TableFormat` needs an `asOf`); ~~(c) snapshots that cannot be read file by file (deletion vectors,
+   renamed nested fields) are refused~~ (done 2026-10-28, 411e804, see Log: read by `iceberg_scan(...,
+   snapshot_from_id => )`, which on DuckDB 1.5.6 uses the snapshot's schema; refused only when DuckDB's columns differ
+   from the snapshot's declared ones). **Stand:** one travelled snapshot of a table with deletion vectors (v3, if the
+   stand's writers produce them) vs Spark's answer. For the coordinator: Trino plugin / StarRocks connector may forward the clause.
 4. ~~**Second S3 store**~~ — done 2026-10-25 (see Log): named stores `arrowflight.s3.stores=<name>,...`, each
    with `arrowflight.s3.<name>.root` and its own endpoint/region/URL style/credentials, own DuckDB secret
    `flight_s3_<name>`. Stand: one Iceberg or Hive catalog in a second MinIO bucket with another (read-only)
