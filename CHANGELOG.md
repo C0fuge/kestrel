@@ -151,6 +151,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   checkpoints, versions, schema evolution, types; Spark's answers in `expected.tsv`) and
   `tools/ci/DuckDbDeltaProbe.java` reads them with `delta` v1.5.6 under the server's lockdown, locally and on S3
   (moto), and records what is read correctly and whether paths outside `allowed_directories` are refused. Test only.
+- Delta on HDFS probe (C3): the `delta` job also puts the fixtures on a single-node HDFS (`tools/ci/hdfs-single.sh`,
+  `apache/hadoop:3.4.1`) and probes them with our hadoopfs build loaded (`PROBE_HDFS_ROOT`; the probe runs in an
+  Ubuntu 20.04 JDK container, the hadoopfs build links libssl 1.1). Result: hadoopfs reads the Parquet files, but
+  `delta` v1.5.6 does not read `hdfs://` tables (delta-kernel: `Unable to recognise URL`). Test only.
 - DuckDB postgres / mysql scanner probe (C2 step 1): `catalogs-ci.yml` job `jdbc-scanners`
   (`tools/ci/DuckDbScannerProbe.java`) loads `postgres_scanner` / `mysql_scanner` v1.5.6 by path, attaches
   PostgreSQL 16 / MySQL 8.4 read-only with a temporary secret, applies the server's lockdown and records which

@@ -143,11 +143,18 @@ C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), fr
       all on Ozone). Plugin test 3/3, server test 4/4 (the HMS reference skipped as on every S3 entry) pass
       locally, unchanged code. Ozone's gateway answers unsigned requests with 403 (readiness check takes any HTTP
       answer).
-    - **Next, not blocked by Q5 (probe only):** Delta on HDFS. Plan: in the `delta` job start a single-node HDFS
-      (Docker Hub `apache/hadoop:3.4.1`, namenode + datanode, `hdfs dfs -put` the fixtures), then in
-      `DuckDbDeltaProbe` (new optional arg/env `PROBE_HDFS_ROOT`) `LOAD` hadoopfs (ci-assets tar) + delta and try
-      `delta_scan('hdfs://localhost:8020/delta/plain')` before/after the lockdown; record the error (expected:
-      delta-kernel has no hdfs object store). If unreadable, the plugin refuses `hdfs://` Delta roots clearly.
+    - Delta on HDFS probed (2026-10-28): `tools/ci/hdfs-single.sh` (Docker Hub `apache/hadoop:3.4.1`, NameNode +
+      DataNode in one container on the host network, ready in ~20 s) holds the fixtures; `DuckDbDeltaProbe` with
+      `PROBE_HDFS_ROOT` loads hadoopfs (`51b7220-afc3`, ci-assets) next to delta and httpfs. The probe now runs in
+      `eclipse-temurin:17-jdk-focal` (+ libxml2): the hadoopfs build links `libssl.so.1.1`, absent on
+      ubuntu-latest. Results: hadoopfs reads the tables' Parquet files and lists `_delta_log` (before and after
+      the lockdown), but every delta function fails on `hdfs://` with `DeltaKernel ObjectStoreError (8): ...
+      Unable to recognise URL "hdfs://localhost:8020/delta/t/"` (delta_scan, delta_list_files, time travel);
+      `ATTACH ... (TYPE delta)` succeeds (lazy) and fails on the first read. Local and S3 results unchanged.
+      Consequence for the plugin: refuse `hdfs://` (and any scheme but local / s3) Delta roots at configuration
+      time with a clear message; reading Delta on HDFS would need a log reader of our own (JSON + checkpoint
+      Parquet, the files then read by hadoopfs' `read_parquet`) - not planned, see Next.
+    - **Next for C3:** step 2 (the plugin) after Q5. Nothing else in C3 is unblocked.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
     reader allows.
 
@@ -248,3 +255,9 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   session end (change is tools/ci + workflow only). Q1, Q4, Q5 still open (no answer yet), so C1 step 2b, C2 step 2
   and the Delta plugin stay unbuilt; C4 waits on P4 (plugins lane, views part (d) next). Next: Delta-on-HDFS probe
   (C3 note above).
+- 2026-10-28: C3 Delta-on-HDFS probe - single-node HDFS in the `delta` job (`tools/ci/hdfs-single.sh`), probe with
+  hadoopfs in an Ubuntu 20.04 JDK container: delta v1.5.6 cannot read `hdfs://` tables (delta-kernel has no HDFS
+  object store; hadoopfs reads the Parquet files). Test only. Catalogs CI green: run 40784918475 (all 9 jobs). Dev
+  CI run 40784918326 (head 77babce) still running at session end (change is tools/ci + workflow only). Q1, Q4, Q5
+  still unanswered: C1 step 2b, C2 step 2 and C3 step 2 stay unbuilt. P4 (plugins lane) is closed, so C4 is
+  unblocked: next item.
