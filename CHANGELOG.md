@@ -20,6 +20,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   directory; directory mode 700. `cacheAdmission=reuse` applies to each tier with its own reach. Metrics
   `arrowflight_s3_cache_disk_*` (capacity/used bytes, blocks, hits, misses, writes, evictions, dropped, errors,
   not_admitted), `disk...=` counts in the `s3=cacheClosed` line, `diskPath=` / `diskCapacityBytes=` in `s3=cacheOpen`.
+- Hive `OpenCSVSerde` tables (P4 step 2c) under `hive.textTables`: lines parsed with opencsv 2.3 (new plugin
+  dependency, the version Hive 3.1.3 uses) exactly as Hive's serde does: `separatorChar` / `quoteChar` /
+  `escapeChar` (default `,` `"` and, for the default escape `"`, opencsv's backslash), header lines, missing
+  fields NULL, empty line all NULL, no NULL text. Every column is a string, as Hive reads them; tables that
+  declare other column types stay skipped with a log reason, as do footer lines.
 - Hive text tables with nested columns (P4 step 2): arrays, maps and structs of `LazySimpleSerDe` tables
   (`hive.textTables`) are read as Hive reads them: split at `collection.delim` (or the misspelt
   `colelction.delim`, default byte 2), `mapkey.delim` (default 3) and bytes 4-8 for deeper levels, up to Hive's 7

@@ -91,6 +91,13 @@ class HiveTextTableTest {
         hms.createTable("txt", "nested", "file:" + nested,
                 "i int;a array<int>;m map<string,int>;st struct<x:int,y:string,z:map<int,int>>", "",
                 "text", null);
+        Path csv = Files.createDirectories(dir.resolve("lake/csv"));
+        hms.createTable("txt", "csv", "file:" + csv, "id string;name string", "p string", "csv",
+                Map.of("serde:separatorChar", ";", "skip.header.line.count", "1"));
+        Files.writeString(file(hms.addPartition("txt", "csv", List.of("a"), null), "1.csv"),
+                "id;name\n1;\"x;y\"\n2\n");
+        hms.createTable("txt", "typedcsv", "file:" + dir.resolve("lake/typedcsv"), "id int", "",
+                "csv", null);
         hms.createTable("txt", "unions", "file:" + dir.resolve("lake/unions"),
                 "u uniontype<int,string>", "", "text", null);
     }
@@ -107,6 +114,8 @@ class HiveTextTableTest {
             assertFalse(tables.contains("footer"), "footer lines are not read: " + tables);
             assertTrue(tables.contains("nested"), tables.toString());
             assertFalse(tables.contains("unions"), "unions are not read: " + tables);
+            assertTrue(tables.contains("csv"), tables.toString());
+            assertFalse(tables.contains("typedcsv"), "OpenCSVSerde columns are strings: " + tables);
             TableSnapshot flat = catalog.current(new TableName("txt", "flat")).orElseThrow();
             assertEquals(new ReadSpec.ArrowStream("text"), flat.read());
             assertEquals(2, flat.files().size());
@@ -158,6 +167,18 @@ class HiveTextTableTest {
                         rows(duckdb, "SELECT i, a::VARCHAR, m::VARCHAR, st::VARCHAR, typeof(a),"
                                 + " typeof(m) FROM text_nested ORDER BY i"));
             }
+            assertEquals(0, allocator.getAllocatedMemory());
+        }
+    }
+
+    @Test
+    void openCsvSerdeTablesAreReadAsHiveParsesThem() throws Exception {
+        try (Catalog catalog = open(Map.of("textTables", "true"));
+                BufferAllocator allocator = new RootAllocator()) {
+            TableSnapshot csv = catalog.current(new TableName("txt", "csv")).orElseThrow();
+            assertEquals(new ReadSpec.ArrowStream("text"), csv.read());
+            assertEquals(List.of("1|x;y|a", "2|null|a"),
+                    read(catalog, allocator, csv, List.of("id", "name", "p")));
             assertEquals(0, allocator.getAllocatedMemory());
         }
     }

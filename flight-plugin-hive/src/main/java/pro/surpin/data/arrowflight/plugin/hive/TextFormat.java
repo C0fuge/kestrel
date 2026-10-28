@@ -32,16 +32,19 @@ import java.util.Map;
  * @param lastColumnTakesRest whether the last column holds the rest of a row with more fields
  * @param tableOverrides the table's parameters among {@link #KEYS}, which also apply to its
  *     partitions (not part of equality)
+ * @param csv for an {@code OpenCSVSerde} table how its lines are parsed (then only
+ *     {@code headerLines} of the other components counts), else null
  */
-record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, boolean escapeCrlf, byte[] nullSequence,
-        int headerLines, boolean lastColumnTakesRest, Map<String, String> tableOverrides) {
+record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, boolean escapeCrlf,
+        byte[] nullSequence, int headerLines, boolean lastColumnTakesRest,
+        Map<String, String> tableOverrides, CsvLayout csv) {
 
     /** Properties that change how files are read. */
     static final List<String> KEYS = List.of("field.delim", "serialization.format", "escape.delim",
             "serialization.escape.crlf", "serialization.null.format", "skip.header.line.count",
             "skip.footer.line.count", "serialization.last.column.takes.rest", "line.delim",
             "serialization.encoding", "timestamp.formats", "collection.delim", "colelction.delim",
-            "mapkey.delim");
+            "mapkey.delim", CsvLayout.SEPARATOR, CsvLayout.QUOTE, CsvLayout.ESCAPE);
 
     /** Hive's default field delimiter, byte 1 (Ctrl-A). */
     static final byte DEFAULT_FIELD_DELIMITER = 1;
@@ -61,17 +64,7 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
     static TextFormat of(Map<String, String> serdeParameters, Map<String, String> tableParameters) {
         Map<String, String> properties = new HashMap<>();
         Map<String, String> overrides = new HashMap<>();
-        if (serdeParameters != null) {
-            properties.putAll(serdeParameters);
-        }
-        if (tableParameters != null) {
-            tableParameters.forEach((key, value) -> {
-                if (value != null && KEYS.contains(key)) {
-                    properties.put(key, value);
-                    overrides.put(key, value);
-                }
-            });
-        }
+        merge(serdeParameters, tableParameters, properties, overrides);
         String line = properties.get("line.delim");
         if (line != null && !line.isEmpty() && byteOf(line, (byte) '\n') != '\n') {
             throw new IllegalArgumentException("text table with line delimiter "
@@ -125,7 +118,56 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
                 "true".equalsIgnoreCase(properties.getOrDefault("serialization.escape.crlf", "false")),
                 nullFormat.getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
                 "true".equalsIgnoreCase(properties.getOrDefault(
-                        "serialization.last.column.takes.rest", "false")), Map.copyOf(overrides));
+                        "serialization.last.column.takes.rest", "false")), Map.copyOf(overrides),
+                null);
+    }
+
+    /**
+     * Reads the format of an {@code OpenCSVSerde} table: its {@link CsvLayout} and header lines.
+     *
+     * @param serdeParameters the serde's parameters, or null
+     * @param tableParameters the table's parameters, or null
+     * @return the format
+     * @throws IllegalArgumentException for footer lines or characters opencsv refuses
+     */
+    static TextFormat csv(Map<String, String> serdeParameters, Map<String, String> tableParameters) {
+        Map<String, String> properties = new HashMap<>();
+        Map<String, String> overrides = new HashMap<>();
+        merge(serdeParameters, tableParameters, properties, overrides);
+        if (count(properties, "skip.footer.line.count") > 0) {
+            throw new IllegalArgumentException("text table with skip.footer.line.count: not read yet");
+        }
+        byte[] nested = new byte[MAX_LEVEL];
+        for (int level = 1; level <= MAX_LEVEL; level++) {
+            nested[level - 1] = (byte) (level + 1);
+        }
+        return new TextFormat(DEFAULT_FIELD_DELIMITER, nested, -1, false,
+                "\\N".getBytes(StandardCharsets.UTF_8), count(properties, "skip.header.line.count"),
+                false, Map.copyOf(overrides), CsvLayout.of(properties));
+    }
+
+    /**
+     * Merges serde and table parameters as Hive does: the table's win.
+     *
+     * @param serdeParameters the serde's parameters, or null
+     * @param tableParameters the table's parameters, or null
+     * @param properties receives the merged properties
+     * @param overrides receives the table's parameters among {@link #KEYS}
+     */
+    private static void merge(Map<String, String> serdeParameters,
+            Map<String, String> tableParameters, Map<String, String> properties,
+            Map<String, String> overrides) {
+        if (serdeParameters != null) {
+            properties.putAll(serdeParameters);
+        }
+        if (tableParameters != null) {
+            tableParameters.forEach((key, value) -> {
+                if (value != null && KEYS.contains(key)) {
+                    properties.put(key, value);
+                    overrides.put(key, value);
+                }
+            });
+        }
     }
 
     /**
@@ -133,10 +175,10 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
      *
      * @param serdeParameters the partition's serde parameters, or null
      * @return the format
-     * @throws IllegalArgumentException as {@link #of}
+     * @throws IllegalArgumentException as {@link #of} or {@link #csv}
      */
     TextFormat forPartition(Map<String, String> serdeParameters) {
-        return of(serdeParameters, tableOverrides);
+        return csv == null ? of(serdeParameters, tableOverrides) : csv(serdeParameters, tableOverrides);
     }
 
     /**
@@ -157,7 +199,7 @@ record TextFormat(byte fieldDelimiter, byte[] nestedSeparators, int escape, bool
     String canonical() {
         return "d" + fieldDelimiter + ",s" + HexFormat.of().formatHex(nestedSeparators) + ",e" + escape + ",c" + escapeCrlf + ",n"
                 + HexFormat.of().formatHex(nullSequence) + ",h" + headerLines + ",r"
-                + lastColumnTakesRest;
+                + lastColumnTakesRest + (csv == null ? "" : ",csv" + csv.canonical());
     }
 
     /**

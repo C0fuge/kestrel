@@ -200,6 +200,47 @@ class TextArrowReaderTest {
     }
 
     @Test
+    void csvLinesAreParsedAsHivesOpenCsvSerde() throws Exception {
+        List<OrcArrowReader.Column> three = List.of(new OrcArrowReader.Column("a", "string"),
+                new OrcArrowReader.Column("b", "string"), new OrcArrowReader.Column("c", "string"));
+        List<String> all = List.of("a", "b", "c");
+        TextFormat defaults = TextFormat.csv(Map.of(), Map.of("skip.header.line.count", "1"));
+        // Quotes, doubled quotes, the backslash escape (the serde's default; opencsv 2.3 drops it
+        // before anything but a quote or a backslash), missing fields, an empty line, Hive's NULL
+        // text (no NULL text in this serde) and an unclosed quote (its field is dropped).
+        String text = "a,b,c\n"
+                + "1,\"x,y\",\"say \"\"hi\"\"\"\n"
+                + "2,a\\,b,c\n"
+                + "3\n"
+                + "\n"
+                + "4,\\N,\"\"\n"
+                + "5,\"open\n";
+        assertEquals(List.of("1|x,y|say \"hi\"", "2|a|b", "3|null|null", "null|null|null",
+                "4|N|", "5|null|null"), read(text, defaults, all, "f.csv", three));
+        assertEquals(List.of("z|x"), read(text.substring(0, 6) + "x,y\\,z,c\n", defaults,
+                List.of("c", "a"), "f.csv", three));
+        assertEquals(List.of("�|x|null"), read(new byte[] {(byte) 0xff, ',', 'x'},
+                TextFormat.csv(Map.of(), Map.of()), all, "f.csv", three));
+        // Own separator, quote and escape; the table's properties win over the serde's.
+        TextFormat own = TextFormat.csv(Map.of("separatorChar", ";", "quoteChar", "'",
+                "escapeChar", "#"), Map.of("separatorChar", "|"));
+        assertEquals(List.of("x|y;'z'|a\\b"), read("x|'y;#'z#''|a\\b\n", own, all, "f", three));
+        assertNotEquals(own, TextFormat.csv(Map.of("separatorChar", "|", "quoteChar", "'",
+                "escapeChar", "#"), Map.of()).forPartition(Map.of()));
+        assertEquals(own, own.forPartition(Map.of("separatorChar", "|", "quoteChar", "'",
+                "escapeChar", "#")));
+        assertNotEquals(format(Map.of()), TextFormat.csv(Map.of(), Map.of()));
+        for (Map<String, String> refused : List.of(Map.of("separatorChar", ""),
+                Map.of("skip.footer.line.count", "1"))) {
+            assertThrows(IllegalArgumentException.class, () -> TextFormat.csv(refused, Map.of()),
+                    refused.toString());
+        }
+        TextArrowReader.checkType("a", org.apache.orc.TypeDescription.fromString("string"), own);
+        assertThrows(IllegalArgumentException.class, () -> TextArrowReader.checkType("a",
+                org.apache.orc.TypeDescription.fromString("int"), own));
+    }
+
+    @Test
     void nestedColumnsAreSplitAtTheSeparatorsOfTheirLevel() throws Exception {
         List<OrcArrowReader.Column> columns = List.of(new OrcArrowReader.Column("a", "array<int>"),
                 new OrcArrowReader.Column("m", "map<string,int>"),

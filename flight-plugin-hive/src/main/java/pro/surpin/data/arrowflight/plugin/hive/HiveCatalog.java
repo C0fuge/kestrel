@@ -459,7 +459,8 @@ final class HiveCatalog implements Catalog {
             return;
         }
         String problem;
-        if (!HiveTable.text(partition.getSd())) {
+        if (!HiveTable.text(partition.getSd())
+                || HiveTable.csv(partition.getSd()) != (hive.textFormat().csv() != null)) {
             problem = "has another storage format";
         } else {
             try {

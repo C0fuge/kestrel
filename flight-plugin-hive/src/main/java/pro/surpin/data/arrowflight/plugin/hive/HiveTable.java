@@ -142,7 +142,8 @@ record HiveTable(String database, String name, Kind kind, String location,
         TextFormat format = null;
         try {
             if (text) {
-                format = TextFormat.of(sd.getSerdeInfo().getParameters(), params);
+                format = csv(sd) ? TextFormat.csv(sd.getSerdeInfo().getParameters(), params)
+                        : TextFormat.of(sd.getSerdeInfo().getParameters(), params);
             }
             for (FieldSchema field : sd.getCols()) {
                 columns.add(column(field));
@@ -151,7 +152,7 @@ record HiveTable(String database, String name, Kind kind, String location,
                 }
                 if (text) {
                     TextArrowReader.checkType(field.getName(),
-                            TypeDescription.fromString(field.getType()));
+                            TypeDescription.fromString(field.getType()), format);
                 }
             }
             if (table.getPartitionKeys() != null) {
@@ -186,17 +187,28 @@ record HiveTable(String database, String name, Kind kind, String location,
     }
 
     /**
-     * Tells whether a storage descriptor names a text table of Hive's default serde.
+     * Tells whether a storage descriptor names a text table the plugin reads.
      *
      * @param sd storage descriptor
-     * @return true for {@code TextInputFormat} with {@code LazySimpleSerDe}
+     * @return true for {@code TextInputFormat} with {@code LazySimpleSerDe} or {@code OpenCSVSerde}
      */
     static boolean text(StorageDescriptor sd) {
         String serde = sd.getSerdeInfo() == null || sd.getSerdeInfo().getSerializationLib() == null
                 ? "" : sd.getSerdeInfo().getSerializationLib();
         String input = sd.getInputFormat() == null ? "" : sd.getInputFormat();
         return "textinputformat".equals(simpleName(input))
-                && "lazysimpleserde".equals(simpleName(serde));
+                && ("lazysimpleserde".equals(simpleName(serde)) || csv(sd));
+    }
+
+    /**
+     * Tells whether a storage descriptor names Hive's {@code OpenCSVSerde}.
+     *
+     * @param sd storage descriptor
+     * @return true for {@code org.apache.hadoop.hive.serde2.OpenCSVSerde}
+     */
+    static boolean csv(StorageDescriptor sd) {
+        return sd.getSerdeInfo() != null && sd.getSerdeInfo().getSerializationLib() != null
+                && "opencsvserde".equals(simpleName(sd.getSerdeInfo().getSerializationLib()));
     }
 
     /**

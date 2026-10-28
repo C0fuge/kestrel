@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -53,7 +54,8 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * ({@link TextFormat#separator}): an empty field is an empty array or map, a map entry without a
  * key separator has a NULL value, entries with a NULL key are dropped and of equal keys the first
  * is kept (as Hive's {@code LazyMap}), struct fields are matched by position like a row's.
- * Files ending in {@code .gz}, {@code .deflate} or {@code .bz2} are
+ * {@code OpenCSVSerde} tables ({@link CsvLayout}) are string columns parsed by opencsv as
+ * Hive's serde parses them. Files ending in {@code .gz}, {@code .deflate} or {@code .bz2} are
  * decompressed as Hadoop's codecs write them; other compressed files ({@code .snappy},
  * {@code .lz4}, {@code .zst}, {@code .lzo}, {@code .br}) are refused. The Arrow types are the
  * ones of {@link OrcArrowReader#field}, which DuckDB reads as the declared types.
@@ -124,7 +126,7 @@ final class TextArrowReader extends ArrowReader {
             }
             positions[i] = position;
             types[i] = TypeDescription.fromString(columns.get(position).hiveType());
-            checkType(projection.get(i), types[i]);
+            checkType(projection.get(i), types[i], format);
             needed = Math.max(needed, position + 1);
         }
         this.fieldsNeeded = needed;
@@ -143,6 +145,24 @@ final class TextArrowReader extends ArrowReader {
      */
     static void checkType(String name, TypeDescription type) {
         checkType(name, type, type, 1);
+    }
+
+    /**
+     * Checks that a column's type is read from a table of a format: every column of an
+     * {@code OpenCSVSerde} table is a string (Hive reads them all as strings).
+     *
+     * @param name column name
+     * @param type its type
+     * @param format the table's format
+     * @throws IllegalArgumentException when the type is not read
+     */
+    static void checkType(String name, TypeDescription type, TextFormat format) {
+        if (format.csv() == null) {
+            checkType(name, type);
+        } else if (type.getCategory() != TypeDescription.Category.STRING) {
+            throw new IllegalArgumentException("OpenCSVSerde column " + name + " has type " + type
+                    + ": Hive reads every column of the serde as string, declare it string");
+        }
     }
 
     private static void checkType(String name, TypeDescription column, TypeDescription type,
@@ -194,6 +214,10 @@ final class TextArrowReader extends ArrowReader {
         root.allocateNew();
         int rows = 0;
         while (rows < batchSize && readLine()) {
+            if (format.csv() != null) {
+                writeCsv(root, rows++);
+                continue;
+            }
             split();
             for (int i = 0; i < positions.length; i++) {
                 write(root.getVector(i), types[i], rows, fieldStarts[positions[i]],
@@ -326,6 +350,27 @@ final class TextArrowReader extends ArrowReader {
         }
         for (; field < fieldsNeeded; field++) {
             fieldStarts[field] = -1;
+        }
+    }
+
+    /**
+     * Writes the current line of an {@code OpenCSVSerde} table, parsed as the serde parses it.
+     *
+     * @param root target batch
+     * @param row target row
+     * @throws IOException never for a line in memory
+     */
+    private void writeCsv(VectorSchemaRoot root, int row) throws IOException {
+        // Malformed bytes become U+FFFD, as Hadoop's Text.toString() decodes the row for the serde.
+        String[] fields = format.csv().read(new String(line, 0, lineLength, StandardCharsets.UTF_8));
+        for (int i = 0; i < positions.length; i++) {
+            FieldVector vector = root.getVector(i);
+            if (fields == null || positions[i] >= fields.length) {
+                OrcArrowReader.setNull(vector, row);
+            } else {
+                ((VarCharVector) vector).setSafe(row,
+                        fields[positions[i]].getBytes(StandardCharsets.UTF_8));
+            }
         }
     }
 

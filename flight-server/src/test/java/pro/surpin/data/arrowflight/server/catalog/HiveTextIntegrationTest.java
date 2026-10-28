@@ -47,7 +47,8 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
  * default layout with a gzip file, and a
  * partitioned comma-separated table with a header line and an empty null format) are answered in
  * both result modes exactly like the same rows in Parquet tables of the same metastore, alone,
- * filtered, grouped by a partition column and joined with Parquet and with each other.
+ * filtered, grouped by a partition column and joined with Parquet and with each other; an
+ * OpenCSVSerde table answers its strings as Hive parses them.
  */
 class HiveTextIntegrationTest {
 
@@ -127,6 +128,12 @@ class HiveTextIntegrationTest {
                     text((int) f[1], (int) f[2], ",", "", true));
             parquet(Path.of(at[1].substring("file:".length())).resolve(name), (int) f[1], (int) f[2]);
         }
+        // OpenCSVSerde: every column a string, parsed by opencsv as Hive does.
+        Path people = Files.createDirectories(lake.resolve("people"));
+        Files.writeString(people.resolve("000000_0"),
+                "id,name,note\n1,\"Doe, Jane\",\"said \"\"hi\"\"\"\n2,Bob\n");
+        hms.call("createTable", "hvtxt", "people", "file:" + people, "id string;name string;note string",
+                "", "csv", Map.of("skip.header.line.count", "1"));
         Path plugins = dir.resolve("plugins");
         HiveTestTables.installPlugin(plugins);
         proxy = hms.proxy();
@@ -217,6 +224,16 @@ class HiveTextIntegrationTest {
         String self = "SELECT count(*) AS n FROM hvtxt.%1$s a, hvtxt.%1$s b WHERE a.i = b.i + 1";
         assertEquals(answer(String.format(self, "flat_pq"), "complete"),
                 answer(String.format(self, "flat"), "complete"));
+    }
+
+    @Test
+    void openCsvSerdeTablesAnswerInBothModes() throws Exception {
+        for (String mode : List.of("complete", "partial")) {
+            Answer answer = answer("SELECT id, name, note FROM hvtxt.people", mode);
+            assertEquals(List.of("1|Doe, Jane|said \"hi\"", "2|Bob|null"), answer.rows(), mode);
+            assertEquals(List.of("1"), answer("SELECT id FROM hvtxt.people WHERE name LIKE '%Jane'",
+                    mode).rows(), mode);
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
