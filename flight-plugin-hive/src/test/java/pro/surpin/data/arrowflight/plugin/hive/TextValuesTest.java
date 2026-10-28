@@ -3,12 +3,19 @@ package pro.surpin.data.arrowflight.plugin.hive;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -121,5 +128,75 @@ class TextValuesTest {
 
     private static byte[] b(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void plainDecimalsEqualTheGeneralReader() {
+        List<String> texts = new ArrayList<>(List.of("0", "-0", "+1", "1.", ".5", "-.5", ".", "-", "",
+                "1.234", "12.30", "999.99", "1000.00", "-999.995", "00012.5", "1e3", " 1.5", "1.5 ",
+                "1,5", "1.2.3", "123456789012345678", "1234567890123456789", "0.000000000000000001"));
+        Random random = new Random(7);
+        for (int i = 0; i < 20_000; i++) {
+            StringBuilder text = new StringBuilder(random.nextInt(4) == 0 ? "-" : "");
+            int whole = random.nextInt(12);
+            for (int d = 0; d < whole; d++) {
+                text.append((char) ('0' + random.nextInt(10)));
+            }
+            if (random.nextBoolean()) {
+                text.append('.');
+                for (int d = random.nextInt(5); d > 0; d--) {
+                    text.append((char) ('0' + random.nextInt(10)));
+                }
+            }
+            texts.add(text.toString());
+        }
+        int plain = 0;
+        for (String text : texts) {
+            byte[] bytes = text.getBytes(StandardCharsets.US_ASCII);
+            for (int[] type : new int[][] {{15, 2}, {6, 2}, {18, 0}, {18, 18}, {4, 1}, {1, 0}}) {
+                long fast = TextValues.plainDecimal(bytes, 0, bytes.length, type[0], type[1]);
+                if (fast == TextValues.NOT_PLAIN) {
+                    continue;
+                }
+                plain++;
+                BigDecimal general = TextValues.decimal(bytes, 0, bytes.length, type[0], type[1]);
+                assertEquals(general, BigDecimal.valueOf(fast, type[1]),
+                        text + " as decimal(" + type[0] + "," + type[1] + ")");
+            }
+        }
+        assertTrue(plain > 30_000, "plain reads: " + plain);
+    }
+
+    @Test
+    void datesOfTenBytesEqualThePatternReader() {
+        List<String> texts = new ArrayList<>(List.of("2024-02-29", "2023-02-29", "2024-13-01",
+                "2024-00-10", "2024-01-00", "2024-01-32", "0000-01-01", "9999-12-31", "2024-1-011",
+                "20240-1-01", "2024/01/01", "2024-01-0a", "+024-01-01", "2024-04-31"));
+        Random random = new Random(11);
+        for (int i = 0; i < 20_000; i++) {
+            texts.add(String.format("%04d-%02d-%02d", random.nextInt(3000), random.nextInt(14),
+                    random.nextInt(33)));
+        }
+        for (String text : texts) {
+            byte[] bytes = text.getBytes(StandardCharsets.US_ASCII);
+            assertEquals(patternDate(text), TextValues.date(bytes, 0, bytes.length), text);
+        }
+    }
+
+    /** The date reader before its fast path, as reference. */
+    private static Integer patternDate(String field) {
+        String text = field.strip();
+        int blank = text.indexOf(' ');
+        Matcher m = Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})")
+                .matcher(blank < 0 ? text : text.substring(0, blank));
+        if (!m.matches()) {
+            return null;
+        }
+        try {
+            return (int) LocalDate.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)),
+                    Integer.parseInt(m.group(3))).toEpochDay();
+        } catch (DateTimeException e) {
+            return null;
+        }
     }
 }

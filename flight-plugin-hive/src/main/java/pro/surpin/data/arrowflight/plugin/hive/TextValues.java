@@ -11,6 +11,7 @@ import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -32,6 +33,16 @@ final class TextValues {
     private static final Pattern TIMESTAMP = Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})"
             + "(?:[ T](\\d{1,2}):(\\d{1,2})(?::(\\d{1,2})(?:\\.(\\d{1,9}))?)?)?");
     private static final long MICROS_PER_SECOND = 1_000_000L;
+    /** Returned by {@link #plainDecimal} for text it leaves to {@link #decimal}. */
+    static final long NOT_PLAIN = Long.MIN_VALUE;
+    private static final long[] POWERS_OF_TEN = new long[19];
+
+    static {
+        POWERS_OF_TEN[0] = 1L;
+        for (int i = 1; i < POWERS_OF_TEN.length; i++) {
+            POWERS_OF_TEN[i] = POWERS_OF_TEN[i - 1] * 10;
+        }
+    }
 
     private TextValues() {
     }
@@ -171,6 +182,76 @@ final class TextValues {
     }
 
     /**
+     * Reads a plain decimal ({@code [-+]digits[.digits]}, at most 18 digits, no more fraction
+     * digits than the scale) as its unscaled value at a column's scale, without objects; any
+     * other text is left to {@link #decimal}.
+     *
+     * @param bytes buffer
+     * @param start first byte
+     * @param end end of the field
+     * @param precision column precision, at most 18
+     * @param scale column scale
+     * @return the unscaled value, or {@link #NOT_PLAIN} when {@link #decimal} must read it
+     */
+    static long plainDecimal(byte[] bytes, int start, int end, int precision, int scale) {
+        int i = start;
+        boolean negative = false;
+        if (i < end && (bytes[i] == '-' || bytes[i] == '+')) {
+            negative = bytes[i] == '-';
+            i++;
+        }
+        long unscaled = 0;
+        int digits = 0;
+        int fraction = -1;
+        for (; i < end; i++) {
+            byte b = bytes[i];
+            if (b >= '0' && b <= '9') {
+                if (++digits > 18) {
+                    return NOT_PLAIN;
+                }
+                unscaled = unscaled * 10 + (b - '0');
+                if (fraction >= 0) {
+                    fraction++;
+                }
+            } else if (b == '.' && fraction < 0) {
+                fraction = 0;
+            } else {
+                return NOT_PLAIN;
+            }
+        }
+        int fractionDigits = Math.max(fraction, 0);
+        if (digits == 0 || fractionDigits > scale || digits - fractionDigits + scale > 18) {
+            return NOT_PLAIN;
+        }
+        for (int k = fractionDigits; k < scale; k++) {
+            unscaled *= 10;
+        }
+        if (unscaled >= POWERS_OF_TEN[precision]) {
+            return NOT_PLAIN;
+        }
+        return negative ? -unscaled : unscaled;
+    }
+
+    /**
+     * Reads ASCII digits.
+     *
+     * @param bytes buffer
+     * @param start first byte
+     * @param count digits
+     * @return their value, or -1 when a byte is not a digit
+     */
+    private static int digits(byte[] bytes, int start, int count) {
+        int value = 0;
+        for (int i = start; i < start + count; i++) {
+            if (bytes[i] < '0' || bytes[i] > '9') {
+                return -1;
+            }
+            value = value * 10 + (bytes[i] - '0');
+        }
+        return value;
+    }
+
+    /**
      * Reads a date.
      *
      * @param bytes buffer
@@ -179,6 +260,18 @@ final class TextValues {
      * @return days since 1970-01-01, or null
      */
     static Integer date(byte[] bytes, int start, int end) {
+        if (end - start == 10 && bytes[start + 4] == '-' && bytes[start + 7] == '-') {
+            int year = digits(bytes, start, 4);
+            int month = digits(bytes, start + 5, 2);
+            int day = digits(bytes, start + 8, 2);
+            if (year >= 0 && month >= 0 && day >= 0) {
+                try {
+                    return (int) LocalDate.of(year, month, day).toEpochDay();
+                } catch (DateTimeException e) {
+                    return null;
+                }
+            }
+        }
         String text = new String(bytes, start, end - start, StandardCharsets.ISO_8859_1).strip();
         int blank = text.indexOf(' ');
         Matcher m = DATE.matcher(blank < 0 ? text : text.substring(0, blank));
@@ -266,6 +359,14 @@ final class TextValues {
      * @return the bytes when they are valid UTF-8, else the text re-encoded with U+FFFD
      */
     static byte[] utf8(byte[] bytes, int start, int end) {
+        int i = start;
+        while (i < end && bytes[i] >= 0) {
+            i++;
+        }
+        if (i == end) {
+            // ASCII is valid UTF-8 as it is.
+            return Arrays.copyOfRange(bytes, start, end);
+        }
         CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT);

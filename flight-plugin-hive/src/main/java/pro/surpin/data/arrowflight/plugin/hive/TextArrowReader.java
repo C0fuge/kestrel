@@ -602,6 +602,14 @@ final class TextArrowReader extends ArrowReader {
                 }
             }
             case DECIMAL -> {
+                if (type.getPrecision() <= 18) {
+                    long unscaled = TextValues.plainDecimal(line, start, end, type.getPrecision(),
+                            type.getScale());
+                    if (unscaled != TextValues.NOT_PLAIN) {
+                        ((DecimalVector) vector).setSafe(row, unscaled);
+                        return;
+                    }
+                }
                 BigDecimal value = TextValues.decimal(line, start, end, type.getPrecision(),
                         type.getScale());
                 if (value == null) {

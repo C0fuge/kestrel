@@ -15,7 +15,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Hadoop splits them; files over 8 MiB, like ORC files since P1), instead of one thread per file. Same rows in the
   same order; compressed text files and tables with `skip.header.line.count` are still read whole. Avro records
   decode only the requested columns (others are skipped through Avro's resolver, so a file that does not resolve
-  still fails as in Hive) (P4 (d)).
+  still fails as in Hive). Text tables parse plain decimals (up to 18 digits), `yyyy-mm-dd` dates and ASCII strings
+  without intermediate objects (about 2.5x faster on a Q1-style column set, same values) (P4 (d)).
 - Setting `duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false = unchanged): every worker connection
   connects to one DuckDB of the node (one thread pool and one `memory_limit`; storage setup, secrets and lockdown run
   once and are checked at startup); each connection keeps the catalog views in an in-memory catalog of its own, and
