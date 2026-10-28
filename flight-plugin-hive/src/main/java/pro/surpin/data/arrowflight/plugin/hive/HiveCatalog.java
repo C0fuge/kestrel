@@ -30,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
@@ -225,6 +226,32 @@ final class HiveCatalog implements Catalog {
             }
         }
         return Optional.empty();
+    }
+
+    @Override
+    public Optional<TableSnapshot> asOf(TableName table, AsOf point) throws IOException {
+        // A snapshot ID names an immutable snapshot: the listed metadata file that has it is
+        // enough. A reference moves and a later commit may predate an instant: read the
+        // metastore's current metadata file for those.
+        boolean cachedFirst = point instanceof AsOf.SnapshotId;
+        for (boolean fresh : cachedFirst ? new boolean[] {false, true} : new boolean[] {true}) {
+            Optional<HiveTable> hive = hiveTable(table, fresh);
+            if (hive.isEmpty()) {
+                return Optional.empty();
+            }
+            if (hive.get().kind() != HiveTable.Kind.ICEBERG) {
+                throw new UnsupportedOperationException("only Iceberg tables of the metastore"
+                        + " keep snapshot history");
+            }
+            try {
+                return Optional.of(iceberg.asOf(table, hive.get().metadataLocation(), point));
+            } catch (IllegalArgumentException e) {
+                if (fresh) {
+                    throw e;
+                }
+            }
+        }
+        throw new IllegalStateException("unreachable");
     }
 
     @Override

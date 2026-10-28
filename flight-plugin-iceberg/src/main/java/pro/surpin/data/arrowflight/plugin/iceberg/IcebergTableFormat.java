@@ -13,6 +13,7 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
 
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -74,6 +75,16 @@ final class IcebergTableFormat implements TableFormat {
             }
         }
         return Optional.of(planner.plan(table, metadataLocation, parsed, snapshot, schema).snapshot());
+    }
+
+    @Override
+    public TableSnapshot asOf(TableName table, String metadataLocation, AsOf point)
+            throws IOException {
+        TableMetadata parsed = metadata(metadataLocation);
+        Snapshot snapshot = TimeTravel.find(parsed, point).orElseThrow(
+                () -> new IllegalArgumentException(TimeTravel.missing(table, parsed, point)));
+        return planner.plan(table, metadataLocation, parsed, snapshot,
+                TimeTravel.schemaOf(parsed, snapshot)).snapshot();
     }
 
     @Override

@@ -449,8 +449,8 @@ answers. A ticket the server did not sign is `INVALID_ARGUMENT`.
 
 ### Iceberg time travel
 
-A query can read an earlier snapshot of an Iceberg catalog table (iceberg-hadoop, iceberg-rest)
-with the clause Trino and Spark use, right after the table name:
+A query can read an earlier snapshot of an Iceberg catalog table (iceberg-hadoop, iceberg-rest, and
+Iceberg tables registered in a Hive Metastore) with the clause Trino and Spark use, right after the table name:
 
 ```sql
 SELECT * FROM ice.events FOR VERSION AS OF 8213491011553364004;          -- snapshot ID
@@ -465,8 +465,9 @@ snapshot is read with its own data files, deletes and columns (the schema it was
 e.g. before a rename), and a query may read several snapshots of one table (`FROM t c JOIN t FOR
 VERSION AS OF 1 o ON ...`). An unknown or expired snapshot ID, an unknown tag, or a time before
 the first commit is an error (`INVALID_ARGUMENT`), never the current snapshot; a missing table is
-`NOT_FOUND`. Tables of the data directory and Hive tables (also Iceberg tables registered in a Hive
-Metastore, for now) refuse the clause. A snapshot whose files cannot be read one by one (deletion
+`NOT_FOUND`. Tables of the data directory and Hive tables other than Iceberg refuse the clause. For an
+Iceberg table of a Hive Metastore, a snapshot ID is looked up in the metadata file the catalog listed
+(then in the metastore's current one), a tag, branch or time always in the metastore's current one. A snapshot whose files cannot be read one by one (deletion
 vectors, renamed nested fields) is read by DuckDB's `iceberg_scan(..., snapshot_from_id => ...)`,
 as the current snapshot of such a table is, and only when DuckDB reads it with the snapshot's own
 columns (names and types, nested fields included); otherwise the clause is refused (log line

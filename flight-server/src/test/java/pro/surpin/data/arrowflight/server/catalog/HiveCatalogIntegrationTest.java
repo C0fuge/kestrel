@@ -317,8 +317,44 @@ class HiveCatalogIntegrationTest {
         assertEquals(rows + 2, read(info("SELECT id, label FROM hv.ice_evolved", "partial")).size());
     }
 
+    /**
+     * Time travel on an Iceberg table of the metastore (after the commit of the test before):
+     * the earlier snapshot answers as DuckDB reading its metadata file, in both modes; a
+     * missing snapshot and a table that is not Iceberg are refused.
+     */
     @Test
     @Order(6)
+    void icebergTablesOfTheMetastoreTravelInTime() throws Exception {
+        Assumptions.assumeTrue(icebergMetadata != null, "needs -Diceberg.it.extensionDir and the"
+                + " iceberg plugin");
+        long[] first = lastSnapshot(icebergMetadata);
+        String version = "hv.ice_evolved FOR VERSION AS OF " + first[0];
+        String at = "hv.ice_evolved FOR TIMESTAMP AS OF TIMESTAMP '"
+                + java.time.Instant.ofEpochMilli(first[1]) + "'";
+        String expected = directIceberg(icebergMetadata);
+        int now = read(info("SELECT id, label FROM hv.ice_evolved", "partial")).size();
+        for (String travelled : List.of(version, at)) {
+            assertEquals(expected, fingerprint("(SELECT * FROM " + travelled + ")"), travelled);
+            String sql = "SELECT id, label FROM " + travelled;
+            List<String> partial = answer(sql, "partial").rows();
+            assertEquals(answer(sql, "complete").rows(), partial, travelled);
+            assertEquals(now - 2, partial.size(), "the snapshot before the commit: " + travelled);
+        }
+        for (String[] refused : new String[][] {
+                {"hv.ice_evolved FOR VERSION AS OF 12345", "has no snapshot 12345"},
+                {"hv.lineitem_p FOR VERSION AS OF 1", "only Iceberg tables of the metastore"}}) {
+            for (String mode : List.of("complete", "partial")) {
+                FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                        () -> answer("SELECT * FROM " + refused[0], mode), refused[0]);
+                assertEquals(org.apache.arrow.flight.FlightStatusCode.INVALID_ARGUMENT,
+                        e.status().code(), refused[0] + ": " + e);
+                assertTrue(e.getMessage().contains(refused[1]), refused[0] + ": " + e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    @Order(7)
     void partitionsArePinnedPerPlan() throws Exception {
         String sql = "SELECT l_shipmode, count(*) AS n FROM hv.lineitem_p GROUP BY l_shipmode";
         FlightInfo before = info(sql, "partial");
@@ -408,6 +444,21 @@ class HiveCatalogIntegrationTest {
                     + "')"))) {
                 rs.next();
                 return rs.getLong(1) + "|" + rs.getString(2);
+            }
+        }
+    }
+
+    private static long[] lastSnapshot(String metadataLocation) throws Exception {
+        Path ext = Path.of(extensionDir, "v1.5.6", "linux_amd64");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("LOAD '" + ext.resolve("avro.duckdb_extension") + "'");
+            s.execute("LOAD '" + ext.resolve("iceberg.duckdb_extension") + "'");
+            try (ResultSet rs = s.executeQuery("SELECT snapshot_id, epoch_ms(timestamp_ms) FROM"
+                    + " iceberg_snapshots('" + metadataLocation + "') ORDER BY sequence_number"
+                    + " DESC LIMIT 1")) {
+                assertTrue(rs.next());
+                return new long[] {rs.getLong(1), rs.getLong(2)};
             }
         }
     }

@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Iceberg time travel for Iceberg tables registered in a Hive Metastore (item 3 (b)): `FOR VERSION AS OF` /
+  `FOR TIMESTAMP AS OF` after such a table name reads the snapshot through the iceberg plugin, as for the iceberg
+  catalogs (both result modes); other Hive tables still refuse the clause. SPI 1.5: `TableFormat.asOf(table,
+  metadataLocation, point)` (default refuses); the hive plugin descriptor now names SPI 1.5.
 - Hive plugin: Avro tables whose schema is given by `avro.schema.url` (under `hive.avroTables`; such tables were
   skipped). The schema file is read through the server's stores only when it lies under `hive.roots` (an HTTP URL or
   a file elsewhere keeps the table skipped with a log reason), at most 4 MiB, kept per location and read again when
