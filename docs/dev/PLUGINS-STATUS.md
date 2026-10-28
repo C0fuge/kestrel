@@ -58,14 +58,30 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     `DuckDbAdapter.streamCompleteOnce` (views applied, uncached prepare, parameters bound). Known limits: an
     unqualified name (`FROM orders`) or a reference after an ON condition's comma is not replaced and fails as a
     missing table (never an empty answer). Tests `ArrowStreamCompleteTest` 7/7, `TableReferencesTest` 4/4.
-    **Next step (step 2 (c)):** hive `exportArrowScan` with `OrcArrowReader` (one reader per file chained; set the
-    plugin's context class loader inside `loadNextBatch`, since DuckDB calls it on its own threads; predicates ->
-    ORC SARG; partition values as UTF-8 text columns), `hive.orcTables` opt-in per catalog (snapshot
-    `ReadSpec.ArrowStream("orc")` for ORC tables, today skipped) + clear refusal of ORC ACID tables
-    (`transactional=true`), then (d) end-to-end tests as planned above (both result modes, partitioned table,
-    all types vs the same data in Parquet). Risk still open: the plugin ships zstd-jni 1.5.6-10 next to the
-    server's copy (separate class loaders extract their own temp copy of the native library - expected to work,
-    confirm in the end-to-end test).
+    *Step 2 (c) done 2026-10-28 (2e4d2d9):* `hive.orcTables` (default false; ORC tables were and stay skipped
+    without it) -> ORC tables (`HiveTable.Kind.ORC`, serde/input format simple name containing `orc`) are shown
+    with `ReadSpec.ArrowStream("orc")`; their schema IDs hash with a `hive-orc|` prefix (Parquet IDs unchanged);
+    `pinnedColumns` keeps the read spec. `HiveCatalog.exportArrowScan` -> `OrcTableReader` (files one after the
+    other, each opened only when the previous is done, through `Stores.locate` + `DataStore.open`, refusing files
+    outside `hive.roots`; partition columns as UTF-8 text; context class loader set in `loadNextBatch` /
+    `closeReadSource`; errors name the file). Hints -> `OrcSearchArguments` (integers -> LONG, DOUBLE, DECIMAL,
+    STRING/VARCHAR, BOOLEAN, DATE via `java.sql.Date.valueOf`; CHAR, FLOAT, TIMESTAMP, nested, NULL literals and
+    NaN left out). Found on the way: ORC evaluates a SARG leaf only on columns it reads, so a hint on a column
+    outside the projection skipped nothing; `OrcArrowReader` now also reads the SARG's columns. Transactional ORC
+    tables stay skipped with the log reason `transactional (ACID) ORC table: not read yet` (like ACID Parquet
+    tables; a client sees no such table, never wrong rows). Tests: `HiveOrcTableTest` 6/6 (metastore; DuckDB reads
+    the exported stream = the same 6000 rows computed in DuckDB SQL, all 12 types incl. decimal/date/timestamp/
+    char/list/struct/map with NULLs, JVM zone America/Los_Angeles; partitions; partition-only scan; row-group
+    skipping; broken / outside file), `OrcSearchArgumentsTest` 2/2.
+    **Next step (step 2 (d)):** end-to-end through the server with the packaged plugin (plugin dir, `share=hadoop,
+    arrow`): extend `HiveCatalogIntegrationTest` (flight-server) with ORC tables written in the test (orc-core is
+    not on the server's test classpath: write the files in the hive plugin's test jar fixture, which the server's
+    tests already load in their own class loader for `HmsFixture`, or add orc-core as a server test dependency)
+    and `hive.orcTables=true`: both result modes (partial: planner tickets -> endpoint streams; complete: joins of
+    an ORC and a Parquet table, `count(*)`, group by a partition column, filters on data columns), answers equal
+    to the same data in Parquet; confirm the zstd-jni risk (ORC file written with zstd compression read in the
+    server JVM, which has its own zstd-jni). Then a `package=true` pre-release (runtime behaviour of the plugin
+    changes with the opt-in) and the perf note (SF1 lineitem ORC vs Parquet, manual).
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -138,3 +154,9 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   SpotBugs clean. CI: run 40616190366 (9db19b0, dispatched: the push's head commit was `[skip ci]`) green. No
   package release: no plugin serves ArrowStream yet, nothing client-visible changes. Next: step 2 (c), hive
   `exportArrowScan` + `hive.orcTables`.
+- 2026-10-28 (plugins session): P1 step 2 (c) - hive `exportArrowScan` over ORC and `hive.orcTables` opt-in
+  (2e4d2d9, plugin only; no SPI or core code change, a comment line in `arrowflight.properties`); fix: SARG columns
+  are now read by `OrcArrowReader` (hints on unprojected columns were ignored by ORC). Local: hive module 29 tests
+  (`HiveOrcTableTest` 6, `OrcSearchArgumentsTest` 2, `OrcArrowReaderTest` 5, `HiveCatalogTest` 11, Kerberos 5),
+  Checkstyle + SpotBugs clean. CI: run 40621078865 (2e4d2d9) green, all modules. No package release yet: planned after the
+  end-to-end tests of step 2 (d) (default behaviour unchanged).
