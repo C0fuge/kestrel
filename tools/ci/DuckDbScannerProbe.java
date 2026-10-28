@@ -78,7 +78,12 @@ public final class DuckDbScannerProbe {
             String secret = "CREATE TEMPORARY SECRET src_secret (TYPE " + type + ", HOST " + lit(host) + ", PORT "
                     + port + ", DATABASE " + lit(database) + ", USER " + lit(user) + ", PASSWORD " + lit(password)
                     + ")";
+            must(key, "functions before", s, "CREATE TEMPORARY TABLE fn_before AS SELECT DISTINCT function_name"
+                    + " FROM duckdb_functions()");
             boolean ready = must(key, "load", s, "LOAD " + lit(ext))
+                    && must(key, "functions added", s, "SELECT string_agg(function_name || ':' || function_type, ', '"
+                            + " ORDER BY function_name) FROM (SELECT DISTINCT function_name, function_type FROM"
+                            + " duckdb_functions() WHERE function_name NOT IN (SELECT function_name FROM fn_before))")
                     && must(key, "secret", s, secret)
                     && must(key, "attach", s, "ATTACH '' AS src (TYPE " + type + ", SECRET src_secret, READ_ONLY)");
             if (!ready) {
