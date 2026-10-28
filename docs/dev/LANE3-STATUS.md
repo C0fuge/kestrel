@@ -125,6 +125,8 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   writes deferred; loads back to 0 after the member was dropped. Tests: `ClusterServiceTest` (+4),
   `ClusterViewTest` (+1), `ClusterMemberLossIntegrationTest.crashedMemberWhoseAddressVanishedHoldsNoWritesOfPlansOrHeartbeats`.
   Rebased once over the core lane's a29a0a4 (`flightLoadReservationSeconds`, conflict in `createEndpointHandle`,
-  kept both). CI green on the branch: 40748318034 (044256e), 40750101323 (ab93926, after the rebase). Next: D3 step
+  kept both). CI green on the branch: 40748318034 (044256e), 40750101323 (ab93926, after the rebase). On `main`:
+  package=true run 40751852380 on 0f8eb5e (contains aef0a7a; my first dispatch 40751788500 was cancelled by the
+  catalogs lane's push) green, pre-release `server-1.0.0-0f8eb5e5f65c`. Next: D3 step
   2b is optional; D3 otherwise complete - next lane-3 item to be set by the maintainer (or D2 observed gap: force
   the after-first-batch cut path).
