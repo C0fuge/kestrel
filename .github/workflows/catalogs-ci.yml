@@ -395,6 +395,8 @@ jobs:
           "$RUNNER_TEMP/spark/bin/python" tools/ci/delta-fixtures.py "$out"
           mkdir -p "$RUNNER_TEMP/outside"
           cp -r "$out/t" "$RUNNER_TEMP/outside/t"
+          mkdir -p "$RUNNER_TEMP/outside/logonly"
+          cp -r "$out/t/_delta_log" "$RUNNER_TEMP/outside/logonly/"
           find "$out" -maxdepth 2 | sort | head -80
           echo "DELTA_FIXTURES=$out" >> "$GITHUB_ENV"
           echo "PROBE_OUTSIDE_DIR=$RUNNER_TEMP/outside" >> "$GITHUB_ENV"
@@ -428,6 +430,8 @@ jobs:
           ./mvnw dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
           java -cp "$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar" \
             tools/ci/DuckDbDeltaProbe.java "$DELTA_EXT_DIR" "$DELTA_FIXTURES"
+          echo "outside after the probe:"; find "$PROBE_OUTSIDE_DIR" -maxdepth 2 | sort
+          echo "fixtures root after the probe:"; ls "$DELTA_FIXTURES"
 
       - name: S3 log
         if: failure()

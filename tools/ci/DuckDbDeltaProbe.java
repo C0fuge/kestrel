@@ -12,7 +12,8 @@
  * I/O. The connection is set up as the server sets up a query connection (in-memory secrets, LOAD by path,
  * secrets, then allowed_directories + no extension autoload + enable_external_access=false +
  * lock_configuration=true). Every result is printed and appended to $GITHUB_STEP_SUMMARY when set. Exit status
- * 1 when loading or the plain read before the lockdown fails; everything else is only recorded.
+ * 1 when loading or the plain read before the lockdown fails; everything else is only recorded ("GETS THROUGH"
+ * marks what the lockdown should have refused).
  */
 
 import java.nio.file.Files;
@@ -160,6 +161,48 @@ public final class DuckDbDeltaProbe {
                         "SELECT count(*) FROM read_parquet(" + lit(s3Outside + "t/*.parquet") + ")");
             }
             refuse("local", "delta_scan http", c, "SELECT count(*) FROM delta_scan('http://127.0.0.1:9/t')");
+
+            // How far the extension's own I/O (delta-kernel) goes past the lockdown: the log of a table outside
+            // the allowed directories (schema, file list), other hosts, and the functions it adds that write.
+            if (!outside.isEmpty()) {
+                refuse("local", "schema outside allowed", c, "SELECT string_agg(column_name || ' ' || column_type,"
+                        + " ', ') FROM (DESCRIBE SELECT * FROM delta_scan(" + lit(outside + "/t") + "))");
+                refuse("local", "list files outside allowed", c, "SELECT * FROM delta_list_files("
+                        + lit(outside + "/t") + ")");
+                refuse("local", "log-only table outside allowed", c, "SELECT count(*) FROM delta_scan("
+                        + lit(outside + "/logonly") + ")");
+                refuse("local", "file: URI outside allowed", c, "SELECT count(*) FROM delta_scan("
+                        + lit("file://" + outside + "/t") + ")");
+                refuse("local", "missing dir outside allowed", c, "SELECT count(*) FROM delta_scan('/proc/self')");
+            }
+            refuse("local", "delta_scan https", c, "SELECT count(*) FROM delta_scan('https://127.0.0.1:9/t')");
+            refuse("local", "delta_scan az", c, "SELECT count(*) FROM delta_scan('az://c/t')");
+            refuse("local", "delta_scan gs", c, "SELECT count(*) FROM delta_scan('gs://b/t')");
+            query("setup", "added function signatures", c, "SELECT function_name, parameters, parameter_types"
+                    + " FROM duckdb_functions() WHERE function_name IN ('write_blob', 'copy_dir',"
+                    + " 'delta_set_transaction_version', 'delta_filter_pushdown_log')");
+            if (!outside.isEmpty()) {
+                refuse("local", "write_blob outside allowed", c, "SELECT write_blob(" + lit(outside + "/wb")
+                        + ", 'abc'::BLOB)");
+                refuse("local", "write_blob inside allowed", c, "SELECT write_blob(" + lit(local + "wb")
+                        + ", 'abc'::BLOB)");
+                refuse("local", "copy_dir to outside", c, "SELECT * FROM copy_dir(" + lit(local + "t") + ", "
+                        + lit(outside + "/copied") + ")");
+                query("local", "outside dir after writes", c, "SELECT 'see job log: ls outside'");
+            }
+            refuse("local", "set transaction version", c, "SELECT * FROM delta_set_transaction_version("
+                    + lit(local + "t") + ", 'probe', 7)");
+            if (s3 && !s3Outside.isEmpty()) {
+                must("s3", "unscoped secret after lockdown", c, "CREATE TEMPORARY SECRET s3_any (TYPE s3, KEY_ID "
+                        + lit(env("PROBE_S3_KEY")) + ", SECRET " + lit(secretValue) + ", ENDPOINT "
+                        + lit(s3Endpoint) + ", URL_STYLE 'path', USE_SSL false, REGION 'us-east-1')");
+                refuse("s3", "delta_scan outside allowed, unscoped secret", c,
+                        "SELECT count(*) FROM delta_scan(" + lit(s3Outside + "t") + ")");
+                refuse("s3", "schema outside allowed, unscoped secret", c, "SELECT string_agg(column_name, ',')"
+                        + " FROM (DESCRIBE SELECT * FROM delta_scan(" + lit(s3Outside + "t") + "))");
+                refuse("s3", "list files outside allowed, unscoped secret", c, "SELECT count(*) FROM"
+                        + " delta_list_files(" + lit(s3Outside + "t") + ")");
+            }
             query("setup", "secrets visible", c, "SELECT name, type FROM duckdb_secrets()");
         }
     }
