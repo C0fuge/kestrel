@@ -19,10 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.iceberg.catalog.Namespace;
-import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.iceberg.rest.RESTCatalog;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
@@ -117,20 +113,7 @@ class RestCatalogConformanceTest {
             settings.put("oauthUri", v);
             writer.put("oauth2-server-uri", v);
         });
-        try (RESTCatalog rest = new RESTCatalog()) {
-            rest.setConf(new Configuration());
-            rest.initialize("conformance", writer);
-            Namespace ns = Namespace.of(IcebergFixtures.NAMESPACE);
-            if (rest.namespaceExists(ns)) {
-                // A catalog kept from an earlier local run: start from no tables.
-                for (TableIdentifier id : rest.listTables(ns)) {
-                    rest.dropTable(id, false);
-                }
-            } else {
-                rest.createNamespace(ns);
-            }
-            restMetadata = IcebergFixtures.write(rest);
-        }
+        restMetadata = IcebergFixtures.writeRest(writer);
     }
 
     private static Optional<String> env(String name) {

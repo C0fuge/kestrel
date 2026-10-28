@@ -65,6 +65,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Iceberg REST catalogs through the server (C1 step 3, local warehouses): `RestCatalogServerConformanceTest` runs the
+  server with the iceberg plugin's iceberg-rest catalog on Polaris / the Iceberg REST fixture next to an iceberg-hadoop
+  reference with the same tables; complete answers equal the reference, partial equal complete. Test only
+  (`catalogs-ci.yml`; `IcebergFixtures.writeRest`).
 - Iceberg REST catalog conformance on S3 (C1 step 2a): `catalogs-ci.yml` also runs `RestCatalogConformanceTest`
   with the warehouse in an S3 bucket (moto's S3 server; MinIO's images no longer pull anonymously) for Apache
   Polaris 1.2.0 (S3 storage without STS), the Iceberg REST fixture 1.10.0 (S3FileIO) and Lakekeeper 0.13.8

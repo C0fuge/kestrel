@@ -41,6 +41,7 @@ import org.apache.iceberg.deletes.PositionDeleteWriter;
 import org.apache.iceberg.hadoop.HadoopCatalog;
 import org.apache.iceberg.io.DataWriter;
 import org.apache.iceberg.parquet.Parquet;
+import org.apache.iceberg.rest.RESTCatalog;
 import org.apache.iceberg.types.Types;
 
 /**
@@ -84,6 +85,30 @@ public final class IcebergFixtures {
             return write(catalog);
         } finally {
             catalog.close();
+        }
+    }
+
+    /**
+     * Writes all test tables through a real Iceberg REST catalog (Iceberg Java's RESTCatalog),
+     * creating namespace {@link #NAMESPACE} or first dropping the tables an earlier run left in it.
+     *
+     * @param properties RESTCatalog properties (uri, warehouse, credential, io-impl, ...)
+     * @return table name to its current metadata file
+     * @throws IOException when a file cannot be written
+     */
+    public static Map<String, String> writeRest(Map<String, String> properties) throws IOException {
+        try (RESTCatalog rest = new RESTCatalog()) {
+            rest.setConf(new Configuration());
+            rest.initialize("conformance", properties);
+            Namespace ns = Namespace.of(NAMESPACE);
+            if (rest.namespaceExists(ns)) {
+                for (TableIdentifier id : rest.listTables(ns)) {
+                    rest.dropTable(id, false);
+                }
+            } else {
+                rest.createNamespace(ns);
+            }
+            return write(rest);
         }
     }
 

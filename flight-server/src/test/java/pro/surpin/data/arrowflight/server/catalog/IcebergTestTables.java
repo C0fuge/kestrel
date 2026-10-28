@@ -70,6 +70,18 @@ public final class IcebergTestTables {
     }
 
     /**
+     * Writes all test tables through a real Iceberg REST catalog.
+     *
+     * @param properties RESTCatalog properties (uri, warehouse, credential, io-impl, ...)
+     * @return table name to its current metadata file
+     * @throws Exception when the tables cannot be written
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, String> writeRest(Map<String, String> properties) throws Exception {
+        return (Map<String, String>) call(FIXTURES, "writeRest", properties);
+    }
+
+    /**
      * Commits two more rows to table evolved.
      *
      * @param warehouse directory

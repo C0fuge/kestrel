@@ -1,6 +1,6 @@
 # Lane 4 (catalogs and sources): conformance of the iceberg plugin's REST path against real
-# Iceberg REST catalogs started as containers (RestCatalogConformanceTest; docs/dev/CATALOGS-STATUS.md
-# item C1). Test-only credentials, generated or fixed for the throw-away containers.
+# Iceberg REST catalogs started as containers (RestCatalogConformanceTest, and the answers through
+# the server: RestCatalogServerConformanceTest; docs/dev/CATALOGS-STATUS.md item C1). Test-only credentials, generated or fixed for the throw-away containers.
 name: Catalogs CI
 
 on:
@@ -10,6 +10,8 @@ on:
       - "flight-plugin-iceberg/**"
       - "flight-spi/**"
       - "flight-plugin-s3/**"
+      - "flight-server/src/main/java/pro/surpin/data/arrowflight/server/catalog/**"
+      - "flight-server/src/test/java/pro/surpin/data/arrowflight/server/catalog/**"
       - "tools/ci/**"
       - ".github/workflows/catalogs-ci.yml"
   workflow_dispatch:
@@ -173,7 +175,7 @@ jobs:
       - name: Conformance test
         run: |
           set -euo pipefail
-          ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-iceberg -am
+          ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-iceberg,flight-server -am
           ./mvnw test -pl flight-plugin-iceberg -Dtest=RestCatalogConformanceTest \
             -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           # A skipped conformance test is a failure here.
@@ -184,6 +186,23 @@ jobs:
           tests, skipped = int(s.get("tests")), int(s.get("skipped"))
           print(f"conformance: {tests} tests, {skipped} skipped")
           assert tests == 3 and skipped == 0, "conformance tests skipped"
+          EOF
+
+      # Answers through the server (partial and complete) vs an iceberg-hadoop reference; local
+      # warehouses only for now (S3 warehouses: the next C1 step).
+      - name: Server conformance test
+        if: ${{ !endsWith(matrix.catalog, '-s3') }}
+        run: |
+          set -euo pipefail
+          ./mvnw test -pl flight-server -Dtest=RestCatalogServerConformanceTest \
+            -Dsurefire.failIfNoSpecifiedTests=false -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          s = ET.parse("flight-server/target/surefire-reports/"
+                       "TEST-pro.surpin.data.arrowflight.server.catalog.RestCatalogServerConformanceTest.xml").getroot()
+          tests, skipped = int(s.get("tests")), int(s.get("skipped"))
+          print(f"server conformance: {tests} tests, {skipped} skipped")
+          assert tests == 3 and skipped == 0, "server conformance tests skipped"
           EOF
 
       - name: Catalog log
