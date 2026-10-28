@@ -550,6 +550,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- `duckDbThreadsUnderLoad`: a query alone on the node now keeps its `duckDbThreads`, as documented, also when
+  `duckDbThreads` exceeds the cores (the default floor of 4 threads on 1-3 core nodes); before, every query on such
+  a node ran on the low-thread connection. `SmallQueryThroughputPerfTest` takes `-Dperf.threadsUnderLoad`.
 - DuckDB thread default no longer drops below 4 (laptop stand p19b, 2026-10-28): since item 19b 4c/8g, 8c/16g and
   16c/24g containers got 2/2/3 threads per connection (cut by the one-thread-per-GiB cap) and TPC-H SF10 ran
   1.35-1.7x slower than with 4. Default now cores / 4 between 4 and 16, the per-GiB cap applies only above 4; the

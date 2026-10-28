@@ -26,6 +26,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -92,10 +94,14 @@ class ThreadsUnderLoadIntegrationTest {
     private static List<String> answers(Path dir, String mode, int threads, int threadsUnderLoad,
             int threadsWhenIdle, int cores) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(FILES);
+        DuckDbAdapter.QuerySlot held = null;
         try (TestFlightServerHelper helper = TestFlightServerHelper.builder()
                 .dataDir(dir.toString()).resultMode(mode).threads(threads)
                 .threadsUnderLoad(threadsUnderLoad, cores).threadsWhenIdle(threadsWhenIdle).start()) {
             FlightSqlClient client = helper.sqlClient();
+            // Under load alone: a query held running on the test thread puts every DoGet next to
+            // another one (a query alone keeps its threads).
+            held = threadsUnderLoad > 0 && threadsWhenIdle == 0 ? helper.duckDbAdapter.enterQuery() : null;
             FlightCallHeaders headers = new FlightCallHeaders();
             headers.insert("x-flight-result-mode", mode);
             CallOption header = new HeaderCallOption(headers);
@@ -118,9 +124,9 @@ class ThreadsUnderLoadIntegrationTest {
                 }
                 out.add(sql + " -> " + rows.size() + " rows, hash " + rows.hashCode());
             }
-            if (threadsUnderLoad == 0 || threads > cores) {
-                // With more threads than cores every query is under load; otherwise only
-                // endpoints that happen to overlap are, which a fast run may not see.
+            if (threadsWhenIdle == 0) {
+                // With a query held running every query is under load; otherwise only endpoints
+                // that happen to overlap are, which a fast run may not see.
                 assertEquals(threadsUnderLoad > 0, helper.duckDbAdapter.queriesUnderLoad() > 0,
                         "queries under load");
             }
@@ -130,6 +136,9 @@ class ThreadsUnderLoadIntegrationTest {
             assertTrue(out.get(0).contains(" " + ROWS + " rows"), out.get(0));
             return out;
         } finally {
+            if (held != null) {
+                held.close();
+            }
             pool.shutdownNow();
         }
     }

@@ -955,11 +955,12 @@ public final class DuckDbAdapter implements AutoCloseable {
 
     /**
      * Counts a query as running on this node until the returned slot is closed. With
-     * duckDbThreadsUnderLoad set, the query runs on this thread's low-thread session when the
-     * running queries times duckDbThreads exceed the cores: parallel queries then share the cores
-     * instead of each starting duckDbThreads threads. With duckDbThreadsWhenIdle set, a query that
-     * starts while no other query runs takes this thread's high-thread session and keeps it to
-     * its end, even when other queries start meanwhile. Close the slot once, on the same thread.
+     * duckDbThreadsUnderLoad set, the query runs on this thread's low-thread session when other
+     * queries run and the running queries times duckDbThreads exceed the cores: parallel queries
+     * then share the cores instead of each starting duckDbThreads threads. With
+     * duckDbThreadsWhenIdle set, a query that starts while no other query runs takes this
+     * thread's high-thread session and keeps it to its end, even when other queries start
+     * meanwhile. Close the slot once, on the same thread.
      *
      * @return slot to close when the query ends
      */
@@ -969,7 +970,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
         int running = runningQueries.incrementAndGet();
         try {
-            if (loadSession != null && (long) running * appConfig.duckDbThreads() > cores) {
+            // A query alone keeps its threads, also when duckDbThreads exceed the cores.
+            if (loadSession != null && running > 1 && (long) running * appConfig.duckDbThreads() > cores) {
                 loadSession.get();
                 slotSessions.set(loadSession);
                 queriesUnderLoad.incrementAndGet();

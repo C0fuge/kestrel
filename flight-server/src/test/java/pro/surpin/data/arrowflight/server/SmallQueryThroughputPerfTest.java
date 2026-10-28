@@ -56,6 +56,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * the numbers; asserts only the answers. {@code -Dperf.server=host:port} measures a server started
  * separately (pinned to its own cores, so the in-process clients do not share its CPUs) on the
  * table under {@code -Dperf.dataDir}, which the test writes when it is missing.
+ * {@code -Dperf.threads} and {@code -Dperf.threadsUnderLoad} set duckDbThreads and
+ * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults).
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -88,15 +90,18 @@ class SmallQueryThroughputPerfTest {
             return;
         }
         int threads = Integer.parseInt(System.getProperty("perf.threads", "0"));
+        int underLoad = Integer.parseInt(System.getProperty("perf.threadsUnderLoad", "0"));
         String mode = System.getProperty("perf.mode", "complete");
         boolean s3 = "s3".equals(System.getProperty("perf.store", "local"));
         // 0 = the server's own default for the store (not the helper's 1 thread).
         TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
-                .dataDir(dir.toString()).resultMode(mode).threads(threads);
+                .dataDir(dir.toString()).resultMode(mode).threads(threads)
+                .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors());
         try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
                 TestFlightServerHelper helper = builder.start()) {
             measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)
-                    + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default"));
+                    + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default")
+                    + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""));
         }
     }
 

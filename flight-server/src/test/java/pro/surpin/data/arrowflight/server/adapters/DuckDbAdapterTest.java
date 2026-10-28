@@ -605,6 +605,34 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Regression: with duckDbThreads above the cores (the default floor of 4 threads on a 2-core
+     * node) a query alone on the node kept moving to the low-thread connection; it keeps its
+     * threads, and only a query next to it gets duckDbThreadsUnderLoad.
+     */
+    @Test
+    void aQueryAloneKeepsItsThreadsWhenTheyExceedTheCores(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        ExecutorService other = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(twoThreads(base), ioPool,
+                pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()), 1, 1)) {
+            try (DuckDbAdapter.QuerySlot first = adapter.enterQuery()) {
+                assertEquals("2", setting(adapter.connection(), "threads"));
+                assertEquals(0, adapter.queriesUnderLoad());
+                assertEquals("1", other.submit(() -> {
+                    try (DuckDbAdapter.QuerySlot second = adapter.enterQuery()) {
+                        return setting(adapter.connection(), "threads");
+                    }
+                }).get());
+            }
+            assertEquals(1, adapter.queriesUnderLoad());
+        } finally {
+            ioPool.shutdownNow();
+            other.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies that with duckDbThreadsWhenIdle a query that starts alone runs on the thread's
      * high-thread connection and keeps it while others start, that a query starting next to it
      * gets duckDbThreads, or duckDbThreadsUnderLoad once the cores are taken.
