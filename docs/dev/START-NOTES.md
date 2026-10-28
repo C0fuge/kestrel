@@ -75,7 +75,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `CompressionClientsIntegrationTest`); Java Flight clients need `arrow-compression` + `zstd-jni` (zstd) or
   `commons-compress` (lz4) on their class path. `lz4` needs lz4-java from `libs/` on the server. Counters
   `arrowflight_flight_compress*` on `/metrics`; level `flightCompressionLevel` (1), batches under
-  `flightCompressionMinBytes` (64 KiB) go plain.
+  `flightCompressionMinBytes` (64 KiB) go plain; `flightCompressionThreads` (0 = one per core, at most 8; 1 = off)
+  compresses the columns of a large batch side by side.
 - JDBC: the stock Arrow Flight SQL JDBC driver cannot decode compressed batches, so it must not ask (and the server
   default must stay `none` for it). Our patched driver can, once it carries the codecs: (1) bundle
   `org.apache.arrow:arrow-compression` (same Arrow version as the driver) and `com.github.luben:zstd-jni` (and

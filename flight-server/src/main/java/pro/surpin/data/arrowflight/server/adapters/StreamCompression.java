@@ -1,6 +1,11 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
 import java.util.Locale;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.CallInfo;
 import org.apache.arrow.flight.CallStatus;
@@ -39,16 +44,33 @@ public final class StreamCompression implements FlightServerMiddleware {
      * @param defaultCodec codec for calls without the header
      * @param zstdLevel Zstandard level (LZ4 has none)
      * @param minBatchBytes batches with fewer body bytes are sent plain
+     * @param threads threads that compress the buffers of one batch side by side (0 = one per core
+     *     up to 8, 1 = the stream's own thread only)
      */
-    public record Settings(Codec defaultCodec, int zstdLevel, long minBatchBytes) {
+    public record Settings(Codec defaultCodec, int zstdLevel, long minBatchBytes, int threads) {
+
+        /** Most threads the automatic thread count picks. */
+        static final int MAX_AUTO_THREADS = 8;
 
         /** Settings that never compress unless a client asks. */
         public static final Settings DEFAULT = new Settings(Codec.NONE, 1, 64 * 1024L);
 
         /**
+         * Creates settings with the automatic thread count.
+         *
+         * @param defaultCodec codec for calls without the header
+         * @param zstdLevel Zstandard level
+         * @param minBatchBytes batches with fewer body bytes are sent plain
+         */
+        public Settings(Codec defaultCodec, int zstdLevel, long minBatchBytes) {
+            this(defaultCodec, zstdLevel, minBatchBytes, 0);
+        }
+
+        /**
          * Checks the settings.
          *
-         * @throws IllegalArgumentException if the level is outside 1..22 or the size is negative
+         * @throws IllegalArgumentException if the level is outside 1..22 or the size or thread
+         *     count is negative
          */
         public Settings {
             if (defaultCodec == null) {
@@ -61,10 +83,24 @@ public final class StreamCompression implements FlightServerMiddleware {
                 throw new IllegalArgumentException(
                         "flightCompressionMinBytes must not be negative: " + minBatchBytes);
             }
+            if (threads < 0) {
+                throw new IllegalArgumentException("flightCompressionThreads must not be negative: " + threads);
+            }
+        }
+
+        /**
+         * Resolves the thread count.
+         *
+         * @param processors cores the JVM sees
+         * @return threads per batch, at least 1
+         */
+        public int threadsFor(int processors) {
+            return threads > 0 ? threads : Math.max(1, Math.min(processors, MAX_AUTO_THREADS));
         }
     }
 
     private final Settings settings;
+    private final ParallelWork parallel;
     private final Codec codec;
     private final String refusal;
     private final boolean fromHeader;
@@ -73,12 +109,15 @@ public final class StreamCompression implements FlightServerMiddleware {
      * Remembers the codec of one call.
      *
      * @param settings server settings
+     * @param parallel helpers that compress the buffers of a batch side by side
      * @param codec resolved codec
      * @param refusal why the header names no usable codec, or null
      * @param fromHeader whether the call sent the header
      */
-    private StreamCompression(Settings settings, Codec codec, String refusal, boolean fromHeader) {
+    private StreamCompression(Settings settings, ParallelWork parallel, Codec codec, String refusal,
+            boolean fromHeader) {
         this.settings = settings;
+        this.parallel = parallel;
         this.codec = codec;
         this.refusal = refusal;
         this.fromHeader = fromHeader;
@@ -147,7 +186,7 @@ public final class StreamCompression implements FlightServerMiddleware {
         if (use == Codec.NONE) {
             return listener;
         }
-        return new CompressingStreamListener(listener, use, settings);
+        return new CompressingStreamListener(listener, use, settings, parallel);
     }
 
     @Override
@@ -169,14 +208,16 @@ public final class StreamCompression implements FlightServerMiddleware {
     public static final class Factory implements FlightServerMiddleware.Factory<StreamCompression> {
 
         private final Settings settings;
+        private final ParallelWork parallel;
 
         /**
-         * Creates the factory.
+         * Creates the factory; its compression threads start on first use and end when idle.
          *
          * @param settings server settings
          */
         public Factory(Settings settings) {
             this.settings = settings;
+            this.parallel = ParallelWork.create(settings.threadsFor(Runtime.getRuntime().availableProcessors()));
         }
 
         @Override
@@ -184,13 +225,47 @@ public final class StreamCompression implements FlightServerMiddleware {
                 RequestContext context) {
             String requested = incomingHeaders.get(HEADER);
             if (requested == null) {
-                return new StreamCompression(settings, settings.defaultCodec(), null, false);
+                return new StreamCompression(settings, parallel, settings.defaultCodec(), null, false);
             }
             try {
-                return new StreamCompression(settings, parse(requested), null, true);
+                return new StreamCompression(settings, parallel, parse(requested), null, true);
             } catch (IllegalArgumentException e) {
-                return new StreamCompression(settings, Codec.NONE, e.getMessage(), true);
+                return new StreamCompression(settings, parallel, Codec.NONE, e.getMessage(), true);
             }
+        }
+    }
+
+    /**
+     * Helper threads of a server's compressing streams.
+     *
+     * @param executor runs helpers, or null when batches are compressed by the stream's thread only
+     * @param helpers most helpers one batch asks for
+     */
+    record ParallelWork(Executor executor, int helpers) {
+
+        /** No helpers: each stream compresses on its own thread. */
+        static final ParallelWork SERIAL = new ParallelWork(null, 0);
+
+        /**
+         * Creates the helpers of a thread count: the stream's thread plus threads - 1 pool threads
+         * shared by all streams, which end after 30 s idle.
+         *
+         * @param threads threads per batch
+         * @return helpers
+         */
+        static ParallelWork create(int threads) {
+            if (threads <= 1) {
+                return SERIAL;
+            }
+            AtomicInteger counter = new AtomicInteger();
+            ThreadPoolExecutor pool = new ThreadPoolExecutor(threads - 1, threads - 1, 30, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<>(), runnable -> {
+                        Thread thread = new Thread(runnable, "arrow-compress-" + counter.incrementAndGet());
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            pool.allowCoreThreadTimeOut(true);
+            return new ParallelWork(pool, threads - 1);
         }
     }
 }

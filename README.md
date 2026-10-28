@@ -286,7 +286,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
-| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightSessionIdleSeconds`, `flightSessionMax` |
+| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `endpointBackupLocations`, `endpointsPerServer` |
@@ -308,7 +308,9 @@ header, which breaks clients without the codec. `flightCompressionLevel` (defaul
 LZ4 has no level and costs less CPU per byte for a lower ratio. The server compresses LZ4 with lz4-java from
 the runtime libs set (`libs/`); without it `lz4` is refused. Batches with fewer than
 `flightCompressionMinBytes` body bytes (default 65536) go plain, and a stream whose first 4 compressed batches
-do not shrink by a tenth sends the rest plain. Any other header value is refused with INVALID_ARGUMENT. Counters
+do not shrink by a tenth sends the rest plain. The buffers (columns) of a large batch are compressed side by side
+by the stream's thread and up to `flightCompressionThreads` - 1 helper threads shared by all streams (default 0 =
+one thread per core, at most 8; 1 = the stream's thread only); the bytes sent are the same either way. Any other header value is refused with INVALID_ARGUMENT. Counters
 `arrowflight_flight_compressed_batches_total`, `arrowflight_flight_compression_{input,output}_bytes_total`,
 `_plain_batches_total` and `_given_up_streams_total` are on `/metrics`.
 

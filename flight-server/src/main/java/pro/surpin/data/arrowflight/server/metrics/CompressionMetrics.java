@@ -65,6 +65,24 @@ public final class CompressionMetrics {
     }
 
     /**
+     * Returns the body bytes of compressed batches before compression.
+     *
+     * @return bytes since start
+     */
+    public static long inputBytes() {
+        return INPUT_BYTES.get();
+    }
+
+    /**
+     * Returns the body bytes of compressed batches as sent.
+     *
+     * @return bytes since start
+     */
+    public static long outputBytes() {
+        return OUTPUT_BYTES.get();
+    }
+
+    /**
      * Returns how many streams stopped compressing.
      *
      * @return count since start

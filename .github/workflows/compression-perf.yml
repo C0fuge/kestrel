@@ -1,0 +1,82 @@
+# Manual perf run of item 20 (f): one result stream over a loopback link slowed by tc netem
+# (default delay 10 ms + rate 1 Gbit on lo, so 20 ms round trip), plain vs zstd vs lz4 with one
+# compression thread and with the automatic count. Prints Arrow MB/s, seconds, process CPU and
+# ratio (CompressionThroughputPerfTest) into the job summary. Not part of Dev CI.
+name: Compression perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      delay:
+        description: "netem delay on lo (each direction)"
+        type: string
+        default: "10ms"
+      rate:
+        description: "netem rate on lo"
+        type: string
+        default: "1gbit"
+      rows:
+        description: "rows of the lineitem-like table"
+        type: string
+        default: "3000000"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compression-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build the server module (no tests)
+        run: ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+
+      - name: Unthrottled baseline
+        run: >
+          ./mvnw -pl flight-server surefire:test -Dgroups=perf -DexcludedGroups=
+          -Dtest=CompressionThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
+          -Dcompression.perf.rows="${{ inputs.rows }}" -Dcompression.perf.report="$RUNNER_TEMP/baseline.md"
+
+      - name: Slow the loopback link
+        run: |
+          set -euo pipefail
+          sudo tc qdisc add dev lo root netem delay "${{ inputs.delay }}" rate "${{ inputs.rate }}"
+          tc qdisc show dev lo
+          ping -c 3 127.0.0.1 | tail -n 2
+
+      - name: Throttled run
+        run: >
+          ./mvnw -pl flight-server surefire:test -Dgroups=perf -DexcludedGroups=
+          -Dtest=CompressionThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
+          -Dcompression.perf.rows="${{ inputs.rows }}" -Dcompression.perf.report="$RUNNER_TEMP/netem.md"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Compression perf on $(nproc) cores"
+            echo
+            echo "netem on lo: delay ${{ inputs.delay }}, rate ${{ inputs.rate }}; rows ${{ inputs.rows }}; best of 3 reads"
+            echo
+            echo "#### Throttled"
+            cat "$RUNNER_TEMP/netem.md" 2>/dev/null || echo "(no result)"
+            echo
+            echo "#### Unthrottled"
+            cat "$RUNNER_TEMP/baseline.md" 2>/dev/null || echo "(no result)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

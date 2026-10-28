@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Parallel stream compression (item 20, step (f)): the buffers of a large compressed batch are compressed side by
+  side by the stream's thread and helper threads shared by all streams, largest first; the batch is sent once all
+  are done (byte for byte the serial batch, no extra batches held). New setting `flightCompressionThreads` /
+  `arrowflight.flight.compressionThreads` (default 0 = one per core, at most 8; 1 = serial as before). Only streams
+  of clients that ask for compression are affected. New manual workflow `compression-perf.yml` and perf test
+  `CompressionThroughputPerfTest`: one stream over loopback slowed by `tc netem` (10 ms, 1 Gbit), plain / zstd / lz4,
+  serial vs parallel (Arrow MB/s, CPU, ratio).
 - Compression answer checks for non-Java clients (item 20, step (e)): `CompressionClientsIntegrationTest` reads
   a mixed-type table through pyarrow Flight (C++) and the ADBC Flight SQL driver (Go), plain, `none`, `zstd` and
   `lz4`, in both result modes, and requires identical answers and server-side compressed batches per client

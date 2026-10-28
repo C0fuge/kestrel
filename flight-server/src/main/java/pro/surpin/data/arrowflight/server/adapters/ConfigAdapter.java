@@ -194,7 +194,8 @@ public class ConfigAdapter {
     /**
      * Resolves the stream compression settings: {@code flightCompression} (none, zstd or lz4; codec
      * for calls without the {@code arrow-compression} header), {@code flightCompressionLevel}
-     * (Zstandard level) and {@code flightCompressionMinBytes} (smaller batches go plain).
+     * (Zstandard level), {@code flightCompressionMinBytes} (smaller batches go plain) and
+     * {@code flightCompressionThreads} (threads per batch, 0 = one per core up to 8).
      *
      * @param props configuration source
      * @return resolved settings
@@ -207,7 +208,9 @@ public class ConfigAdapter {
                 defaults.zstdLevel(), props);
         long minBytes = getLong("flightCompressionMinBytes", "arrowflight.flight.compressionMinBytes",
                 defaults.minBatchBytes(), props);
-        return new StreamCompression.Settings(StreamCompression.parse(codec), level, minBytes);
+        int threads = getInt("flightCompressionThreads", "arrowflight.flight.compressionThreads",
+                defaults.threads(), props);
+        return new StreamCompression.Settings(StreamCompression.parse(codec), level, minBytes, threads);
     }
 
     /**
