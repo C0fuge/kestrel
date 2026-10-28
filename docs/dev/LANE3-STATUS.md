@@ -22,6 +22,13 @@ D2. Item 18 step 3 - cluster integration test, then a perf test.
       not forced; forcing it needs a cut after DuckDB emitted, e.g. a larger wide projection with a later cut.
 D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d follow-up): plan from a local cluster snapshot
     refreshed by the heartbeat thread instead of blocking map reads; keep `hazelcast.max.no.heartbeat.seconds` as is.
+    - ~~Step 1: planning reads~~ *done 2026-10-28 (a110a22, see Log):* `ClusterView`.
+    - Step 2: writes that still wait for a silent member's partitions: this node's heartbeat put (other nodes then drop
+      a live node as stale for a few seconds), `addLoad` / `subtractLoad` computes, load-tracked ticket reservations
+      (`createEndpointHandle`), `storeHandle`. Idea: skip or defer (async, local delta applied at once) writes whose
+      key owner is unresponsive; measure with the iptables test (partial-mode plan with load tracking).
+    - Step 3 (optional): `fileLocations(false)` (local disks) still uses `entrySet`, which waits; plans there fail
+      anyway when a node is lost, so only the error is late.
 
 ## Log
 
@@ -86,3 +93,19 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   40715095069 on 2cfa23e green, pre-release server-1.0.0-2cfa23eb62f9. Checked the core lane's 94ad610 (cut tests accept a failover + merge): matches
   the intent. D2 is complete. Next: D3.
 - 2026-10-28 (maintainer): lane-3 session 16:25Z took LOCK-LANE3 and ended within 2 minutes without changes; lock released by the maintainer.
+- 2026-10-28 (lane 3 session, 5th): lock 17:29Z. D3 step 1 done (a110a22, rebase-merged into `main`): planning reads
+  (`allServerLoads`, `filterLiveServers`, `fileLocations(true)`, `hasFileInventory`) go through `ClusterView`
+  (`HazelcastAdapter.view()`): `getAsync` per key plus one probe key per other member (a key whose partition that member
+  owns), waiting at most 1 s; a member whose reads do not answer is unresponsive: its keys take the last values read
+  (the heartbeat thread refreshes loads and heartbeats every 3 s, `refreshView`), its server is left out of plans but
+  not removed from the pool, later reads do not wait for it, and it is back as soon as any read of its partitions
+  answers or it leaves the cluster. This node's own inventory falls back to its local copy; an unknown inventory on a
+  silent partition counts as published (nodes publish before they register). `max.no.heartbeat` stays 10 s.
+  Measured locally (iptables DROP on 127.0.0.2, default 10 s): first plan < 3 s (was >= 10 s), later plans < 500 ms
+  while the member is still in the cluster. Tests: `ClusterViewTest` (6), `ClusterServiceTest` (+1),
+  `ClusterMemberLossIntegrationTest.crashedMemberWhoseAddressVanishedHoldsOnlyTheFirstPlanForTheReadWait` (replaces
+  the 3 s-heartbeat variant; runs where iptables works: root or sudo -n). Known gap: a member's entry on the silent
+  member's partitions that this node never read is absent (refreshView makes that the first 3 s of a node only).
+  CI 40739303087 green on the branch (3871f94). On `main`: my package=true dispatch 40741178454 on a110a22 cancelled
+  the plugins lane's dispatch 40739820098 on 929b544 (same concurrency group; a110a22 contains 929b544).
+
