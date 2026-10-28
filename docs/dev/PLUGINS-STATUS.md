@@ -305,10 +305,13 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     many blocks; empty, not-Avro, cut by 20/10/2 bytes), `HiveAvroTableTest` 3 (metastore: opt-in, literal and
     column tables, tinyint/url/stale skipped, DuckDB reads all 17 types, partitions with NULL partition,
     partition-only scan, partition with another schema refused).
-    *Next (step 2):* (c) the server end-to-end test for Avro (`HiveAvroIntegrationTest` like
-    `HiveTextIntegrationTest`: packaged plugin, Avro vs Parquet in both modes, joins, pruning - needs avro +
-    snappy-java in the server tests' fixture class loader or files written in the test class path), then
-    `avro.schema.url` (read the schema through the stores, cache per table) and simple views; (d) perf note
+    End to end (cdc0889, test only): `HiveAvroIntegrationTest` (server, packaged plugin, real metastore): `hvavro.flat`
+    (schema as table literal; deflate + uncompressed files) and `hvavro.items` (columns' schema, partitioned by
+    region with a NULL partition, zstandard) answer like the same rows in Parquet in both modes (schema and rows;
+    star, count, GROUP BY partition, nested columns, filters), fingerprints = DuckDB computing the rows, partition
+    pruning (1 endpoint), joins Avro x Parquet / Avro x Avro / self-join. Files written by `AvroTestFiles` (hive
+    test fixture) in the metastore class loader; avro, commons-compress, commons-io added to `fixture-libs`.
+    *Next (step 2):* (c) `avro.schema.url` (read the schema through the stores, cache per table) and simple views; (d) perf note
     (text/CSV/JSON/Avro vs Parquet SF1) and splitting large files (Avro at sync markers, uncompressed text at line
     boundaries).
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
@@ -469,3 +472,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   `HiveTextIntegrationTest` 6/6. CI: Dev CI run 40689263636 (f73de96, package=true; push head was `[skip ci]`)
   green (build + package), pre-release `server-1.0.0-f73de96b8773` (JSON tables behind the `hive.textTables` opt-in,
   default off). Next: P4 step 2 (c) Avro, then views; (d) perf.
+- 2026-10-28 (plugins session): P4 step 2 (c) part 3 - Hive Avro tables under the new opt-in `hive.avroTables`
+  (default false; deb0a99 plugin + unit/metastore tests, cdc0889 server end-to-end test; plugin only, no SPI or core
+  code change, comment lines in `arrowflight.properties`; new plugin dependencies Avro 1.12.0 + snappy-java, Jackson
+  2.17.2 now compile; CHANGELOG). No local build (Maven Central rate-limited the session: HTTP 429). CI: Dev CI run
+  40712744776 (2cfa23e, push from the catalogs lane, contains both commits) green (build; all modules SUCCESS). My
+  push runs 40710493366 / 40711359997 were superseded in the shared `dev-ci-main` group (and 40710493366 cancelled
+  the catalogs lane's dispatch 40710223962 for 411e804 - covered by the green run above). Pre-release: see the next
+  line / the release list (`server-1.0.0-<sha>` from main after cdc0889). Next: P4 `avro.schema.url`, views, perf.
