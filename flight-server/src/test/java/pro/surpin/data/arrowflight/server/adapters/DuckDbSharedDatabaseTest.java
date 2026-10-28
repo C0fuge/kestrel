@@ -166,8 +166,7 @@ class DuckDbSharedDatabaseTest {
             ExecutorService worker = Executors.newSingleThreadExecutor();
             String catalog = worker.submit(() -> single(adapter.connection(), "SELECT current_database()"))
                     .get(30, TimeUnit.SECONDS);
-            worker.shutdown();
-            assertTrue(worker.awaitTermination(30, TimeUnit.SECONDS));
+            awaitEnded(worker, List.of(worker.submit(Thread::currentThread).get(30, TimeUnit.SECONDS)));
             Connection own = adapter.connection();
             assertTrue(single(own, "SELECT string_agg(database_name, ',') FROM duckdb_databases()")
                     .contains(catalog));
@@ -270,8 +269,7 @@ class DuckDbSharedDatabaseTest {
             ExecutorService worker = Executors.newSingleThreadExecutor();
             worker.submit(() -> adapter.describeComplete(allocator, "SELECT id FROM s.t", views))
                     .get(30, TimeUnit.SECONDS);
-            worker.shutdown();
-            assertTrue(worker.awaitTermination(30, TimeUnit.SECONDS));
+            awaitEnded(worker, List.of(worker.submit(Thread::currentThread).get(30, TimeUnit.SECONDS)));
             String catalogs = "SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '"
                     + DuckDbAdapter.SESSION_CATALOG_PREFIX + "%'";
             assertEquals("2", single(current, catalogs));
@@ -330,23 +328,27 @@ class DuckDbSharedDatabaseTest {
                         s.execute("CREATE OR REPLACE TEMP VIEW left_behind AS SELECT 1 AS x");
                     }
                     all.await(30, TimeUnit.SECONDS);
-                    return buffer + "|" + single(conn, "SELECT current_database()");
+                    return buffer + "|" + single(conn, "SELECT current_database()") + "|"
+                            + Thread.currentThread().getName();
                 }));
             }
             List<String> buffers = new ArrayList<>();
             List<String> catalogs = new ArrayList<>();
+            List<String> threadNames = new ArrayList<>();
             for (Future<String> session : sessions) {
                 String[] parts = session.get(60, TimeUnit.SECONDS).split("\\|");
                 buffers.add(parts[0]);
                 catalogs.add(parts[1]);
+                threadNames.add(parts[2]);
             }
             buffers.sort(null);
             assertEquals(List.of("7.6 MiB", "7.6 MiB", "976.5 KiB"), buffers);
             assertEquals(0, pool.idle());
             assertEquals(1, pool.missed());
 
-            workers.shutdown();
-            assertTrue(workers.awaitTermination(30, TimeUnit.SECONDS));
+            List<Thread> threads = Thread.getAllStackTraces().keySet().stream()
+                    .filter(t -> threadNames.contains(t.getName())).toList();
+            awaitEnded(workers, threads);
             adapter.closeSessionsOfEndedThreads();
             assertEquals(2, pool.idle());
 
@@ -426,6 +428,24 @@ class DuckDbSharedDatabaseTest {
                 "{\"schema_name\":\"s\",\"table_name\":\"t\",\"catalog_name\":\"Flight_Session_7\"}"));
         assertEquals(List.of("t", "flight_session_2"), DuckDbAdapter.requireAllowedFunctions(
                 "{\"schema_name\":\"flight_session_2\",\"table_name\":\"t\",\"catalog_name\":\"\"}"));
+    }
+
+    /**
+     * Shuts a pool down and waits until its threads have ended: awaitTermination may return
+     * while a worker thread is still alive, and the session reaper only closes sessions of
+     * threads that are no longer alive.
+     *
+     * @param pool    pool to shut down
+     * @param threads the pool's threads
+     * @throws InterruptedException when interrupted while waiting
+     */
+    private static void awaitEnded(ExecutorService pool, List<Thread> threads) throws InterruptedException {
+        pool.shutdown();
+        assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
+        for (Thread thread : threads) {
+            thread.join(30_000);
+            assertFalse(thread.isAlive(), thread.getName());
+        }
     }
 
     /**
