@@ -11,17 +11,28 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
     - Step 1 done (2026-10-28): `RestCatalogConformanceTest` + workflow `catalogs-ci.yml` (matrix polaris,
       iceberg-rest-fixture; local `file://` warehouse bind-mounted at the same path, containers run as the runner user
       with `/etc/passwd` mounted). Polaris covers OAuth2 client credentials, `scope`, prefix from `/v1/config`.
-    - **Next (step 2): S3 + vended credentials.** Add a MinIO service (`quay.io/minio/minio` works on GitHub runners;
-      Docker Hub `minio/minio` is gone) and a Polaris S3 catalog with STS (MinIO supports AssumeRole), plus Lakekeeper
-      (`quay.io/lakekeeper/catalog`, needs PostgreSQL + `POST /management/v1/bootstrap` + warehouse) and Nessie
-      (`ghcr.io/projectnessie/nessie`, `nessie.catalog.warehouses.*` + S3 settings). Writer side: the test writes with
-      Iceberg Java RESTCatalog; needs `iceberg-aws` + AWS SDK as test deps (or write via the catalog's vended creds).
-      Plugin side (additive, optional setting e.g. `iceberg-rest.vendedCredentials=true`, default off): send
-      `X-Iceberg-Access-Delegation: vended-credentials` on loadTable, read `config` / `storage-credentials`
-      (`s3.access-key-id`, `s3.secret-access-key`, `s3.session-token`, `s3.session-token-expires-at-ms`) and hand them
-      to the S3 store / DuckDB secret per table prefix, refreshed before expiry. Check first how the s3 plugin's stores
-      take per-prefix credentials (may need an additive SPI method: then its own commit + SPI version bump). Never log
-      the credentials (SecretRedactor).
+    - Step 2a done (2026-10-28): S3 warehouses with static keys. `RestCatalogConformanceTest` takes
+      `ICEBERG_REST_IT_ROOT=s3://...` + `ICEBERG_REST_IT_S3_*` (writer: Iceberg S3FileIO with the url-connection
+      client - Iceberg 1.12's "apache" client is the SDK's Apache 5 client, absent from SDK 2.34.1; plugin: the s3
+      plugin's store; DuckDB: httpfs + secret). Matrix entries polaris-s3 (`stsUnavailable`), iceberg-rest-fixture-s3,
+      lakekeeper-s3 (`vakamo/lakekeeper` on Docker Hub, PostgreSQL, `tools/ci/lakekeeper-setup.sh`; its metrics
+      port moved to 9100). S3 server: moto (`quay.io/minio/minio` refuses anonymous pulls; Docker Hub `minio/minio`
+      is gone). All five pass locally (Docker in the session; quay.io and ghcr.io blobs are blocked there).
+    - **Next (step 2b): vended credentials.** Findings so far: (1) DuckDB secrets are created per connection before
+      lockdown (`DuckDbAdapter`, `DataStore.contributeDuckDb`), but `CREATE OR REPLACE TEMPORARY SECRET` and
+      `DROP SECRET` still work after `enable_external_access=false` + `lock_configuration=true` (checked with
+      duckdb_jdbc 1.5.6); client SQL cannot do it (only SELECTs pass the parse check), so the server could install
+      a table's scoped temporary credentials on a connection before running a query on it. (2) Manifests are read
+      through `Stores` (server credentials); with vended credentials only, the plugin needs its own S3 GET with
+      SigV4 (copy the s3 plugin's small `S3SigV4`, no SDK) in `StoresFileIO` for locations under such a table.
+      Needed core/SPI piece (lane-4 limit: additive, own commit, SPI bump, STATUS.md Log line): e.g.
+      `TableSnapshot`/`ReadSpec` carrying optional scoped storage credentials (prefix, type, options, expiry) that
+      the server validates like `createSecret` (scope below the catalog's roots) and installs with
+      `CREATE OR REPLACE TEMPORARY SECRET` on the query's connection(s), never logged. Plugin: optional
+      `iceberg-rest.vendedCredentials=false` (default off) sends `X-Iceberg-Access-Delegation: vended-credentials`,
+      reads `config` / `storage-credentials`, refreshes before `s3.session-token-expires-at-ms`. CI: moto STS
+      (AssumeRole) with Lakekeeper `sts-enabled` / Polaris without `stsUnavailable`; check what each returns.
+      See Open questions before building the core part.
     - Step 3: answers through the server (partial/complete) for the REST tables vs HMS, Unity Catalog OSS if feasible.
 C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source through DuckDB's `postgres` / `mysql`
     extensions (bundle for 1.5.6 offline like the others; check availability), read-only, pushdown of filters/projection,
@@ -31,6 +42,14 @@ C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), fr
     cannot read (deletion vectors / column mapping if unsupported). Then: Apache Ozone S3 gateway as an S3 backend test.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
     reader allows.
+
+## Open questions
+
+- Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
+  DuckDB connections after lockdown (`CREATE OR REPLACE TEMPORARY SECRET`, scope checked below the catalog's
+  roots, values redacted), fed by a new optional field on the catalog SPI. It touches the DuckDB lockdown
+  (security), so: may lane 4 add this (opt-in, off by default, own commits), or should the core lane own the server
+  part? Until answered, lane 4 continues with step 3 and C2 and leaves 2b's core part unbuilt.
 
 ## Log
 
