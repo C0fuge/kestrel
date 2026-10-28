@@ -171,8 +171,10 @@ class DistributedClusterIntegrationTest {
     }
 
     /**
-     * Verifies a peer stream reset before the first batch reached the client falls back to the
-     * single-node answer: the merge of groups reads every endpoint answer first.
+     * Verifies a peer stream reset before the first batch reached the client gives the exact
+     * answer: the merge of groups reads every endpoint answer first, so a reset after the peer's
+     * schema falls back to the single-node answer, and one before it fails over to a backup
+     * location and merges (which of the two depends on where the relay's byte count lands).
      *
      * @throws Exception on failure
      */
@@ -184,8 +186,7 @@ class DistributedClusterIntegrationTest {
             useDistributed(through(NODE.get(2), relay));
             assertEquals(alone, answer(WIDE_GROUPS));
             assertTrue(relay.wasCut(), "the peer's stream was not cut");
-            assertEquals(0, distributed.mergedAnswers());
-            assertEquals(1, distributed.fallbacks());
+            assertCutAnswered(1);
         }
     }
 
@@ -209,11 +210,10 @@ class DistributedClusterIntegrationTest {
                 outcome = null;
             }
             assertTrue(relay.wasCut(), "the peer's stream was not cut");
-            assertEquals(0, distributed.mergedAnswers());
             if (outcome != null) {
                 assertEquals(alone, outcome);
-                assertEquals(1, distributed.fallbacks());
             }
+            assertCutAnswered(outcome != null ? 1 : 0);
         }
         // The node still answers afterwards, merged.
         useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
@@ -355,6 +355,20 @@ class DistributedClusterIntegrationTest {
         Function<Location, FlightClient> direct = DistributedComplete.clientFactory(peerAllocator, null);
         return location -> direct.apply(port(location) == port(node)
                 ? Location.forGrpcInsecure("localhost", relay.port()) : location);
+    }
+
+    /**
+     * Checks how a query whose peer stream was cut was answered: merged only after a failover to
+     * a backup location, else by the single-node fallback.
+     *
+     * @param answered queries that got an answer (merged or fallen back)
+     */
+    private static void assertCutAnswered(int answered) {
+        assertEquals(answered, distributed.mergedAnswers() + distributed.fallbacks(),
+                "merged " + distributed.mergedAnswers() + ", fell back " + distributed.fallbacks());
+        if (distributed.mergedAnswers() > 0) {
+            assertTrue(distributed.failovers() > 0, "merged after a cut without a failover");
+        }
     }
 
     /**
