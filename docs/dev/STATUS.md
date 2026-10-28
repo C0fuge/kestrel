@@ -685,6 +685,14 @@
 
 ## Open questions
 
+- **Maintainer 2026-10-29, answer to "Item 22: one DuckDB scheduler": yes, build it as the opt-in
+  `duckDbSharedDatabase` (default false)** - one shared database per node, connection-local TEMP views, per-query
+  names, secrets/lockdown set once per node, node-wide `memory_limit`/`threads`. Required before any default change:
+  tests for view isolation between concurrent sessions and users (incl. Ranger-filtered views), lockdown checks with the
+  shared instance, identical TPC-H answers, a short security note in the Log (what an attacker could reach across
+  sessions and why not). Steps small, one `package=true` pre-release per step; the screening measures 4/8-stream scans,
+  small-query load and SF10 on it vs off. This is now the core lane's next code item.
+
 - **Item 22: one DuckDB scheduler (2026-10-28, core lane).** Every worker connection is its own in-memory DuckDB with
   its own thread pool, so N parallel streams start N x `duckDbThreads` threads on the node (plain DuckDB JDBC on 2
   cores: 4 instances x 2 threads ~830 MB/s at 2.1-2.6 s CPU/GB, x 1 thread ~1270 MB/s at 1.5); upstream shares one
