@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Base64;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,6 +20,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Tag("unit")
 class LdapFlightAuthenticatorTest {
     private final LdapSessionToken sessions = new LdapSessionToken(new byte[32], 60_000, Clock.systemUTC());
+
+    /**
+     * Builds an authenticator without a group search.
+     *
+     * @param directory credential check
+     * @return authenticator
+     */
+    private LdapFlightAuthenticator authenticator(LdapFlightAuthenticator.Directory directory) {
+        return new LdapFlightAuthenticator(directory, sessions,
+                new LdapGroupCache(directory, false, 60_000, Clock.systemUTC()));
+    }
 
     /**
      * Builds headers with one Authorization value.
@@ -59,8 +71,8 @@ class LdapFlightAuthenticatorTest {
     /** The identity is what the directory returns; the session token carries it to later calls. */
     @Test
     void issuesSessionForDirectoryIdentity() {
-        LdapFlightAuthenticator auth = new LdapFlightAuthenticator(
-                (user, password) -> user.equals("ALICE") && password.equals("p:w") ? "alice" : null, sessions);
+        LdapFlightAuthenticator auth = authenticator((user, password) -> user.equals("ALICE")
+                && password.equals("p:w") ? new LdapFlightAuthenticator.Login("alice", Set.of()) : null);
         CallHeaderAuthenticator.AuthResult result = auth.authenticate(headers(basic("ALICE:p:w")));
         assertEquals("alice", result.getPeerIdentity());
         FlightCallHeaders outgoing = new FlightCallHeaders();
@@ -74,10 +86,10 @@ class LdapFlightAuthenticatorTest {
     @Test
     void refusesMalformedCredentials() {
         AtomicInteger calls = new AtomicInteger();
-        LdapFlightAuthenticator auth = new LdapFlightAuthenticator((user, password) -> {
+        LdapFlightAuthenticator auth = authenticator((user, password) -> {
             calls.incrementAndGet();
-            return user;
-        }, sessions);
+            return new LdapFlightAuthenticator.Login(user, Set.of());
+        });
         for (String header : new String[] {null, "", "Negotiate abc", "Basic !!!", basic("nocolon"),
                 basic(":pw"), "Basic " + "A".repeat(9000), "Bearer junk"}) {
             refused(auth, header, FlightStatusCode.UNAUTHENTICATED);
@@ -88,9 +100,51 @@ class LdapFlightAuthenticatorTest {
     /** A directory outage is UNAVAILABLE, not a wrong password. */
     @Test
     void reportsOutagesAsUnavailable() {
-        LdapFlightAuthenticator auth = new LdapFlightAuthenticator((user, password) -> {
+        LdapFlightAuthenticator auth = authenticator((user, password) -> {
             throw new LdapDirectory.DirectoryUnavailableException("down", null);
-        }, sessions);
+        });
         refused(auth, basic("alice:pw"), FlightStatusCode.UNAVAILABLE);
+    }
+
+    /**
+     * A login fills the group cache, so session calls on this node do not ask the directory; a session
+     * whose groups cannot be read (another node, directory down) fails as UNAVAILABLE.
+     */
+    @Test
+    void sessionCallsNeedTheirGroups() {
+        AtomicInteger lookups = new AtomicInteger();
+        boolean[] down = {false};
+        LdapFlightAuthenticator.Directory directory = new LdapFlightAuthenticator.Directory() {
+            @Override
+            public LdapFlightAuthenticator.Login login(String user, String password) {
+                return new LdapFlightAuthenticator.Login(user, Set.of("analysts"));
+            }
+
+            @Override
+            public Set<String> groups(String identity) throws LdapDirectory.DirectoryUnavailableException {
+                lookups.incrementAndGet();
+                if (down[0]) {
+                    throw new LdapDirectory.DirectoryUnavailableException("down", null);
+                }
+                return Set.of("analysts");
+            }
+        };
+        LdapFlightAuthenticator auth = new LdapFlightAuthenticator(directory, sessions,
+                new LdapGroupCache(directory, true, 60_000, Clock.systemUTC()));
+        FlightCallHeaders outgoing = new FlightCallHeaders();
+        auth.authenticate(headers(basic("alice:pw"))).appendToOutgoingHeaders(outgoing);
+        String bearer = outgoing.get("Authorization");
+        assertEquals("alice", auth.authenticate(headers(bearer)).getPeerIdentity());
+        assertEquals(0, lookups.get());
+
+        LdapFlightAuthenticator otherNode = new LdapFlightAuthenticator(directory, sessions,
+                new LdapGroupCache(directory, true, 60_000, Clock.systemUTC()));
+        assertEquals("alice", otherNode.authenticate(headers(bearer)).getPeerIdentity());
+        assertEquals(1, lookups.get());
+        down[0] = true;
+        LdapFlightAuthenticator thirdNode = new LdapFlightAuthenticator(directory, sessions,
+                new LdapGroupCache(directory, true, 60_000, Clock.systemUTC()));
+        refused(thirdNode, bearer, FlightStatusCode.UNAVAILABLE);
+        assertEquals("alice", otherNode.authenticate(headers(bearer)).getPeerIdentity());
     }
 }

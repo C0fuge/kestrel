@@ -32,7 +32,10 @@ from Hadoop's group mapping. Flight TLS is required.
 | `FLIGHT_LDAP_USER_SEARCH_BASE` | Search mode (instead of a template): subtree searched for the user's entry, whose DN is then bound with the password. |
 | `FLIGHT_LDAP_USER_SEARCH_FILTER` | Search mode filter, `{0}` = the escaped login name; default `(uid={0})`, AD: `(sAMAccountName={0})`. Exactly one entry must match. |
 | `FLIGHT_LDAP_USER_ATTRIBUTE` | Search mode: attribute of the entry used as the identity (e.g. `uid`, `sAMAccountName`); default the login name as sent. |
-| `FLIGHT_LDAP_BIND_DN`, `FLIGHT_LDAP_BIND_PASSWORD` (or `_FILE`) | Search mode service account; default anonymous search. A refused service account is reported as `UNAVAILABLE`. |
+| `FLIGHT_LDAP_BIND_DN`, `FLIGHT_LDAP_BIND_PASSWORD` (or `_FILE`) | Service account for the user search (search mode) and the group search (both modes); default anonymous searches. A refused service account is reported as `UNAVAILABLE`. |
+| `FLIGHT_LDAP_GROUP_SEARCH_BASE` | Optional. Subtree searched for the user's groups; their names are added to the groups Ranger sees (next to Hadoop's group mapping). Unset: Hadoop's group mapping only, as before. |
+| `FLIGHT_LDAP_GROUP_SEARCH_FILTER` | Group filter, `{0}` = the escaped identity, `{1}` = the escaped user DN; default `(\|(member={1})(uniqueMember={1})(memberUid={0}))`. AD with nested groups: `(member:1.2.840.113556.1.4.1941:={1})`. |
+| `FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE` | Attribute of a group entry that names the group; default `cn` (AD: `cn` or `sAMAccountName`, as Ranger usersync names them). |
 | `FLIGHT_LDAP_SESSION_SECRET` | Required. Base64 HMAC key, at least 32 bytes, the same on every node. |
 | `FLIGHT_LDAP_SESSION_MINUTES` | Session token lifetime, 1-1440, default 10; after it the client must log in again. |
 | `FLIGHT_LDAP_CONNECT_TIMEOUT_MS`, `FLIGHT_LDAP_RESPONSE_TIMEOUT_MS` | Per server connect timeout (default 5000) and per operation timeout (default 10000). |
@@ -40,6 +43,16 @@ from Hadoop's group mapping. Flight TLS is required.
 Login names may contain letters, digits and `. _ - @` only (so no DN or filter escaping issues); empty passwords are
 refused before the directory is asked (an empty-password bind is an anonymous bind in LDAP). Wrong credentials are
 `UNAUTHENTICATED`; an unreachable directory, a TLS failure or a timeout is `UNAVAILABLE`.
+
+Groups (with `FLIGHT_LDAP_GROUP_SEARCH_BASE`): read at the login (as the service account if one is set, else as the
+user) and kept for the session lifetime; a group change takes effect at the next login. A node that receives a
+session token without having seen the login reads the groups once, with the service account or anonymously - so on
+a cluster set `FLIGHT_LDAP_BIND_DN` unless the directory allows anonymous searches. Groups are never guessed: when
+they cannot be read (directory down, the identity's entry not found, more than 1000 groups) the login or call fails
+`UNAVAILABLE` and policy checks deny; they never run with fewer groups.
+
+A custom provider can supply groups the same way: `FlightAuthenticationProvider.groups(identity)` (default none) is
+added to the Hadoop group mapping for Ranger checks; an exception from it makes the check deny.
 
 ## Add an authentication provider
 

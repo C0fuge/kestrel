@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -175,5 +176,81 @@ class LdapDirectoryTest {
         assertThrows(IllegalArgumentException.class, () -> LdapSettings.fromEnvironment(settings));
         settings.put("FLIGHT_LDAP_ALLOW_PLAINTEXT", "true");
         assertEquals("alice", directory(settings).authenticate("alice", "alice-pw"));
+    }
+
+    /**
+     * Adds the group search to settings.
+     *
+     * @param settings provider settings
+     * @return the same settings
+     */
+    private static Map<String, String> withGroups(Map<String, String> settings) {
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_BASE", "ou=groups," + LdapTestDirectory.BASE);
+        return settings;
+    }
+
+    /** Without a group search, logins carry no groups and identities have none. */
+    @Test
+    void noGroupsWithoutGroupSearch() throws Exception {
+        LdapDirectory directory = directory(ldap.searchSettings());
+        assertEquals(Set.of(), directory.login("alice", "alice-pw").groups());
+        assertEquals(Set.of(), directory.groups("alice"));
+    }
+
+    /**
+     * The default filter finds groupOfNames, groupOfUniqueNames and posixGroup memberships, at the login
+     * (as the user, template mode) and for a session identity (anonymous search).
+     */
+    @Test
+    void readsGroupsAtLoginAndForIdentities() throws Exception {
+        LdapDirectory directory = directory(withGroups(ldap.templateSettings()));
+        assertEquals(new LdapFlightAuthenticator.Login("alice", Set.of("analysts", "bi-users")),
+                directory.login("alice", "alice-pw"));
+        assertEquals(Set.of("bi-users", "ops"), directory.login("bob", "bob:pw:with:colons").groups());
+        assertNull(directory.login("bob", "wrong"));
+        assertEquals(Set.of("analysts", "bi-users"), directory.groups("alice"));
+        assertEquals(Set.of("bi-users", "ops"), directory.groups("bob"));
+        assertEquals(Set.of(), directory.groups("nobody"));
+    }
+
+    /**
+     * In search mode with an identity attribute, the service account finds the entry of a session
+     * identity; a custom filter and name attribute apply.
+     */
+    @Test
+    void searchModeIdentityGroupsWithCustomFilter() throws Exception {
+        Map<String, String> settings = withGroups(ldap.searchSettings());
+        settings.put("FLIGHT_LDAP_USER_SEARCH_BASE", "ou=people," + LdapTestDirectory.BASE);
+        settings.put("FLIGHT_LDAP_USER_ATTRIBUTE", "uid");
+        LdapDirectory directory = directory(settings);
+        assertEquals(new LdapFlightAuthenticator.Login("alice", Set.of("analysts", "bi-users")),
+                directory.login("ALICE", "alice-pw"));
+        assertEquals(Set.of("bi-users", "ops"), directory.groups("bob"));
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_FILTER", "(&(objectClass=groupOfUniqueNames)(uniqueMember={1}))");
+        settings.put("FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE", "description");
+        directory = directory(settings);
+        assertEquals(Set.of("BI users"), directory.groups("bob"));
+        assertEquals(Set.of("BI users"), directory.login("alice", "alice-pw").groups());
+    }
+
+    /** An identity without exactly one entry, or a failing group search, fails instead of giving no groups. */
+    @Test
+    void groupLookupFailuresAreReported() {
+        Map<String, String> settings = withGroups(ldap.searchSettings());
+        LdapDirectory directory = directory(settings);
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class, () -> directory.groups("carol"));
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class, () -> directory.groups("nobody"));
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_BASE", "ou=missing," + LdapTestDirectory.BASE);
+        LdapDirectory missingBase = directory(settings);
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class,
+                () -> missingBase.login("alice", "alice-pw"));
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class, () -> missingBase.groups("alice"));
+        Map<String, String> template = withGroups(ldap.templateSettings());
+        template.put("FLIGHT_LDAP_BIND_DN", LdapTestDirectory.SERVICE_DN);
+        template.put("FLIGHT_LDAP_BIND_PASSWORD", "wrong");
+        LdapDirectory wrongService = directory(template);
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class, () -> wrongService.groups("alice"));
+        assertThrows(LdapDirectory.DirectoryUnavailableException.class,
+                () -> wrongService.login("alice", "alice-pw"));
     }
 }

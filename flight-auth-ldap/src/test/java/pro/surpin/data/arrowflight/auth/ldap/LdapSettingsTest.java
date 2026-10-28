@@ -135,4 +135,32 @@ class LdapSettingsTest {
         settings.put("FLIGHT_LDAP_BIND_PASSWORD", "pw");
         refused(settings, "not both");
     }
+
+    /** Group search settings: defaults, a service account in template mode only with groups, checks. */
+    @Test
+    void readsGroupSearch() {
+        assertNull(LdapSettings.fromEnvironment(base()).groupSearchBase());
+        Map<String, String> settings = base();
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=org");
+        LdapSettings read = LdapSettings.fromEnvironment(settings);
+        assertEquals(LdapSettings.DEFAULT_GROUP_FILTER, read.groupSearchFilter());
+        assertEquals("cn", read.groupNameAttribute());
+        settings.put("FLIGHT_LDAP_BIND_DN", "cn=svc,dc=example,dc=org");
+        settings.put("FLIGHT_LDAP_BIND_PASSWORD", "pw");
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_FILTER", "(member:1.2.840.113556.1.4.1941:={1})");
+        settings.put("FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE", "sAMAccountName");
+        read = LdapSettings.fromEnvironment(settings);
+        assertEquals("cn=svc,dc=example,dc=org", read.bindDn());
+        assertEquals("sAMAccountName", read.groupNameAttribute());
+
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_FILTER", "(objectClass=group)");
+        refused(settings, "must contain {0}");
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_FILTER", "(member={1}");
+        refused(settings, "Malformed FLIGHT_LDAP_GROUP_SEARCH_FILTER");
+        settings.remove("FLIGHT_LDAP_GROUP_SEARCH_BASE");
+        refused(settings, "FLIGHT_LDAP_BIND_DN");
+        settings.remove("FLIGHT_LDAP_BIND_DN");
+        settings.remove("FLIGHT_LDAP_BIND_PASSWORD");
+        refused(settings, "need FLIGHT_LDAP_GROUP_SEARCH_BASE");
+    }
 }

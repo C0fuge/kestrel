@@ -20,13 +20,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.security.GeneralSecurityException;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Checks user names and passwords with simple binds against the configured directory servers. */
+/**
+ * Checks user names and passwords with simple binds against the configured directory servers and
+ * reads the users' groups.
+ */
 final class LdapDirectory implements LdapFlightAuthenticator.Directory {
     private static final Logger LOGGER = LoggerFactory.getLogger(LdapDirectory.class);
     /** Login names: letters, digits and {@code . _ - @}, so neither DNs nor filters need escaping. */
     private static final Pattern USER = Pattern.compile("[\\p{L}\\p{N}._@-]{1,256}");
+    /** Most groups one user may have; more fail the lookup rather than drop some. */
+    static final int MAX_GROUPS = 1000;
     private final LdapSettings settings;
     private final SSLUtil ssl;
     private final LDAPConnectionOptions options;
@@ -61,22 +68,35 @@ final class LdapDirectory implements LdapFlightAuthenticator.Directory {
         return user != null && USER.matcher(user).matches();
     }
 
+    /**
+     * Checks credentials and returns only the identity.
+     *
+     * @param user login name
+     * @param password password
+     * @return identity, or null when refused
+     * @throws DirectoryUnavailableException when the directory cannot answer
+     */
+    String authenticate(String user, String password) throws DirectoryUnavailableException {
+        LdapFlightAuthenticator.Login login = login(user, password);
+        return login == null ? null : login.identity();
+    }
+
     @Override
-    public String authenticate(String user, String password) throws DirectoryUnavailableException {
+    public LdapFlightAuthenticator.Login login(String user, String password) throws DirectoryUnavailableException {
         if (!acceptableUser(user) || password == null || password.isEmpty()) {
             return null;
         }
         try (LDAPConnection connection = connect()) {
             if (settings.searchBase() == null) {
                 String bindName = settings.userDnTemplate().replace("{0}", user);
-                return bind(connection, bindName, password) ? user : null;
+                return bind(connection, bindName, password) ? accepted(connection, user, bindName) : null;
             }
             SearchResultEntry entry = findUser(connection, user);
             if (entry == null || !bind(connection, entry.getDN(), password)) {
                 return null;
             }
             if (settings.userAttribute() == null) {
-                return user;
+                return accepted(connection, user, entry.getDN());
             }
             String[] values = entry.getAttributeValues(settings.userAttribute());
             if (values == null || values.length != 1 || values[0].isBlank() || values[0].length() > 1024
@@ -85,7 +105,7 @@ final class LdapDirectory implements LdapFlightAuthenticator.Directory {
                         user, settings.userAttribute());
                 return null;
             }
-            return values[0];
+            return accepted(connection, values[0], entry.getDN());
         } catch (LDAPException e) {
             if (unavailable(e.getResultCode())) {
                 throw new DirectoryUnavailableException("LDAP directory unavailable: " + e.getResultCode(), e);
@@ -93,6 +113,100 @@ final class LdapDirectory implements LdapFlightAuthenticator.Directory {
             LOGGER.warn("LDAP login of {} refused: {}", user, e.getResultCode());
             return null;
         }
+    }
+
+    @Override
+    public Set<String> groups(String identity) throws DirectoryUnavailableException {
+        if (settings.groupSearchBase() == null) {
+            return Set.of();
+        }
+        try (LDAPConnection connection = connect()) {
+            bindService(connection);
+            String userDn;
+            if (settings.searchBase() == null) {
+                if (!acceptableUser(identity)) {
+                    throw new DirectoryUnavailableException("LDAP identity unusable in a DN", null);
+                }
+                userDn = settings.userDnTemplate().replace("{0}", identity);
+            } else {
+                String encoded = Filter.encodeValue(identity);
+                Filter filter = Filter.create(settings.userAttribute() == null
+                        ? settings.searchFilter().replace("{0}", encoded)
+                        : "(" + settings.userAttribute() + "=" + encoded + ")");
+                SearchRequest request = new SearchRequest(settings.searchBase(), SearchScope.SUB, filter, "1.1");
+                request.setSizeLimit(2);
+                SearchResult result = connection.search(request);
+                if (result.getEntryCount() != 1) {
+                    throw new DirectoryUnavailableException("LDAP finds " + result.getEntryCount()
+                            + " entries for the identity", null);
+                }
+                userDn = result.getSearchEntries().get(0).getDN();
+            }
+            return searchGroups(connection, identity, userDn);
+        } catch (LDAPException e) {
+            throw new DirectoryUnavailableException("LDAP group lookup failed: " + e.getResultCode(), e);
+        }
+    }
+
+    /**
+     * Builds an accepted login, reading the groups when a group search is configured.
+     *
+     * @param connection connection bound as the user
+     * @param identity caller's identity
+     * @param userDn user's DN
+     * @return accepted login
+     * @throws DirectoryUnavailableException when the groups cannot be read
+     */
+    private LdapFlightAuthenticator.Login accepted(LDAPConnection connection, String identity, String userDn)
+            throws DirectoryUnavailableException {
+        if (settings.groupSearchBase() == null) {
+            return new LdapFlightAuthenticator.Login(identity, Set.of());
+        }
+        try {
+            bindService(connection);
+            return new LdapFlightAuthenticator.Login(identity, searchGroups(connection, identity, userDn));
+        } catch (LDAPException e) {
+            throw new DirectoryUnavailableException("LDAP group lookup failed: " + e.getResultCode(), e);
+        }
+    }
+
+    /**
+     * Binds as the service account when one is configured.
+     *
+     * @param connection open connection
+     * @throws LDAPException on directory failure
+     * @throws DirectoryUnavailableException when the directory refuses the service account
+     */
+    private void bindService(LDAPConnection connection) throws LDAPException, DirectoryUnavailableException {
+        if (settings.bindDn() != null && !bind(connection, settings.bindDn(), settings.bindPassword())) {
+            throw new DirectoryUnavailableException("LDAP directory refuses FLIGHT_LDAP_BIND_DN", null);
+        }
+    }
+
+    /**
+     * Reads the names of the groups a user belongs to.
+     *
+     * @param connection bound connection
+     * @param identity caller's identity, for {@code {0}}
+     * @param userDn user's DN, for {@code {1}}
+     * @return group names
+     * @throws LDAPException on directory failure, or more than {@link #MAX_GROUPS} groups
+     */
+    private Set<String> searchGroups(LDAPConnection connection, String identity, String userDn)
+            throws LDAPException {
+        Filter filter = Filter.create(settings.groupSearchFilter()
+                .replace("{0}", Filter.encodeValue(identity)).replace("{1}", Filter.encodeValue(userDn)));
+        SearchRequest request = new SearchRequest(settings.groupSearchBase(), SearchScope.SUB, filter,
+                settings.groupNameAttribute());
+        request.setSizeLimit(MAX_GROUPS);
+        Set<String> groups = new HashSet<>();
+        for (SearchResultEntry entry : connection.search(request).getSearchEntries()) {
+            String name = entry.getAttributeValue(settings.groupNameAttribute());
+            if (name != null && !name.isBlank()) {
+                groups.add(name);
+            }
+        }
+        return Set.copyOf(groups);
     }
 
     /**
@@ -128,9 +242,7 @@ final class LdapDirectory implements LdapFlightAuthenticator.Directory {
      */
     private SearchResultEntry findUser(LDAPConnection connection, String user)
             throws LDAPException, DirectoryUnavailableException {
-        if (settings.bindDn() != null && !bind(connection, settings.bindDn(), settings.bindPassword())) {
-            throw new DirectoryUnavailableException("LDAP directory refuses FLIGHT_LDAP_BIND_DN", null);
-        }
+        bindService(connection);
         Filter filter = Filter.create(settings.searchFilter().replace("{0}", Filter.encodeValue(user)));
         SearchRequest request = settings.userAttribute() == null
                 ? new SearchRequest(settings.searchBase(), SearchScope.SUB, filter, "1.1")

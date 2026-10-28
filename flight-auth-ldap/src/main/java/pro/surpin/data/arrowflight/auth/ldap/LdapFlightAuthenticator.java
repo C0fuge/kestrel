@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Set;
 
 /**
  * Admits a Basic user name and password the directory accepts, answering with a signed session
@@ -19,18 +20,45 @@ final class LdapFlightAuthenticator implements CallHeaderAuthenticator {
     private static final int MAX_BASIC_LENGTH = 8192;
     private final Directory directory;
     private final LdapSessionToken sessions;
+    private final LdapGroupCache groups;
 
-    /** Checks a login name and password. */
+    /**
+     * An accepted login.
+     *
+     * @param identity the caller's identity
+     * @param groups the caller's directory groups, empty without a group search
+     */
+    record Login(String identity, Set<String> groups) {
+        /**
+         * Copies the groups.
+         */
+        Login {
+            groups = Set.copyOf(groups);
+        }
+    }
+
+    /** Checks a login name and password and looks up groups. */
     interface Directory {
         /**
          * Checks credentials.
          *
          * @param user login name as sent by the client
          * @param password password
-         * @return the caller's identity, or null when the credentials are refused
+         * @return the accepted login, or null when the credentials are refused
          * @throws LdapDirectory.DirectoryUnavailableException when the directory cannot answer
          */
-        String authenticate(String user, String password) throws LdapDirectory.DirectoryUnavailableException;
+        Login login(String user, String password) throws LdapDirectory.DirectoryUnavailableException;
+
+        /**
+         * Looks up the groups of an identity a session token carries.
+         *
+         * @param identity identity of an earlier login
+         * @return group names
+         * @throws LdapDirectory.DirectoryUnavailableException when the directory cannot tell the groups
+         */
+        default Set<String> groups(String identity) throws LdapDirectory.DirectoryUnavailableException {
+            return Set.of();
+        }
     }
 
     /**
@@ -38,10 +66,12 @@ final class LdapFlightAuthenticator implements CallHeaderAuthenticator {
      *
      * @param directory credential check
      * @param sessions session token codec
+     * @param groups group cache, filled at logins
      */
-    LdapFlightAuthenticator(Directory directory, LdapSessionToken sessions) {
+    LdapFlightAuthenticator(Directory directory, LdapSessionToken sessions, LdapGroupCache groups) {
         this.directory = directory;
         this.sessions = sessions;
+        this.groups = groups;
     }
 
     @Override
@@ -50,6 +80,7 @@ final class LdapFlightAuthenticator implements CallHeaderAuthenticator {
         if (header != null && header.startsWith(Auth2Constants.BEARER_PREFIX)) {
             try {
                 String user = sessions.verify(header.substring(Auth2Constants.BEARER_PREFIX.length()).trim());
+                requireGroups(user);
                 return () -> user;
             } catch (IllegalArgumentException e) {
                 throw unauthenticated("Invalid or expired LDAP session; log in again");
@@ -71,17 +102,19 @@ final class LdapFlightAuthenticator implements CallHeaderAuthenticator {
             throw unauthenticated("Malformed Basic credential");
         }
         String login = decoded.substring(0, colon);
-        String identity;
+        Login accepted;
         try {
-            identity = directory.authenticate(login, decoded.substring(colon + 1));
+            accepted = directory.login(login, decoded.substring(colon + 1));
         } catch (LdapDirectory.DirectoryUnavailableException e) {
             LOGGER.warn("LDAP login of {} not checked: {}", printable(login), e.getMessage());
             throw CallStatus.UNAVAILABLE.withDescription("LDAP directory unavailable").toRuntimeException();
         }
-        if (identity == null) {
+        if (accepted == null) {
             LOGGER.info("LDAP login of {} refused", printable(login));
             throw unauthenticated("Invalid LDAP user name or password");
         }
+        String identity = accepted.identity();
+        groups.put(identity, accepted.groups());
         String token = sessions.issue(identity);
         return new AuthResult() {
             @Override
@@ -94,6 +127,21 @@ final class LdapFlightAuthenticator implements CallHeaderAuthenticator {
                 outgoing.insert(Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + token);
             }
         };
+    }
+
+    /**
+     * Returns the groups of a session's identity, so a call whose groups cannot be told fails here
+     * as unavailable instead of being denied later by the policy.
+     *
+     * @param identity identity from a valid session token
+     */
+    private void requireGroups(String identity) {
+        try {
+            groups.groups(identity);
+        } catch (LdapDirectory.DirectoryUnavailableException e) {
+            LOGGER.warn("LDAP groups of {} not read: {}", printable(identity), e.getMessage());
+            throw CallStatus.UNAVAILABLE.withDescription("LDAP group lookup failed").toRuntimeException();
+        }
     }
 
     /**

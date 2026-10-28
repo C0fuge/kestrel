@@ -17,6 +17,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Other streams (metadata, SqlInfo) always copy. Local A/B on 2 cores (`ParallelScanPerfTest`, in-process client on
   the same cores, 6 M-row table, two rounds each): 8 endpoints 243/234 -> 245/268 MB/s at 8.05/8.34 -> 7.26/7.15 s
   CPU per GB; 1 and 4 streams within noise. `ParallelScanPerfTest` takes `-Dperf.zeroCopyWrites`.
+- LDAP groups for Ranger (P2 step 2), opt-in `FLIGHT_LDAP_GROUP_SEARCH_BASE` (+ `FLIGHT_LDAP_GROUP_SEARCH_FILTER`,
+  default `(|(member={1})(uniqueMember={1})(memberUid={0}))`, and `FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE`, default `cn`):
+  the user's directory groups, read at the login and kept for the session lifetime (another node reads them once with
+  the service account, `FLIGHT_LDAP_BIND_DN` now also allowed in template mode), are added to the Hadoop group
+  mapping for Ranger checks. Unreadable groups fail the call `UNAVAILABLE` / deny, never fewer groups. Core: new
+  `FlightAuthenticationProvider.groups(identity)` (default none, so the built-in providers are unchanged).
 - LDAP / Active Directory login (P2 step 1), new optional module `flight-auth-ldap`, `FLIGHT_AUTH_PROVIDER=ldap`
   (existing providers unchanged): a Basic user name + password (what JDBC/ODBC/ADBC and BI tools send) is checked with
   a simple bind - DN template (`FLIGHT_LDAP_USER_DN_TEMPLATE`, e.g. an AD UPN `{0}@corp.example`) or search with a

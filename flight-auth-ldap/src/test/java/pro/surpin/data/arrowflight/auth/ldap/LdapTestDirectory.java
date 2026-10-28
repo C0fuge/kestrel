@@ -3,6 +3,8 @@ package pro.surpin.data.arrowflight.auth.ldap;
 import com.unboundid.ldap.listener.InMemoryDirectoryServer;
 import com.unboundid.ldap.listener.InMemoryDirectoryServerConfig;
 import com.unboundid.ldap.listener.InMemoryListenerConfig;
+import com.unboundid.ldap.sdk.Entry;
+import com.unboundid.ldap.sdk.schema.Schema;
 import com.unboundid.util.ssl.KeyStoreKeyManager;
 import com.unboundid.util.ssl.SSLUtil;
 import com.unboundid.util.ssl.TrustAllTrustManager;
@@ -57,6 +59,16 @@ final class LdapTestDirectory implements AutoCloseable {
         SSLUtil clientSsl = new SSLUtil(new TrustAllTrustManager());
         InMemoryDirectoryServerConfig config = new InMemoryDirectoryServerConfig(BASE);
         config.addAdditionalBindCredentials(SERVICE_DN, SERVICE_PASSWORD);
+        config.setSchema(Schema.mergeSchemas(Schema.getDefaultStandardSchema(), new Schema(new Entry(
+                "cn=schema",
+                new com.unboundid.ldap.sdk.Attribute("attributeTypes",
+                        "( 1.3.6.1.1.1.1.1 NAME 'gidNumber' EQUALITY integerMatch "
+                                + "SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+                        "( 1.3.6.1.1.1.1.12 NAME 'memberUid' EQUALITY caseExactIA5Match "
+                                + "SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )"),
+                new com.unboundid.ldap.sdk.Attribute("objectClasses",
+                        "( 1.3.6.1.1.1.2.2 NAME 'posixGroup' SUP top STRUCTURAL MUST ( cn $ gidNumber ) "
+                                + "MAY ( userPassword $ memberUid $ description ) )")))));
         config.setListenerConfigs(
                 InMemoryListenerConfig.createLDAPConfig("ldap", null, 0,
                         startTls ? serverSsl.createSSLSocketFactory() : null),
@@ -70,6 +82,14 @@ final class LdapTestDirectory implements AutoCloseable {
         person("bob", "people", "bob:pw:with:colons");
         person("carol", "people", "carol-pw");
         person("carol", "contractors", "carol-pw");
+        server.add("dn: ou=groups," + BASE, "objectClass: organizationalUnit", "ou: groups");
+        server.add("dn: cn=analysts,ou=groups," + BASE, "objectClass: groupOfNames", "cn: analysts",
+                "member: uid=alice,ou=people," + BASE);
+        server.add("dn: cn=bi-users,ou=groups," + BASE, "objectClass: groupOfUniqueNames", "cn: bi-users",
+                "description: BI users", "uniqueMember: uid=alice,ou=people," + BASE,
+                "uniqueMember: uid=bob,ou=people," + BASE);
+        server.add("dn: cn=ops,ou=groups," + BASE, "objectClass: posixGroup", "cn: ops", "gidNumber: 1001",
+                "memberUid: bob");
         server.startListening();
     }
 

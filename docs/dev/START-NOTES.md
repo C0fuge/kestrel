@@ -50,8 +50,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   ldaps://dc2.corp:636`, `FLIGHT_LDAP_SESSION_SECRET` (base64, >= 32 bytes, the same on every node) and either
   `FLIGHT_LDAP_USER_DN_TEMPLATE={0}@corp.example` (AD UPN bind) or `FLIGHT_LDAP_USER_SEARCH_BASE` +
   `FLIGHT_LDAP_USER_SEARCH_FILTER=(sAMAccountName={0})` + `FLIGHT_LDAP_BIND_DN` / `FLIGHT_LDAP_BIND_PASSWORD_FILE`.
-  The login name is the Flight identity Ranger checks (groups: Hadoop's group mapping, as for Kerberos users). All
-  settings: `docs/security/providers.md` in the repository.
+  The login name is the Flight identity Ranger checks (groups: Hadoop's group mapping, as for Kerberos users; with
+  `FLIGHT_LDAP_GROUP_SEARCH_BASE` also the user's directory groups - on a cluster set `FLIGHT_LDAP_BIND_DN` for it).
+  All settings: `docs/security/providers.md` in the repository.
 - Kerberos HDFS without an external `kinit`: set `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN

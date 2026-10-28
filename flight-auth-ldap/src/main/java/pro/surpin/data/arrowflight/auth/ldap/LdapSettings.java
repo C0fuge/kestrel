@@ -1,5 +1,8 @@
 package pro.surpin.data.arrowflight.auth.ldap;
 
+import com.unboundid.ldap.sdk.Filter;
+import com.unboundid.ldap.sdk.LDAPException;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
@@ -22,7 +25,7 @@ import java.util.Map;
  * @param searchBase base DN of the user search, or null in template mode
  * @param searchFilter user search filter with {@code {0}} for the escaped user name
  * @param userAttribute attribute of the found entry that names the identity, or null for the login name
- * @param bindDn service account for the user search, or null for an anonymous search
+ * @param bindDn service account for the user and group searches, or null for anonymous searches
  * @param bindPassword service account password, or null
  * @param trustStore trust store file for TLS, or null for the JVM default trust
  * @param trustStoreType trust store type
@@ -31,14 +34,22 @@ import java.util.Map;
  * @param responseTimeoutMillis timeout of one LDAP operation
  * @param sessionSecret HMAC key of the session tokens, shared by all nodes
  * @param sessionMillis session token lifetime
+ * @param groupSearchBase base DN of the group search, or null when groups come only from the Hadoop
+ *     group mapping
+ * @param groupSearchFilter group search filter with {@code {0}} for the identity and {@code {1}} for
+ *     the user's DN, both escaped
+ * @param groupNameAttribute attribute of a found group entry that names the group
  */
 record LdapSettings(List<Server> servers, boolean startTls, String userDnTemplate, String searchBase,
         String searchFilter, String userAttribute, String bindDn, String bindPassword, Path trustStore,
         String trustStoreType, String trustStorePassword, int connectTimeoutMillis,
-        int responseTimeoutMillis, byte[] sessionSecret, long sessionMillis) {
+        int responseTimeoutMillis, byte[] sessionSecret, long sessionMillis, String groupSearchBase,
+        String groupSearchFilter, String groupNameAttribute) {
 
     /** Default search filter: the user name as {@code uid}. */
     static final String DEFAULT_FILTER = "(uid={0})";
+    /** Default group search filter: groupOfNames, groupOfUniqueNames and posixGroup membership. */
+    static final String DEFAULT_GROUP_FILTER = "(|(member={1})(uniqueMember={1})(memberUid={0}))";
 
     /**
      * One directory server address.
@@ -90,10 +101,24 @@ record LdapSettings(List<Server> servers, boolean startTls, String userDnTemplat
         String attribute = optional(environment, "FLIGHT_LDAP_USER_ATTRIBUTE");
         String bindDn = optional(environment, "FLIGHT_LDAP_BIND_DN");
         String bindPassword = secret(environment, "FLIGHT_LDAP_BIND_PASSWORD");
-        if (template != null && (attribute != null || bindDn != null
+        String groupBase = optional(environment, "FLIGHT_LDAP_GROUP_SEARCH_BASE");
+        if (template != null && (attribute != null || (bindDn != null && groupBase == null)
                 || optional(environment, "FLIGHT_LDAP_USER_SEARCH_FILTER") != null)) {
             throw new IllegalArgumentException("FLIGHT_LDAP_USER_SEARCH_FILTER, FLIGHT_LDAP_USER_ATTRIBUTE "
-                    + "and FLIGHT_LDAP_BIND_DN belong to search mode (FLIGHT_LDAP_USER_SEARCH_BASE)");
+                    + "and FLIGHT_LDAP_BIND_DN belong to search mode (FLIGHT_LDAP_USER_SEARCH_BASE); "
+                    + "FLIGHT_LDAP_BIND_DN also to group search (FLIGHT_LDAP_GROUP_SEARCH_BASE)");
+        }
+        String groupFilter = optional(environment, "FLIGHT_LDAP_GROUP_SEARCH_FILTER");
+        String groupAttribute = optional(environment, "FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE");
+        if (groupBase == null && (groupFilter != null || groupAttribute != null)) {
+            throw new IllegalArgumentException("FLIGHT_LDAP_GROUP_SEARCH_FILTER and "
+                    + "FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE need FLIGHT_LDAP_GROUP_SEARCH_BASE");
+        }
+        if (groupFilter == null) {
+            groupFilter = DEFAULT_GROUP_FILTER;
+        }
+        if (groupBase != null) {
+            checkGroupFilter(groupFilter);
         }
         if ((bindDn == null) != (bindPassword == null)) {
             throw new IllegalArgumentException("FLIGHT_LDAP_BIND_DN and its password go together");
@@ -106,7 +131,25 @@ record LdapSettings(List<Server> servers, boolean startTls, String userDnTemplat
                 bounded(environment, "FLIGHT_LDAP_CONNECT_TIMEOUT_MS", 5_000, 100, 120_000),
                 bounded(environment, "FLIGHT_LDAP_RESPONSE_TIMEOUT_MS", 10_000, 100, 300_000),
                 sessionSecret(required(environment, "FLIGHT_LDAP_SESSION_SECRET")),
-                bounded(environment, "FLIGHT_LDAP_SESSION_MINUTES", 10, 1, 1440) * 60_000L);
+                bounded(environment, "FLIGHT_LDAP_SESSION_MINUTES", 10, 1, 1440) * 60_000L,
+                groupBase, groupFilter, groupAttribute == null ? "cn" : groupAttribute);
+    }
+
+    /**
+     * Checks that a group search filter names the user and parses.
+     *
+     * @param filter configured filter
+     */
+    private static void checkGroupFilter(String filter) {
+        if (!filter.contains("{0}") && !filter.contains("{1}")) {
+            throw new IllegalArgumentException("FLIGHT_LDAP_GROUP_SEARCH_FILTER must contain {0} (identity) "
+                    + "or {1} (user DN)");
+        }
+        try {
+            Filter.create(filter.replace("{0}", "x").replace("{1}", "x"));
+        } catch (LDAPException e) {
+            throw new IllegalArgumentException("Malformed FLIGHT_LDAP_GROUP_SEARCH_FILTER: " + filter, e);
+        }
     }
 
     /**
@@ -272,6 +315,6 @@ record LdapSettings(List<Server> servers, boolean startTls, String userDnTemplat
     @Override
     public String toString() {
         return "LdapSettings[servers=" + servers + ", startTls=" + startTls + ", searchMode="
-                + (searchBase != null) + "]";
+                + (searchBase != null) + ", groupSearch=" + (groupSearchBase != null) + "]";
     }
 }

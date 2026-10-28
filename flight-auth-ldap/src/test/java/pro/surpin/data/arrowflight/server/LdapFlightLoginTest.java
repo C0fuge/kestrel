@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -49,6 +50,7 @@ class LdapFlightLoginTest {
         certificate = pem.get(0);
         Map<String, String> settings = ldap.templateSettings();
         settings.put("FLIGHT_AUTH_PROVIDER", "ldap");
+        settings.put("FLIGHT_LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=org");
         settings.put("FLIGHT_TLS_CERT", pem.get(0).toString());
         settings.put("FLIGHT_TLS_KEY", pem.get(1).toString());
         security = FlightSecurity.fromSettings(settings);
@@ -142,5 +144,19 @@ class LdapFlightLoginTest {
         assertTrue(e.getMessage().contains("requires TLS"), e.getMessage());
         settings.put("FLIGHT_BEARER_TOKEN", "x");
         assertThrows(IllegalArgumentException.class, () -> FlightSecurity.fromSettings(settings));
+    }
+
+    /** The provider's groups reach the Ranger group set, next to the Hadoop group mapping. */
+    @Test
+    void directoryGroupsReachPolicyChecks() throws Exception {
+        try (FlightClient client = client()) {
+            CredentialCallOption session = client.authenticateBasicToken("bob", "bob:pw:with:colons")
+                    .orElseThrow();
+            assertEquals("bob", whoAmI(client, session));
+        }
+        assertEquals(Set.of("bi-users", "ops"), security.authentication().groups("bob"));
+        assertEquals(Set.of("analysts", "bi-users"), security.authentication().groups("alice"));
+        assertEquals(Set.of("bi-users", "ops", "staff"), RangerAuthorization.union(
+                security.authentication()::groups, identity -> Set.of("staff")).apply("bob"));
     }
 }
