@@ -555,4 +555,4 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   tables (8410789; descriptor `spi=1.6`; comment lines in `arrowflight.properties`; CHANGELOG). No client-visible
   change (the server does not read catalog views yet). Local (GCS mirror of Central): `SpiTest` 9/9, hive module
   79/79 (new `HiveViewCatalogTest` 3; UTF-8 locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40744052381
-  (8410789) running at commit time. No pre-release (no runtime change). Next: views part 3 (core), detailed in Next steps.
+  (8410789) green (build, all modules). No pre-release (no runtime change). Next: views part 3 (core), detailed in Next steps.
