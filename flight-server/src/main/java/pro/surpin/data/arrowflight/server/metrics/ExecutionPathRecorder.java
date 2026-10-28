@@ -1,8 +1,5 @@
 package pro.surpin.data.arrowflight.server.metrics;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
@@ -33,7 +30,7 @@ import java.util.regex.Pattern;
 public final class ExecutionPathRecorder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ExecutionPathRecorder.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String HEX_DIGITS = "0123456789ABCDEF";
     private static final Object FILE_LOCK = new Object();
     private static final String OUTPUT_ENV = "BENCHMARK_EXECUTION_PATH_LOG";
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
@@ -180,24 +177,78 @@ public final class ExecutionPathRecorder {
     public static String toJson(String qid, String query, ExecutionPathTracker tracker,
             boolean success, String failureReason) {
         ExecutionPath path = tracker.path();
-        ObjectNode event = JSON.createObjectNode();
-        event.put("schema_version", "1.0.0");
-        event.put("timestamp", Instant.now().toString());
-        event.put("qid", qid);
-        event.put("node", LogUtil.node());
-        event.put("query_digest", queryDigest(query));
-        event.put("execution_path", path.label());
-        event.put("pushdown_evidence", path.isPushdownEvidence());
-        event.put("success", success);
-        putNullable(event, "fallback_target",
-                tracker.fallbackTarget() == null ? null : tracker.fallbackTarget().label());
-        putNullable(event, "reason", tracker.reason());
-        putNullable(event, "failure_reason", sanitize(failureReason));
-        try {
-            return JSON.writeValueAsString(event);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Could not serialize execution-path event", e);
+        return json(Instant.now().toString(), qid, LogUtil.node(), queryDigest(query), path,
+                success, tracker.fallbackTarget() == null ? null : tracker.fallbackTarget().label(),
+                tracker.reason(), sanitize(failureReason));
+    }
+
+    /**
+     * Writes the fields of one event as compact JSON, as Jackson writes them (same order and
+     * escapes), without building a JSON tree: this runs once per DoGet.
+     *
+     * @param timestamp ISO-8601 instant
+     * @param qid endpoint query identifier
+     * @param node node name
+     * @param digest query digest
+     * @param path execution path taken
+     * @param success whether execution completed successfully
+     * @param fallbackTarget fallback target label or null
+     * @param reason path reason or null
+     * @param failureReason sanitized failure description or null
+     * @return serialized event
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    static String json(String timestamp, String qid, String node, String digest, ExecutionPath path,
+            boolean success, String fallbackTarget, String reason, String failureReason) {
+        StringBuilder out = new StringBuilder(320);
+        out.append("{\"schema_version\":\"1.0.0\"");
+        field(out, "timestamp", timestamp);
+        field(out, "qid", qid);
+        field(out, "node", node);
+        field(out, "query_digest", digest);
+        field(out, "execution_path", path.label());
+        out.append(",\"pushdown_evidence\":").append(path.isPushdownEvidence());
+        out.append(",\"success\":").append(success);
+        field(out, "fallback_target", fallbackTarget);
+        field(out, "reason", reason);
+        field(out, "failure_reason", failureReason);
+        return out.append('}').toString();
+    }
+
+    /**
+     * Appends a string field (null as JSON null), escaped as Jackson escapes it.
+     *
+     * @param out JSON text
+     * @param name field name
+     * @param value field value or null
+     */
+    private static void field(StringBuilder out, String name, String value) {
+        out.append(",\"").append(name).append("\":");
+        if (value == null) {
+            out.append("null");
+            return;
         }
+        out.append('"');
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> out.append("\\\"");
+                case '\\' -> out.append("\\\\");
+                case '\b' -> out.append("\\b");
+                case '\f' -> out.append("\\f");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        out.append("\\u00").append(HEX_DIGITS.charAt(c >> 4)).append(HEX_DIGITS.charAt(c & 0xF));
+                    } else {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        out.append('"');
     }
 
     /**
@@ -213,21 +264,6 @@ public final class ExecutionPathRecorder {
         MessageDigest digest = SHA256.get();
         digest.reset();
         return HexFormat.of().formatHex(digest.digest(normalized.getBytes(StandardCharsets.UTF_8)));
-    }
-
-    /**
-     * Writes a nullable string field.
-     *
-     * @param event destination JSON object
-     * @param field field name
-     * @param value field value
-     */
-    private static void putNullable(ObjectNode event, String field, String value) {
-        if (value == null) {
-            event.putNull(field);
-        } else {
-            event.put(field, value);
-        }
     }
 
     /**

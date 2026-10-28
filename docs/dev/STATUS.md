@@ -66,6 +66,22 @@
 >    Hazelcast in single-node mode, thread hand-offs, Arrow allocation, DuckDB threads vs cores) and cut the top items;
 >    compare with upstream's path for the same query. Goal: >= upstream's queries/s at 8 and 32 clients on 2 CPUs with
 >    identical answers; c1 p50 must not get worse.
+>    *Step 1 done 2026-10-28 (see Log):* new perf test `SmallQueryThroughputPerfTest` (1/8/32 clients, point lookup +
+>    filtered count as stock clients run them: prepare, GetFlightInfo, DoGet, close; q/s, p50/p95, process CPU per
+>    query and per thread group; run it under `taskset -c 0,1`). Where the CPU goes (local, 2 CPUs, c32, 4 local
+>    Parquet files, ~11 ms CPU per query incl. the in-process client): DoGet handler ~5.7 ms = DuckDB prepare of the
+>    new text 0.8 + execute/Arrow export 3.4 + fetch 0.45 + Flight putNext 0.27 + execution-path event 0.29 + ticket
+>    decode/metrics/qid 0.25; GetFlightInfo 0.67 (0.64 of it Hazelcast registry + heartbeat reads, local dirs only);
+>    prepare (cached describe) 0.16; close 0.03; gRPC/netty for the 4 calls ~2; DuckDB's second thread ~1.4 (see
+>    (b)); client ~0.9. Cut: the Hazelcast reads on a one-member cluster, the Jackson tree of the event, a
+>    `Mac.getInstance` per ticket, `String.format` per qid: c8 159 -> 188 q/s, c32 222 -> 250 (same session, A/B
+>    twice). JaCoCo's agent costs ~25 % q/s here: measure with `-Djacoco.skip=true -DargLine=-Dx=1`.
+>    **Next steps of 21:** (b) `duckDbThreads=1` gives another ~9 % at c8 on 2 CPUs (c1 unchanged locally) but the
+>    lockdown (`lock_configuration`) forbids changing threads per query under load - Open question; (c) the storage
+>    the screening repo uses for the load test (local vs HDFS/S3): over HDFS every query also opens files through
+>    hadoopfs (not profiled here) - measure on the stand / screening which part is storage; (d) the remaining
+>    DoGet prepare (0.8 ms) and the 4 gRPC calls per query (stock JDBC/ADBC pattern) - look at what upstream's path
+>    does per query and whether a plain-statement (CommandStatementQuery) client is cheaper.
 > 3. item 22 (new) - **one scan in 4-8 parallel streams.** Upstream 807-823 MB/s vs ours 463-502 MB/s on 2 CPUs (at about
 >    twice our memory; one stream is a tie). Find why (per-stream DuckDB work, batch size, copies between DuckDB's Arrow
 >    output and the Flight stream, the per-stream budget of 0f, endpoint split of S6) and close the gap. Goal >= 750 MB/s
@@ -518,6 +534,14 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Item 21 (b): DuckDB threads under load (2026-10-28).** On 2 CPUs with 8-32 small queries at once, `duckDbThreads=1`
+  instead of the default 2 saves ~1.4 ms CPU per query (+9 % q/s at c8, local; heavy single queries lose their second
+  thread). Changing the thread count per query when more queries run than cores is not possible today: every
+  session sets `lock_configuration = true` after its setup, and `SET threads` is refused after that. Options: (1)
+  leave it, document `duckDbThreads=1` for small-query nodes; (2) a 1-core default floor for <= 2 cores (default
+  change); (3) open a second, 1-thread connection per worker for use under load (memory: one more DuckDB per
+  worker). Recommendation: (1) now, and let the screening repo measure `-DduckDbThreads=1` on the pre-release.
 
 - **Maintainer 2026-10-28, answers for item 18:** (1) identity: option (b) - an internal call signed with the ticket
   secret carrying the user name, accepted only from live cluster members' addresses and only when

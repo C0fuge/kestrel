@@ -485,7 +485,8 @@ public final class QueryPlanner {
      * @throws IllegalStateException when the nodes keep their files apart
      */
     public QueryPlan planComplete(String query, byte[] parameters) {
-        if (!parquetAdapter.sharedStorage() && !readsOnlyCatalogTables(query)) {
+        // A node alone in its cluster skips the distributed map reads of every query.
+        if (!parquetAdapter.sharedStorage() && !clusterService.alone() && !readsOnlyCatalogTables(query)) {
             int live = clusterService.filterLiveServers(clusterService.allServerLoads().keySet()).size();
             if (live > 1) {
                 throw new IllegalStateException("A complete answer needs storage every node can read"

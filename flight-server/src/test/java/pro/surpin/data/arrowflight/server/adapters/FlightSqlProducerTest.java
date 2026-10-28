@@ -818,6 +818,10 @@ class FlightSqlProducerTest {
         assertEquals("1f0c2a9e", FlightSqlProducer.qid(com.google.protobuf.ByteString.copyFromUtf8("1f0c2a9e-77aa-4bcd")));
         org.junit.jupiter.api.Assertions.assertTrue(FlightSqlProducer.qid(com.google.protobuf.ByteString.copyFrom(new byte[] {'A', 'F', 'T', '1', 0, 0, 1, 2, 3}))
                 .matches("[0-9a-f]{8}"));
+        for (byte[] bytes : new byte[][] {{0}, {1, 2, 3}, {(byte) 0xff, 0, 0, 0, 7}, new byte[64]}) {
+            com.google.protobuf.ByteString handle = com.google.protobuf.ByteString.copyFrom(bytes);
+            assertEquals(String.format("%08x", java.util.Arrays.hashCode(bytes)), FlightSqlProducer.qid(handle));
+        }
     }
 
     /**

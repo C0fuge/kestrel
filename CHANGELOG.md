@@ -234,6 +234,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Less CPU per small query (item 21, step 1): GetFlightInfo of a complete answer on a node alone in its cluster no
+  longer reads the server registry and heartbeat maps (it checked the node count on every query over local
+  directories); the per-DoGet `executionPath=` event is written as text instead of through a Jackson tree (same
+  text); endpoint tickets reuse one HMAC instance per thread; binary ticket query ids are formatted without
+  `String.format` (same ids). Local, 2 CPUs, point lookups + filtered counts over 4 local Parquet files, client in
+  the same JVM (`SmallQueryThroughputPerfTest`): c8 ~159 -> ~188 queries/s, c32 ~222 -> ~250, CPU per query
+  ~12.3 -> ~10.4 ms at c8. No wire, setting, answer or log-text change.
 - Iceberg position deletes (item 2 (iii)): data files that share their delete files (as after a MERGE) are now read
   in one `read_parquet` whose position delete files are read once and matched by DuckDB's `file_index` and the row
   number, instead of one UNION ALL branch per data file that re-read every delete file. Local, 500 files x 2000 rows

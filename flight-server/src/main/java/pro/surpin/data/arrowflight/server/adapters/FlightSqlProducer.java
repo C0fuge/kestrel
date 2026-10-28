@@ -1518,7 +1518,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         if (head.chars().allMatch(c -> c == '-' || Character.isLetterOrDigit(c) && c < 128)) {
             return head;
         }
-        return String.format("%08x", java.util.Arrays.hashCode(handle.toByteArray()));
+        // Same text as String.format("%08x", ...), which costs more than the rest of this method.
+        return java.util.HexFormat.of().toHexDigits(java.util.Arrays.hashCode(handle.toByteArray()));
     }
 
     /**

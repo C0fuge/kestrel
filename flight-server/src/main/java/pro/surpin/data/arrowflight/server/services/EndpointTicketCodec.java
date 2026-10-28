@@ -23,6 +23,14 @@ final class EndpointTicketCodec {
     private static final int MAX_FIELD_BYTES = 16 * 1024 * 1024;
     private static final int MAX_FILE_COUNT = 1_000_000;
     private static final String HMAC_ALGORITHM = "HmacSHA256";
+    /** One HMAC instance per thread, initialized with the key of each use. */
+    private static final ThreadLocal<Mac> MAC = ThreadLocal.withInitial(() -> {
+        try {
+            return Mac.getInstance(HMAC_ALGORITHM);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Unable to sign Flight endpoint ticket", e);
+        }
+    });
 
     /** Secrets replaced by {@link #useSecret} that still verify tickets signed before. */
     private static final int PREVIOUS_SECRETS = 4;
@@ -254,9 +262,17 @@ final class EndpointTicketCodec {
         return false;
     }
 
+    /**
+     * Signs bytes with a key.
+     *
+     * @param key HMAC key
+     * @param payload signed bytes
+     * @return HMAC signature
+     */
     private static byte[] sign(byte[] key, byte[] payload) {
         try {
-            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            // A provider lookup per ticket costs more than the HMAC; init resets the instance.
+            Mac mac = MAC.get();
             mac.init(new SecretKeySpec(key, HMAC_ALGORITHM));
             return mac.doFinal(payload);
         } catch (GeneralSecurityException e) {

@@ -227,6 +227,21 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
+     * Tells whether this node is the only member of its cluster, from the local member list:
+     * then no other node is live, without reading the distributed maps.
+     *
+     * @return true for a one-node cluster; false when membership cannot be read
+     */
+    public boolean alone() {
+        try {
+            return hazelcast.memberCount() == 1;
+        } catch (RuntimeException e) {
+            LOGGER.warn("Cluster membership unavailable: {}", e.toString());
+            return false;
+        }
+    }
+
+    /**
      * Returns load for a specific set of server URIs.
      *
      * @param serverUris URIs to query

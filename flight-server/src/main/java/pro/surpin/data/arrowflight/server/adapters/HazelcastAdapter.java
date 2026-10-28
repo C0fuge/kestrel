@@ -160,6 +160,15 @@ public final class HazelcastAdapter implements AutoCloseable {
     }
 
     /**
+     * Counts the members of the cluster as this member sees it now, without a remote call.
+     *
+     * @return number of members, this one included
+     */
+    public int memberCount() {
+        return instance.getCluster().getMembers().size();
+    }
+
+    /**
      * Lists the Flight URIs of the servers whose Hazelcast members are in the cluster now.
      *
      * @return URIs of current members, or null when a member does not tell its URI (a member

@@ -88,6 +88,19 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /** Verifies a node is alone only when it is its cluster's single member. */
+    @Test
+    void aloneOnlyWithOneMember() {
+        ClusterService cs = createService("grpc://n1:32010");
+        when(hazelcast.memberCount()).thenReturn(1);
+        assertTrue(cs.alone());
+        when(hazelcast.memberCount()).thenReturn(2);
+        assertFalse(cs.alone());
+        when(hazelcast.memberCount()).thenThrow(new IllegalStateException("not active"));
+        assertFalse(cs.alone());
+        cs.close();
+    }
+
     /** Verifies a node publishes its inventory again when the cluster lost it. */
     @Test
     void repairClusterStatePublishesLostInventoryAgain() {

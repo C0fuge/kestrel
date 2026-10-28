@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.metrics;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import pro.surpin.data.arrowflight.server.model.ExecutionPath;
 import pro.surpin.data.arrowflight.server.model.ExecutionPathTracker;
 import org.junit.jupiter.api.Tag;
@@ -28,6 +29,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ExecutionPathRecorderTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * Verifies the hand-written event text is exactly Jackson's serialization of the same
+     * fields, also for quotes, backslashes, control and non-ASCII characters.
+     *
+     * @throws Exception if JSON serialization fails
+     */
+    @Test
+    void eventTextEqualsJacksonsSerialization() throws Exception {
+        StringBuilder every = new StringBuilder();
+        for (char c = 0; c < 0x80; c++) {
+            every.append(c);
+        }
+        String tricky = every + " \u00e9\u4e2d\u2028\ud83d\ude00 \"q\" \\";
+        for (String text : new String[] {null, "", "plain", tricky}) {
+            for (ExecutionPath path : List.of(ExecutionPath.DUCKDB_SCAN, ExecutionPath.FALLBACK)) {
+                for (boolean success : new boolean[] {true, false}) {
+                    ObjectNode expected = JSON.createObjectNode();
+                    expected.put("schema_version", "1.0.0");
+                    expected.put("timestamp", "2026-10-28T01:02:03.456789Z");
+                    expected.put("qid", "q-" + text);
+                    expected.put("node", "node");
+                    expected.put("query_digest", "abc");
+                    expected.put("execution_path", path.label());
+                    expected.put("pushdown_evidence", path.isPushdownEvidence());
+                    expected.put("success", success);
+                    expected.put("fallback_target", text);
+                    expected.put("reason", text);
+                    expected.put("failure_reason", text);
+                    assertEquals(JSON.writeValueAsString(expected), ExecutionPathRecorder.json(
+                            "2026-10-28T01:02:03.456789Z", "q-" + text, "node", "abc", path, success,
+                            text, text, text));
+                }
+            }
+        }
+    }
 
     /**
      * Verifies every concrete server path is serialized with a stable label.

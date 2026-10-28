@@ -600,6 +600,19 @@ class QueryPlannerTest {
         assertEquals(S2, plan.endpoints().get(0).getLocations().get(0).getUri().toString());
     }
 
+    /** Verifies a node alone in its cluster plans a complete answer without reading the cluster maps. */
+    @Test
+    void completeAnswerOnAOneNodeClusterReadsNoClusterMaps() {
+        when(clusterService.alone()).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        assertEquals(1, planner.planComplete("SELECT 1").endpoints().size());
+        verify(clusterService, never()).allServerLoads();
+        verify(clusterService, never()).filterLiveServers(anySet());
+    }
+
     /** Verifies a complete answer is refused on a cluster whose nodes keep their files apart. */
     @Test
     void completeAnswerNeedsSharedStorageOnACluster() {
