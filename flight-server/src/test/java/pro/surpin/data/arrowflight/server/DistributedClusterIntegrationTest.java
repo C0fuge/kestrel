@@ -39,7 +39,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Distributed complete mode on a cluster of three nodes in one JVM (item 18 step 3, D2): the
  * nodes share one data directory, so every node can also answer alone; the first node's merged
  * answers must equal its single-node answers, with peers healthy, a peer's stream cut in the
- * middle, a peer whose Flight service is down while its member is live, and a node gone.
+ * middle, a peer whose Flight service is down while its member is live (read from backup
+ * locations), every location down, and a node gone.
  */
 @Tag("integration")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -221,20 +222,42 @@ class DistributedClusterIntegrationTest {
     }
 
     /**
-     * Verifies a peer whose member is live but whose Flight service is gone falls back to the
-     * single-node answer.
+     * Verifies the endpoint answers of a peer whose member is live but whose Flight service is gone
+     * are read from the endpoints' backup locations, and the merged answer stays exact.
      *
      * @throws Exception on failure
      */
     @Test
     @Order(4)
-    void peerWithoutFlightServiceFallsBackToSingleNodeAnswer() throws Exception {
+    void peerWithoutFlightServiceIsReadFromBackupLocations() throws Exception {
         int closedPort = freePort();
         Function<Location, FlightClient> healthy = DistributedComplete.clientFactory(peerAllocator, null);
         for (String query : List.of(MERGED.get(2), WIDE_ROWS)) {
             String alone = answer(query);
             useDistributed(location -> healthy.apply(port(location) == port(NODE.get(1))
                     ? Location.forGrpcInsecure("localhost", closedPort) : location));
+            assertEquals(alone, answer(query), query);
+            assertEquals(1, distributed.mergedAnswers(), query);
+            assertEquals(0, distributed.fallbacks(), query);
+            assertTrue(distributed.failovers() > 0, "the down peer's endpoints failed over: " + query);
+            useDistributed(null);
+        }
+    }
+
+    /**
+     * Verifies an endpoint whose locations all refuse the call falls back to the single-node
+     * answer.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    @Order(5)
+    void endpointDownAtAllLocationsFallsBackToSingleNodeAnswer() throws Exception {
+        int closedPort = freePort();
+        Function<Location, FlightClient> healthy = DistributedComplete.clientFactory(peerAllocator, null);
+        for (String query : List.of(MERGED.get(2), WIDE_ROWS)) {
+            String alone = answer(query);
+            useDistributed(location -> healthy.apply(Location.forGrpcInsecure("localhost", closedPort)));
             assertEquals(alone, answer(query), query);
             assertEquals(0, distributed.mergedAnswers(), query);
             assertEquals(1, distributed.fallbacks(), query);
@@ -249,7 +272,7 @@ class DistributedClusterIntegrationTest {
      * @throws Exception on failure
      */
     @Test
-    @Order(5)
+    @Order(6)
     void nodeThatLeftIsNotPlannedAndAnswersStayExact() throws Exception {
         TestFlightServerHelper gone = NODE.remove(2);
         String goneUri = gone.location.getUri().toString();

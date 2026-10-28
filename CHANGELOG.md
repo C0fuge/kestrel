@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Distributed complete mode (opt-in `distributedComplete`): an endpoint answer that fails before its schema (peer's
+  Flight service down, connection refused) is read from the endpoint's backup locations in order, as clients fail
+  over, before the whole query falls back to the single-node path; `DistributedComplete.failovers()` and a
+  `distributedComplete=failover` log line (item 18, D2 (c) part 2). A failure after the schema still falls back.
 - Distributed complete mode: `DistributedCompletePerfTest` (`perf`, item 18 step 3, D2 (b)) - three nodes, Q1/Q6-like
   aggregates, wide DISTINCT, ORDER BY LIMIT, wide GROUP BY and wide rows with `distributedComplete` off vs on (wall
   time, peer MB, peer wait); `DistributedComplete.peerBytes()` / `peerWaitNanos()` and `peerBytes=` / `peerWaitMs=` in

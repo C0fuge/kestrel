@@ -7,6 +7,7 @@ import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightProducer;
+import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.HeaderCallOption;
 import org.apache.arrow.flight.Location;
@@ -46,8 +47,9 @@ import java.util.function.Function;
  * 18, distributed complete mode, opt-in {@code distributedComplete}): the planning node plans the
  * query in parts, reads every endpoint from its node with a Flight DoGet as the client's user
  * ({@link InternalCallIdentity}), and merges the endpoint answers in its own DuckDB
- * ({@link CompleteAnswerMerge}). Queries whose shape does not merge, plans of one endpoint, and
- * failures before the first batch reaches the client keep today's path (this node computes the
+ * ({@link CompleteAnswerMerge}). An endpoint answer that fails before its schema is read from the
+ * endpoint's backup locations in order. Queries whose shape does not merge, plans of one endpoint,
+ * and failures before the first batch reaches the client keep today's path (this node computes the
  * answer alone); a failure after the first batch fails the query.
  */
 public final class DistributedComplete implements AutoCloseable {
@@ -66,6 +68,7 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong fallbacks = new AtomicLong();
     private final AtomicLong peerBytes = new AtomicLong();
     private final AtomicLong peerWaitNanos = new AtomicLong();
+    private final AtomicLong failovers = new AtomicLong();
 
     /**
      * Creates the distributed path of complete answers.
@@ -147,8 +150,9 @@ public final class DistributedComplete implements AutoCloseable {
         try {
             CallOption identity = identityOption(user);
             for (FlightEndpoint endpoint : endpoints) {
-                streams.add(client(endpoint).getStream(endpoint.getTicket(), identity));
+                streams.add(client(endpoint, 0).getStream(endpoint.getTicket(), identity));
             }
+            failOver(endpoints, streams, identity);
             Schema schema = commonSchema(streams);
             // The answer the client was promised: names and types of the single-node path.
             Schema expected = execution.completeSchema(allocator, query);
@@ -203,6 +207,15 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public long fallbacks() {
         return fallbacks.get();
+    }
+
+    /**
+     * Counts the endpoint answers read from a backup location since start.
+     *
+     * @return failovers
+     */
+    public long failovers() {
+        return failovers.get();
     }
 
     /**
@@ -261,18 +274,51 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
-     * Returns the client of an endpoint's first location (the node it was planned for).
+     * Returns the client of one of an endpoint's locations (the first is the node it was planned
+     * for, the others its backups).
      *
      * @param endpoint endpoint
+     * @param index location index
      * @return Flight client
      * @throws IllegalStateException when the endpoint has no location
      */
-    private FlightClient client(FlightEndpoint endpoint) {
+    private FlightClient client(FlightEndpoint endpoint, int index) {
         if (endpoint.getLocations().isEmpty()) {
             throw new IllegalStateException("An endpoint has no location");
         }
-        Location location = endpoint.getLocations().get(0);
+        Location location = endpoint.getLocations().get(index);
         return clients.computeIfAbsent(location.getUri(), uri -> clientFactory.apply(location));
+    }
+
+    /**
+     * Waits for the schema of every endpoint answer; an answer that fails before its schema is
+     * read again from the endpoint's next location, as a client fails over to a backup location.
+     *
+     * @param endpoints planned endpoints
+     * @param streams their streams, in the same order; failed ones are replaced
+     * @param identity the client's signed identity
+     * @throws FlightRuntimeException when an endpoint failed at all its locations
+     */
+    private void failOver(List<FlightEndpoint> endpoints, List<FlightStream> streams, CallOption identity) {
+        for (int i = 0; i < endpoints.size(); i++) {
+            FlightEndpoint endpoint = endpoints.get(i);
+            for (int location = 0; ; location++) {
+                try {
+                    streams.get(i).getSchema();
+                    break;
+                } catch (FlightRuntimeException e) {
+                    if (location + 1 >= endpoint.getLocations().size()) {
+                        throw e;
+                    }
+                    LOGGER.info("node={} distributedComplete=failover from={} to={} reason='{}'", LogUtil.node(),
+                            endpoint.getLocations().get(location).getUri(),
+                            endpoint.getLocations().get(location + 1).getUri(), e.getMessage());
+                    closeAll(List.of(streams.get(i)));
+                    streams.set(i, client(endpoint, location + 1).getStream(endpoint.getTicket(), identity));
+                    failovers.incrementAndGet();
+                }
+            }
+        }
     }
 
     /**
