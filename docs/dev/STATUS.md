@@ -1794,3 +1794,22 @@
   3/3. **Lane 3: please check the fix matches your intent.** My push cancelled lane 3's package dispatch 40691235109;
   package run 40695407602 on 94ad610 (contains c7e436e and fd9f62f) green, pre-release `server-1.0.0-94ad61021d93`.
   Next: the screening's numbers (items 21/22/19b/17 (e)), then the stand rounds; no open code item left in stage 3.
+- 2026-10-28 (cloud session): stage 3 has no open code step (all wait on the screening / stand), so backlog item 13 (c)
+  (3042102): DuckDB's external file cache. Measured on DuckDB 1.5.6 (httpfs over a local HTTP range server and the
+  fake S3): the cache lives in the connection's buffer pool and is evicted within `memory_limit` (200 MB limit, 330 MB
+  read: 93-125 MiB resident; local files are not cached, only 256-byte header ranges). So since item 19b's default
+  `memory_limit` it is bounded per connection; the node may hold that limit x live connections (an idle connection
+  keeps its cache until it is closed). The stand's OOM kills were on builds without a default limit. Added: startup
+  line `duckdb=externalFileCache perConnection= expectedConnections= expectedMiB= memoryMiB=` when the cache is on,
+  WARN `duckdb=externalFileCacheUnbounded` with `duckDbMemoryLimit=none`; README / `arrowflight.properties` / TUNING
+  text. Tests: `DuckDbSizingTest`, `S3IntegrationTest.theExternalFileCacheStaysWithinTheMemoryLimit` (64 MiB limit,
+  8 x 30 MB files read twice: cache <= limit, the last file re-read without GETs; 3/3 locally). Default unchanged
+  (off). Note: a 64 MiB limit OOMs a 4-thread scan of 8 such files with the cache on or off, so that is DuckDB's
+  operator memory, not the cache. Dev CI push run 40702582891 green. No pre-release (log lines only).
+  Tip for later sessions: S3/httpfs tests run in the session: download `ci-assets` asset
+  `duckdb-extensions-v1.5.6.tar.zst` with curl from the release URL, extract it with Python `zstandard` (no zstd
+  binary here), set `DUCKDB_HTTPFS_EXTENSION`, build `flight-plugin-s3` (`install -DskipTests`), then run the tests
+  with `-DexcludedGroups=perf`.
+  Next: the screening's numbers (items 21/22/19b/17 (e)), then the stand rounds; other code candidates: item 3 (c)
+  (check `iceberg_scan(..., snapshot_from_id =>)` on 1.5.6 for the refused snapshots), item 1b libs pruning (risky
+  without a stand: Ranger needs Jersey).
