@@ -89,7 +89,9 @@ public class TestFlightServerHelper implements AutoCloseable {
             // Adapters
             parquetAdapter = new ParquetAdapter(appConfig,
                     new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
-            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool());
+            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
+                    pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
+                    b.threadsUnderLoad, b.cores);
         }
 
         // Services
@@ -174,6 +176,8 @@ public class TestFlightServerHelper implements AutoCloseable {
         private int hazelcastPort;
         private int flightPort;
         private int threads = 1;
+        private int threadsUnderLoad;
+        private int cores = Runtime.getRuntime().availableProcessors();
         private StreamCompression.Settings compression = StreamCompression.Settings.DEFAULT;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
@@ -186,6 +190,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder hazelcastPort(int p) { this.hazelcastPort = p; return this; }
         public Builder flightPort(int p) { this.flightPort = p; return this; }
         public Builder threads(int t) { this.threads = t; return this; }
+        public Builder threadsUnderLoad(int t, int c) { this.threadsUnderLoad = t; this.cores = c; return this; }
         public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }
 
         public TestFlightServerHelper start() throws Exception {

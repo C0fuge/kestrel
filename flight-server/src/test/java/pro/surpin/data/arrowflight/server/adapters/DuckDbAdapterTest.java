@@ -537,6 +537,82 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies that with duckDbThreadsUnderLoad a query moves to the thread's low-thread
+     * connection only while the running queries times duckDbThreads exceed the cores, and back
+     * once the load is gone.
+     */
+    @Test
+    void queriesUnderLoadRunOnTheLowThreadConnection(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        ExecutorService other = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(twoThreads(base), ioPool,
+                pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()), 1, 2)) {
+            try (DuckDbAdapter.QuerySlot first = adapter.enterQuery()) {
+                // One query with two threads fits two cores.
+                assertEquals("2", setting(adapter.connection(), "threads"));
+                String underLoad = other.submit(() -> {
+                    try (DuckDbAdapter.QuerySlot second = adapter.enterQuery()) {
+                        return setting(adapter.connection(), "threads");
+                    }
+                }).get();
+                assertEquals("1", underLoad);
+                assertEquals("2", setting(adapter.connection(), "threads"));
+            }
+            assertEquals(1, adapter.queriesUnderLoad());
+            // The load is gone: the other thread's next query has its two threads again.
+            assertEquals("2", other.submit(() -> {
+                try (DuckDbAdapter.QuerySlot again = adapter.enterQuery()) {
+                    return setting(adapter.connection(), "threads");
+                }
+            }).get());
+            assertEquals(1, adapter.queriesUnderLoad());
+        } finally {
+            ioPool.shutdownNow();
+            other.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies that without duckDbThreadsUnderLoad, or with a value not below duckDbThreads,
+     * every query keeps its thread's one connection however many run.
+     */
+    @Test
+    void withoutThreadsUnderLoadQueriesKeepTheirConnection(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            for (int underLoad : new int[] {0, 2, 3}) {
+                try (DuckDbAdapter adapter = new DuckDbAdapter(twoThreads(base), ioPool,
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
+                        underLoad, 1);
+                        DuckDbAdapter.QuerySlot first = adapter.enterQuery();
+                        DuckDbAdapter.QuerySlot second = adapter.enterQuery()) {
+                    assertEquals("2", setting(adapter.connection(), "threads"), "underLoad " + underLoad);
+                    assertEquals(0, adapter.queriesUnderLoad(), "underLoad " + underLoad);
+                    assertEquals(1, adapter.openSessions(), "underLoad " + underLoad);
+                }
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Returns a configuration with two DuckDB threads per connection.
+     *
+     * @param base temporary directory for DuckDB's spill files
+     * @return configuration
+     */
+    private static AppConfig twoThreads(java.nio.file.Path base) {
+        return new AppConfig(
+                3, 2, 1, 131072, 0, 1, 2,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, base.toString(), null, "complete", true, true);
+    }
+
+    /**
      * Reads a setting of a DuckDB connection.
      *
      * @param connection DuckDB connection

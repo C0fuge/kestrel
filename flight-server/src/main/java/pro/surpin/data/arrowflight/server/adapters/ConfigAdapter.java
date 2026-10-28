@@ -214,6 +214,33 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns duckDbThreadsUnderLoad from the system configuration.
+     *
+     * @return DuckDB threads per query while the node is loaded, 0 = off
+     */
+    public static int duckDbThreadsUnderLoad() {
+        return duckDbThreadsUnderLoad(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code duckDbThreadsUnderLoad} ({@code DUCKDB_THREADS_UNDER_LOAD}): DuckDB threads
+     * of a second connection per worker that queries use while the running queries times
+     * duckDbThreads exceed the cores; default 0 = off.
+     *
+     * @param props configuration source
+     * @return threads, 0 = off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int duckDbThreadsUnderLoad(ConfigSource props) {
+        int threads = getIntWithEnv("duckDbThreadsUnderLoad", "arrowflight.duckdb.threadsUnderLoad",
+                "DUCKDB_THREADS_UNDER_LOAD", 0, props);
+        if (threads < 0) {
+            throw new IllegalArgumentException("duckDbThreadsUnderLoad must not be negative: " + threads);
+        }
+        return threads;
+    }
+
+    /**
      * Creates the Flight SQL session store from the system configuration.
      *
      * @return session store

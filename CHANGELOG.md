@@ -10,6 +10,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- DuckDB threads under load (item 22, also item 21 (b) option 3), opt-in: `duckDbThreadsUnderLoad` /
+  `arrowflight.duckdb.threadsUnderLoad` / `DUCKDB_THREADS_UNDER_LOAD` (default 0 = off, unchanged). Each Flight
+  worker gets a second DuckDB connection with that many threads, opened on first use; a DoGet that starts while the
+  running DoGets times `duckDbThreads` exceed the cores runs on it (same setup, views and answers), a query alone keeps
+  all threads. On 2 cores (`duckDbThreads=2`, value 1, pyarrow client on other cores) one partial-mode scan in 4
+  endpoints went 712 -> 792 MB/s and in 8 endpoints 579 -> 611 MB/s, server CPU -13 % / -6 %. New perf test
+  `ParallelScanPerfTest` (one scan in N partial-mode endpoints, or N concurrent complete-mode scans; optionally
+  against a separately started server).
 - `SmallQueryThroughputPerfTest` (perf tag) can run plain statements (`-Dperf.client=statement`: GetFlightInfo +
   DoGet) besides the stock prepared pattern, to compare the two client patterns (item 21 (d)). Test only.
 - ORC tables in the Hive catalog, opt-in (P1 step 2 (c)): with `hive.orcTables=true`

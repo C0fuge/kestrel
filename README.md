@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -290,6 +290,14 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `endpointBackupLocations`, `endpointsPerServer` |
+
+`duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
+second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per
+worker). A DoGet that starts while the running DoGets times `duckDbThreads` exceed the node's cores
+runs on it; a query alone on the node keeps all `duckDbThreads`. With 2 cores, `duckDbThreads=2` and
+`duckDbThreadsUnderLoad=1`, parallel partial-mode endpoints of one scan (`endpointsPerServer` 4-8) or
+concurrent queries then share the cores instead of starting two threads each. Values not below
+`duckDbThreads` keep it off.
 
 `flightBackpressureThresholdBytes` is the most a single Flight stream queues for a slow client;
 `flightOutboundBudgetBytes` (default 0 = a quarter of the JVM's direct memory limit,

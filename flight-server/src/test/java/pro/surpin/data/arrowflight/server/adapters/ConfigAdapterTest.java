@@ -128,6 +128,21 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void duckDbThreadsUnderLoadIsOffByDefaultAndRefusesNegativeValues() throws IOException {
+        assertEquals(0, ConfigAdapter.duckDbThreadsUnderLoad(source(Map.of(), Map.of())));
+        assertEquals(1, ConfigAdapter.duckDbThreadsUnderLoad(
+                source(Map.of("duckDbThreadsUnderLoad", "1"), Map.of())));
+        assertEquals(1, ConfigAdapter.duckDbThreadsUnderLoad(
+                source(Map.of("arrowflight.duckdb.threadsUnderLoad", "1"), Map.of())));
+        assertEquals(2, ConfigAdapter.duckDbThreadsUnderLoad(
+                source(Map.of(), Map.of("DUCKDB_THREADS_UNDER_LOAD", "2"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbThreadsUnderLoad(
+                        source(Map.of("duckDbThreadsUnderLoad", "-1"), Map.of())));
+        assertTrue(e.getMessage().contains("duckDbThreadsUnderLoad"), e.getMessage());
+    }
+
+    @Test
     void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndEight() {
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(1));
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4));

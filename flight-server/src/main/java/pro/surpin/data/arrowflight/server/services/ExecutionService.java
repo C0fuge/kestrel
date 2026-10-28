@@ -143,6 +143,16 @@ public final class ExecutionService {
     }
 
     /**
+     * Counts a query as running on this node until the slot is closed; see
+     * {@link DuckDbAdapter#enterQuery()}.
+     *
+     * @return slot to close on the same thread when the query ends
+     */
+    public DuckDbAdapter.QuerySlot enterQuery() {
+        return duckDbAdapter.enterQuery();
+    }
+
+    /**
      * Describes a table from its Parquet footers with the column types queries stream.
      *
      * @param schema schema name

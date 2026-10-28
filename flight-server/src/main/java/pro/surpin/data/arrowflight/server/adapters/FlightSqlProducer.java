@@ -594,7 +594,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         ExecutionPathTracker pathTracker = new ExecutionPathTracker();
         boolean success = false;
         String failureReason = null;
-        try {
+        try (DuckDbAdapter.QuerySlot slot = executionService.enterQuery()) {
             authorization.requireQuery(context == null ? null : context.peerIdentity(), query);
             if (state.complete()) {
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);

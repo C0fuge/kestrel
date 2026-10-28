@@ -38,6 +38,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
@@ -136,6 +137,19 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final Map<String, List<String>> parseCheckCache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(64, 0.75f, true));
     private final ThreadLocal<Session> threadSession;
+    /**
+     * Second session per thread with duckDbThreadsUnderLoad threads, opened on first use; null
+     * when the setting is off.
+     */
+    private final ThreadLocal<Session> loadSession;
+    /** Session a query slot chose for this thread's current query; unset = threadSession. */
+    private final ThreadLocal<Session> slotSession = new ThreadLocal<>();
+    /** Queries inside a slot on this node now. */
+    private final AtomicInteger runningQueries = new AtomicInteger();
+    /** Queries that ran on a low-thread session since start. */
+    private final AtomicLong queriesUnderLoad = new AtomicLong();
+    private final int threadsUnderLoad;
+    private final int cores;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     /** hadoopfs settings the loaded extension does not know, warned about once. */
     private final Set<String> unknownHdfsSettings = ConcurrentHashMap.newKeySet();
@@ -308,6 +322,23 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param setup     setup written by the DuckDbSetupValidator; empty roots disable the lockdown
      */
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup) {
+        this(appConfig, ioPool, setup, 0, Runtime.getRuntime().availableProcessors());
+    }
+
+    /**
+     * Creates DuckDB adapter whose queries move to a second DuckDB connection per thread with
+     * fewer threads while more queries run than the cores can give duckDbThreads each.
+     *
+     * @param appConfig        server configuration
+     * @param ioPool           shared I/O thread pool for parallel execution
+     * @param setup            setup written by the DuckDbSetupValidator; empty roots disable the
+     *                         lockdown
+     * @param threadsUnderLoad DuckDB threads of the second connection; 0, or not below
+     *                         duckDbThreads, keeps every query on its thread's one connection
+     * @param cores            processors the node's queries share
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
+            int threadsUnderLoad, int cores) {
         this.readableRoots = setup.roots();
         this.storageSetupStatements = setup.statements();
         this.redactor = setup.redactor();
@@ -324,17 +355,12 @@ public final class DuckDbAdapter implements AutoCloseable {
             // stops the server here instead of failing every query.
             verifyStorageSetup();
         }
-        this.threadSession = ThreadLocal.withInitial(() -> {
-            try {
-                Connection conn = openConnection(false);
-                Session session = new Session(Thread.currentThread(), conn,
-                        appConfig.duckDbStatementCacheSize());
-                allSessions.add(session);
-                return session;
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to create thread-local DuckDB connection", e);
-            }
-        });
+        this.threadSession = ThreadLocal.withInitial(() -> openSession(appConfig.duckDbThreads()));
+        this.threadsUnderLoad = threadsUnderLoad > 0 && threadsUnderLoad < appConfig.duckDbThreads()
+                ? threadsUnderLoad : 0;
+        this.cores = Math.max(1, cores);
+        this.loadSession = this.threadsUnderLoad > 0
+                ? ThreadLocal.withInitial(() -> openSession(this.threadsUnderLoad)) : null;
         // Flight runs streams on a cached thread pool: its threads end after a minute of
         // idleness and new ones are created later, so sessions of ended threads must be closed.
         this.sessionReaper = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -345,8 +371,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.sessionReaper.scheduleWithFixedDelay(this::closeSessionsOfEndedThreads,
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
-        LOGGER.info("node={} duckdb=threads perConnection={} availableProcessors={}", LogUtil.node(),
-                appConfig.duckDbThreads(), Runtime.getRuntime().availableProcessors());
+        LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} availableProcessors={}",
+                LogUtil.node(), appConfig.duckDbThreads(), this.threadsUnderLoad, this.cores);
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);
@@ -366,13 +392,32 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Opens a session of the current thread on a new DuckDB connection.
+     *
+     * @param threads DuckDB threads of the connection
+     * @return session, registered for closing when the thread ends
+     */
+    private Session openSession(int threads) {
+        try {
+            Connection conn = openConnection(false, threads);
+            Session session = new Session(Thread.currentThread(), conn,
+                    appConfig.duckDbStatementCacheSize());
+            allSessions.add(session);
+            return session;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create thread-local DuckDB connection", e);
+        }
+    }
+
+    /**
      * Opens and configures a DuckDB connection for queries.
      *
      * @param logExtensions whether to log the storage extensions loaded
+     * @param threads       DuckDB threads of the connection
      * @return configured connection
      * @throws Exception when DuckDB cannot be opened or configured
      */
-    private Connection openConnection(boolean logExtensions) throws Exception {
+    private Connection openConnection(boolean logExtensions, int threads) throws Exception {
         Properties props = new Properties();
         if (appConfig.duckDbAllowUnsignedExtensions()) {
             props.setProperty("allow_unsigned_extensions", "true");
@@ -385,7 +430,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         props.setProperty("allow_persistent_secrets", "false");
         Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
         try {
-            configureConnection(conn, logExtensions);
+            configureConnection(conn, logExtensions, threads);
         } catch (Exception e) {
             Session.closeQuietly(conn);
             throw e;
@@ -401,7 +446,7 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @throws IllegalStateException when the storage setup fails
      */
     private void verifyStorageSetup() {
-        try (Connection conn = openConnection(true)) {
+        try (Connection conn = openConnection(true, appConfig.duckDbThreads())) {
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                 LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
             }
@@ -418,11 +463,13 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param conn JDBC connection
      * @param logExtensions whether to log the storage extensions loaded, read before the
      *                      lockdown because the extension directory is not readable after it
+     * @param threads       DuckDB threads of the connection
      * @throws Exception on configuration failure
      */
-    private void configureConnection(Connection conn, boolean logExtensions) throws Exception {
+    private void configureConnection(Connection conn, boolean logExtensions, int threads)
+            throws Exception {
         try (Statement s = conn.createStatement()) {
-            s.execute("SET threads = " + appConfig.duckDbThreads());
+            s.execute("SET threads = " + threads);
             String memLimit = appConfig.duckDbMemoryLimit();
             if (memLimit != null && !memLimit.isBlank()) {
                 s.execute("SET memory_limit = " + sqlStringLiteral(memLimit));
@@ -710,7 +757,12 @@ public final class DuckDbAdapter implements AutoCloseable {
             return;
         }
         if (Thread.currentThread() == session.owner) {
-            threadSession.remove();
+            if (loadSession != null && slotSession.get() == session) {
+                slotSession.remove();
+                loadSession.remove();
+            } else {
+                threadSession.remove();
+            }
         }
         if (allSessions.remove(session)) {
             session.close();
@@ -791,8 +843,66 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @return JDBC connection
      */
     public Connection connection() {
-        return threadSession.get().conn;
+        return session().conn;
     }
+
+    /**
+     * Returns the session this thread's current query runs on.
+     *
+     * @return the session a query slot chose, else the thread's own
+     */
+    private Session session() {
+        Session chosen = slotSession.get();
+        return chosen != null ? chosen : threadSession.get();
+    }
+
+    /**
+     * Counts a query as running on this node until the returned slot is closed. With
+     * duckDbThreadsUnderLoad set, the query runs on this thread's low-thread session when the
+     * running queries times duckDbThreads exceed the cores: parallel queries then share the cores
+     * instead of each starting duckDbThreads threads. Close the slot once, on the same thread.
+     *
+     * @return slot to close when the query ends
+     */
+    public QuerySlot enterQuery() {
+        if (loadSession == null) {
+            return NO_SLOT;
+        }
+        int running = runningQueries.incrementAndGet();
+        try {
+            if ((long) running * appConfig.duckDbThreads() > cores) {
+                slotSession.set(loadSession.get());
+                queriesUnderLoad.incrementAndGet();
+            }
+        } catch (RuntimeException e) {
+            runningQueries.decrementAndGet();
+            throw e;
+        }
+        return () -> {
+            slotSession.remove();
+            runningQueries.decrementAndGet();
+        };
+    }
+
+    /**
+     * Returns the number of queries that ran on a low-thread session since start.
+     *
+     * @return query count
+     */
+    public long queriesUnderLoad() {
+        return queriesUnderLoad.get();
+    }
+
+    /** A query's place in the node's running-query count; see {@link #enterQuery()}. */
+    @FunctionalInterface
+    public interface QuerySlot extends AutoCloseable {
+        /** Ends the query's slot. */
+        @Override
+        void close();
+    }
+
+    /** Slot of a node without duckDbThreadsUnderLoad: nothing is counted. */
+    private static final QuerySlot NO_SLOT = () -> { };
 
     /**
      * Returns the shared I/O executor service.
@@ -835,7 +945,7 @@ public final class DuckDbAdapter implements AutoCloseable {
     public void streamSql(BufferAllocator allocator, String duckSql,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        Session session = threadSession.get();
+        Session session = session();
         try {
             try {
                 streamSql(session, allocator, duckSql, listener, startListener);
@@ -865,7 +975,7 @@ public final class DuckDbAdapter implements AutoCloseable {
     public void streamSqlOnce(BufferAllocator allocator, String duckSql,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        Session session = threadSession.get();
+        Session session = session();
         try {
             requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
             try (PreparedStatement ps = session.conn.prepareStatement(duckSql)) {
@@ -1067,7 +1177,7 @@ public final class DuckDbAdapter implements AutoCloseable {
     public org.apache.arrow.vector.types.pojo.Schema describeSql(BufferAllocator allocator,
             String duckSql) throws Exception {
         long t = LogUtil.mark();
-        Session session = threadSession.get();
+        Session session = session();
         try (PreparedStatement ps = session.conn.prepareStatement(duckSql);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) ps.executeQuery();
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
@@ -1462,7 +1572,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        Session session = threadSession.get();
+        Session session = session();
         try {
             try {
                 streamComplete(session, allocator, sql, parameters, views, listener, startListener);
@@ -1529,7 +1639,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        Session session = threadSession.get();
+        Session session = session();
         try {
             if (session.viewsVersion != views.version()) {
                 session.viewDrops = applyViews(session.conn, session.viewDrops,
@@ -1610,7 +1720,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 return cached.result();
             }
         }
-        Session session = threadSession.get();
+        Session session = session();
         try {
             return describeComplete(session, allocator, sql, parameters, views);
         } catch (Exception e) {
@@ -1782,7 +1892,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (cached != null) {
             return cached.parameters();
         }
-        Session session = threadSession.get();
+        Session session = session();
         try {
             Connection conn = describeConnection(session, sql, views);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {

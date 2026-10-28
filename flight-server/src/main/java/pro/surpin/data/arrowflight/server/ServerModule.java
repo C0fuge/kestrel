@@ -229,7 +229,8 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
-        return new DuckDbAdapter(config, ioPool, registry.duckDbSetup());
+        return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
+                ConfigAdapter.duckDbThreadsUnderLoad(), Runtime.getRuntime().availableProcessors());
     }
 
     /**
