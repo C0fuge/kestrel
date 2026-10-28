@@ -171,6 +171,12 @@
 >    per connection), fewer under concurrency. Tests: formula across host profiles (2c/6g container, 4c/16g, 16c/64g,
 >    64c/512g, small `memory.max` with many cores), no OOM in the existing 6 GB container tests; perf in CI on 4 vCPU
 >    (no regression vs today's defaults) - large hosts are measured on the maintainer's stand later.
+>    *Step 1 done 2026-10-28 (a9e43ca, see Log):* `DuckDbSizing` + `HostLimits` (cgroup v2/v1 `memory.max`, JVM total
+>    memory, `-Xmx`, direct limit); `memory_limit` per connection = budget / `duckDbMemoryConnections` (default cores /
+>    threads, at least 2), >= 1 GiB, <= 80 % of memory; threads cores / 4 in 2..16 (S3 >= 4), <= 1 per GiB, >= 2;
+>    `duckDbMemoryLimit=none` = old behaviour; startup line `duckdb=sizing`. **Next of 19b:** screening on the
+>    pre-release (2c/6g gets 1 GiB per connection - TPC-H SF10 and the load test vs `7562a5bdb7b9`, see Open question
+>    "Item 19b expected connections"); stand: large hosts, clamp 16 vs 32; step 2 (adaptive threads, opt-in).
 > 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).
@@ -612,6 +618,15 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Item 19b expected connections (2026-10-28, core lane).** The default `memory_limit` divides the DuckDB budget by
+  `duckDbMemoryConnections` = cores / threads (at least 2), i.e. the queries that fill the cores - not by the worker
+  pool (32-64 threads), which would leave a single heavy query 1 GiB on most hosts. More concurrent heavy queries can
+  still overcommit the budget (each is capped, the sum is not; still far below the old 80 % of RAM per instance).
+  On the 2c/6g screening container (`-Xmx3g`, direct 2g) the budget is ~0.1 GiB, so every connection gets the 1 GiB
+  floor (was 4.8 GiB); TUNING.md's stand round saw no speed change at `duckDbMemoryLimit=1GB` on SF10, but the
+  screening should confirm. Options if it regresses: a floor of 2 GiB, or divide by the worker pool only above some
+  host size. Maintainer's call on the divisor; `duckDbMemoryLimit=none` restores the old behaviour per deployment.
 
 - **Quota tails (2026-10-28, core lane, for the screening/coordinator).** With `--cpus=2` the c8/c32 p95/p99 of small
   queries are dominated by CFS throttling (a query that crosses a throttled period waits ~45 ms), in every build; ratios
