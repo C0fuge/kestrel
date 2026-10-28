@@ -100,6 +100,21 @@
 >    twice our memory; one stream is a tie). Find why (per-stream DuckDB work, batch size, copies between DuckDB's Arrow
 >    output and the Flight stream, the per-stream budget of 0f, endpoint split of S6) and close the gap. Goal >= 750 MB/s
 >    with peak RSS at most +25 % over today's.
+>    *Step 1 done 2026-10-28 (see Log):* new perf test `ParallelScanPerfTest` (one partial-mode scan in N endpoints -
+>    complete mode is always one stream - or N concurrent complete-mode scans; `-Dperf.server=host:port` measures a
+>    separately started server). Findings on 2 cores: the server's CPU per GB grows with the number of parallel
+>    streams because every endpoint runs in its own DuckDB with `duckDbThreads` (2) threads; plain DuckDB JDBC shows
+>    the same (4 instances x 2 threads ~830 MB/s at 2.1-2.6 s CPU/GB, x 1 thread ~1270 MB/s at 1.5). Cut, opt-in:
+>    `duckDbThreadsUnderLoad` (second, low-thread connection per worker for DoGets that start while running DoGets x
+>    `duckDbThreads` > cores). Measured with a pyarrow client on other cores, 16-file 6 M-row lineitem-like table:
+>    4 endpoints 712 -> 792 MB/s, 8 endpoints 579 -> 611, 1 stream unchanged. Zero-copy Flight writes
+>    (`arrow.flight.enable_zero_copy_write`, not used by us) were inconclusive here (+11 % once, worse once).
+>    **Next steps of 22:** (b) the screening repo measures the pre-release with `-DduckDbThreadsUnderLoad=1` and
+>    `endpointsPerServer` 4/8 (partial mode); (c) 8 endpoints stay ~20 % below 4 on 2 cores: try capping the DoGets
+>    that produce batches at once to the cores (opt-in) and look at per-stream budget waits; (d) zero-copy writes
+>    for the DuckDB stream path only (its buffers are fresh per batch), measured on a quiet runner.
+>    Caveat (see the maintainer's S3 tail bug above): fewer threads per query lengthen round-trip-bound S3 reads, so
+>    leave `duckDbThreadsUnderLoad` off on S3 nodes until that bug is understood; it targets CPU-bound local/HDFS scans.
 > 3b. item 17 (e) (new, from the CI screening's cache run 40569584228, `COMPARE-CACHE-2026-10-27.md`) - **S3 read cache
 >    memory and large scans.** With `arrowflight.s3.cacheMegabytes=1024` (`-Xmx3g`, direct 2g, 6 GB container) peak RSS
 >    was ~5.7 GB vs ~2.3 GB off (2.45x; ~300 MB from the container limit, no OOM kill yet) - find where the extra ~3.4 GB
@@ -570,6 +585,9 @@
   leave it, document `duckDbThreads=1` for small-query nodes; (2) a 1-core default floor for <= 2 cores (default
   change); (3) open a second, 1-thread connection per worker for use under load (memory: one more DuckDB per
   worker). Recommendation: (1) now, and let the screening repo measure `-DduckDbThreads=1` on the pre-release.
+  *2026-10-28:* option (3) built as an opt-in for item 22 (`duckDbThreadsUnderLoad`, default 0 = off; no default
+  changed). The question left is only whether to turn it on by default (e.g. 1 on nodes with <= 4 cores) once the
+  screening / stand numbers are in.
 
 - **Maintainer 2026-10-28, answers for item 18:** (1) identity: option (b) - an internal call signed with the ticket
   secret carrying the user name, accepted only from live cluster members' addresses and only when
@@ -1520,3 +1538,17 @@
   no Java hot spot left. No server change; findings and the remaining levers in Open question "Item 21 (d)".
   Test-only change, push run 40622807155 green; no pre-release (no runtime change). Next: item 22 (one scan in 4-8 parallel streams) while the screening
   measures `server-1.0.0-881b7c62b373`.
+- 2026-10-28 (cloud session): item 22 step 1 (e9f0fd3). New perf test `ParallelScanPerfTest`. Found on 2 cores:
+  complete mode is always one stream (parallel endpoints need partial mode); per-GB server CPU grows with parallel
+  endpoints because each runs its own DuckDB with `duckDbThreads` threads (plain DuckDB JDBC: 4 instances x 2 threads
+  ~830 MB/s at 2.1-2.6 s CPU/GB, x 1 thread ~1270 MB/s at 1.5 s/GB). Added opt-in `duckDbThreadsUnderLoad`
+  (default 0 = off; item 21 (b) option 3): a second, low-thread DuckDB connection per worker for DoGets that start
+  while running DoGets x `duckDbThreads` > cores. Standalone server pinned to 2 cores, pyarrow client on 2 other cores,
+  partial mode, 16 files / 6 M rows: 4 endpoints 712 -> 792 MB/s (server CPU -13 %), 8 endpoints 579 -> 611 (-6 %),
+  1 stream unchanged. Zero-copy Flight writes inconclusive (follow-up (d)). Tests: `DuckDbAdapterTest` (switch only
+  under load, back after; off when 0 or >= duckDbThreads), `ConfigAdapterTest`, `ThreadsUnderLoadIntegrationTest`
+  (same answers in both modes with 4 parallel endpoints). Package run 40631441911 green on 1f600b9 (my commit + a
+  plugins-lane test commit), pre-release `server-1.0.0-1f600b930eda`; push run 40630875352 and first package run
+  40630892523 cancelled (concurrency group). Screening: one scan in 4/8 partial-mode endpoints
+  (`endpointsPerServer`) with and without `-DduckDbThreadsUnderLoad=1`. Next: the maintainer's S3 small-query p95 bug
+  (bug first), then item 22 (b)-(d).
