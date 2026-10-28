@@ -300,7 +300,8 @@ direct memory (streams CANCELLED "Server sendMessage() failed with Error", conta
 
 Result streams can be sent with Arrow IPC body compression (Zstandard or LZ4 frames) for slow links. It is
 off unless asked: a client sends the call header `arrow-compression: zstd` or `lz4` (or `none`) on its DoGet
-calls, and must be able to decode compressed batches (pyarrow, ADBC C++/Go; Java Flight with
+calls, and must be able to decode compressed batches (pyarrow, ADBC C++/Go - both checked in CI by
+`CompressionClientsIntegrationTest`; Java Flight with
 `arrow-compression` and `zstd-jni` for zstd, or `commons-compress` for lz4, on its class path; the stock Flight
 SQL JDBC driver cannot). `flightCompression=zstd` (or `lz4`) makes it the default for calls without the
 header, which breaks clients without the codec. `flightCompressionLevel` (default 1) is the Zstandard level;

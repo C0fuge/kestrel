@@ -67,6 +67,25 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   s3 plugin's: with both on, keep the two sizes together below half of `-Xmx`. Log lines `lakefs=cacheOpen` /
   `lakefs=cacheClosed`, metrics `arrowflight_lakefs_cache_*`. A miss read whose answer carries another ETag than the
   one looked up is refused like a failed `If-Match` (for gateways that ignore `If-Match`; both caches).
+- Result stream compression (opt-in, item 20): off unless a client asks. A client sends the call header
+  `arrow-compression: zstd` or `lz4` on its DoGet calls, or sets the Flight SQL session option `arrow-compression`
+  (SetSessionOptions; the session lives on the node that created it); `flightCompression=zstd|lz4` makes it the
+  default for calls without either, which breaks every client without the codec - leave it at `none` while stock
+  JDBC drivers read from the node. pyarrow and ADBC (C++/Go) decode both codecs as they are (checked in CI by
+  `CompressionClientsIntegrationTest`); Java Flight clients need `arrow-compression` + `zstd-jni` (zstd) or
+  `commons-compress` (lz4) on their class path. `lz4` needs lz4-java from `libs/` on the server. Counters
+  `arrowflight_flight_compress*` on `/metrics`; level `flightCompressionLevel` (1), batches under
+  `flightCompressionMinBytes` (64 KiB) go plain.
+- JDBC: the stock Arrow Flight SQL JDBC driver cannot decode compressed batches, so it must not ask (and the server
+  default must stay `none` for it). Our patched driver can, once it carries the codecs: (1) bundle
+  `org.apache.arrow:arrow-compression` (same Arrow version as the driver) and `com.github.luben:zstd-jni` (and
+  `org.apache.commons:commons-compress` for lz4) in the driver jar, relocated the same way as its Arrow classes, with
+  the `META-INF/services/...CompressionCodec$Factory` entry merged (ServicesResourceTransformer) so the driver's
+  `FlightStream` finds the codec factory; (2) the driver already sends URL properties it does not know as call
+  headers, so `jdbc:arrow-flight-sql://host:32010/?arrow-compression=zstd` asks for zstd on every call (the server
+  only reads it on DoGet); no SetSessionOptions call is needed. Without (1) such a URL fails on the first
+  compressed batch instead of answering wrong. Check: same answers with and without the property on a query of a
+  few MB, and `arrowflight_flight_compressed_batches_total` rising.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
 - A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
   Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`

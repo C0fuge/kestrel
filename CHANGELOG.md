@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Compression answer checks for non-Java clients (item 20, step (e)): `CompressionClientsIntegrationTest` reads
+  a mixed-type table through pyarrow Flight (C++) and the ADBC Flight SQL driver (Go), plain, `none`, `zstd` and
+  `lz4`, in both result modes, and requires identical answers and server-side compressed batches per client
+  (CI installs pyarrow 26.0.0 / adbc-driver-flightsql 1.13.0; skipped without `-Dpython.it.executable`).
+  START-NOTES now describe the compression opt-in and the change our patched JDBC driver needs to ask for it
+  (step (d)). No runtime change.
 - Partial answers over catalog tables read as Arrow streams (P1 step 2 (b) part 2 (1); no plugin produces such
   tables yet): the planner ships their files with partition values like Hive Parquet files, every endpoint asks
   the catalog for one stream with the columns the query names (all for `*`, one for `count(*)`) and the simple

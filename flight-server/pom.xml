@@ -71,6 +71,7 @@
              1.4.1-1.4.3 have the hash-aggregate bug behind the q04 wrong answer (fixed in 1.4.4). -->
         <duckdb.version>1.5.6.0</duckdb.version>
         <iceberg.it.extensionDir></iceberg.it.extensionDir>
+        <python.it.executable></python.it.executable>
         <spark.version>3.5.9</spark.version>
         <grpc.version>1.84.2</grpc.version>
         <netty.version>4.2.19.Final</netty.version>
@@ -628,6 +629,8 @@
                         <!-- Iceberg catalog tests: DuckDB's iceberg/avro extensions (v1.4.5/<platform>/
                              below this directory); without it those tests are skipped. -->
                         <iceberg.it.extensionDir>${iceberg.it.extensionDir}</iceberg.it.extensionDir>
+                        <!-- CompressionClientsIntegrationTest: a Python with pyarrow and adbc-driver-flightsql -->
+                        <python.it.executable>${python.it.executable}</python.it.executable>
                         <!-- LibsSetTest: the libraries of the libs-set and server-classpath executions -->
                         <libs.set.dir>${project.build.directory}/libs</libs.set.dir>
                         <libs.set.serverClasspath>${project.build.directory}/server-runtime.classpath</libs.set.serverClasspath>

@@ -80,12 +80,22 @@ jobs:
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends krb5-user
 
+      # CompressionClientsIntegrationTest: pyarrow Flight (C++) and the ADBC Flight SQL driver (Go)
+      # read compressed result streams (item 20 (e)).
+      - name: Python clients (pyarrow, ADBC Flight SQL)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          echo "PYTHON_IT=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
+
       - name: Build, all tests (no perf / real-services), Checkstyle, SpotBugs
         run: >
           ./mvnw clean verify checkstyle:check spotbugs:check
           -DexcludedGroups=perf,real-services
           -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"
+          -Dpython.it.executable="$PYTHON_IT"
 
       - name: Test summary
         if: always()
