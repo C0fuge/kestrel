@@ -50,3 +50,6 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   answer; a node that left is not planned. Helper: `hazelcastSeeds(...)`, `sharedStorage()`. Local run 5/5 green
   (~8 s); CI run 40681311340 green on the branch (before the rebase onto acb87cb, plugins-lane commits only).
   Next: D2 (b) perf test on vs off, D2 (c) two-process TLS + auth.
+  On `main` 8d2006c has no CI run yet: the merge push ended in a `[skip ci]` commit, and a dispatch (40682318542)
+  was cancelled by me so as not to cancel the plugins lane's run 40681896929 (same concurrency group). Next session:
+  confirm a green Dev CI run on `main` containing 8d2006c (else dispatch one).
