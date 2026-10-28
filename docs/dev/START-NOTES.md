@@ -35,7 +35,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
   checks the extension versions at startup.
 - DuckDB runs a quarter of the cores (between 2 and 8) threads per connection by default (`duckDbThreads`, was a fixed
-  4; the startup line `duckdb=threads perConnection=` shows the value); set `-DduckDbThreads=4` to keep the old value,
+  4; the startup line `duckdb=threads perConnection=` shows the value), at least 4 when `dataDir` is an `s3://` /
+  `s3a://` / `s3n://` / `lakefs://` URI (since 2026-10-28); set `-DduckDbThreads=4` to keep the old value,
   `-DduckDbThreads=1` / `FLIGHT_DUCKDB_THREADS=1` where compute workers share the node.
 - HDFS: put the NameNode RPC timeouts into the `LIBHDFS3_CONF` file (`rpc.client.connect.timeout=5000`,
   `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,

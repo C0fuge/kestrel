@@ -142,6 +142,32 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbThreadsUnderLoad"), e.getMessage());
     }
 
+    /**
+     * Regression for the S3 small-query tail (2026-10-28): on object stores the default keeps at
+     * least 4 threads, local and HDFS data directories keep the size-aware default, an explicit
+     * value wins everywhere.
+     */
+    @Test
+    void duckDbThreadsDefaultKeepsFourOnObjectStores() throws IOException {
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "s3://lake/data"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(1, "S3A://lake/data"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(8, "s3n://lake/data"));
+        assertEquals(4, ConfigAdapter.defaultDuckDbThreads(4, "lakefs://repo/main/data"));
+        assertEquals(6, ConfigAdapter.defaultDuckDbThreads(24, "s3://lake/data"));
+        assertEquals(8, ConfigAdapter.defaultDuckDbThreads(64, "s3://lake/data"));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "/data/parquet"));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "hdfs://nn:8020/data"));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, "file:///data/s3://x"));
+        assertEquals(2, ConfigAdapter.defaultDuckDbThreads(4, null));
+        int cores = Runtime.getRuntime().availableProcessors();
+        assertEquals(Math.max(4, ConfigAdapter.defaultDuckDbThreads(cores)), ConfigAdapter.getConfig(
+                source(Map.of("dataDir", "s3://lake/data"), Map.of())).duckDbThreads());
+        assertEquals(ConfigAdapter.defaultDuckDbThreads(cores), ConfigAdapter.getConfig(
+                source(Map.of("dataDir", "hdfs://nn:8020/data"), Map.of())).duckDbThreads());
+        assertEquals(2, ConfigAdapter.getConfig(source(Map.of("dataDir", "s3://lake/data",
+                "duckDbThreads", "2"), Map.of())).duckDbThreads());
+    }
+
     @Test
     void duckDbThreadsDefaultIsAQuarterOfTheCoresBetweenTwoAndEight() {
         assertEquals(2, ConfigAdapter.defaultDuckDbThreads(1));

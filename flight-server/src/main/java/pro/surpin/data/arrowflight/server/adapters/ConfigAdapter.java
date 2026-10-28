@@ -2,7 +2,9 @@ package pro.surpin.data.arrowflight.server.adapters;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
@@ -12,6 +14,12 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
  * in that order of precedence (see {@link ConfigSource}). Produces an immutable AppConfig record.
  */
 public class ConfigAdapter {
+
+    /** Schemes of data directories on object stores read over HTTP. */
+    private static final Set<String> OBJECT_STORE_SCHEMES = Set.of("s3", "s3a", "s3n", "lakefs");
+
+    /** Fewest default DuckDB threads per connection on such stores (the default before item 19). */
+    private static final int REMOTE_MIN_DUCKDB_THREADS = 4;
 
     /**
      * Utility class, no instantiation.
@@ -43,12 +51,13 @@ public class ConfigAdapter {
                 "arrowflight.duckdb.warmConnections", Math.min(8, ioParallelism), props);
         int duckDbGroups = getInt("duckDbGroups",
                 "arrowflight.duckdb.groups", Math.min(8, ioParallelism), props);
+        String dataDir = getString("dataDir", null, "/data/parquet", props);
         int duckDbThreads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
         if (duckDbThreads < 0) {
             throw new IllegalArgumentException("duckDbThreads must not be negative: " + duckDbThreads);
         }
         if (duckDbThreads == 0) {
-            duckDbThreads = defaultDuckDbThreads(Runtime.getRuntime().availableProcessors());
+            duckDbThreads = defaultDuckDbThreads(Runtime.getRuntime().availableProcessors(), dataDir);
         }
         String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
                 "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
@@ -100,7 +109,6 @@ public class ConfigAdapter {
                     "flightListenerReadyTimeoutMs must be positive: "
                             + flightListenerReadyTimeoutMillis);
         }
-        String dataDir = getString("dataDir", null, "/data/parquet", props);
         String localDataDir = getStringWithEnv("localDataDir", "arrowflight.localDataDir",
                 "FLIGHT_LOCAL_DATA_DIR", null, props);
         int port = getInt("port", null, 32010, props);
@@ -272,6 +280,37 @@ public class ConfigAdapter {
      */
     static int defaultDuckDbThreads(int availableCores) {
         return Math.min(8, Math.max(2, availableCores / 4));
+    }
+
+    /**
+     * Returns the default DuckDB threads per connection for a data directory: on object stores
+     * read over HTTP (s3, s3a, s3n, lakefs), whose reads wait on round trips, at least 4; elsewhere
+     * the size-aware default.
+     *
+     * @param availableCores processors available to the JVM
+     * @param dataDir data directory URI or path
+     * @return threads per DuckDB connection
+     */
+    static int defaultDuckDbThreads(int availableCores, String dataDir) {
+        int threads = defaultDuckDbThreads(availableCores);
+        return isObjectStore(dataDir) ? Math.max(REMOTE_MIN_DUCKDB_THREADS, threads) : threads;
+    }
+
+    /**
+     * Tells whether a data directory lives on an object store read over HTTP.
+     *
+     * @param dataDir data directory URI or path, may be null
+     * @return true for s3, s3a, s3n and lakefs URIs
+     */
+    static boolean isObjectStore(String dataDir) {
+        if (dataDir == null) {
+            return false;
+        }
+        int colon = dataDir.indexOf("://");
+        if (colon <= 0) {
+            return false;
+        }
+        return OBJECT_STORE_SCHEMES.contains(dataDir.substring(0, colon).toLowerCase(Locale.ROOT));
     }
 
     /**

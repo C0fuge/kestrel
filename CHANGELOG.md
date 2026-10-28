@@ -13,6 +13,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `HiveOrcPerfTest` (perf tag) and the manual workflow `hive-orc-perf.yml` (P1 step 2 (e)): a lineitem-like Hive
   table (SF1 size by default) as Parquet and as ORC (zlib, zstd) through the server with the hive plugin, best of 3
   per query and result mode; complete answers of the ORC tables must equal the Parquet table's. Test only.
+- `SmallQueryThroughputPerfTest` (perf tag) can read its table from the fake S3 through the real s3 plugin
+  (`-Dperf.store=s3`, `-Ds3.perf.latencyMs`, needs `-Ds3.it.httpfs`); `-Dperf.threads` unset now means the server's
+  own default instead of the test helper's 1 thread. Test only.
 - DuckDB threads under load (item 22, also item 21 (b) option 3), opt-in: `duckDbThreadsUnderLoad` /
   `arrowflight.duckdb.threadsUnderLoad` / `DUCKDB_THREADS_UNDER_LOAD` (default 0 = off, unchanged). Each Flight
   worker gets a second DuckDB connection with that many threads, opened on first use; a DoGet that starts while the
@@ -312,6 +315,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- S3 small queries: longer tail since the size-aware `duckDbThreads` default (item 19; 4 vCPU -> 2 threads). With
+  `duckDbThreads` unset or 0 and `dataDir` on `s3://`, `s3a://`, `s3n://` or `lakefs://` the default is now at least
+  4 (the value before item 19; larger hosts keep cores / 4, at most 8); local and HDFS data directories are unchanged,
+  an explicit value still wins. Local A/B, 4 cores, fake S3 at 2 ms per request, prepared point/count queries:
+  2 -> 4 threads c1 p95 48 -> 35 ms, c8 p95 77 -> 67 ms (10 ms per request: c1 107 -> 64, c8 123 -> 101), c32 q/s
+  -18 % on this CPU-saturated in-process run.
 - S3 read cache: concurrent requests for the same missing span now claim all its blocks under one lock, so the
   span is read with one GET; before, two requests could each claim part of it and read it in two GETs (answers
   were right). Suspected cause of the `S3CacheEndpointTest` count failures in CI runs 40586746160 and 40593759006.

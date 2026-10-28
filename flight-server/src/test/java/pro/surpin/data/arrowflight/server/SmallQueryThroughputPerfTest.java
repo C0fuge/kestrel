@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,9 +28,15 @@ import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.HeaderCallOption;
 import org.apache.arrow.flight.sql.FlightSqlClient;
+import org.apache.hadoop.conf.Configuration;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
+import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
+import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -39,8 +46,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * stock JDBC/ADBC clients do (prepare, GetFlightInfo, DoGet, close), or as plain statements
  * ({@code -Dperf.client=statement}: GetFlightInfo, DoGet). Also prints the CPU time per
  * query by thread group, so the server's share can be told from the in-process clients'. Run it
- * pinned to few cores (for example {@code taskset -c 0,1}) to see the CPU-bound case. Prints the
- * numbers; asserts only the answers.
+ * pinned to few cores (for example {@code taskset -c 0,1}) to see the CPU-bound case. With
+ * {@code -Dperf.store=s3} the table lives on the fake S3 behind the real s3 plugin, every object
+ * request delayed by {@code -Ds3.perf.latencyMs} (default 2); needs {@code -Ds3.it.httpfs}. Prints
+ * the numbers; asserts only the answers.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -71,26 +80,61 @@ class SmallQueryThroughputPerfTest {
         int threads = Integer.parseInt(System.getProperty("perf.threads", "0"));
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
         String mode = System.getProperty("perf.mode", "complete");
+        boolean s3 = "s3".equals(System.getProperty("perf.store", "local"));
+        // 0 = the server's own default for the store (not the helper's 1 thread).
         TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
-                .dataDir(dir.toString()).resultMode(mode);
-        if (threads > 0) {
-            builder.threads(threads);
-        }
-        try (TestFlightServerHelper helper = builder.start()) {
+                .dataDir(dir.toString()).resultMode(mode).threads(threads);
+        try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
+                TestFlightServerHelper helper = builder.start()) {
             FlightSqlClient client = helper.sqlClient();
             FlightCallHeaders headers = new FlightCallHeaders();
             headers.insert("x-flight-result-mode", mode);
             CallOption header = new HeaderCallOption(headers);
             boolean statements = "statement".equals(System.getProperty("perf.client", "prepared"));
             System.out.printf(Locale.ROOT,
-                    "== mode %s, client %s, duckDbThreads %s, %d cores, %d s per step%n",
-                    mode, statements ? "statement" : "prepared", threads > 0 ? threads : "default",
+                    "== store %s, mode %s, client %s, duckDbThreads %s, %d cores, %d s per step%n",
+                    s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2) + " ms)" : "local", mode,
+                    statements ? "statement" : "prepared", threads > 0 ? threads : "default",
                     Runtime.getRuntime().availableProcessors(), seconds);
             run(client, header, statements, 8, Math.max(3, seconds / 3), false);
             for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
                 run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
             }
         }
+    }
+
+    /**
+     * Moves the written table to a fake S3 and points the server at it through the real s3 plugin.
+     *
+     * @param builder server builder, given the S3 data directory and the plugin registry
+     * @param dir temporary directory holding the written table
+     * @return the running fake S3
+     * @throws Exception when the httpfs extension is missing or the plugin cannot be copied
+     */
+    private static FakeS3 onFakeS3(TestFlightServerHelper.Builder builder, Path dir) throws Exception {
+        String httpfs = System.getProperty("s3.it.httpfs", System.getenv("DUCKDB_HTTPFS_EXTENSION"));
+        Assumptions.assumeTrue(httpfs != null && Files.isReadable(Path.of(httpfs)),
+                "httpfs extension not configured (-Ds3.it.httpfs or DUCKDB_HTTPFS_EXTENSION)");
+        Path plugin = Files.createDirectories(dir.resolve("plugins").resolve("s3"));
+        try (var jars = Files.list(Path.of("../flight-plugin-s3/target/plugin/s3"))) {
+            for (Path jar : jars.toList()) {
+                Files.copy(jar, plugin.resolve(jar.getFileName().toString()));
+            }
+        }
+        FakeS3 s3 = FakeS3.start();
+        for (int f = 0; f < FILES; f++) {
+            s3.put("lake", "perf/s/orders/part-" + f + ".parquet",
+                    Files.readAllBytes(dir.resolve("s").resolve("orders").resolve("part-" + f + ".parquet")));
+        }
+        s3.latency(Long.getLong("s3.perf.latencyMs", 2));
+        Map<String, String> sys = Map.of("s3Endpoint", s3.endpoint(), "s3UrlStyle", "path",
+                "duckDbHttpfsExtension", httpfs);
+        Map<String, String> env = Map.of("FLIGHT_S3_ACCESS_KEY", "AKIAPERF", "FLIGHT_S3_SECRET_KEY", "perf-secret");
+        ConfigSource source = new ConfigSource(sys::get, new Properties(), env, null);
+        PluginSettings settings = new PluginSettings(dir.resolve("plugins"), null, "directory", false);
+        builder.dataDir("s3://lake/perf").registry(config -> StoreRegistry.open(config, new Configuration(),
+                "localhost", settings, source, List.of()));
+        return s3;
     }
 
     /**
