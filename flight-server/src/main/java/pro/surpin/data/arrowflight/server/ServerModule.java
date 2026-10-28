@@ -124,7 +124,8 @@ public final class ServerModule {
     @Singleton
     ClusterService cluster(HazelcastAdapter hazelcast, AppConfig config) {
         // Registered by the server once it listens.
-        return new ClusterService(hazelcast, config, serverUri, false);
+        return new ClusterService(hazelcast, config, serverUri, false,
+                ConfigAdapter.flightLoadReservationSeconds());
     }
 
     /**

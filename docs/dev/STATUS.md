@@ -875,7 +875,9 @@
   them 10 min (tickets carry no expiry). Options: (1) connectors (Trino plugin, StarRocks connector) send
   `CancelFlightInfo` when a query is abandoned / finished early (LIMIT) — for the coordinator; (2) a shorter
   reservation TTL (e.g. 2 min, or a new setting with the 10 min default kept); (3) both. Proposal: (1) plus an
-  opt-in setting. Which?
+  opt-in setting. Which? *2026-10-28 (core lane): the opt-in part is done (additive, default unchanged):
+  `flightLoadReservationSeconds` (default 600, see Log); (1) stays with the coordinator, and a shorter default is
+  still your call.*
 - The stand findings (a)–(c) in Next steps (S3 outage read latency, unread plans keeping node load
   reservations up to 10 min, slow first plan after B5 on S3) are not numbered, so sessions keep going down the
   numbered list (1b next). Want one of them taken before 1b's remaining groups? (b) skews endpoint placement

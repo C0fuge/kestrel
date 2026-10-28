@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Setting `flightLoadReservationSeconds` (`FLIGHT_LOAD_RESERVATION_SECONDS`, default 600 = unchanged): how long a
+  planned endpoint's bytes count as load on its node when the client neither reads it to the end nor sends
+  `CancelFlightInfo`; a shorter value frees nodes sooner from plans clients abandon (3-node S3 stand finding (b),
+  README "Cancelling a plan"). Values below 1 stop the start.
 - SPI 1.6: `Catalog.views(schema)` (default none) and `CatalogView(name, sql, sources, columns, fingerprint)`. Hive
   plugin (descriptor now SPI 1.6): opt-in `hive.views` (default false) lists simple virtual views whose expanded text
   `HiveViewSql` translates and whose every source is a table (or a listed view) the catalog shows; casts, untranslated

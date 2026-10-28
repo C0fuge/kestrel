@@ -354,6 +354,35 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns flightLoadReservationSeconds from the system configuration.
+     *
+     * @return lifetime of an endpoint's node-load reservation in seconds
+     */
+    public static long flightLoadReservationSeconds() {
+        return flightLoadReservationSeconds(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code flightLoadReservationSeconds} ({@code FLIGHT_LOAD_RESERVATION_SECONDS}): how
+     * long a planned endpoint's bytes count as load on its node when the client neither reads it
+     * to the end nor cancels the plan; default 600.
+     *
+     * @param props configuration source
+     * @return seconds
+     * @throws IllegalArgumentException for a value below 1
+     */
+    public static long flightLoadReservationSeconds(ConfigSource props) {
+        int seconds = getIntWithEnv("flightLoadReservationSeconds",
+                "arrowflight.cluster.loadReservationSeconds", "FLIGHT_LOAD_RESERVATION_SECONDS",
+                600, props);
+        if (seconds < 1) {
+            throw new IllegalArgumentException(
+                    "flightLoadReservationSeconds must be at least 1: " + seconds);
+        }
+        return seconds;
+    }
+
+    /**
      * Returns flightZeroCopyWrites from the system configuration.
      *
      * @return whether DuckDB result streams hand their batches to gRPC without a copy

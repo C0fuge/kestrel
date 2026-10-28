@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `flightLoadReservationSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -442,10 +442,18 @@ an unknown table is `NOT_FOUND`. Same action name and request as upstream da6a35
 A client that will not read (all of) a plan's endpoints should send Flight's `CancelFlightInfo`
 action (Flight SQL's older `CancelQuery` maps to it) with the `FlightInfo`: in a cluster, planning
 reserves each endpoint's bytes as load on its node, and an endpoint that is never read keeps that
-reservation for 10 minutes, steering later plans away from the node. The cancel releases the
+reservation for `flightLoadReservationSeconds` (`FLIGHT_LOAD_RESERVATION_SECONDS`, default 600 = 10
+minutes), steering later plans away from the node. The cancel releases the
 reservations of the plan's endpoints at once and answers `CANCELLED`; repeating it does nothing more.
 Streams already running are not stopped (close them), and a ticket read after the cancel still
 answers. A ticket the server did not sign is `INVALID_ARGUMENT`.
+
+For clients that drop plans without cancelling, a shorter `flightLoadReservationSeconds` (e.g. 120)
+frees the node sooner. The reservation also covers the stream while it runs, so an endpoint read for
+longer than this stops counting as its node's load once the time has passed (it still answers in
+full); set it above the time from planning to the end of your longest endpoint read. Set the same
+value on every node: the node that plans an endpoint sets its reservation, a backup node that runs it
+instead sets it again.
 
 ### Iceberg time travel
 

@@ -47,6 +47,8 @@ public final class ClusterService implements AutoCloseable {
     private static final long PARAMETERS_TTL_MINUTES = 30;
     private static final long HEARTBEAT_TIMEOUT_SEC = 10;
     private static final long HANDLE_TTL_NANOS = TimeUnit.MINUTES.toNanos(10);
+    /** Default lifetime of an endpoint's node-load reservation (flightLoadReservationSeconds). */
+    public static final long DEFAULT_LOAD_RESERVATION_SECONDS = 600;
     private static final int TICKET_SECRET_BYTES = 32;
     private static final String TICKET_SECRET_KEY = "__arrowflight-ticket-secret-v1";
     private static final String TICKET_LOAD_PREFIX = "__arrowflight-ticket-load-v1:";
@@ -55,6 +57,8 @@ public final class ClusterService implements AutoCloseable {
     private final HazelcastAdapter hazelcast;
     private final AppConfig appConfig;
     private final String serverUri;
+    // A plan dropped without CancelFlightInfo keeps its endpoints' load this long.
+    private final long loadReservationSeconds;
     private final ScheduledExecutorService heartbeatExecutor;
     // Moves load accounting of endpoints run here for another node, off the query's path: while
     // the planned node is still a cluster member that does not answer, map calls wait for it.
@@ -100,9 +104,30 @@ public final class ClusterService implements AutoCloseable {
      */
     public ClusterService(HazelcastAdapter hazelcast, AppConfig appConfig, String serverUri,
             boolean registerNow) {
+        this(hazelcast, appConfig, serverUri, registerNow, DEFAULT_LOAD_RESERVATION_SECONDS);
+    }
+
+    /**
+     * Creates a ClusterService with a given lifetime of endpoint load reservations.
+     *
+     * @param hazelcast  Hazelcast adapter
+     * @param appConfig  server configuration
+     * @param serverUri  this server's URI string
+     * @param registerNow whether to register at once, see the four-argument constructor
+     * @param loadReservationSeconds how long an endpoint's load counts on its node when the
+     *        client neither reads it to the end nor cancels the plan
+     * @throws IllegalArgumentException when the lifetime is not positive
+     */
+    public ClusterService(HazelcastAdapter hazelcast, AppConfig appConfig, String serverUri,
+            boolean registerNow, long loadReservationSeconds) {
+        if (loadReservationSeconds < 1) {
+            throw new IllegalArgumentException(
+                    "flightLoadReservationSeconds must be positive: " + loadReservationSeconds);
+        }
         this.hazelcast = hazelcast;
         this.appConfig = appConfig;
         this.serverUri = serverUri;
+        this.loadReservationSeconds = loadReservationSeconds;
         byte[] secret = ticketSecret(hazelcast);
         this.currentSecret = secret.clone();
         this.endpointTicketCodec = new EndpointTicketCodec(secret);
@@ -486,7 +511,9 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
-     * Creates a signed self-contained handle for a server-directed Flight endpoint.
+     * Creates a signed self-contained handle for a server-directed Flight endpoint. A
+     * load-tracked endpoint's bytes stay reserved on its node until the endpoint is released or
+     * the reservation lifetime passes.
      *
      * @param state endpoint execution state
      * @return authenticated handle bytes
@@ -495,7 +522,7 @@ public final class ClusterService implements AutoCloseable {
         byte[] handle = endpointTicketCodec.encode(state);
         if (state.loadTracked()) {
             hazelcast.statementCache().put(
-                    loadReservationKey(handle), state, 10, TimeUnit.MINUTES);
+                    loadReservationKey(handle), state, loadReservationSeconds, TimeUnit.SECONDS);
         }
         return handle;
     }
@@ -556,9 +583,10 @@ public final class ClusterService implements AutoCloseable {
             addLoad(serverUri, reserved.bytes());
             hazelcast.statementCache().put(key, new HandleState(reserved.query(),
                     reserved.filePaths(), serverUri, reserved.bytes(), true, false,
-                    reserved.parameters()), 10, TimeUnit.MINUTES);
+                    reserved.parameters()), loadReservationSeconds, TimeUnit.SECONDS);
         } else if (reservation != null) {
-            hazelcast.statementCache().put(key, reservation, 10, TimeUnit.MINUTES);
+            hazelcast.statementCache().put(key, reservation, loadReservationSeconds,
+                    TimeUnit.SECONDS);
         }
         return true;
     }

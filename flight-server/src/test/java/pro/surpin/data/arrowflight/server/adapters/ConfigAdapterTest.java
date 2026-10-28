@@ -173,6 +173,21 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void flightLoadReservationSecondsDefaultsToTenMinutesAndRefusesZero() throws IOException {
+        assertEquals(600L, ConfigAdapter.flightLoadReservationSeconds(source(Map.of(), Map.of())));
+        assertEquals(120L, ConfigAdapter.flightLoadReservationSeconds(
+                source(Map.of("flightLoadReservationSeconds", "120"), Map.of())));
+        assertEquals(90L, ConfigAdapter.flightLoadReservationSeconds(
+                source(Map.of("arrowflight.cluster.loadReservationSeconds", "90"), Map.of())));
+        assertEquals(60L, ConfigAdapter.flightLoadReservationSeconds(
+                source(Map.of(), Map.of("FLIGHT_LOAD_RESERVATION_SECONDS", "60"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.flightLoadReservationSeconds(
+                        source(Map.of("flightLoadReservationSeconds", "0"), Map.of())));
+        assertTrue(e.getMessage().contains("flightLoadReservationSeconds"), e.getMessage());
+    }
+
+    @Test
     void flightZeroCopyWritesIsOffByDefaultAndRefusesOtherValues() throws IOException {
         assertFalse(ConfigAdapter.flightZeroCopyWrites(source(Map.of(), Map.of())));
         assertTrue(ConfigAdapter.flightZeroCopyWrites(

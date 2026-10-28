@@ -53,12 +53,19 @@ class ClusterServiceTest {
      * Creates a ClusterService with the required constructor mocks.
      */
     private ClusterService createService(String serverUri) {
+        stubHazelcast();
+        return new ClusterService(hazelcast, APP_CONFIG, serverUri);
+    }
+
+    /**
+     * Lets the Hazelcast mock hand out the map mocks.
+     */
+    private void stubHazelcast() {
         when(hazelcast.serverRegistry()).thenReturn(serverRegistry);
         when(hazelcast.serverHeartbeats()).thenReturn(serverHeartbeats);
         when(hazelcast.statementCache()).thenReturn(statementCache);
         when(hazelcast.serverFiles()).thenReturn(serverFiles);
         when(hazelcast.clusterSecrets()).thenReturn(statementCache);
-        return new ClusterService(hazelcast, APP_CONFIG, serverUri);
     }
 
     /** Verifies a node whose Hazelcast member left is not live, even without a heartbeat entry. */
@@ -325,6 +332,35 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /** Verifies endpoint load reservations live for the configured time, also after a claim. */
+    @Test
+    void loadReservationsUseTheConfiguredLifetime() {
+        stubHazelcast();
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService cs = new ClusterService(hazelcast, APP_CONFIG, "backup", true, 120L);
+        byte[] handle = cs.createEndpointHandle(state);
+        verify(statementCache).put(startsWith("__arrowflight-ticket-load-v1:"), eq(state),
+                eq(120L), eq(java.util.concurrent.TimeUnit.SECONDS));
+
+        when(statementCache.remove(anyString())).thenReturn(state);
+        assertTrue(cs.claimEndpointLoad(handle, state));
+        verify(statementCache, times(2)).put(startsWith("__arrowflight-ticket-load-v1:"), any(),
+                eq(120L), eq(java.util.concurrent.TimeUnit.SECONDS));
+        verify(statementCache, never()).put(startsWith("__arrowflight-ticket-load-v1:"), any(),
+                eq(10L), eq(java.util.concurrent.TimeUnit.MINUTES));
+        cs.close();
+    }
+
+    /** Verifies a lifetime below one second is refused. */
+    @Test
+    void loadReservationLifetimeMustBePositive() {
+        stubHazelcast();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new ClusterService(hazelcast, APP_CONFIG, "s1", false, 0L));
+        assertTrue(e.getMessage().contains("flightLoadReservationSeconds"), e.getMessage());
+    }
+
     /** Backs the registry mock's compute with a real map, as Hazelcast applies it. */
     private Map<String, Long> registryBackedByMap() {
         Map<String, Long> backing = new java.util.concurrent.ConcurrentHashMap<>();
@@ -371,7 +407,7 @@ class ClusterServiceTest {
         org.mockito.ArgumentCaptor<Serializable> moved =
                 org.mockito.ArgumentCaptor.forClass(Serializable.class);
         verify(statementCache, atLeastOnce()).put(startsWith("__arrowflight-ticket-load-v1:"),
-                moved.capture(), eq(10L), eq(java.util.concurrent.TimeUnit.MINUTES));
+                moved.capture(), eq(600L), eq(java.util.concurrent.TimeUnit.SECONDS));
         HandleState reservation = (HandleState) moved.getValue();
         assertEquals("backup", reservation.serverUri());
         assertEquals(100L, reservation.bytes());
