@@ -5,6 +5,11 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-10-28 15:00 - native first.** Integrations must talk Arrow Flight / Flight SQL natively (Arrow batches
+> end to end, parallel endpoints, pushdown), not through a JDBC/ODBC layer, wherever the consumer allows it - as done for
+> StarRocks (native catalog instead of the JDBC bridge), Trino and Spark. JDBC/ODBC stay supported for tools that only
+> speak them. For P5 this means ClickHouse's native `arrowFlight` path, not its JDBC bridge.
+
 P1. **ORC tables in the Hive catalog.** *(Done 2026-10-28; opt-in `hive.orcTables`.)* Today the Hive plugin reads only Parquet and Iceberg tables and skips ORC; most
     production Hive tables are ORC. DuckDB has no usable ORC reader (the community `orc` extension reads local files
     only, no pushdown, no 1.5.6 build). Build a Java reader: Apache `orc-core` (with `hive-storage-api`) reading from HDFS
