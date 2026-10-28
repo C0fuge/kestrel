@@ -8,10 +8,12 @@ import java.util.Map;
 import java.util.Set;
 
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
+import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.config.ConfigKey;
@@ -32,13 +34,14 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.4", SpiVersion.current());
+        assertEquals("1.5", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
         assertTrue(SpiVersion.supports("1.3"));
         assertTrue(SpiVersion.supports("1.4"));
-        assertFalse(SpiVersion.supports("1.5"));
+        assertTrue(SpiVersion.supports("1.5"));
+        assertFalse(SpiVersion.supports("1.6"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -115,6 +118,13 @@ class SpiTest {
         assertThrows(IllegalArgumentException.class, () -> MetricSample.counter("arrowflight_hits", "x", 1));
         assertThrows(IllegalArgumentException.class, () -> MetricSample.gauge("arrowflight_a", "x\ny", 1));
         PluginMetrics.none().register(() -> List.of(counter)).close();
+    }
+
+    @Test
+    void tableFormatsRefuseTimeTravelByDefault() {
+        TableFormat format = (table, metadataLocation, snapshotId) -> java.util.Optional.empty();
+        assertThrows(UnsupportedOperationException.class, () -> format.asOf(
+                new TableName("s", "t"), "file:/m.json", new AsOf.SnapshotId(1)));
     }
 
     @Test

@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import pro.surpin.data.arrowflight.server.plugin.ThreadContext;
+import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -47,6 +48,14 @@ public final class SpiTableFormat implements TableFormat {
             String snapshotId) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
             return delegate.snapshot(table, metadataLocation, snapshotId);
+        }
+    }
+
+    @Override
+    public TableSnapshot asOf(TableName table, String metadataLocation, AsOf point)
+            throws IOException {
+        try (ThreadContext ignored = ThreadContext.of(loader)) {
+            return delegate.asOf(table, metadataLocation, point);
         }
     }
 

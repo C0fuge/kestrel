@@ -26,6 +26,26 @@ public interface TableFormat extends AutoCloseable {
             throws IOException;
 
     /**
+     * Plans the snapshot of a table at an earlier point (time travel), with the columns that
+     * snapshot was written with, as {@link Catalog#asOf}. A catalog pins it later through
+     * {@link #snapshot} with the returned snapshot ID. A point the metadata has no snapshot for
+     * is an error, never the current snapshot. The default refuses.
+     *
+     * @param table table name, as the catalog shows it
+     * @param metadataLocation absolute URI of the table's current metadata file
+     * @param point the point to read
+     * @return snapshot
+     * @throws IOException when the metadata cannot be read
+     * @throws IllegalArgumentException when the metadata has no snapshot for the point
+     * @throws UnsupportedOperationException when the format keeps no snapshot history
+     * @since SPI 1.5
+     */
+    default TableSnapshot asOf(TableName table, String metadataLocation, AsOf point)
+            throws IOException {
+        throw new UnsupportedOperationException("the table format keeps no snapshot history");
+    }
+
+    /**
      * Tells why the data files of a snapshot this format planned cannot each be read on their
      * own, as {@link Catalog#partialReadProblem(TableSnapshot)}.
      *
