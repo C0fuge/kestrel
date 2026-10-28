@@ -1934,3 +1934,4 @@
   question "Item 21 (b)", which now proposes default 1 on <= 4 cores). Push run 40756863551 cancelled in favour of
   package run 40756881178 (green), pre-release `server-1.0.0-936b2d7c366c`. Screening: load test on it with and without
   `-DduckDbThreadsUnderLoad=1`. Next: maintainer queue (2) item 22, (3) 19b step 2, (4) item 16.
+- 2026-10-28 (maintainer, CI build tracking 2cfa23eb62f9): local small p50 -22-28 %, scan x8 +15 %, cluster 22/22 with distributedComplete; small flag S3 TPC-H SF1 JDBC total 1.14 (rounds 1.21 1.05 1.14). 2cfa23e predates the 19b thread-floor fix (9efe670) - recheck on the next tracked build (a110a22 / 936b2d7); a bug only if it stays.
