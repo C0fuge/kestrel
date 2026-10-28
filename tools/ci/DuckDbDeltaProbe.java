@@ -175,6 +175,11 @@ public final class DuckDbDeltaProbe {
                         + lit("file://" + outside + "/t") + ")");
                 refuse("local", "missing dir outside allowed", c, "SELECT count(*) FROM delta_scan('/proc/self')");
             }
+            query("local", "replacement scan inside allowed", c, "SELECT count(*) FROM " + lit(local + "t"));
+            if (!outside.isEmpty()) {
+                refuse("local", "replacement scan outside allowed", c, "SELECT count(*) FROM "
+                        + lit(outside + "/t"));
+            }
             refuse("local", "delta_scan https", c, "SELECT count(*) FROM delta_scan('https://127.0.0.1:9/t')");
             refuse("local", "delta_scan az", c, "SELECT count(*) FROM delta_scan('az://c/t')");
             refuse("local", "delta_scan gs", c, "SELECT count(*) FROM delta_scan('gs://b/t')");
