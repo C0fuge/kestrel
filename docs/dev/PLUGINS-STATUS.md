@@ -260,3 +260,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   4096 kept). CI: Dev CI run 40643089615 (77a8db9) green; Dev CI run 40644229233 (36b2177, package=true) green,
   pre-release `server-1.0.0-36b2177d51b4` (ORC opt-in default off; answers unchanged); SF1 one-file perf run
   40643095396 (77a8db9) = 4-file speed. **P1 closed**; next session starts P2 (LDAP/JWT auth providers).
+- 2026-10-28 (plugins session): P2 step 1 - LDAP / AD login provider, new module `flight-auth-ldap` (857af1d; no
+  SPI or core code change; root `pom.xml` module line, dev-ci `package` assembles `flight-auth-<v>-<sha>.tar.zst`;
+  CHANGELOG, `docs/security/providers.md`, START-NOTES). Local: module 25/25 (`LdapDirectoryTest` 11,
+  `LdapFlightLoginTest` 3, `LdapSettingsTest` 5, `LdapSessionTokenTest` 3, `LdapFlightAuthenticatorTest` 3),
+  Checkstyle + SpotBugs clean. CI: Dev CI run 40651658732 (7f308a6, package=true) green, pre-release
+  `server-1.0.0-7f308a6cdb4d` with the `flight-auth` asset (opt-in provider; existing auth unchanged). That dispatch
+  cancelled the core lane's run 40651083243 (78a2720, same concurrency group); 40651658732 includes 78a2720 and is
+  green. Next: step 2 (provider groups into Ranger, small core hook), then step 3 (JWT).
