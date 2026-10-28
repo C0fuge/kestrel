@@ -1827,3 +1827,11 @@
   (check `iceberg_scan(..., snapshot_from_id =>)` on 1.5.6 for the refused snapshots), item 1b libs pruning (risky
   without a stand: Ranger needs Jersey).
 - 2026-10-28 (maintainer, laptop stand p19b): 19b step 1 measured vs 7562a5bdb7b9 under container limits (4c/8g, 8c/16g, 16c/24g, -Xmx3g, direct 2g; ADBC + raw Flight, HDFS SF10 + S3 pair, 3 rounds each, 0 OOM, 22/22). `duckdb=sizing` shows container cores/memory. Chosen threads 2/2/3, memory_limit 1024/2201/3942 MiB. SF10 17.95/17.94/13.43 s vs 10.71/10.73/9.92 (1.35-1.7x slower); 4 threads + 1 GiB limit 10.11 s (limit neutral, RSS unchanged 3.2-3.9 GB). t8/t16 SF10 -23/-20 % but small c8/c32 p50 1.6-3x worse, RSS +27 % at t16. -> bug-first note.
+- 2026-10-28 (lane 3 session): D2 (c) part 1 merged into `main` (eb82020): `DistributedTwoProcessTlsTest`
+  (`integration`, two server JVMs with TLS + token provider, distributed complete answers equal DuckDB's, merged from
+  both nodes; no-token and forged internal identity refused). Core change, additive and small: optional
+  `dataDirShared` / `FLIGHT_DATA_DIR_SHARED` (default false) declares a local data directory a mount every node reads
+  (`HadoopDataStore` / `HadoopDataStoreProvider` / `StoreRegistry`); README + CHANGELOG. Lane 3 checked 94ad610 (the
+  cut tests of `DistributedClusterIntegrationTest`): it matches the intent - a cut before the peer's schema fails
+  over and merges, after it falls back, and the answer stays exact either way. Package run 40715095069 green,
+  pre-release `server-1.0.0-2cfa23eb62f9`. Details in `LANE3-STATUS.md`.

@@ -14,9 +14,9 @@ D2. Item 18 step 3 - cluster integration test, then a perf test.
     - ~~(b) Perf test~~ *Done 2026-10-28 (see Log):* `DistributedCompletePerfTest`. Decision on D1 follow-up (b):
       no parallel prefetch for now - peer wait is 1-3% of the merged query for the aggregate shapes and 14% for the
       wide ones (one JVM); revisit with a real multi-host run (`-Dperf.rows`, numbers in the Log).
-    - (c) TLS + a real auth provider between two processes (separate JVMs, e.g. a test that starts
-      `HadoopArrowFlightServer` twice with `FLIGHT_TLS_*` and the token provider). ~~Failover to an endpoint's
-      backup location before the single-node fallback~~ *done 2026-10-28 (see Log).*
+    - ~~(c) TLS + a real auth provider between two processes~~ *done 2026-10-28 (see Log):*
+      `DistributedTwoProcessTlsTest`. ~~Failover to an endpoint's backup location before the single-node
+      fallback~~ *done 2026-10-28 (see Log).*
     - Observed: a peer stream cut mid-way hit before the first client batch in both cut tests (DuckDB's arrow scan
       reads peers before emitting), so the after-first-batch error path is only asserted as "error or exact",
       not forced; forcing it needs a cut after DuckDB emitted, e.g. a larger wide projection with a later cut.
@@ -69,3 +69,19 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   f73beb2 was cancelled by the core lane's push fd9f62f, whose Dev CI run 40691933422 (contains both commits) was
   running at session end; not cancelled, so as not to cancel theirs. Next session: confirm a green run and a
   pre-release containing c7e436e (else dispatch package=true on `main`). Next: D2 (c) part 1, two-process TLS + token auth.
+- 2026-10-28 (lane 3 session, 4th): lock 14:44Z (a plain `git fetch origin` hung on the tags in this container;
+  `git fetch --no-tags origin main lane/distributed` works). Confirmed c7e436e in pre-release
+  server-1.0.0-94ad61021d93 (Dev CI 40695407602, package green). D2 (c) part 1 done (eb82020, rebase-merged into
+  `main`): `DistributedTwoProcessTlsTest` (`integration`) starts two `HadoopArrowFlightServer` JVMs with
+  `FLIGHT_TLS_CERT`/`KEY` (self-signed for localhost, generated in the test), `FLIGHT_AUTH_PROVIDER=token`,
+  `distributedComplete=true`, `endpointsPerServer=2`, one Hazelcast cluster; 4 shapes over TLS with the bearer token
+  equal DuckDB's answers over the same files, node 1's log shows `distributedComplete=merged endpoints=4` for each and
+  no fallback/failover (so the peer DoGets went over TLS trusting the node's own certificate, admitted by the
+  internal identity in front of the token authenticator); a call without the token and a forged
+  `x-kestrel-internal-identity` from a member's address are UNAUTHENTICATED (`internalCall=refused`). ~15 s; local
+  5/5 green. Needed and added (additive, default unchanged): `dataDirShared` / `FLIGHT_DATA_DIR_SHARED` declares a
+  local data directory a mount every node reads (NFS), so a multi-process cluster on one directory plans complete
+  answers (the in-JVM tests use a proxy for that). CI 40709875961 green on the branch (859f039, before the rebase onto
+  plugins/catalogs commits); Dev CI 40712744776 green on `main` at 2cfa23e (contains eb82020); package=true run
+  40715095069 on 2cfa23e green, pre-release server-1.0.0-2cfa23eb62f9. Checked the core lane's 94ad610 (cut tests accept a failover + merge): matches
+  the intent. D2 is complete. Next: D3.
