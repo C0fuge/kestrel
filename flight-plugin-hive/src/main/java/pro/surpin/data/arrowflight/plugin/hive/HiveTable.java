@@ -88,6 +88,25 @@ record HiveTable(String database, String name, Kind kind, String location,
      */
     static Classified classify(Table table, List<String> roots, boolean icebergFormat,
             boolean orcTables, boolean textTables, boolean avroTables) {
+        return classify(table, roots, icebergFormat, orcTables, textTables, avroTables,
+                AvroFormat.NO_URLS);
+    }
+
+    /**
+     * Classifies a metastore table, reading Avro schema locations with a reader.
+     *
+     * @param table metastore table
+     * @param roots readable roots
+     * @param icebergFormat whether Iceberg tables can be read
+     * @param orcTables whether ORC tables are shown
+     * @param textTables whether text tables are shown
+     * @param avroTables whether Avro tables are shown
+     * @param avroUrls reads {@code avro.schema.url} locations
+     * @return the table, or why it is skipped or hidden
+     */
+    static Classified classify(Table table, List<String> roots, boolean icebergFormat,
+            boolean orcTables, boolean textTables, boolean avroTables,
+            AvroFormat.SchemaReader avroUrls) {
         String type = table.getTableType() == null ? "" : table.getTableType();
         Map<String, String> params = table.getParameters() == null ? Map.of() : table.getParameters();
         if (type.toUpperCase(Locale.ROOT).contains("VIEW")) {
@@ -155,7 +174,8 @@ record HiveTable(String database, String name, Kind kind, String location,
         AvroFormat avroFormat = null;
         try {
             if (avro) {
-                avroFormat = AvroFormat.of(sd.getSerdeInfo().getParameters(), params, sd.getCols());
+                avroFormat = AvroFormat.of(sd.getSerdeInfo().getParameters(), params, sd.getCols(),
+                        avroUrls);
             }
             if (text) {
                 JsonLayout json = json(sd);

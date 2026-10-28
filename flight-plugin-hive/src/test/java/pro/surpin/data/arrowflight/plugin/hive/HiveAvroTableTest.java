@@ -53,6 +53,10 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  */
 class HiveAvroTableTest {
 
+    /** Schema of the table read by {@code avro.schema.url}. */
+    private static final String BY_URL = "{\"type\":\"record\",\"name\":\"u\",\"fields\":["
+            + "{\"name\":\"id\",\"type\":\"int\"},{\"name\":\"name\",\"type\":\"string\"}]}";
+
     @TempDir
     static Path dir;
     static IsolatedHms hms;
@@ -103,8 +107,32 @@ class HiveAvroTableTest {
 
         hms.createTable("avr", "tiny", "file:" + dir.resolve("lake/tiny"), "t tinyint", "", "avro",
                 null);
+        Files.createDirectories(dir.resolve("schemas"));
+        Files.writeString(dir.resolve("schemas/a.avsc"), AvroFormat.fromColumns(
+                AvroFormatTest.columns("i int")).toString());
         hms.createTable("avr", "url", "file:" + dir.resolve("lake/url"), "i int", "", "avro",
                 Map.of(AvroFormat.URL, "file:" + dir.resolve("schemas/a.avsc")));
+        Path schemas = Files.createDirectories(dir.resolve("lake/schemas"));
+        Schema byUrl = AvroFormat.parse(BY_URL);
+        Files.writeString(schemas.resolve("byurl.avsc"), BY_URL);
+        Path byUrlData = Files.createDirectories(dir.resolve("lake/byurl"));
+        GenericRecord one = new GenericData.Record(byUrl);
+        one.put("id", 1);
+        one.put("name", "a");
+        write(byUrlData.resolve("000000_0"), byUrl, CodecFactory.nullCodec(), one);
+        hms.createTable("avr", "byurl", "file:" + byUrlData, "id int;name string", "", "avro",
+                Map.of(AvroFormat.URL, "file:" + schemas.resolve("byurl.avsc")));
+        hms.createTable("avr", "nourl", "file:" + dir.resolve("lake/nourl"), "id int", "", "avro",
+                Map.of("serde:" + AvroFormat.URL, "file:" + schemas.resolve("missing.avsc")));
+        Path purl = Files.createDirectories(dir.resolve("lake/purl"));
+        hms.createTable("avr", "purl", "file:" + purl, "id int;name string", "p int", "avro", null);
+        Schema purlSchema = AvroFormat.fromColumns(AvroFormatTest.columns("id int;name string"));
+        Files.writeString(schemas.resolve("purl.avsc"), purlSchema.toString());
+        write(file(hms.addPartition("avr", "purl", List.of("1"), null, Map.of(AvroFormat.URL,
+                "file:" + schemas.resolve("purl.avsc"))), "a.avro"), purlSchema,
+                CodecFactory.nullCodec(), row2(purlSchema, 5, "e"));
+        write(file(hms.addPartition("avr", "purl", List.of("2"), null), "b.avro"), purlSchema,
+                CodecFactory.nullCodec(), row2(purlSchema, 6, "f"));
         hms.createTable("avr", "stale", "file:" + dir.resolve("lake/stale"), "i int;j int", "",
                 "avro", Map.of("serde:" + AvroFormat.LITERAL, AvroFormatTest.ALL_TYPES));
         hms.createTable("avr", "other", "file:" + dir.resolve("lake/other"), "id int", "p int",
@@ -126,7 +154,9 @@ class HiveAvroTableTest {
             List<String> tables = catalog.tables("avr");
             assertTrue(tables.containsAll(List.of("lit", "parted", "other")), tables.toString());
             assertFalse(tables.contains("tiny"), "Avro has no tinyint: " + tables);
-            assertFalse(tables.contains("url"), "avro.schema.url is not read: " + tables);
+            assertFalse(tables.contains("url"), "avro.schema.url outside the roots: " + tables);
+            assertFalse(tables.contains("nourl"), "missing avro.schema.url file: " + tables);
+            assertTrue(tables.containsAll(List.of("byurl", "purl")), tables.toString());
             assertFalse(tables.contains("stale"), "the literal is not the columns: " + tables);
             TableSnapshot lit = catalog.current(new TableName("avr", "lit")).orElseThrow();
             assertEquals(new ReadSpec.ArrowStream("avro"), lit.read());
@@ -180,6 +210,42 @@ class HiveAvroTableTest {
                     e.getMessage());
             assertEquals(0, allocator.getAllocatedMemory());
         }
+    }
+
+    @Test
+    void schemaUrlsUnderTheRootsAreReadAndReadAgainWhenTheyChange() throws Exception {
+        try (Catalog catalog = open(Map.of("avroTables", "true", "namesTtlSeconds", "0",
+                "metadataTtlSeconds", "0"));
+                BufferAllocator allocator = new RootAllocator()) {
+            TableName name = new TableName("avr", "byurl");
+            TableSnapshot first = catalog.current(name).orElseThrow();
+            assertEquals(List.of("1|a"), read(catalog, allocator, first, List.of("id", "name")));
+            assertEquals(List.of("5|e|1", "6|f|2"), read(catalog, allocator,
+                    catalog.current(new TableName("avr", "purl")).orElseThrow(),
+                    List.of("id", "name", "p")));
+            Path schema = dir.resolve("lake/schemas/byurl.avsc");
+            // Another field name than the metastore's: the table is no longer shown.
+            Files.writeString(schema, BY_URL.replace("\"name\":\"name\"", "\"name\":\"label\""));
+            assertEquals(Optional.empty(), catalog.current(name));
+            IOException e = assertThrows(IOException.class,
+                    () -> catalog.exportArrowScan(first, first.files(),
+                            new ArrowScan(List.of("id"), List.of()), 0L, allocator));
+            assertTrue(e.getMessage().contains("changed"), e.getMessage());
+            // A field doc (column comment) changes the text, not what is read: shown again.
+            Files.writeString(schema, BY_URL.replace("\"type\":\"int\"",
+                    "\"type\":\"int\",\"doc\":\"key\""));
+            TableSnapshot again = catalog.current(name).orElseThrow();
+            assertEquals(List.of("1|a"), read(catalog, allocator, again, List.of("id", "name")));
+            Files.writeString(schema, BY_URL);
+            assertEquals(0, allocator.getAllocatedMemory());
+        }
+    }
+
+    private static GenericRecord row2(Schema schema, int id, String name) {
+        GenericRecord row = new GenericData.Record(schema);
+        row.put("id", id);
+        row.put("name", name);
+        return row;
     }
 
     private static Schema inner(Schema record, String field) {

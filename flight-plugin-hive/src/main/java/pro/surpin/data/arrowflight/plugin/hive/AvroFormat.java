@@ -19,7 +19,8 @@ import org.apache.orc.TypeDescription;
  * The reader schema of a Hive Avro table ({@code AvroSerDe}), found as Hive 3.1.3 finds it: the
  * {@code avro.schema.literal} property (table properties override serde properties), else a
  * schema made from the declared columns as Hive's {@code TypeInfoToSchema} makes it (every field
- * a union with null, default null). {@code avro.schema.url} is not read yet. Hive takes a
+ * a union with null, default null). An {@code avro.schema.url} (when no literal is set) is read
+ * through a {@link SchemaReader}: the catalog reads files under its roots only. Hive takes a
  * table's columns from that schema ({@code SchemaToTypeInfo}); the catalog shows a table only
  * when they are the metastore's columns, so a stale metastore never misnames or mistypes values.
  *
@@ -36,6 +37,26 @@ record AvroFormat(String schemaJson, boolean tableLevel) {
     private static final String NONE = "none";
     private static final int MAX_PRECISION = 38;
 
+    /** Refuses every schema location (no store to read them from). */
+    static final SchemaReader NO_URLS = url -> {
+        throw new IllegalArgumentException(URL + " is not read here (set " + LITERAL + ")");
+    };
+
+    /** Reads the schema text an {@code avro.schema.url} names. */
+    @FunctionalInterface
+    interface SchemaReader {
+
+        /**
+         * Reads a schema file.
+         *
+         * @param url the property's value
+         * @return the schema text
+         * @throws IllegalArgumentException when it cannot or may not be read; the message says
+         *     why
+         */
+        String read(String url);
+    }
+
     /**
      * Finds a table's reader schema and checks it against the declared columns.
      *
@@ -48,6 +69,23 @@ record AvroFormat(String schemaJson, boolean tableLevel) {
      */
     static AvroFormat of(Map<String, String> serde, Map<String, String> table,
             List<FieldSchema> columns) {
+        return of(serde, table, columns, NO_URLS);
+    }
+
+    /**
+     * Finds a table's reader schema, reading an {@code avro.schema.url} with a reader, and
+     * checks it against the declared columns.
+     *
+     * @param serde serde properties
+     * @param table table properties
+     * @param columns declared data columns
+     * @param urls reads schema locations
+     * @return the format
+     * @throws IllegalArgumentException when Hive would not read the schema, the reader cannot
+     *     read it or its columns are not the declared ones
+     */
+    static AvroFormat of(Map<String, String> serde, Map<String, String> table,
+            List<FieldSchema> columns, SchemaReader urls) {
         List<FieldSchema> declared = columns == null ? List.of() : columns;
         Map<String, String> props = new HashMap<>(serde == null ? Map.of() : serde);
         if (table != null) {
@@ -58,9 +96,11 @@ record AvroFormat(String schemaJson, boolean tableLevel) {
         if (set(props.get(LITERAL))) {
             schema = parse(props.get(LITERAL));
         } else if (props.containsKey(URL)) {
-            throw new IllegalArgumentException(NONE.equals(props.get(URL))
-                    ? "Avro table without a schema (" + URL + "=none)"
-                    : URL + " is not read yet (set " + LITERAL + ")");
+            String url = props.get(URL);
+            if (NONE.equals(url)) {
+                throw new IllegalArgumentException("Avro table without a schema (" + URL + "=none)");
+            }
+            schema = parse(urls.read(url), URL + " " + url);
         } else {
             schema = fromColumns(declared);
         }
@@ -73,14 +113,16 @@ record AvroFormat(String schemaJson, boolean tableLevel) {
      *
      * @param serde the partition's serde properties
      * @param columns the partition's data columns
+     * @param urls reads schema locations
      * @return the partition's format; this format when a table property names the schema
      * @throws IllegalArgumentException when the partition's schema is not read
      */
-    AvroFormat forPartition(Map<String, String> serde, List<FieldSchema> columns) {
+    AvroFormat forPartition(Map<String, String> serde, List<FieldSchema> columns,
+            SchemaReader urls) {
         if (tableLevel) {
             return this;
         }
-        AvroFormat partition = of(serde, Map.of(), columns);
+        AvroFormat partition = of(serde, Map.of(), columns, urls);
         return new AvroFormat(partition.schemaJson(), false);
     }
 
@@ -101,10 +143,14 @@ record AvroFormat(String schemaJson, boolean tableLevel) {
      * @throws IllegalArgumentException when it does not parse
      */
     static Schema parse(String json) {
+        return parse(json, LITERAL);
+    }
+
+    private static Schema parse(String json, String source) {
         try {
             return new Schema.Parser().setValidateDefaults(false).parse(json);
         } catch (AvroRuntimeException e) {
-            throw new IllegalArgumentException("unreadable " + LITERAL + ": " + e.getMessage(), e);
+            throw new IllegalArgumentException("unreadable " + source + ": " + e.getMessage(), e);
         }
     }
 

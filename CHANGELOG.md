@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Hive plugin: Avro tables whose schema is given by `avro.schema.url` (under `hive.avroTables`; such tables were
+  skipped). The schema file is read through the server's stores only when it lies under `hive.roots` (an HTTP URL or
+  a file elsewhere keeps the table skipped with a log reason), at most 4 MiB, kept per location and read again when
+  its size or modification time changes; a literal still wins over a URL, as in Hive. A partition's own URL is read
+  the same way; a changed schema file makes queries planned before it fail clearly (P4).
 - Iceberg time travel to snapshots whose files cannot be read one by one (deletion vectors, renamed nested fields;
   item 3 (c)): such a snapshot is now read by DuckDB's `iceberg_scan(..., snapshot_from_id => <id>)` instead of
   being refused, and only when DuckDB reads it with the snapshot's own columns (names and types, nested field names

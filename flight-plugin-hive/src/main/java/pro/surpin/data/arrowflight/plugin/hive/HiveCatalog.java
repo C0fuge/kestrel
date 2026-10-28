@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.plugin.hive;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -65,6 +66,10 @@ final class HiveCatalog implements Catalog {
             Math.min(4, Runtime.getRuntime().availableProcessors()));
     /** Most bytes of an ORC file read as one read-ahead unit (a group of its stripes). */
     private static final long ORC_RANGE_BYTES = 32L << 20;
+    /** Largest avro.schema.url file read. */
+    private static final long MAX_AVRO_SCHEMA_BYTES = 4L << 20;
+    /** Schema files kept before the cache starts again. */
+    private static final int MAX_AVRO_SCHEMAS = 10_000;
 
     private final HiveSettings settings;
     private final Metastore metastore;
@@ -81,6 +86,20 @@ final class HiveCatalog implements Catalog {
     private final Map<String, Cached<Boolean>> partitionsOutside = new ConcurrentHashMap<>();
     private final Map<TableName, Object> locks = new ConcurrentHashMap<>();
     private final Set<String> logged = ConcurrentHashMap.newKeySet();
+    /** Schema files of avro.schema.url by location, read again when their size or time changes. */
+    private final Map<String, SchemaFile> avroSchemas = new ConcurrentHashMap<>();
+    /** Reads avro.schema.url locations under the roots. */
+    private final AvroFormat.SchemaReader avroUrls = this::avroSchema;
+
+    /**
+     * An Avro schema file as last read.
+     *
+     * @param size file size
+     * @param modificationTime file time
+     * @param text file content
+     */
+    private record SchemaFile(long size, long modificationTime, String text) {
+    }
 
     /**
      * A value with its refresh deadline.
@@ -367,7 +386,7 @@ final class HiveCatalog implements Catalog {
      */
     private Optional<HiveTable> classified(Table table) {
         HiveTable.Classified result = HiveTable.classify(table, settings.roots(), iceberg != null,
-                settings.orcTables(), settings.textTables(), settings.avroTables());
+                settings.orcTables(), settings.textTables(), settings.avroTables(), avroUrls);
         String name = table.getDbName() + "." + table.getTableName();
         if (result.skipped() != null && logged.add("skip:" + name + ":" + result.skipped())) {
             LOGGER.info("node={} hive=tableSkipped table={} reason='{}'", node, name, result.skipped());
@@ -493,7 +512,7 @@ final class HiveCatalog implements Catalog {
      * @param partition one of its partitions
      * @throws IOException when the partition is read otherwise than the table
      */
-    private static void checkAvroPartition(HiveTable hive, Partition partition) throws IOException {
+    private void checkAvroPartition(HiveTable hive, Partition partition) throws IOException {
         if (hive.kind() != HiveTable.Kind.AVRO || partition.getSd() == null) {
             return;
         }
@@ -505,7 +524,7 @@ final class HiveCatalog implements Catalog {
                 Map<String, String> serde = partition.getSd().getSerdeInfo() == null ? Map.of()
                         : partition.getSd().getSerdeInfo().getParameters();
                 // Schema.equals ignores docs (column comments) and compares what is read.
-                problem = hive.avroFormat().forPartition(serde, partition.getSd().getCols())
+                problem = hive.avroFormat().forPartition(serde, partition.getSd().getCols(), avroUrls)
                         .schema().equals(hive.avroFormat().schema()) ? null
                         : "has another Avro schema than the table";
             } catch (IllegalArgumentException e) {
@@ -537,6 +556,58 @@ final class HiveCatalog implements Catalog {
         }
         throw new IOException("The table " + snapshot.name() + " is gone or its columns or format"
                 + " changed since the query was planned");
+    }
+
+    /**
+     * Reads the schema file an {@code avro.schema.url} names, as Hive reads it through its file
+     * system, but only under the catalog's roots (never an HTTP URL or another file). The text is
+     * kept per location and read again when the file's size or time changes.
+     *
+     * @param url the property's value
+     * @return the schema text
+     * @throws IllegalArgumentException when it lies outside the roots, is too large or cannot be
+     *     read
+     */
+    private String avroSchema(String url) {
+        String location = HiveLocations.normalize(url);
+        if (!HiveLocations.underAny(location, settings.roots())) {
+            throw new IllegalArgumentException(AvroFormat.URL + " " + url + " lies outside the"
+                    + " catalog's roots (only schema files under hive.roots are read)");
+        }
+        Located located;
+        DataFile file;
+        try {
+            located = stores.locate(location);
+            file = located.store().file(located.relativePath());
+        } catch (IOException | RuntimeException e) {
+            throw unreadableSchema(url, e);
+        }
+        SchemaFile known = avroSchemas.get(location);
+        if (known != null && known.size() == file.size()
+                && known.modificationTime() == file.modificationTime()) {
+            return known.text();
+        }
+        if (file.size() > MAX_AVRO_SCHEMA_BYTES) {
+            throw new IllegalArgumentException(AvroFormat.URL + " " + url + " has " + file.size()
+                    + " bytes, more than " + MAX_AVRO_SCHEMA_BYTES);
+        }
+        byte[] bytes = new byte[(int) file.size()];
+        try {
+            located.store().open(file).readFully(0, bytes, 0, bytes.length);
+        } catch (IOException | RuntimeException e) {
+            throw unreadableSchema(url, e);
+        }
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        if (avroSchemas.size() >= MAX_AVRO_SCHEMAS) {
+            avroSchemas.clear();
+        }
+        avroSchemas.put(location, new SchemaFile(file.size(), file.modificationTime(), text));
+        return text;
+    }
+
+    private static IllegalArgumentException unreadableSchema(String url, Exception cause) {
+        return new IllegalArgumentException("Unable to read schema from given path: " + url + " ("
+                + cause.getMessage() + ")", cause);
     }
 
     /**

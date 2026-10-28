@@ -91,6 +91,39 @@ class AvroFormatTest {
     }
 
     @Test
+    void schemaUrlsAreReadWhenNoLiteralIsSet() {
+        List<String> read = new ArrayList<>();
+        AvroFormat.SchemaReader urls = url -> {
+            read.add(url);
+            return ALL_TYPES;
+        };
+        AvroFormat table = AvroFormat.of(Map.of(), Map.of(AvroFormat.URL, "hdfs://nn/a.avsc"),
+                columns(ALL_COLUMNS), urls);
+        assertTrue(table.tableLevel());
+        assertEquals(AvroFormat.parse(ALL_TYPES), table.schema());
+        assertEquals(List.of("hdfs://nn/a.avsc"), read);
+        // A literal wins over a location (also over one in the table properties), as in Hive.
+        AvroFormat literal = AvroFormat.of(Map.of(AvroFormat.LITERAL, ALL_TYPES),
+                Map.of(AvroFormat.URL, "hdfs://nn/b.avsc"), columns(ALL_COLUMNS), urls);
+        assertEquals(AvroFormat.parse(ALL_TYPES), literal.schema());
+        assertEquals(1, read.size());
+        // A serde location: partitions read their own.
+        AvroFormat serde = AvroFormat.of(Map.of(AvroFormat.URL, "hdfs://nn/c.avsc"), Map.of(),
+                columns(ALL_COLUMNS), urls);
+        assertFalse(serde.tableLevel());
+        assertEquals(serde, serde.forPartition(Map.of(AvroFormat.URL, "hdfs://nn/d.avsc"),
+                columns(ALL_COLUMNS), urls));
+        assertEquals(List.of("hdfs://nn/a.avsc", "hdfs://nn/c.avsc", "hdfs://nn/d.avsc"), read);
+        assertEquals(table, table.forPartition(Map.of(), columns("i int"), AvroFormat.NO_URLS));
+        IllegalArgumentException failed = assertThrows(IllegalArgumentException.class,
+                () -> AvroFormat.of(Map.of(), Map.of(AvroFormat.URL, "hdfs://nn/e.avsc"),
+                        columns(ALL_COLUMNS), url -> {
+                            throw new IllegalArgumentException("Unable to read " + url);
+                        }));
+        assertEquals("Unable to read hdfs://nn/e.avsc", failed.getMessage());
+    }
+
+    @Test
     void columnsGiveHiveTypeInfoToSchema() {
         String columns = "i int;s string;d decimal(10,2);dt date;ts timestamp;b boolean;c char(3);"
                 + "v varchar(5);bin binary;l bigint;f float;db double;a array<int>;"
@@ -122,6 +155,10 @@ class AvroFormatTest {
     @Test
     void schemasHiveDoesNotReadOrThatDifferFromTheColumnsAreRefused() {
         assertRefused(Map.of(AvroFormat.URL, "hdfs://nn/schemas/a.avsc"), ALL_COLUMNS, "not read");
+        IllegalArgumentException bad = assertThrows(IllegalArgumentException.class,
+                () -> AvroFormat.of(Map.of(), Map.of(AvroFormat.URL, "hdfs://nn/a.avsc"),
+                        columns("i int"), url -> "not json"));
+        assertTrue(bad.getMessage().contains("hdfs://nn/a.avsc"), bad.getMessage());
         assertRefused(Map.of(AvroFormat.URL, "none"), ALL_COLUMNS, "without a schema");
         assertRefused(Map.of(AvroFormat.LITERAL, ALL_TYPES), "i int", "fields");
         assertRefused(Map.of(AvroFormat.LITERAL, ALL_TYPES), ALL_COLUMNS.replace("i int", "j int"),
