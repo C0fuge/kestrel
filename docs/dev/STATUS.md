@@ -2055,3 +2055,23 @@
   distributed tests take ports from the new `TestPorts.free()` (below the ephemeral range, distinct in the JVM)
   instead of `ServerSocket(0)`, so outgoing connections can no longer take a test server's port before it binds.
   New tests needing a free port should use it. Details in `LANE3-STATUS.md`.
+- 2026-10-28 (cloud session, core lane): item 22 shared DuckDB step (c) (17f4eca + test fix 881bbf7).
+  `streaming_buffer_size` is LOCAL in DuckDB 1.5.6. It cannot be set with SET GLOBAL, it is refused as a config
+  option at open, `duplicate()` does not inherit it, and `lock_configuration` freezes it. So with
+  `duckDbSharedDatabase` the shared DuckDB now opens `duckDbSharedBufferedConnections` (new optional setting, env
+  `DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64, 0 = ignore the buffer size as before) duplicates with the buffer
+  set before the lockdown. They are locked like every other connection afterwards (tested). `BufferedConnections`
+  lends them to worker sessions. When a session's thread ends, its connection comes back: catalog detached,
+  temporary views dropped; if either fails, the connection is closed. Sessions beyond the pool get DuckDB's default
+  buffer and one WARN `duckdb=sharedStreamingBuffer exhausted=true`. A replaced shared DuckDB gets a pool of its own,
+  and the old pool closes. The startup line `duckdb=sharedDatabaseOpened` shows `bufferedConnections=` and
+  `streamingBufferSize=`. Without `duckDbSharedDatabase` or `duckDbStreamingBufferSize` nothing changes. Tests:
+  `DuckDbSharedDatabaseTest` (+3: buffer reaches pooled sessions, a further session gets the default, a connection
+  comes back without temporary views or catalog; replacement; off cases) and `ConfigAdapterTest`.
+  `SharedDatabaseIntegrationTest` now also runs with a 64KB buffer on 2 pooled connections for 4 parallel streams
+  (same answers in both modes). Also fixed a test race: `awaitTermination` returned before the worker thread was
+  dead, so `replacedDescribeDatabaseAndEndedThreads` failed once locally; the tests now join the threads. Dev CI
+  package run 40789295791 green (my push run cancelled by it), pre-release `server-1.0.0-881bbf73e946`.
+  **Screening:** 4/8-stream scans with `-DduckDbSharedDatabase=true -DduckDbStreamingBufferSize=64MiB` vs shared
+  alone (item 16 found 64MiB within noise per DuckDB; shared mode may differ). Next: shared DuckDB steps (b) (stand)
+  and (d) (decision); no other open core code step is known short of the maintainer's answers.
