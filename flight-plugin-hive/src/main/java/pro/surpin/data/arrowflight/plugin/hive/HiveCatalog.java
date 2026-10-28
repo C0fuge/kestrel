@@ -43,9 +43,9 @@ import pro.surpin.data.arrowflight.spi.storage.Stores;
 
 /**
  * A Hive Metastore as the server sees it: databases are schemas (with an optional prefix),
- * Parquet tables are tables, and so are ORC tables with hive.orcTables and text tables with
- * hive.textTables (the catalog reads their files itself and hands the rows over as Arrow
- * streams). A table's snapshot is its files now: the files in the table
+ * Parquet tables are tables, and so are ORC tables with hive.orcTables, text tables with
+ * hive.textTables and Avro tables with hive.avroTables (the catalog reads their files itself and
+ * hands the rows over as Arrow streams). A table's snapshot is its files now: the files in the table
  * location, or for a partitioned table the files in every partition's location as the metastore
  * names them (never guessed from directories), each with its partition values from the
  * metastore. Every location must lie under the catalog's roots before anything below it is
@@ -228,6 +228,9 @@ final class HiveCatalog implements Catalog {
             if (hive.kind() == HiveTable.Kind.TEXT) {
                 format = TableFilesReader.text(hive.dataColumns(), hive.textFormat(),
                         ORC_BATCH_ROWS);
+            } else if (hive.kind() == HiveTable.Kind.AVRO) {
+                format = TableFilesReader.avro(hive.dataColumns(), hive.avroFormat(),
+                        ORC_BATCH_ROWS);
             } else {
                 Map<String, TypeDescription> types = new HashMap<>();
                 for (OrcArrowReader.Column column : hive.dataColumns()) {
@@ -364,7 +367,7 @@ final class HiveCatalog implements Catalog {
      */
     private Optional<HiveTable> classified(Table table) {
         HiveTable.Classified result = HiveTable.classify(table, settings.roots(), iceberg != null,
-                settings.orcTables(), settings.textTables());
+                settings.orcTables(), settings.textTables(), settings.avroTables());
         String name = table.getDbName() + "." + table.getTableName();
         if (result.skipped() != null && logged.add("skip:" + name + ":" + result.skipped())) {
             LOGGER.info("node={} hive=tableSkipped table={} reason='{}'", node, name, result.skipped());
@@ -412,6 +415,7 @@ final class HiveCatalog implements Catalog {
                     continue;
                 }
                 checkTextPartition(hive, partition);
+                checkAvroPartition(hive, partition);
                 locations.put(location, values(hive, partition));
             }
             recordPartitionsOutside(hive, outside);
@@ -434,7 +438,7 @@ final class HiveCatalog implements Catalog {
     }
 
     /**
-     * Tells how the server reads a Parquet, ORC or text table.
+     * Tells how the server reads a Parquet, ORC, text or Avro table.
      *
      * @param hive table
      * @return read specification
@@ -443,6 +447,7 @@ final class HiveCatalog implements Catalog {
         return switch (hive.kind()) {
             case ORC -> new ReadSpec.ArrowStream("orc");
             case TEXT -> new ReadSpec.ArrowStream("text");
+            case AVRO -> new ReadSpec.ArrowStream("avro");
             default -> new ReadSpec.ParquetFiles(false);
         };
     }
@@ -480,7 +485,41 @@ final class HiveCatalog implements Catalog {
     }
 
     /**
-     * Finds the ORC or text table of a snapshot with the snapshot's columns.
+     * Refuses a partition of an Avro table that Hive reads with another schema than the table's:
+     * one with another storage format, or, unless a table property names the schema, whose
+     * own schema property or columns give another reader schema.
+     *
+     * @param hive table
+     * @param partition one of its partitions
+     * @throws IOException when the partition is read otherwise than the table
+     */
+    private static void checkAvroPartition(HiveTable hive, Partition partition) throws IOException {
+        if (hive.kind() != HiveTable.Kind.AVRO || partition.getSd() == null) {
+            return;
+        }
+        String problem;
+        if (!HiveTable.avro(partition.getSd())) {
+            problem = "has another storage format";
+        } else {
+            try {
+                Map<String, String> serde = partition.getSd().getSerdeInfo() == null ? Map.of()
+                        : partition.getSd().getSerdeInfo().getParameters();
+                // Schema.equals ignores docs (column comments) and compares what is read.
+                problem = hive.avroFormat().forPartition(serde, partition.getSd().getCols())
+                        .schema().equals(hive.avroFormat().schema()) ? null
+                        : "has another Avro schema than the table";
+            } catch (IllegalArgumentException e) {
+                problem = e.getMessage();
+            }
+        }
+        if (problem != null) {
+            throw new IOException("Partition " + partition.getValues() + " of Avro table "
+                    + hive.qualified() + " " + problem + ": not read");
+        }
+    }
+
+    /**
+     * Finds the ORC, text or Avro table of a snapshot with the snapshot's columns.
      *
      * @param snapshot snapshot this catalog returned
      * @return the table
@@ -490,7 +529,8 @@ final class HiveCatalog implements Catalog {
         for (boolean fresh : new boolean[] {false, true}) {
             Optional<HiveTable> hive = hiveTable(snapshot.name(), fresh);
             if (hive.isPresent() && (hive.get().kind() == HiveTable.Kind.ORC
-                    || hive.get().kind() == HiveTable.Kind.TEXT)
+                    || hive.get().kind() == HiveTable.Kind.TEXT
+                    || hive.get().kind() == HiveTable.Kind.AVRO)
                     && hive.get().schemaId().equals(snapshot.snapshotId())) {
                 return hive.get();
             }

@@ -286,7 +286,7 @@ class HiveCatalogTest {
         assertFalse(HiveLocations.underAny("/a/bc", List.of("/a/b")));
         assertFalse(HiveLocations.underAny("/a/b/../c", List.of("/a/b")));
         assertNull(HiveTable.classify(new org.apache.hadoop.hive.metastore.api.Table(), List.of("/a"),
-                false, false, false).table());
+                false, false, false, false).table());
     }
 
     private static boolean atLeast(String version, int major, int minor) {

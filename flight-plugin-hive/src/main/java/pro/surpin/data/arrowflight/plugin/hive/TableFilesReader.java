@@ -29,9 +29,9 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
 
 /**
- * Reads the files of one table scan (ORC or text) one after the other as one Arrow stream: the
+ * Reads the files of one table scan (ORC, text or Avro) one after the other as one Arrow stream: the
  * requested columns in the requested order, data columns as the format's reader
- * ({@link OrcArrowReader}, {@link TextArrowReader}) reads them and partition
+ * ({@link OrcArrowReader}, {@link TextArrowReader}, {@link AvroArrowReader}) reads them and partition
  * columns as text, a constant per file from its partition values (NULL when missing). An ORC file
  * larger than a quarter of {@code rangeBytes} is read as consecutive byte ranges, each a group of whole stripes
  * from the file's footer of at least its size over {@code readAhead}, at most about
@@ -39,7 +39,7 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * the first range starts at 0 and the last is open-ended, so the ranges cover the file whatever
  * its footer or listed size say). Up to {@code readAhead} ranges are decoded at once on the executor's threads, each a few
  * batches ahead, and their batches are handed over in file and range order, so the stream is the
- * same as a file-by-file read; a text file is one range. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
+ * same as a file-by-file read; a text or Avro file is one range. The stream's callbacks run on DuckDB's threads and the decoding on the executor's, so
  * both set the plugin's context class loader, which Hadoop and ORC load classes from.
  */
 final class TableFilesReader extends ArrowReader {
@@ -392,6 +392,41 @@ final class TableFilesReader extends ArrowReader {
                     List<String> projection, long offset, long length) throws IOException {
                 return new TextArrowReader(allocator, file, location, dataColumns, projection,
                         textFormat, batchSize);
+            }
+        };
+    }
+
+    /**
+     * Reads the data files of a Hive Avro table, each as one range.
+     *
+     * @param dataColumns the table's data columns
+     * @param avroFormat the table's reader schema
+     * @param batchSize rows per batch
+     * @return the format
+     */
+    static Format avro(List<OrcArrowReader.Column> dataColumns, AvroFormat avroFormat,
+            int batchSize) {
+        return new Format() {
+            @Override
+            public String name() {
+                return "Avro";
+            }
+
+            @Override
+            public boolean splits() {
+                return false;
+            }
+
+            @Override
+            public List<Long> rangeStarts(ReadableFile file, String location, long target) {
+                return List.of();
+            }
+
+            @Override
+            public ArrowReader open(BufferAllocator allocator, ReadableFile file, String location,
+                    List<String> projection, long offset, long length) throws IOException {
+                return new AvroArrowReader(allocator, file, location, dataColumns, projection,
+                        avroFormat, batchSize);
             }
         };
     }

@@ -412,14 +412,20 @@ final class JsonRows {
      * @param length most code points
      * @return the text, cut
      */
-    private static String cut(String text, int length) {
+    static String cut(String text, int length) {
         if (length > 0 && text.codePointCount(0, text.length()) > length) {
             return text.substring(0, text.offsetByCodePoints(0, length));
         }
         return text;
     }
 
-    private static String stripEnd(String text) {
+    /**
+     * Drops a text's trailing spaces, as Hive's {@code HiveChar.getStrippedValue}.
+     *
+     * @param text the text
+     * @return the text without trailing spaces
+     */
+    static String stripEnd(String text) {
         int end = text.length();
         while (end > 0 && text.charAt(end - 1) == ' ') {
             end--;

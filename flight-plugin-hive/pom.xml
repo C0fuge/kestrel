@@ -161,13 +161,13 @@
             </exclusions>
         </dependency>
 
-        <!-- Tests run a real metastore (Hive 3.1.3 on embedded Derby) in-process: its server
-             libraries, test scope only (and target/fixture-libs for the server's tests). -->
+        <!-- Jackson 2: Avro's at runtime (its version); the in-process test metastore runs on it
+             too. -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.12.0</version>
-            <scope>test</scope>
+            <version>2.17.2</version>
+            <scope>compile</scope>
             <exclusions>
                 <exclusion>
                     <groupId>*</groupId>
@@ -178,8 +178,8 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>2.12.0</version>
-            <scope>test</scope>
+            <version>2.17.2</version>
+            <scope>compile</scope>
             <exclusions>
                 <exclusion>
                     <groupId>*</groupId>
@@ -190,8 +190,8 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-core</artifactId>
-            <version>2.12.0</version>
-            <scope>test</scope>
+            <version>2.17.2</version>
+            <scope>compile</scope>
             <exclusions>
                 <exclusion>
                     <groupId>*</groupId>
@@ -199,6 +199,8 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- Tests run a real metastore (Hive 3.1.3 on embedded Derby) in-process: its server
+             libraries, test scope only (and target/fixture-libs for the server's tests). -->
         <dependency>
             <groupId>com.github.joshelser</groupId>
             <artifactId>dropwizard-metrics-hadoop-metrics2-reporter</artifactId>
@@ -373,6 +375,32 @@
             <groupId>net.sf.opencsv</groupId>
             <artifactId>opencsv</artifactId>
             <version>2.3</version>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Avro tables (hive.avroTables): Avro's resolving datum reader (Hive 3.1.3 reads them
+             with Avro 1.8.2; 1.12 is free of the schema parsing advisories of the older lines).
+             Its Jackson 2 is declared above. -->
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+            <version>1.12.0</version>
+            <scope>compile</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- Avro's snappy codec (Hive's usual avro.output.codec). -->
+        <dependency>
+            <groupId>org.xerial.snappy</groupId>
+            <artifactId>snappy-java</artifactId>
+            <version>1.1.10.7</version>
             <scope>compile</scope>
         </dependency>
         <!-- JSON text tables (hive.textTables): Hive 3.1.3's JsonSerDe walks the tokens of

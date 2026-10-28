@@ -16,6 +16,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   included) - otherwise refused as before. DuckDB 1.5.6 reads both snapshots of a table before and after a nested
   rename with their own field names (`IcebergCatalogIntegrationTest`, complete and partial mode). Log line
   `views=icebergSnapshotRead`.
+- Hive plugin: Avro tables (`AvroSerDe` + `AvroContainerInputFormat`), opt-in `hive.avroTables` (default false; such
+  tables were and stay skipped without it), read by the plugin as Hive 3.1.3 reads them and handed over as Arrow
+  streams (both result modes, partition pruning). Reader schema from `avro.schema.literal` (table properties over
+  serde properties) or made from the columns as Hive's `TypeInfoToSchema`; the table is shown only when that schema
+  gives the metastore's columns (`avro.schema.url`, unions other than with null, Avro types without a Hive column
+  type: skipped with a log reason). Each file is resolved from its own schema to the table's (promotions, defaults);
+  decimals at the file's scale, char/varchar cut to the file's maxLength, timestamps in the file's
+  `writer.time.zone` (a file without it fails on its first timestamp: Hive shows them in its server's zone); a
+  partition with another schema, a file cut short and records Hive fails on fail the query naming the file. Codecs
+  null/deflate/snappy/bzip2/zstandard. New plugin dependencies: Avro 1.12.0, snappy-java, Jackson 2.17 (P4).
 - Startup line `duckdb=externalFileCache perConnection= expectedConnections= expectedMiB= memoryMiB=` when
   `duckDbExternalFileCache=true`, and a WARN `duckdb=externalFileCacheUnbounded` when it is on without a per-connection
   `memory_limit` (`duckDbMemoryLimit=none`). Measured on DuckDB 1.5.6: the cache stays within each connection's

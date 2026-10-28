@@ -116,7 +116,7 @@ public final class HmsFixture {
      * @param columns {@code name type;name type} (Hive types)
      * @param partitionKeys {@code name type;...}, empty for none
      * @param format "parquet", "text", "csv" (OpenCSVSerde), "json" (HCatalog's JsonSerDe),
-     *     "json2" (serde2's JsonSerDe), "openx" (OpenX's JsonSerDe) or "orc"
+     *     "json2" (serde2's JsonSerDe), "openx" (OpenX's JsonSerDe), "avro" or "orc"
      * @param params extra table parameters, or null (with "transactional": a managed table;
      *     keys starting with {@code serde:} go to the serde's parameters without the prefix)
      * @throws TException on metastore errors
@@ -450,6 +450,11 @@ public final class HmsFixture {
                 input = "org.apache.iceberg.mr.hive.HiveIcebergInputFormat";
                 output = "org.apache.iceberg.mr.hive.HiveIcebergOutputFormat";
                 serde = "org.apache.iceberg.mr.hive.HiveIcebergSerDe";
+            }
+            case "avro" -> {
+                input = "org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat";
+                output = "org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat";
+                serde = "org.apache.hadoop.hive.serde2.avro.AvroSerDe";
             }
             case "csv" -> {
                 input = "org.apache.hadoop.mapred.TextInputFormat";

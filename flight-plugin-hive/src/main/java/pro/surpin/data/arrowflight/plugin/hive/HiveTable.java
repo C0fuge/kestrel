@@ -18,24 +18,26 @@ import org.apache.orc.TypeDescription;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 /**
- * A metastore table the catalog can show: a Parquet, ORC or text table with its columns (data
+ * A metastore table the catalog can show: a Parquet, ORC, text or Avro table with its columns (data
  * columns, then partition columns, as DuckDB types) or an Iceberg table with its metadata file.
  *
  * @param database database name
  * @param name table name
  * @param kind how it is read
  * @param location normalised table location
- * @param columns declared columns, partition columns last (Parquet, ORC and text tables)
- * @param partitionColumns partition column names (Parquet, ORC and text tables)
- * @param schemaId hash of the columns and their types (and of a text table's format); the
- *     snapshot ID of Parquet, ORC and text tables
+ * @param columns declared columns, partition columns last (Parquet, ORC, text and Avro tables)
+ * @param partitionColumns partition column names (Parquet, ORC, text and Avro tables)
+ * @param schemaId hash of the columns and their types (and of a text table's format or an Avro
+ *     table's reader schema); the snapshot ID of Parquet, ORC, text and Avro tables
  * @param metadataLocation normalised current metadata file (Iceberg tables), or null
- * @param dataColumns data columns with their Hive types (ORC and text tables), else empty
+ * @param dataColumns data columns with their Hive types (ORC, text and Avro tables), else empty
  * @param textFormat how the files are laid out (text tables), else null
+ * @param avroFormat the reader schema (Avro tables), else null
  */
 record HiveTable(String database, String name, Kind kind, String location,
         List<ColumnSpec> columns, List<String> partitionColumns, String schemaId,
-        String metadataLocation, List<OrcArrowReader.Column> dataColumns, TextFormat textFormat) {
+        String metadataLocation, List<OrcArrowReader.Column> dataColumns, TextFormat textFormat,
+        AvroFormat avroFormat) {
 
     /** How a table is read. */
     enum Kind {
@@ -49,7 +51,9 @@ record HiveTable(String database, String name, Kind kind, String location,
          * Text files of LazySimpleSerDe, OpenCSVSerde or JsonSerDe, read by the plugin and handed
          * over as Arrow streams.
          */
-        TEXT
+        TEXT,
+        /** Avro data files of AvroSerDe, read by the plugin and handed over as Arrow streams. */
+        AVRO
     }
 
     /**
@@ -79,10 +83,11 @@ record HiveTable(String database, String name, Kind kind, String location,
      * @param icebergFormat whether Iceberg tables can be read
      * @param orcTables whether ORC tables are shown
      * @param textTables whether text tables are shown
+     * @param avroTables whether Avro tables are shown
      * @return the table, or why it is skipped or hidden
      */
     static Classified classify(Table table, List<String> roots, boolean icebergFormat,
-            boolean orcTables, boolean textTables) {
+            boolean orcTables, boolean textTables, boolean avroTables) {
         String type = table.getTableType() == null ? "" : table.getTableType();
         Map<String, String> params = table.getParameters() == null ? Map.of() : table.getParameters();
         if (type.toUpperCase(Locale.ROOT).contains("VIEW")) {
@@ -106,13 +111,14 @@ record HiveTable(String database, String name, Kind kind, String location,
                 return hidden(location + " / " + normalized);
             }
             return new Classified(new HiveTable(table.getDbName(), table.getTableName(), Kind.ICEBERG,
-                    location, List.of(), List.of(), "iceberg", normalized, List.of(), null), null, null);
+                    location, List.of(), List.of(), "iceberg", normalized, List.of(), null, null), null, null);
         }
         if (params.containsKey("storage_handler")) {
             return skipped("storage handler " + params.get("storage_handler"));
         }
         boolean orc = sd != null && orc(sd);
         boolean text = sd != null && text(sd);
+        boolean avro = sd != null && avro(sd);
         if ("true".equalsIgnoreCase(params.getOrDefault("transactional", "false"))) {
             return skipped(orc ? "transactional (ACID) ORC table: not read yet"
                     : "transactional (ACID) table");
@@ -127,7 +133,10 @@ record HiveTable(String database, String name, Kind kind, String location,
         if (text && !textTables) {
             return skipped("text table (hive.textTables=false)");
         }
-        if (sd == null || !(orc || text || parquet(sd))) {
+        if (avro && !avroTables) {
+            return skipped("Avro table (hive.avroTables=false)");
+        }
+        if (sd == null || !(orc || text || avro || parquet(sd))) {
             String serde = sd == null || sd.getSerdeInfo() == null ? null
                     : sd.getSerdeInfo().getSerializationLib();
             return skipped("storage format " + (sd == null ? "none" : sd.getInputFormat()
@@ -143,7 +152,11 @@ record HiveTable(String database, String name, Kind kind, String location,
         List<String> partitions = new ArrayList<>();
         List<OrcArrowReader.Column> dataColumns = new ArrayList<>();
         TextFormat format = null;
+        AvroFormat avroFormat = null;
         try {
+            if (avro) {
+                avroFormat = AvroFormat.of(sd.getSerdeInfo().getParameters(), params, sd.getCols());
+            }
             if (text) {
                 JsonLayout json = json(sd);
                 format = json != null ? TextFormat.json(sd.getSerdeInfo().getParameters(), params, json)
@@ -152,7 +165,7 @@ record HiveTable(String database, String name, Kind kind, String location,
             }
             for (FieldSchema field : sd.getCols()) {
                 columns.add(column(field));
-                if (orc || text) {
+                if (orc || text || avro) {
                     dataColumns.add(orcColumn(field));
                 }
                 if (text) {
@@ -172,10 +185,13 @@ record HiveTable(String database, String name, Kind kind, String location,
         if (columns.size() == partitions.size()) {
             return skipped("no data columns");
         }
-        Kind kind = orc ? Kind.ORC : text ? Kind.TEXT : Kind.PARQUET;
+        Kind kind = orc ? Kind.ORC : text ? Kind.TEXT : avro ? Kind.AVRO : Kind.PARQUET;
+        String schemaId = kind == Kind.AVRO
+                ? avroSchemaId(table, columns, partitions, avroFormat)
+                : schemaId(table, kind, columns, partitions, format);
         return new Classified(new HiveTable(table.getDbName(), table.getTableName(), kind,
-                location, columns, partitions, schemaId(table, kind, columns, partitions, format),
-                null, List.copyOf(dataColumns), format), null, null);
+                location, columns, partitions, schemaId, null, List.copyOf(dataColumns), format,
+                avroFormat), null, null);
     }
 
     /**
@@ -204,6 +220,20 @@ record HiveTable(String database, String name, Kind kind, String location,
         String input = sd.getInputFormat() == null ? "" : sd.getInputFormat();
         return "textinputformat".equals(simpleName(input))
                 && ("lazysimpleserde".equals(simpleName(serde)) || csv(sd) || json(sd) != null);
+    }
+
+    /**
+     * Tells whether a storage descriptor names Hive's Avro serde and input format.
+     *
+     * @param sd storage descriptor
+     * @return true for {@code AvroSerDe} with {@code AvroContainerInputFormat}
+     */
+    static boolean avro(StorageDescriptor sd) {
+        String serde = sd.getSerdeInfo() == null || sd.getSerdeInfo().getSerializationLib() == null
+                ? "" : sd.getSerdeInfo().getSerializationLib();
+        String input = sd.getInputFormat() == null ? "" : sd.getInputFormat();
+        return "avroserde".equals(simpleName(serde))
+                && "avrocontainerinputformat".equals(simpleName(input));
     }
 
     /**
@@ -302,6 +332,28 @@ record HiveTable(String database, String name, Kind kind, String location,
                 : kind == Kind.TEXT ? "hive-text|" + format.canonical() + "|" : "hive|")
                 .append(table.getDbName()).append('.')
                 .append(table.getTableName()).append('|');
+        for (ColumnSpec column : columns) {
+            canonical.append(column.name()).append(':').append(column.duckDbType()).append(';');
+        }
+        canonical.append('|').append(String.join(",", partitions));
+        return "h" + hash(canonical.toString());
+    }
+
+    /**
+     * Hashes what an executing node must read the same way as the planning node, for an Avro
+     * table: its columns and its reader schema.
+     *
+     * @param table metastore table
+     * @param columns declared columns
+     * @param partitions partition columns
+     * @param format the reader schema
+     * @return {@code h<16 hex>}
+     */
+    static String avroSchemaId(Table table, List<ColumnSpec> columns, List<String> partitions,
+            AvroFormat format) {
+        StringBuilder canonical = new StringBuilder("hive-avro|").append(format.schemaJson())
+                .append('|').append(format.tableLevel()).append('|').append(table.getDbName())
+                .append('.').append(table.getTableName()).append('|');
         for (ColumnSpec column : columns) {
             canonical.append(column.name()).append(':').append(column.duckDbType()).append(';');
         }
