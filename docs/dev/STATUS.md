@@ -79,6 +79,16 @@
 > allocations per batch); goal >= upstream q/s at 8 and 32 clients with c1 p50 not worse. (2) **item 22 continued** -
 > 4-8 stream scans: goal >= 750 MB/s on 2 CPUs (now ~1.18x of 7562a5b at 8 streams). (3) **item 19b step 2** adaptive
 > threads per query (opt-in). (4) item 16 decision from the existing numbers. Each with a `package=true` pre-release.
+>
+> *(1) item 21, 2026-10-28 evening (936b2d7, see Log):* found that since the 19b floor (4 threads) a 1-3 core node
+> ran **every** query on the `duckDbThreadsUnderLoad` connection (running x 4 > 2 even for one query) - fixed: a
+> query alone keeps its threads. Local, 2 cores (`taskset -c 0,1`, JaCoCo off, prepared client, 10 s steps):
+> default c1/c8/c32 54.9/144/156 q/s, `-DduckDbThreadsUnderLoad=1` 54.7/173/211 (+20 % / +36 %), `-DduckDbThreads=1`
+> 55.1/170/210. So on 2 CPUs the 4-thread default costs ~25 % small-query q/s and `duckDbThreadsUnderLoad=1` gets
+> it back without taking threads from a lone heavy query. **Screening:** the load test on the new pre-release with
+> and without `-DduckDbThreadsUnderLoad=1` vs upstream native (2 CPUs); see Open question "Item 21 (b)" for turning
+> it on by default on small nodes. Next code step of 21 if a gap remains: none server-side known (see "Item 21 (d)");
+> then item 22 / 19b step 2 / 16 as listed.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
@@ -710,6 +720,11 @@
   *2026-10-28:* option (3) built as an opt-in for item 22 (`duckDbThreadsUnderLoad`, default 0 = off; no default
   changed). The question left is only whether to turn it on by default (e.g. 1 on nodes with <= 4 cores) once the
   screening / stand numbers are in.
+  *2026-10-28 evening:* more pressing since the 19b floor: a 2-core node now runs 4 threads per query, and locally
+  (2 cores) that is ~25 % fewer small-query q/s at c8/c32 than 1 thread; `duckDbThreadsUnderLoad=1` (after the
+  936b2d7 fix) recovers all of it (c8 144 -> 173, c32 156 -> 211) while a lone query keeps 4. Proposal: default
+  `duckDbThreadsUnderLoad=1` when cores <= 4 (else 0) - a default change, so waiting for the maintainer; the
+  screening's numbers on the pre-release would confirm it.
 
 - **Maintainer 2026-10-28, answers for item 18:** (1) identity: option (b) - an internal call signed with the ticket
   secret carrying the user name, accepted only from live cluster members' addresses and only when
