@@ -65,5 +65,7 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   TPC-H does; noted in the test's Javadoc. D2 (c) part 2 done (c7e436e): an endpoint answer that fails before its
   schema is read from the endpoint's next location (backup), `failovers()`; tests: peer Flight down -> merged via
   backups (was: single-node fallback), all locations down -> fallback. CI 40689624446 green on the branch (64f531e,
-  both commits; 40689301840 cancelled by it); rebase-merged into `main`, package=true dispatched on `main` (see
-  STATUS.md Log). Next: D2 (c) part 1, two-process TLS + token auth.
+  both commits; 40689301840 cancelled by it); rebase-merged into `main`, package=true run 40691235109 on
+  f73beb2 was cancelled by the core lane's push fd9f62f, whose Dev CI run 40691933422 (contains both commits) was
+  running at session end; not cancelled, so as not to cancel theirs. Next session: confirm a green run and a
+  pre-release containing c7e436e (else dispatch package=true on `main`). Next: D2 (c) part 1, two-process TLS + token auth.
