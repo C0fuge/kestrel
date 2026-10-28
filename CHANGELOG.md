@@ -326,6 +326,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Tests: `TestFlightServerHelper` ignored `endpointsPerServer`, so in-process partial-mode scans were always one
   endpoint (`ParallelScanPerfTest` endpoint runs and `ThreadsUnderLoadIntegrationTest` measured one stream); the
   integration tests now assert the split. Test only.
+- Arrow-stream tables (Hive ORC, `hive.orcTables`): a multiplication in the query (`sum(a * b)`) counted as a
+  `SELECT *`, so the catalog streamed every column of the table (P1 step 2 (f)). `ArrowScanRequests` now takes a
+  star between two values for a product; a star that may select columns (`SELECT *`, `t.*`, `DISTINCT ON (a) *`,
+  `* EXCLUDE`, a star next to a comment) still reads all. Answers unchanged; local 2M-row lineitem ORC: Q6-style
+  1.8 -> 0.5 s, Q1-style 2.0 -> 0.8 s.
 - S3 small queries: longer tail since the size-aware `duckDbThreads` default (item 19; 4 vCPU -> 2 threads). With
   `duckDbThreads` unset or 0 and `dataDir` on `s3://`, `s3a://`, `s3n://` or `lakefs://` the default is now at least
   4 (the value before item 19; larger hosts keep cores / 4, at most 8); local and HDFS data directories are unchanged,

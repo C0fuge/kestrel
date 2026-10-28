@@ -60,9 +60,28 @@ class ArrowScanRequestsTest {
                 "SELECT count( * ) AS \"n\" FROM " + SOURCE + " WHERE \"p\" > 2"));
         List<String> all = SNAPSHOT.columns().stream().map(ColumnSpec::name).toList();
         assertEquals(all, ArrowScanRequests.columns(SNAPSHOT, "SELECT * FROM " + SOURCE));
-        // A product names no column by its star: reading every column is merely more work.
-        assertEquals(all, ArrowScanRequests.columns(SNAPSHOT,
+        // Stars that select columns, whatever stands next to them.
+        for (String sql : List.of("SELECT DISTINCT * FROM ", "SELECT id, * FROM ",
+                "SELECT t.* FROM ", "SELECT * EXCLUDE (id) FROM ", "SELECT DISTINCT ON (id) * FROM ",
+                "SELECT price * 2, * FROM ", "SELECT max(*) FROM ", "SELECT id\n*\nFROM ",
+                "SELECT id * /* comment */ price FROM ", "SELECT ALL * FROM ")) {
+            assertEquals(all, ArrowScanRequests.columns(SNAPSHOT, sql + SOURCE + " t"), sql);
+        }
+    }
+
+    @Test
+    void aProductReadsOnlyItsColumns() {
+        // Regression: a multiplication read every column (TPC-H Q1/Q6 over ORC as slow as SELECT *).
+        assertEquals(List.of("id"), ArrowScanRequests.columns(SNAPSHOT,
                 "SELECT id * 2 FROM " + SOURCE));
+        assertEquals(List.of("price", "ratio", "day"), ArrowScanRequests.columns(SNAPSHOT,
+                "SELECT sum(price * ratio) AS \"r\" FROM " + SOURCE
+                        + " WHERE day >= DATE '1994-01-01'"));
+        assertEquals(List.of("Name", "price", "ratio"), ArrowScanRequests.columns(SNAPSHOT,
+                "SELECT \"name\", sum(\"price\" * (1 - ratio) * (1 + ratio)), 2.5 * price,"
+                        + " price * -1, count(*) FROM " + SOURCE + " GROUP BY \"name\""));
+        assertEquals(List.of("id", "price"), ArrowScanRequests.columns(SNAPSHOT,
+                "SELECT max(id) * price, 'a' * 0 FROM " + SOURCE + " GROUP BY price"));
     }
 
     @Test

@@ -46,6 +46,15 @@ public final class ArrowScanRequests {
     /** {@code count(*)}, whose star names no column. */
     private static final Pattern COLUMNS_EXPRESSION = Pattern.compile("(?i)\\bcolumns\\s*\\(");
     private static final Pattern COUNT_STAR = Pattern.compile("(?i)count\\s*\\(\\s*\\*\\s*\\)");
+    /** Words after which a star starts a select list rather than multiplying a value. */
+    private static final Set<String> KEYWORDS = Set.of("select", "distinct", "all", "by", "on",
+            "and", "or", "not", "where", "when", "then", "else", "case", "in", "is", "like",
+            "between", "having", "qualify", "returning", "as", "from", "join", "using", "over",
+            "partition", "limit", "offset", "union", "except", "intersect", "with");
+    /** Words that may follow a select-list star. */
+    private static final Set<String> STAR_MODIFIERS = Set.of("from", "exclude", "replace",
+            "rename", "like", "ilike", "similar", "glob", "as", "into", "where", "group",
+            "order", "limit", "union", "except", "intersect", "window", "qualify", "having");
     private static final Set<String> INTEGERS = Set.of("TINYINT", "SMALLINT", "INTEGER", "BIGINT");
     private static final DSLContext RENDER = DSL.using(SQLDialect.DEFAULT,
             new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
@@ -119,21 +128,25 @@ public final class ArrowScanRequests {
      *
      * @param sql SQL text
      * @param into receives the identifiers
-     * @return true when the text holds a star outside string literals
+     * @return true when the text holds a star outside string literals that is no product
      */
     private static boolean identifiers(String sql, Set<String> into) {
         boolean star = false;
+        // Whether the last token ends a value (a column, a literal, a closing parenthesis).
+        boolean operand = false;
         int i = 0;
         int n = sql.length();
         while (i < n) {
             char c = sql.charAt(i);
             if (c == '\'') {
                 i = skipQuoted(sql, i, '\'');
+                operand = true;
             } else if (c == '"') {
                 int end = skipQuoted(sql, i, '"');
                 into.add(sql.substring(i + 1, end - 1).replace("\"\"", "\"")
                         .toLowerCase(Locale.ROOT));
                 i = end;
+                operand = true;
             } else if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
                 int eol = sql.indexOf('\n', i);
                 i = eol < 0 ? n : eol + 1;
@@ -142,17 +155,64 @@ public final class ArrowScanRequests {
                 i = end < 0 ? n : end + 2;
             } else if (Character.isLetter(c) || c == '_') {
                 int start = i;
-                while (i < n && (Character.isLetterOrDigit(sql.charAt(i)) || sql.charAt(i) == '_'
-                        || sql.charAt(i) == '$')) {
-                    i++;
-                }
-                into.add(sql.substring(start, i).toLowerCase(Locale.ROOT));
+                i = wordEnd(sql, i);
+                String word = sql.substring(start, i).toLowerCase(Locale.ROOT);
+                into.add(word);
+                operand = !KEYWORDS.contains(word);
+            } else if (Character.isDigit(c)) {
+                i = wordEnd(sql, i);
+                operand = true;
+            } else if (Character.isWhitespace(c)) {
+                i++;
             } else {
-                star |= c == '*';
+                // A star between two values is a product; any other star may select columns.
+                star |= c == '*' && !(operand && operandFollows(sql, i + 1));
+                operand = c == ')';
                 i++;
             }
         }
         return star;
+    }
+
+    /**
+     * Finds the end of a word or a number.
+     *
+     * @param sql SQL text
+     * @param start index of its first character
+     * @return index after it
+     */
+    private static int wordEnd(String sql, int start) {
+        int i = start;
+        while (i < sql.length() && (Character.isLetterOrDigit(sql.charAt(i))
+                || sql.charAt(i) == '_' || sql.charAt(i) == '$')) {
+            i++;
+        }
+        return i;
+    }
+
+    /**
+     * Tells whether a value starts after a star: a column, a literal, a parenthesis or a sign,
+     * but no clause keyword (as in {@code DISTINCT ON (a) * FROM t}).
+     *
+     * @param sql SQL text
+     * @param from index after the star
+     * @return true when the star is followed by a value
+     */
+    private static boolean operandFollows(String sql, int from) {
+        int i = from;
+        while (i < sql.length() && Character.isWhitespace(sql.charAt(i))) {
+            i++;
+        }
+        if (i >= sql.length()) {
+            return false;
+        }
+        char c = sql.charAt(i);
+        if (Character.isLetter(c) || c == '_') {
+            return !STAR_MODIFIERS.contains(sql.substring(i, wordEnd(sql, i))
+                    .toLowerCase(Locale.ROOT));
+        }
+        return Character.isDigit(c) || c == '(' || c == '"' || c == '\'' || c == '+'
+                || c == '-' && !(i + 1 < sql.length() && sql.charAt(i + 1) == '-');
     }
 
     /**
