@@ -99,6 +99,14 @@
 > opt-in combinations fell inside that spread), so the decision stays with the screening's runs of the opt-ins already
 > in the pre-releases. *(3) 19b step 2* was done before (fd9f62f, `duckDbThreadsWhenIdle`). *(4) item 16 decided:*
 > no default change (see item 16). Next core code step: the Open question above, if the maintainer wants it.
+>
+> *Item 22 shared DuckDB, step 1 done 2026-10-28 (4075216, see Log):* opt-in `duckDbSharedDatabase` (default false).
+> **Screening:** 4/8-stream scans, small-query load and SF10 on the pre-release with `-DduckDbSharedDatabase=true` vs
+> without (and vs `7562a5bdb7b9`). **Next steps of the shared DuckDB** (each small, own pre-release): (a) the describe
+> connection (today still one small DuckDB per worker, 1 thread / 256 MB) as a second catalog of the shared one;
+> (b) a stand round with Ranger and the hive/iceberg catalogs on; (c) `duckDbStreamingBufferSize` in shared mode
+> (DuckDB freezes this per-connection setting with the lockdown - only via a DuckDB-side default, see Log);
+> (d) default change only after the screening's numbers and the maintainer's decision.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
@@ -686,7 +694,8 @@
 ## Open questions
 
 - **Maintainer 2026-10-29, answer to "Item 22: one DuckDB scheduler": yes, build it as the opt-in
-  `duckDbSharedDatabase` (default false)** - one shared database per node, connection-local TEMP views, per-query
+  `duckDbSharedDatabase` (default false)** *(step 1 built 2026-10-28, 4075216, see Log; a default change is still
+  open)* - one shared database per node, connection-local TEMP views, per-query
   names, secrets/lockdown set once per node, node-wide `memory_limit`/`threads`. Required before any default change:
   tests for view isolation between concurrent sessions and users (incl. Ranger-filtered views), lockdown checks with the
   shared instance, identical TPC-H answers, a short security note in the Log (what an attacker could reach across
