@@ -254,6 +254,33 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns duckDbThreadsWhenIdle from the system configuration.
+     *
+     * @return DuckDB threads of a query that starts alone on the node, 0 = off
+     */
+    public static int duckDbThreadsWhenIdle() {
+        return duckDbThreadsWhenIdle(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code duckDbThreadsWhenIdle} ({@code DUCKDB_THREADS_WHEN_IDLE}): DuckDB threads
+     * of a further connection per worker that a query uses when it starts while no other query
+     * runs on the node; default 0 = off.
+     *
+     * @param props configuration source
+     * @return threads, 0 = off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int duckDbThreadsWhenIdle(ConfigSource props) {
+        int threads = getIntWithEnv("duckDbThreadsWhenIdle", "arrowflight.duckdb.threadsWhenIdle",
+                "DUCKDB_THREADS_WHEN_IDLE", 0, props);
+        if (threads < 0) {
+            throw new IllegalArgumentException("duckDbThreadsWhenIdle must not be negative: " + threads);
+        }
+        return threads;
+    }
+
+    /**
      * Returns duckDbProducingStreams from the system configuration.
      *
      * @return streams that may produce batches in DuckDB at once, 0 = no cap

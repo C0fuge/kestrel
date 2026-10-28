@@ -143,6 +143,21 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void duckDbThreadsWhenIdleIsOffByDefaultAndRefusesNegativeValues() throws IOException {
+        assertEquals(0, ConfigAdapter.duckDbThreadsWhenIdle(source(Map.of(), Map.of())));
+        assertEquals(8, ConfigAdapter.duckDbThreadsWhenIdle(
+                source(Map.of("duckDbThreadsWhenIdle", "8"), Map.of())));
+        assertEquals(8, ConfigAdapter.duckDbThreadsWhenIdle(
+                source(Map.of("arrowflight.duckdb.threadsWhenIdle", "8"), Map.of())));
+        assertEquals(16, ConfigAdapter.duckDbThreadsWhenIdle(
+                source(Map.of(), Map.of("DUCKDB_THREADS_WHEN_IDLE", "16"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbThreadsWhenIdle(
+                        source(Map.of("duckDbThreadsWhenIdle", "-1"), Map.of())));
+        assertTrue(e.getMessage().contains("duckDbThreadsWhenIdle"), e.getMessage());
+    }
+
+    @Test
     void duckDbProducingStreamsIsOffByDefaultAndRefusesNegativeValues() throws IOException {
         assertEquals(0, ConfigAdapter.duckDbProducingStreams(source(Map.of(), Map.of())));
         assertEquals(2, ConfigAdapter.duckDbProducingStreams(

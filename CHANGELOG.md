@@ -18,6 +18,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   aggregates, wide DISTINCT, ORDER BY LIMIT, wide GROUP BY and wide rows with `distributedComplete` off vs on (wall
   time, peer MB, peer wait); `DistributedComplete.peerBytes()` / `peerWaitNanos()` and `peerBytes=` / `peerWaitMs=` in
   its `merged` log line.
+- `duckDbThreadsWhenIdle` (item 19b step 2), opt-in: `arrowflight.duckdb.threadsWhenIdle` / `DUCKDB_THREADS_WHEN_IDLE`
+  (default 0 = off). Each Flight worker gets, on first use, a further DuckDB connection with that many threads (at
+  most the cores); a DoGet that starts while no other runs on the node uses it to its end. Values not above
+  `duckDbThreads` are off. Startup line `duckdb=threads ... whenIdle=`.
 - S3 / lakeFS read cache disk tier (item 17 (a)), opt-in: `arrowflight.s3.cacheDiskPath` (absolute directory, default
   empty = memory only) + `arrowflight.s3.cacheDiskMegabytes` (size cap; both needed, and `cacheMegabytes` > 0); same
   keys under `arrowflight.lakefs.`. Blocks read from S3 are also written (one background writer, queue of 64 blocks,

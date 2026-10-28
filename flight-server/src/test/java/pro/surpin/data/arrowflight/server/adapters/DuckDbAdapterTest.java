@@ -605,6 +605,74 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies that with duckDbThreadsWhenIdle a query that starts alone runs on the thread's
+     * high-thread connection and keeps it while others start, that a query starting next to it
+     * gets duckDbThreads, or duckDbThreadsUnderLoad once the cores are taken.
+     */
+    @Test
+    void aQueryStartingAloneRunsOnTheHighThreadConnection(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)
+            throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        ExecutorService second = Executors.newSingleThreadExecutor();
+        ExecutorService third = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(twoThreads(base), ioPool,
+                pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
+                1, 4, 4, ProducingStreamGate.OFF, false)) {
+            try (DuckDbAdapter.QuerySlot first = adapter.enterQuery()) {
+                assertEquals("4", setting(adapter.connection(), "threads"));
+                CountDownLatch entered = new CountDownLatch(1);
+                CountDownLatch release = new CountDownLatch(1);
+                Future<String> next = second.submit(() -> {
+                    try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                        entered.countDown();
+                        release.await();
+                        return setting(adapter.connection(), "threads");
+                    }
+                });
+                assertTrue(entered.await(30, TimeUnit.SECONDS));
+                // Three queries times two threads exceed four cores.
+                assertEquals("1", third.submit(() -> {
+                    try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                        return setting(adapter.connection(), "threads");
+                    }
+                }).get());
+                release.countDown();
+                assertEquals("2", next.get());
+                assertEquals("4", setting(adapter.connection(), "threads"));
+            }
+            assertEquals(1, adapter.queriesWhenIdle());
+            assertEquals(1, adapter.queriesUnderLoad());
+            // Alone again: the next query on another thread gets the high-thread connection.
+            assertEquals("4", second.submit(() -> {
+                try (DuckDbAdapter.QuerySlot again = adapter.enterQuery()) {
+                    return setting(adapter.connection(), "threads");
+                }
+            }).get());
+            assertEquals(2, adapter.queriesWhenIdle());
+            // Outside a slot a thread uses its plain connection.
+            assertEquals("2", setting(adapter.connection(), "threads"));
+        } finally {
+            ioPool.shutdownNow();
+            second.shutdownNow();
+            third.shutdownNow();
+        }
+    }
+
+    /**
+     * Verifies the threads of the connection for queries that start alone: capped at the cores,
+     * off when that is not above duckDbThreads.
+     */
+    @Test
+    void threadsWhenIdleAreCappedAtTheCoresAndOffWhenNotAboveThreads() {
+        assertEquals(0, DuckDbAdapter.threadsWhenIdle(0, 2, 16));
+        assertEquals(8, DuckDbAdapter.threadsWhenIdle(8, 2, 16));
+        assertEquals(16, DuckDbAdapter.threadsWhenIdle(64, 4, 16));
+        assertEquals(0, DuckDbAdapter.threadsWhenIdle(2, 2, 16));
+        assertEquals(0, DuckDbAdapter.threadsWhenIdle(8, 2, 2));
+        assertEquals(0, DuckDbAdapter.threadsWhenIdle(8, 2, 0));
+    }
+
+    /**
      * Verifies that without duckDbThreadsUnderLoad, or with a value not below duckDbThreads,
      * every query keeps its thread's one connection however many run.
      */

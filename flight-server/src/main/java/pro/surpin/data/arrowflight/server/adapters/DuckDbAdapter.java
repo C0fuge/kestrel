@@ -142,13 +142,21 @@ public final class DuckDbAdapter implements AutoCloseable {
      * when the setting is off.
      */
     private final ThreadLocal<Session> loadSession;
-    /** Session a query slot chose for this thread's current query; unset = threadSession. */
-    private final ThreadLocal<Session> slotSession = new ThreadLocal<>();
+    /**
+     * Further session per thread with duckDbThreadsWhenIdle threads, opened on first use; null
+     * when the setting is off.
+     */
+    private final ThreadLocal<Session> idleSession;
+    /** Sessions a query slot chose for this thread's current query; unset = threadSession. */
+    private final ThreadLocal<ThreadLocal<Session>> slotSessions = new ThreadLocal<>();
     /** Queries inside a slot on this node now. */
     private final AtomicInteger runningQueries = new AtomicInteger();
     /** Queries that ran on a low-thread session since start. */
     private final AtomicLong queriesUnderLoad = new AtomicLong();
+    /** Queries that ran on a high-thread session since start. */
+    private final AtomicLong queriesWhenIdle = new AtomicLong();
     private final int threadsUnderLoad;
+    private final int threadsWhenIdle;
     private final int cores;
     /** Caps the streams inside DuckDB at once (duckDbProducingStreams); off by default. */
     private final ProducingStreamGate producingGate;
@@ -384,6 +392,28 @@ public final class DuckDbAdapter implements AutoCloseable {
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
             int threadsUnderLoad, int cores, ProducingStreamGate producingGate,
             boolean zeroCopyWrites) {
+        this(appConfig, ioPool, setup, threadsUnderLoad, 0, cores, producingGate, zeroCopyWrites);
+    }
+
+    /**
+     * Creates DuckDB adapter with duckDbThreadsUnderLoad, duckDbThreadsWhenIdle, a cap on the
+     * streams that produce batches at once and the choice of zero-copy Flight writes.
+     *
+     * @param appConfig        server configuration
+     * @param ioPool           shared I/O thread pool for parallel execution
+     * @param setup            setup written by the DuckDbSetupValidator; empty roots disable the
+     *                         lockdown
+     * @param threadsUnderLoad DuckDB threads of the second connection; 0, or not below
+     *                         duckDbThreads, keeps every query on its thread's one connection
+     * @param threadsWhenIdle  DuckDB threads of the connection a query uses when it starts alone
+     *                         on the node, at most the cores; 0, or not above duckDbThreads, is off
+     * @param cores            processors the node's queries share
+     * @param producingGate    gate of the streams inside DuckDB at once
+     * @param zeroCopyWrites   whether result streams hand their buffers to gRPC without a copy
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
+            int threadsUnderLoad, int threadsWhenIdle, int cores, ProducingStreamGate producingGate,
+            boolean zeroCopyWrites) {
         this.producingGate = producingGate;
         this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
@@ -408,6 +438,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.cores = Math.max(1, cores);
         this.loadSession = this.threadsUnderLoad > 0
                 ? ThreadLocal.withInitial(() -> openSession(this.threadsUnderLoad)) : null;
+        this.threadsWhenIdle = threadsWhenIdle(threadsWhenIdle, appConfig.duckDbThreads(), this.cores);
+        this.idleSession = this.threadsWhenIdle > 0
+                ? ThreadLocal.withInitial(() -> openSession(this.threadsWhenIdle)) : null;
         // Flight runs streams on a cached thread pool: its threads end after a minute of
         // idleness and new ones are created later, so sessions of ended threads must be closed.
         this.sessionReaper = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -418,9 +451,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.sessionReaper.scheduleWithFixedDelay(this::closeSessionsOfEndedThreads,
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
-        LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} producingStreams={}"
-                + " zeroCopyWrites={} availableProcessors={}", LogUtil.node(),
-                appConfig.duckDbThreads(), this.threadsUnderLoad, producingGate.permits(),
+        LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} whenIdle={}"
+                + " producingStreams={} zeroCopyWrites={} availableProcessors={}", LogUtil.node(),
+                appConfig.duckDbThreads(), this.threadsUnderLoad, this.threadsWhenIdle,
+                producingGate.permits(),
                 zeroCopyWrites, this.cores);
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
@@ -438,6 +472,19 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             LOGGER.info("node={} duckdb=warmupDone", LogUtil.node());
         }
+    }
+
+    /**
+     * Chooses the threads of the connection for queries that start alone on the node.
+     *
+     * @param requested duckDbThreadsWhenIdle, 0 = off
+     * @param threads   duckDbThreads of every other connection
+     * @param cores     processors the node's queries share
+     * @return the requested threads at most the cores, or 0 when that is not above threads
+     */
+    static int threadsWhenIdle(int requested, int threads, int cores) {
+        int capped = Math.min(requested, Math.max(1, cores));
+        return capped > threads ? capped : 0;
     }
 
     /**
@@ -806,9 +853,10 @@ public final class DuckDbAdapter implements AutoCloseable {
             return;
         }
         if (Thread.currentThread() == session.owner) {
-            if (loadSession != null && slotSession.get() == session) {
-                slotSession.remove();
-                loadSession.remove();
+            ThreadLocal<Session> chosen = slotSessions.get();
+            if (chosen != null && chosen.get() == session) {
+                slotSessions.remove();
+                chosen.remove();
             } else {
                 threadSession.remove();
             }
@@ -901,34 +949,41 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @return the session a query slot chose, else the thread's own
      */
     private Session session() {
-        Session chosen = slotSession.get();
-        return chosen != null ? chosen : threadSession.get();
+        ThreadLocal<Session> chosen = slotSessions.get();
+        return (chosen != null ? chosen : threadSession).get();
     }
 
     /**
      * Counts a query as running on this node until the returned slot is closed. With
      * duckDbThreadsUnderLoad set, the query runs on this thread's low-thread session when the
      * running queries times duckDbThreads exceed the cores: parallel queries then share the cores
-     * instead of each starting duckDbThreads threads. Close the slot once, on the same thread.
+     * instead of each starting duckDbThreads threads. With duckDbThreadsWhenIdle set, a query that
+     * starts while no other query runs takes this thread's high-thread session and keeps it to
+     * its end, even when other queries start meanwhile. Close the slot once, on the same thread.
      *
      * @return slot to close when the query ends
      */
     public QuerySlot enterQuery() {
-        if (loadSession == null) {
+        if (loadSession == null && idleSession == null) {
             return NO_SLOT;
         }
         int running = runningQueries.incrementAndGet();
         try {
-            if ((long) running * appConfig.duckDbThreads() > cores) {
-                slotSession.set(loadSession.get());
+            if (loadSession != null && (long) running * appConfig.duckDbThreads() > cores) {
+                loadSession.get();
+                slotSessions.set(loadSession);
                 queriesUnderLoad.incrementAndGet();
+            } else if (idleSession != null && running == 1) {
+                idleSession.get();
+                slotSessions.set(idleSession);
+                queriesWhenIdle.incrementAndGet();
             }
         } catch (RuntimeException e) {
             runningQueries.decrementAndGet();
             throw e;
         }
         return () -> {
-            slotSession.remove();
+            slotSessions.remove();
             runningQueries.decrementAndGet();
         };
     }
@@ -940,6 +995,15 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public long queriesUnderLoad() {
         return queriesUnderLoad.get();
+    }
+
+    /**
+     * Returns the number of queries that ran on a high-thread session since start.
+     *
+     * @return query count
+     */
+    public long queriesWhenIdle() {
+        return queriesWhenIdle.get();
     }
 
     /**
@@ -959,7 +1023,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         void close();
     }
 
-    /** Slot of a node without duckDbThreadsUnderLoad: nothing is counted. */
+    /** Slot of a node without duckDbThreadsUnderLoad and duckDbThreadsWhenIdle: nothing is counted. */
     private static final QuerySlot NO_SLOT = () -> { };
 
     /**

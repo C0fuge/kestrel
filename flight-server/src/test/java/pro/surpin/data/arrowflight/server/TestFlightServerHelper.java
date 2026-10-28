@@ -93,7 +93,8 @@ public class TestFlightServerHelper implements AutoCloseable {
             parquetAdapter = new ParquetAdapter(appConfig, b.sharedStorage ? shared(store) : store);
             duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
                     pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
-                    b.threadsUnderLoad, b.cores, new ProducingStreamGate(b.producingStreams),
+                    b.threadsUnderLoad, b.threadsWhenIdle, b.cores,
+                    new ProducingStreamGate(b.producingStreams),
                     b.zeroCopyWrites);
         }
 
@@ -218,6 +219,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         private boolean sharedStorage;
         private int threads = 1;
         private int threadsUnderLoad;
+        private int threadsWhenIdle;
         private int cores = Runtime.getRuntime().availableProcessors();
         private int producingStreams;
         private boolean zeroCopyWrites;
@@ -238,6 +240,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder hazelcastSeeds(String... s) { this.hazelcastSeeds = s.clone(); return this; }
         public Builder threads(int t) { this.threads = t; return this; }
         public Builder threadsUnderLoad(int t, int c) { this.threadsUnderLoad = t; this.cores = c; return this; }
+        public Builder threadsWhenIdle(int t) { this.threadsWhenIdle = t; return this; }
         public Builder producingStreams(int p) { this.producingStreams = p; return this; }
         public Builder zeroCopyWrites(boolean z) { this.zeroCopyWrites = z; return this; }
         public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }

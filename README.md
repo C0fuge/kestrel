@@ -309,6 +309,16 @@ runs on it; a query alone on the node keeps all `duckDbThreads`. With 2 cores, `
 concurrent queries then share the cores instead of starting two threads each. Values not below
 `duckDbThreads` keep it off.
 
+`duckDbThreadsWhenIdle` (`DUCKDB_THREADS_WHEN_IDLE`, default 0 = off) gives every Flight worker a
+further DuckDB connection with that many threads (at most the cores; opened on first use, so up to
+one more DuckDB per worker). A DoGet that starts while no other DoGet runs on the node runs on it and
+keeps those threads to its end, even when other queries start meanwhile (they get `duckDbThreads`,
+or `duckDbThreadsUnderLoad` once the cores are taken). Meant for big hosts whose default
+`duckDbThreads` (cores / 4) leaves a lone heavy query most of the cores idle, e.g. 16 cores:
+`duckDbThreadsWhenIdle=16`. The connection has the same `memory_limit` as the others; DuckDB wants
+about 1 GiB per thread for joins and aggregates, so set `duckDbMemoryLimit` to match. Values not
+above `duckDbThreads` keep it off.
+
 `duckDbProducingStreams` (`DUCKDB_PRODUCING_STREAMS`, default 0 = no cap) lets at most that many
 Flight streams of a node be inside DuckDB at once, running their query or computing their next
 batch; the others wait their turn in arrival order. A stream waiting for its client or the outbound

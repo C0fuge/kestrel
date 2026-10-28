@@ -31,8 +31,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Checks that queries moved to the low-thread DuckDB connection by {@code duckDbThreadsUnderLoad}
- * return the same answers as without it: a scan split into several endpoints read at once, an
- * ordered query and an aggregate, in both result modes.
+ * or to the high-thread one by {@code duckDbThreadsWhenIdle} return the same answers as without
+ * them: a scan split into several endpoints read at once, an ordered query and an aggregate, in
+ * both result modes.
  */
 @Tag("integration")
 class ThreadsUnderLoadIntegrationTest {
@@ -66,9 +67,10 @@ class ThreadsUnderLoadIntegrationTest {
         System.setProperty("endpointsPerServer", String.valueOf(FILES));
         try {
             for (String mode : List.of("partial", "complete")) {
-                List<String> plain = answers(dir, mode, 0);
-                List<String> underLoad = answers(dir, mode, 1);
-                assertEquals(plain, underLoad, mode);
+                List<String> plain = answers(dir, mode, 2, 0, 0, 1);
+                assertEquals(plain, answers(dir, mode, 2, 1, 0, 1), mode + " under load");
+                assertEquals(plain, answers(dir, mode, 1, 0, 4, 4), mode + " when idle");
+                assertEquals(plain, answers(dir, mode, 2, 1, 3, 3), mode + " both");
             }
         } finally {
             System.clearProperty("endpointsPerServer");
@@ -76,19 +78,23 @@ class ThreadsUnderLoadIntegrationTest {
     }
 
     /**
-     * Starts a server with two DuckDB threads on one core and returns every query's answer.
+     * Starts a server with the given DuckDB threads and cores and returns every query's answer.
      *
      * @param dir data directory
      * @param mode result mode
+     * @param threads duckDbThreads
      * @param threadsUnderLoad duckDbThreadsUnderLoad, 0 = off
+     * @param threadsWhenIdle duckDbThreadsWhenIdle, 0 = off
+     * @param cores cores the node's queries share
      * @return one digest per query
      * @throws Exception on failure
      */
-    private static List<String> answers(Path dir, String mode, int threadsUnderLoad) throws Exception {
+    private static List<String> answers(Path dir, String mode, int threads, int threadsUnderLoad,
+            int threadsWhenIdle, int cores) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(FILES);
         try (TestFlightServerHelper helper = TestFlightServerHelper.builder()
-                .dataDir(dir.toString()).resultMode(mode).threads(2)
-                .threadsUnderLoad(threadsUnderLoad, 1).start()) {
+                .dataDir(dir.toString()).resultMode(mode).threads(threads)
+                .threadsUnderLoad(threadsUnderLoad, cores).threadsWhenIdle(threadsWhenIdle).start()) {
             FlightSqlClient client = helper.sqlClient();
             FlightCallHeaders headers = new FlightCallHeaders();
             headers.insert("x-flight-result-mode", mode);
@@ -112,8 +118,15 @@ class ThreadsUnderLoadIntegrationTest {
                 }
                 out.add(sql + " -> " + rows.size() + " rows, hash " + rows.hashCode());
             }
-            assertEquals(threadsUnderLoad > 0, helper.duckDbAdapter.queriesUnderLoad() > 0,
-                    "queries under load");
+            if (threadsUnderLoad == 0 || threads > cores) {
+                // With more threads than cores every query is under load; otherwise only
+                // endpoints that happen to overlap are, which a fast run may not see.
+                assertEquals(threadsUnderLoad > 0, helper.duckDbAdapter.queriesUnderLoad() > 0,
+                        "queries under load");
+            }
+            // The ordered query and the aggregate run alone on the node.
+            assertEquals(threadsWhenIdle > 0, helper.duckDbAdapter.queriesWhenIdle() > 0,
+                    "queries when idle");
             assertTrue(out.get(0).contains(" " + ROWS + " rows"), out.get(0));
             return out;
         } finally {

@@ -253,7 +253,8 @@ public final class ServerModule {
         LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(),
                 ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect()).describe());
         return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
-                ConfigAdapter.duckDbThreadsUnderLoad(), Runtime.getRuntime().availableProcessors(),
+                ConfigAdapter.duckDbThreadsUnderLoad(), ConfigAdapter.duckDbThreadsWhenIdle(),
+                Runtime.getRuntime().availableProcessors(),
                 new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
                 ConfigAdapter.flightZeroCopyWrites());
     }
