@@ -37,17 +37,25 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     even a re-prepare) fails "This stream has been released"; a view over it can be read once. duckdb_jdbc 1.5.6
     also has Java table functions (`DuckDBTableFunction`), considered and rejected: projection pushdown only, no
     filter pushdown, per-value JNI writes, no LIST/MAP/STRUCT/BLOB.
-    **Next step (step 2 (b) part 2), wire it into execution, each in a small core commit with a STATUS.md Log line:**
-    (1) partial mode - `ExecutionService` catalog path (around `catalogFilesSource`, line ~770): for ArrowStream
-    build the `ArrowScan` from the parsed query (`pq` projected + filter columns; for `count(*)` the first declared
-    column) and simple predicates, open `ArrowStreamScans` on `duckDbAdapter.connection()`, and run the SQL WITHOUT
-    the session statement cache (`session.statement(duckSql)` caches by text - a cached statement over a released
-    stream fails; add an uncached `streamSql` variant in `DuckDbAdapter`); close the scans in `finally` after
-    streaming. `QueryPlanner` `shipValues` and `ExecutionService.ticketFiles`/`shipped` must accept ArrowStream like
-    ParquetFiles; `catalogDescribeSource` needs a schema without reading (use `CatalogViews.declaredColumnsSource`).
-    (2) complete mode - rewrite each reference of an ArrowStream table in the client SQL to its own stream source,
-    the same way `CatalogViews.timeTravel(sql, describe)` already rewrites time-travel references (reuse its
-    reference finder); describe -> `declaredColumnsSource`. Then (c) hive `exportArrowScan` with `OrcArrowReader`
+    *Step 2 (b) part 2 (1) done 2026-10-28:* partial mode reads ArrowStream snapshots (core commit, STATUS.md Log):
+    `ExecutionService.streamArrowScan` (one `ArrowStreamScans` per endpoint call, closed in `finally`),
+    `DuckDbAdapter.streamSqlOnce` (prepared per run, never cached, parse check not remembered, no changed-file
+    retry), `catalog/ArrowScanRequests` (columns = declared columns named anywhere in the endpoint SQL, all for a
+    star, the first for none; predicates = simple conditions of the WHERE's top-level AND with literals of the
+    column's exact declared type - BIGINT/INTEGER/SMALLINT/TINYINT -> Long, DECIMAL -> BigDecimal, DOUBLE ->
+    Double, VARCHAR, BOOLEAN, DATE, TIMESTAMP; FLOAT and others never), `ExecutionService.shipsPartitionValues`
+    (planner + `ticketFiles`; partition pruning applies), describe -> `CatalogViews.declaredColumnsSource`. Tests
+    `ArrowScanRequestsTest` 6/6, `ArrowStreamExecutionTest` 5/5 (whole snapshot, same text twice, count(*), group
+    by partition, planner tickets -> endpoint read, outside-root refusal, describe reads nothing, failing catalog
+    leaves no view/buffer).
+    **Next step (step 2 (b) part 2 (2)):** complete mode - rewrite each reference of an ArrowStream table in the
+    client SQL to its own stream source, the way `CatalogViews.timeTravel(sql, describe)` rewrites time-travel
+    references (reuse its reference finder; `TimeTravelClause.find`), with `ArrowScanRequests.of(snapshot,
+    clientSql, null)` per reference (columns from the whole client SQL; predicates only when the query is a single
+    table - a filter of a join may not hold for this reference), run through `streamSqlOnce`; describe ->
+    `declaredColumnsSource`; complete-mode views keep skipping the table for queries that do not name it. Watch:
+    `streamComplete` applies views and binds parameters on a cached statement - the stream variant needs the same
+    parameter binding on an uncached one. Then (c) hive `exportArrowScan` with `OrcArrowReader`
     (one reader per file chained; set the plugin's context class loader inside `loadNextBatch`, since DuckDB calls
     it on its own threads; predicates -> ORC SARG), `hive.orcTables` + ACID refusal, (d) end-to-end tests as planned
     above. Risk still open: the plugin ships zstd-jni 1.5.6-10 next to the server's copy (separate class loaders

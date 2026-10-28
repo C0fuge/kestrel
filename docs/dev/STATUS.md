@@ -1400,3 +1400,10 @@
   streams), `SpiCatalog.exportArrowScan` delegation, `CatalogSources.filesSource` refuses `ArrowStream` snapshots.
   Not wired into execution yet; next plugins-lane step touches `ExecutionService` (partial path), `QueryPlanner`
   (`shipValues`) and the complete-mode reference rewrite next to `CatalogViews.timeTravel` - small, own commits.
+- 2026-10-28 (plugins lane, FYI core lane): core commit (P1 step 2 (b) part 2 (1)) - partial mode reads catalog
+  tables whose snapshot is `ReadSpec.ArrowStream`: `ExecutionService.readCatalogFiles` -> `streamArrowScan`
+  (`ArrowStreamScans` on the thread's DuckDB connection, closed in `finally`), new `DuckDbAdapter.streamSqlOnce`
+  (prepared per run, not cached, parse check not remembered, no changed-file retry), new
+  `catalog/ArrowScanRequests` (columns + predicate hints), `shipsPartitionValues` used by `QueryPlanner` and
+  `ticketFiles`, describe via `CatalogViews.declaredColumnsSource`. Parquet/Iceberg paths unchanged (only
+  `partialSql` extracted). No plugin returns ArrowStream yet.

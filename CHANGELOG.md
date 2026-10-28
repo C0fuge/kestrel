@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Partial answers over catalog tables read as Arrow streams (P1 step 2 (b) part 2 (1); no plugin produces such
+  tables yet): the planner ships their files with partition values like Hive Parquet files, every endpoint asks
+  the catalog for one stream with the columns the query names (all for `*`, one for `count(*)`) and the simple
+  conditions of the WHERE clause's top-level AND as hints (`ArrowScanRequests`), runs the query once over it
+  without the statement cache (`DuckDbAdapter.streamSqlOnce`) and drops the stream afterwards; describing such a
+  query reads no data (declared columns). Complete mode still skips these tables.
 - Flight SQL sessions with the option `arrow-compression` (item 20, step (c)): SetSessionOptions /
   GetSessionOptions / CloseSession (were UNIMPLEMENTED) keep options per `arrow_flight_session_id` cookie on the
   node; `arrow-compression` (`none`/`zstd`/`lz4`) is the codec of the session's DoGet calls without the header
