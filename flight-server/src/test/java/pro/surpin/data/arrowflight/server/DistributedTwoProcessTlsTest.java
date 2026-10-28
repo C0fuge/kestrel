@@ -30,7 +30,6 @@ import pro.surpin.data.arrowflight.server.services.InternalCallIdentity;
 import java.io.File;
 import java.io.InputStream;
 import java.math.BigInteger;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -366,8 +365,6 @@ class DistributedTwoProcessTlsTest {
      * @throws Exception on failure
      */
     private static int freePort() throws Exception {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
+        return TestPorts.free();
     }
 }

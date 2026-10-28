@@ -26,7 +26,6 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.LocalFileSystem;
 
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Paths;
 import java.util.List;
@@ -200,9 +199,7 @@ public class TestFlightServerHelper implements AutoCloseable {
     }
 
     private static int findFreePort() throws Exception {
-        try (ServerSocket ss = new ServerSocket(0)) {
-            return ss.getLocalPort();
-        }
+        return TestPorts.free();
     }
 
     public static Builder builder() {

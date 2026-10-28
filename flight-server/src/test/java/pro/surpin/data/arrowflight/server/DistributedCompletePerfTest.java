@@ -10,7 +10,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
 
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -233,8 +232,6 @@ class DistributedCompletePerfTest {
      * @throws Exception on failure
      */
     private static int freePort() throws Exception {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
+        return TestPorts.free();
     }
 }
