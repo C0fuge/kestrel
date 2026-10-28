@@ -73,6 +73,7 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     the exported stream = the same 6000 rows computed in DuckDB SQL, all 12 types incl. decimal/date/timestamp/
     char/list/struct/map with NULLs, JVM zone America/Los_Angeles; partitions; partition-only scan; row-group
     skipping; broken / outside file), `OrcSearchArgumentsTest` 2/2.
+    *Step 2 (d) in progress 2026-10-28 (86af8f9):* `HiveOrcIntegrationTest` 5/5 locally; CI + package pending.
     **Next step (step 2 (d)):** end-to-end through the server with the packaged plugin (plugin dir, `share=hadoop,
     arrow`): extend `HiveCatalogIntegrationTest` (flight-server) with ORC tables written in the test (orc-core is
     not on the server's test classpath: write the files in the hive plugin's test jar fixture, which the server's
