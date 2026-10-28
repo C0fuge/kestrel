@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Zero-copy Flight writes for DuckDB result streams (item 22 (d)), opt-in: `flightZeroCopyWrites` /
+  `arrowflight.flight.zeroCopyWrites` / `FLIGHT_ZERO_COPY_WRITES` (default false, unchanged; only `true`/`false`).
+  gRPC sends the buffers DuckDB exported for a batch instead of copying each batch first; DuckDB exports every batch
+  into new buffers and Flight keeps them until written, so a batch stays intact while DuckDB computes the next ones.
+  Other streams (metadata, SqlInfo) always copy. Local A/B on 2 cores (`ParallelScanPerfTest`, in-process client on
+  the same cores, 6 M-row table, two rounds each): 8 endpoints 243/234 -> 245/268 MB/s at 8.05/8.34 -> 7.26/7.15 s
+  CPU per GB; 1 and 4 streams within noise. `ParallelScanPerfTest` takes `-Dperf.zeroCopyWrites`.
 - S3 / lakeFS read cache admission (item 17 (e)), opt-in: `arrowflight.s3.cacheAdmission` /
   `arrowflight.lakefs.cacheAdmission` = `always` (default, unchanged) or `reuse`: a missed block is kept only when it
   is read again while it is among the last N blocks not kept (N = the cache's blocks), so a scan larger than the cache
