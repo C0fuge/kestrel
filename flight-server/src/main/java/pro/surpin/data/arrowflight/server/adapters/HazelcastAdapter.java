@@ -10,13 +10,21 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.cluster.Member;
 import com.hazelcast.map.IMap;
 import com.hazelcast.map.listener.EntryExpiredListener;
+import com.hazelcast.instance.impl.HazelcastInstanceProxy;
+import com.hazelcast.internal.partition.InternalPartition;
+import com.hazelcast.internal.partition.InternalPartitionService;
+import com.hazelcast.internal.partition.PartitionReplica;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.IntFunction;
 
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 
@@ -112,7 +120,37 @@ public final class HazelcastAdapter implements AutoCloseable {
         this.serverFiles = instance.getMap(SERVER_FILES_MAP);
         this.clusterSecrets = instance.getMap(CLUSTER_SECRETS_MAP);
         this.view = new ClusterView(instance.getPartitionService(), instance.getCluster().getLocalMember(),
-                member -> member.getAttribute(SERVER_URI_ATTRIBUTE), ClusterView.DEFAULT_READ_WAIT_MILLIS);
+                member -> member.getAttribute(SERVER_URI_ATTRIBUTE), ClusterView.DEFAULT_READ_WAIT_MILLIS,
+                replicasOf(instance));
+    }
+
+    /**
+     * Reads the replicas of a partition from the member's partition table. A write waits for
+     * the synchronous backups as for the owner (up to hazelcast.operation.backup.timeout.millis,
+     * 5 s), and the public API names the owner only.
+     *
+     * @param instance Hazelcast instance
+     * @return replica member ids by partition id, owner first; null when the table is not
+     *         reachable (the owner alone counts then)
+     */
+    private static IntFunction<List<UUID>> replicasOf(HazelcastInstance instance) {
+        if (!(instance instanceof HazelcastInstanceProxy proxy)) {
+            return null;
+        }
+        InternalPartitionService table = proxy.getOriginal().node.getPartitionService();
+        return partitionId -> {
+            List<UUID> replicas = new ArrayList<>();
+            try {
+                InternalPartition partition = table.getPartition(partitionId);
+                for (int i = 0; i < InternalPartition.MAX_REPLICA_COUNT; i++) {
+                    PartitionReplica replica = partition.getReplica(i);
+                    replicas.add(replica == null ? null : replica.uuid());
+                }
+            } catch (RuntimeException e) {
+                return List.of();
+            }
+            return replicas;
+        };
     }
 
     /**

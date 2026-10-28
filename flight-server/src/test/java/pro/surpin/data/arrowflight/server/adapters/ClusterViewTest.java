@@ -153,4 +153,37 @@ class ClusterViewTest {
         view.getAll(map, Set.of("a", "b"), List.of(local, other));
         assertTrue(view.unresponsiveServers().isEmpty());
     }
+    /**
+     * Item D3 step 2: a write waits for the partition's synchronous backups as for its owner, so
+     * a key whose backup is the silent member counts, for a map with backups only.
+     */
+    @Test
+    void keyWhoseBackupIsSilentCountsForWritesWithBackups() {
+        PartitionService partitions = mock(PartitionService.class);
+        when(partitions.getPartition(anyString())).thenAnswer(call -> {
+            String key = call.getArgument(0);
+            Partition partition = mock(Partition.class);
+            when(partition.getOwner()).thenReturn(owners.getOrDefault(key, ownerByHash(key)));
+            when(partition.getPartitionId()).thenReturn(key.equals("b") ? 1 : 2);
+            return partition;
+        });
+        Map<Integer, List<UUID>> replicas = Map.of(
+                1, List.of(other.getUuid(), silent.getUuid(), local.getUuid()),
+                2, List.of(local.getUuid(), other.getUuid(), silent.getUuid()));
+        view = new ClusterView(partitions, local,
+                m -> m.getAttribute(HazelcastAdapter.SERVER_URI_ATTRIBUTE), WAIT_MILLIS, replicas::get);
+        silentAnswers = false;
+        read(Set.of("a", "b", "c"));
+
+        assertTrue(view.replicaUnresponsive("c", 1), "owner silent");
+        assertTrue(view.replicaUnresponsive("b", 1), "first backup silent");
+        assertFalse(view.replicaUnresponsive("b", 0), "no backups: the owner answers");
+        assertFalse(view.replicaUnresponsive("a", 1), "second backup only");
+        assertTrue(view.replicaUnresponsive("a", 2));
+        assertFalse(view.ownerUnresponsive("b"));
+
+        silentAnswers = true;
+        read(Set.of("c"));
+        assertFalse(view.replicaUnresponsive("b", 1), "the member answers again");
+    }
 }

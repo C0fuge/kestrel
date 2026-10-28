@@ -741,4 +741,149 @@ class ClusterServiceTest {
         verify(serverFiles, never()).containsKey(s2);
         cs.close();
     }
+    /** Polls a condition for up to 10 s. */
+    private static void await(java.util.function.BooleanSupplier condition, String what) throws Exception {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!condition.getAsBoolean()) {
+            assertTrue(System.nanoTime() < deadline, what);
+            Thread.sleep(10);
+        }
+    }
+
+    /**
+     * Item D3 step 2: a load change whose registry entry lives on a member that stopped
+     * answering does not wait for it; this node's plans count it at once, and only once after
+     * the write landed.
+     */
+    @Test
+    void loadChangeOnAnUnresponsiveMemberDoesNotWaitAndCountsAtOnce() throws Exception {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        when(hazelcast.members()).thenReturn(Set.of());
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s2));
+        when(view.replicaUnresponsive(eq(s2), anyInt())).thenReturn(true);
+        Map<String, Long> registry = new java.util.concurrent.ConcurrentHashMap<>(Map.of(s1, 0L, s2, 0L));
+        java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
+        when(serverRegistry.compute(anyString(), any())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            if (key.equals(s2)) {
+                answer.await();
+            }
+            java.util.function.BiFunction<String, Long, Long> function = invocation.getArgument(1);
+            return registry.compute(key, function);
+        });
+        when(view.getAll(eq(serverRegistry), eq(Set.of(s1, s2)), any()))
+                .thenAnswer(invocation -> Map.copyOf(registry));
+        ClusterService cs = createService(s1);
+
+        long started = System.nanoTime();
+        cs.addLoad(s2, 100L);
+        cs.addLoad(s1, 50L);
+        assertTrue(System.nanoTime() - started < java.util.concurrent.TimeUnit.SECONDS.toNanos(1));
+        assertEquals(1, cs.deferredWrites());
+        assertEquals(Map.of(s1, 50L, s2, 100L), cs.allServerLoads());
+
+        answer.countDown();
+        await(() -> registry.get(s2) == 100L, "the deferred write did not land");
+        await(() -> cs.allServerLoads().get(s2) == 100L, "the pending delta was counted twice");
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 2: deferred writes of one key keep their order, so a release finds the
+     * reservation that waited for the same member, and the node's load goes back to zero.
+     */
+    @Test
+    void deferredReservationAndReleaseOfOneTicketKeepTheirOrder() throws Exception {
+        String s1 = "grpc://n1:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put(s1, 0L);
+        Map<String, Serializable> cache = new java.util.concurrent.ConcurrentHashMap<>();
+        java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
+        when(statementCache.put(anyString(), any(), anyLong(), any())).thenAnswer(invocation -> {
+            answer.await();
+            return cache.put(invocation.getArgument(0), invocation.getArgument(1));
+        });
+        when(statementCache.remove(anyString())).thenAnswer(
+                invocation -> cache.remove((String) invocation.getArgument(0)));
+        ClusterService cs = createService(s1);
+        when(view.replicaUnresponsive(anyString(), anyInt())).thenAnswer(
+                invocation -> ((String) invocation.getArgument(0)).startsWith("__arrowflight-ticket-load"));
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, s1, 100L, true);
+
+        byte[] handle = cs.createEndpointHandle(state);
+        cs.addLoad(s1, 100L);
+        when(view.replicaUnresponsive(anyString(), anyInt())).thenReturn(false);
+        cs.releaseEndpointLoad(handle, state);
+        assertEquals(2, cs.deferredWrites(), "the release must queue behind the reservation");
+
+        answer.countDown();
+        await(() -> cache.isEmpty() && registry.get(s1) == 0L, "the release missed the reservation: "
+                + cache + " " + registry);
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 2: a heartbeat whose entry lives on a member that stopped answering does not
+     * hold the heartbeat thread, and beats do not pile up behind it.
+     */
+    @Test
+    void heartbeatOnAnUnresponsiveMemberDoesNotWaitAndDoesNotPileUp() throws Exception {
+        String s1 = "grpc://n1:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        ClusterService cs = createService(s1);
+        java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
+        clearInvocations(serverHeartbeats);
+        when(serverHeartbeats.put(eq(s1), anyLong())).thenAnswer(invocation -> {
+            answer.await();
+            return null;
+        });
+        when(view.replicaUnresponsive(eq(s1), anyInt())).thenReturn(true);
+        when(view.ownerUnresponsive(s1)).thenReturn(true);
+
+        long started = System.nanoTime();
+        for (int i = 0; i < 5; i++) {
+            cs.beat();
+        }
+        assertTrue(System.nanoTime() - started < java.util.concurrent.TimeUnit.SECONDS.toNanos(1));
+        assertTrue(cs.deferredWrites() >= 1 && cs.deferredWrites() <= 2, "beats: " + cs.deferredWrites());
+        cs.repairClusterState();
+        verify(serverFiles, never()).containsKey(s1);
+
+        answer.countDown();
+        long deferred = cs.deferredWrites();
+        await(() -> mockingDetails(serverHeartbeats).getInvocations().stream()
+                .filter(call -> call.getMethod().getName().equals("put")).count() == deferred,
+                "the deferred beats did not run");
+        cs.close();
+    }
+
+    /**
+     * Item D3 step 2: a live member's heartbeat entry on a member that stopped answering reads
+     * as the last value seen and ages; the server stays in the pool.
+     */
+    @Test
+    void staleHeartbeatOnAnUnresponsiveMemberKeepsTheServerLive() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        when(hazelcast.members()).thenReturn(Set.of());
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s2));
+        long old = System.currentTimeMillis() - 60_000;
+        when(view.getAll(eq(serverHeartbeats), eq(Set.of(s1, s2)), any()))
+                .thenReturn(Map.of(s1, System.currentTimeMillis(), s2, old));
+        when(view.replicaUnresponsive(eq(s2), anyInt())).thenReturn(true);
+
+        ClusterService cs = createService(s1);
+        assertEquals(Set.of(s1, s2), cs.filterLiveServers(Set.of(s1, s2)));
+        verify(serverRegistry, never()).remove(s2);
+        cs.close();
+    }
 }

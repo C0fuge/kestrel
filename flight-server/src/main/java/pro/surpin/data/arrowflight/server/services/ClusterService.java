@@ -19,8 +19,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.hazelcast.core.HazelcastInstance;
 
@@ -53,6 +56,8 @@ public final class ClusterService implements AutoCloseable {
     private static final String TICKET_SECRET_KEY = "__arrowflight-ticket-secret-v1";
     private static final String TICKET_LOAD_PREFIX = "__arrowflight-ticket-load-v1:";
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    /** Synchronous backups of the registry, heartbeat and statement maps (Hazelcast's default). */
+    private static final int MAP_BACKUP_COUNT = 1;
 
     private final HazelcastAdapter hazelcast;
     private final AppConfig appConfig;
@@ -63,6 +68,15 @@ public final class ClusterService implements AutoCloseable {
     // Moves load accounting of endpoints run here for another node, off the query's path: while
     // the planned node is still a cluster member that does not answer, map calls wait for it.
     private final ExecutorService loadClaimExecutor;
+    // Writes whose key lives on a member that stopped answering run here, one after the other,
+    // so that neither a query nor the heartbeat waits for that member (item D3).
+    private final ExecutorService deferredWriteExecutor;
+    /** Keys with deferred writes not done yet, and how many: later writes of them queue too. */
+    private final Map<String, Integer> deferredKeys = new ConcurrentHashMap<>();
+    /** Load deltas of deferred writes not done yet, by server URI, counted in plans at once. */
+    private final Map<String, Long> pendingLoad = new ConcurrentHashMap<>();
+    private final AtomicBoolean heartbeatDeferred = new AtomicBoolean();
+    private final AtomicLong deferredWrites = new AtomicLong();
     private boolean registered;
     private final EndpointTicketCodec endpointTicketCodec;
     private volatile byte[] currentSecret;
@@ -142,6 +156,11 @@ public final class ClusterService implements AutoCloseable {
             t.setDaemon(true);
             return t;
         });
+        this.deferredWriteExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "flight-cluster-write");
+            t.setDaemon(true);
+            return t;
+        });
         if (registerNow) {
             register();
         }
@@ -150,13 +169,7 @@ public final class ClusterService implements AutoCloseable {
             Serializable value = event.getOldValue();
             if (value instanceof HandleState state && state.serverUri() != null
                     && state.loadTracked()) {
-                hazelcast.serverRegistry().compute(state.serverUri(), (k, v) -> {
-                    if (v == null) {
-                        return null;
-                    }
-                    long updated = v - state.bytes();
-                    return updated <= 0 ? 0L : updated;
-                });
+                subtractLoad(state.serverUri(), state.bytes());
             }
         });
     }
@@ -172,17 +185,18 @@ public final class ClusterService implements AutoCloseable {
         hazelcast.serverRegistry().put(serverUri, 0L);
         hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
         heartbeatExecutor.scheduleAtFixedRate(() -> {
-            try {
-                hazelcast.serverRegistry().putIfAbsent(serverUri, 0L);
-                hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
-                removeExpiredLocalEntries();
-            } catch (Exception e) {
-                LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
-            }
+            // The view first: it finds a member that stopped answering within its read wait, and
+            // the beat then does not wait for that member's partitions.
             try {
                 refreshView();
             } catch (Exception e) {
                 LOGGER.warn("Failed to refresh the cluster view of {}: {}", serverUri, e.getMessage());
+            }
+            try {
+                beat();
+                removeExpiredLocalEntries();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
             }
             try {
                 repairClusterState();
@@ -190,6 +204,99 @@ public final class ClusterService implements AutoCloseable {
                 LOGGER.warn("Failed to check the cluster state of {}: {}", serverUri, e.getMessage());
             }
         }, HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Writes this server's registry entry (when missing) and heartbeat. When the entries live on
+     * a member that stopped answering, the write waits in the background and the heartbeat
+     * thread goes on (the cluster view stays fresh); one such beat waits at a time and writes
+     * the time it runs at.
+     */
+    void beat() {
+        Runnable write = () -> {
+            heartbeatDeferred.set(false);
+            hazelcast.serverRegistry().putIfAbsent(serverUri, 0L);
+            hazelcast.serverHeartbeats().put(serverUri, System.currentTimeMillis());
+        };
+        if (mustDefer(serverUri)) {
+            if (heartbeatDeferred.compareAndSet(false, true) && !writeOrDefer(serverUri, "heartbeat", write)) {
+                heartbeatDeferred.set(false);
+            }
+            return;
+        }
+        write.run();
+    }
+
+    /**
+     * Tells whether a write of a key would wait for a member that stopped answering (the key's
+     * owner or its backup), or must follow deferred writes of the same key.
+     *
+     * @param key map key
+     * @return true when the write goes to the background
+     */
+    private boolean mustDefer(String key) {
+        if (deferredKeys.containsKey(key)) {
+            return true;
+        }
+        ClusterView view = hazelcast.view();
+        return view != null && view.replicaUnresponsive(key, MAP_BACKUP_COUNT);
+    }
+
+    /**
+     * Tells whether a read of a key would wait for a member that stopped answering.
+     *
+     * @param key map key
+     * @return true when the key's owner is unresponsive
+     */
+    private boolean ownerUnresponsive(String key) {
+        ClusterView view = hazelcast.view();
+        return view != null && view.ownerUnresponsive(key);
+    }
+
+    /**
+     * Runs a cluster map write now, or in the background when its key lives on a member that
+     * stopped answering (until the member answers again or Hazelcast drops it and the key moves
+     * to a backup). Deferred writes of one key keep their order.
+     *
+     * @param key map key the write waits for
+     * @param what what the write does, for the log
+     * @param write the write
+     * @return true when the write was deferred
+     */
+    boolean writeOrDefer(String key, String what, Runnable write) {
+        if (!mustDefer(key)) {
+            write.run();
+            return false;
+        }
+        deferredKeys.merge(key, 1, Integer::sum);
+        try {
+            deferredWriteExecutor.execute(() -> {
+                try {
+                    write.run();
+                } catch (RuntimeException e) {
+                    LOGGER.warn("Deferred cluster write ({}) failed: {}", what, e.toString());
+                } finally {
+                    deferredKeys.computeIfPresent(key, (k, n) -> n <= 1 ? null : n - 1);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            deferredKeys.computeIfPresent(key, (k, n) -> n <= 1 ? null : n - 1);
+            LOGGER.debug("Cluster write ({}) dropped: the service is closed", what);
+            return true;
+        }
+        deferredWrites.incrementAndGet();
+        LOGGER.debug("Cluster write ({}) deferred: its key lives on a member that does not answer", what);
+        return true;
+    }
+
+    /**
+     * Counts the cluster writes that went to the background because their key lived on a
+     * member that stopped answering.
+     *
+     * @return number of deferred writes since start
+     */
+    public long deferredWrites() {
+        return deferredWrites.get();
     }
 
     /**
@@ -217,8 +324,11 @@ public final class ClusterService implements AutoCloseable {
                 // Its Hazelcast member left: the node is gone, whatever the maps still say (a
                 // lost partition can drop its heartbeat entry, which reads as "just registered").
                 LOGGER.warn("Server {} is no longer a cluster member, removing from pool", uri);
-                hazelcast.serverRegistry().remove(uri);
-                hazelcast.serverHeartbeats().remove(uri);
+                removeFromPool(uri);
+            } else if (members != null && lastHb != null && lastHb < deadline && mustDefer(uri)) {
+                // Its heartbeat entry lives on a member that stopped answering: the value is the
+                // last one read and ages while the node itself, a member, beats on.
+                live.add(uri);
             } else if (lastHb == null) {
                 // Registration and the first heartbeat are separate distributed-map writes.
                 // Keep a newly registered node eligible during that short window.
@@ -228,12 +338,24 @@ public final class ClusterService implements AutoCloseable {
             } else {
                 LOGGER.warn("Server {} is stale (last heartbeat {}ms ago), removing from pool",
                         uri, now - lastHb);
-                hazelcast.serverRegistry().remove(uri);
-                hazelcast.serverHeartbeats().remove(uri);
+                removeFromPool(uri);
             }
         }
         LogUtil.logTiming(t, "hazelcast.filterLiveServers", "total=" + serverUris.size() + " live=" + live.size());
         return live;
+    }
+
+    /**
+     * Removes a server's registry and heartbeat entries, in the background when they live on a
+     * member that stopped answering.
+     *
+     * @param uri server URI
+     */
+    private void removeFromPool(String uri) {
+        writeOrDefer(uri, "remove " + uri, () -> {
+            hazelcast.serverRegistry().remove(uri);
+            hazelcast.serverHeartbeats().remove(uri);
+        });
     }
 
     /**
@@ -253,7 +375,9 @@ public final class ClusterService implements AutoCloseable {
             for (String uri : members) {
                 Long load = loads.get(uri);
                 if (load != null) {
-                    result.put(uri, load);
+                    // Load added here whose write still waits for an unresponsive member counts now.
+                    long pending = pendingLoad.getOrDefault(uri, 0L);
+                    result.put(uri, Math.max(0L, load + pending));
                 }
             }
         } else {
@@ -428,14 +552,39 @@ public final class ClusterService implements AutoCloseable {
      */
     public void addLoad(String uri, long delta) {
         long t = LogUtil.mark();
-        hazelcast.serverRegistry().compute(uri, (k, v) -> {
+        changeLoad(uri, delta, true);
+        LogUtil.logTiming(t, "hazelcast.addLoad", "uri=" + uri + " delta=" + delta);
+    }
+
+    /**
+     * Changes a node's tracked load, never below zero; in the background when the node's entry
+     * lives on a member that stopped answering, counted in this node's plans at once.
+     *
+     * @param uri server URI
+     * @param delta bytes to add (positive or negative)
+     * @param create whether a missing entry is created; a node no longer in the registry (stale
+     *        and removed) must not come back by a release, or it would count as just started
+     */
+    private void changeLoad(String uri, long delta, boolean create) {
+        Runnable write = () -> hazelcast.serverRegistry().compute(uri, (k, v) -> {
             if (v == null) {
-                return delta;
+                return create ? delta : null;
             }
             long updated = v + delta;
             return updated <= 0 ? 0L : updated;
         });
-        LogUtil.logTiming(t, "hazelcast.addLoad", "uri=" + uri + " delta=" + delta);
+        if (!mustDefer(uri)) {
+            write.run();
+            return;
+        }
+        pendingLoad.merge(uri, delta, Long::sum);
+        writeOrDefer(uri, "load " + uri, () -> {
+            try {
+                write.run();
+            } finally {
+                pendingLoad.computeIfPresent(uri, (k, v) -> v - delta == 0L ? null : v - delta);
+            }
+        });
     }
 
     /**
@@ -448,7 +597,8 @@ public final class ClusterService implements AutoCloseable {
         long t = LogUtil.mark();
         localHandles.put(handle, new LocalHandle(
                 state, System.nanoTime() + HANDLE_TTL_NANOS));
-        hazelcast.statementCache().put(handle, state, 10, TimeUnit.MINUTES);
+        writeOrDefer(handle, "store handle",
+                () -> hazelcast.statementCache().put(handle, state, 10, TimeUnit.MINUTES));
         LogUtil.logTiming(t, "hazelcast.storeHandle");
     }
 
@@ -460,8 +610,9 @@ public final class ClusterService implements AutoCloseable {
      * @param parameters one-row Arrow IPC stream with the values
      */
     public void rememberParameters(String statementId, byte[] parameters) {
-        hazelcast.statementCache().put(PARAMETERS_PREFIX + statementId, parameters,
-                PARAMETERS_TTL_MINUTES, TimeUnit.MINUTES);
+        String key = PARAMETERS_PREFIX + statementId;
+        writeOrDefer(key, "remember parameters", () -> hazelcast.statementCache().put(key, parameters,
+                PARAMETERS_TTL_MINUTES, TimeUnit.MINUTES));
     }
 
     /**
@@ -521,8 +672,9 @@ public final class ClusterService implements AutoCloseable {
     public byte[] createEndpointHandle(HandleState state) {
         byte[] handle = endpointTicketCodec.encode(state);
         if (state.loadTracked()) {
-            hazelcast.statementCache().put(
-                    loadReservationKey(handle), state, loadReservationSeconds, TimeUnit.SECONDS);
+            String key = loadReservationKey(handle);
+            writeOrDefer(key, "reserve endpoint load", () -> hazelcast.statementCache().put(
+                    key, state, loadReservationSeconds, TimeUnit.SECONDS));
         }
         return handle;
     }
@@ -551,11 +703,13 @@ public final class ClusterService implements AutoCloseable {
         if (!state.loadTracked() || state.serverUri() == null || state.bytes() == 0L) {
             return;
         }
-        Serializable reservation = hazelcast.statementCache()
-                .remove(loadReservationKey(handle));
-        if (reservation instanceof HandleState reserved) {
-            subtractLoad(reserved.serverUri(), reserved.bytes());
-        }
+        String key = loadReservationKey(handle);
+        writeOrDefer(key, "release endpoint load", () -> {
+            Serializable reservation = hazelcast.statementCache().remove(key);
+            if (reservation instanceof HandleState reserved) {
+                subtractLoad(reserved.serverUri(), reserved.bytes());
+            }
+        });
     }
 
     /**
@@ -633,13 +787,7 @@ public final class ClusterService implements AutoCloseable {
      */
     private void subtractLoad(String uri, long bytes) {
         long t = LogUtil.mark();
-        hazelcast.serverRegistry().compute(uri, (k, v) -> {
-            if (v == null) {
-                return null;
-            }
-            long updated = v - bytes;
-            return updated <= 0 ? 0L : updated;
-        });
+        changeLoad(uri, -bytes, false);
         LogUtil.logTiming(t, "hazelcast.subtractLoad", "uri=" + uri + " bytes=" + bytes);
     }
 
@@ -650,7 +798,7 @@ public final class ClusterService implements AutoCloseable {
      */
     public void removeHandle(String handle) {
         localHandles.remove(handle);
-        hazelcast.statementCache().remove(handle);
+        writeOrDefer(handle, "remove handle", () -> hazelcast.statementCache().remove(handle));
     }
 
     /**
@@ -678,10 +826,15 @@ public final class ClusterService implements AutoCloseable {
      */
     void repairClusterState() {
         Map<String, Long> inventory = localInventory;
-        if (inventory != null && !hazelcast.serverFiles().containsKey(serverUri)) {
+        // Entries on a member that stopped answering can neither be checked nor repaired now;
+        // checking would hold the heartbeat thread until Hazelcast drops the member.
+        if (inventory != null && !ownerUnresponsive(serverUri) && !hazelcast.serverFiles().containsKey(serverUri)) {
             hazelcast.serverFiles().put(serverUri, new LinkedHashMap<>(inventory));
             LOGGER.warn("The cluster had lost the file inventory of {}; published it again ({} files)",
                     serverUri, inventory.size());
+        }
+        if (ownerUnresponsive(TICKET_SECRET_KEY)) {
+            return;
         }
         Serializable shared = hazelcast.clusterSecrets().get(TICKET_SECRET_KEY);
         if (shared == null) {
@@ -794,6 +947,7 @@ public final class ClusterService implements AutoCloseable {
         }
         heartbeatExecutor.shutdownNow();
         loadClaimExecutor.shutdownNow();
+        deferredWriteExecutor.shutdownNow();
         localHandles.clear();
         try {
             hazelcast.close();

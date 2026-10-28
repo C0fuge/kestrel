@@ -272,6 +272,53 @@ class ClusterMemberLossIntegrationTest {
     }
 
     /**
+     * Item D3 step 2: after the first plan found the silent member, the writes of a partial-mode
+     * plan with load tracking (load added per server, a reservation per ticket, its release) and
+     * the heartbeat do not wait for it either; they land once Hazelcast dropped the member, and
+     * every load goes back to zero.
+     */
+    @Test
+    void crashedMemberWhoseAddressVanishedHoldsNoWritesOfPlansOrHeartbeats() throws Exception {
+        String iptables = iptablesCommand();
+        Assumptions.assumeTrue(iptables != null, "needs iptables as root or via sudo -n");
+        List<ClusterService> cluster = crashCluster(null);
+        ClusterService survivor = cluster.get(0);
+        String[] servers = {"grpc+tcp://n1:32010", "grpc+tcp://n2:32010"};
+        String rules = "%1$s %2$s INPUT -s 127.0.0.2 -j DROP && %1$s %2$s INPUT -d 127.0.0.2 -j DROP";
+        long millis;
+        try {
+            assertTrue(run(rules.formatted(iptables, "-I")), "the DROP rules were not added");
+            firstPlanMillisAfterCrash(cluster);
+            long started = System.nanoTime();
+            for (int i = 0; i < 40; i++) {
+                String server = servers[i % 2];
+                HandleState state = HandleState.forServerFiles("SELECT " + i,
+                        new String[]{"tpch/lineitem/f" + i + ".parquet"}, server, 100L, true);
+                byte[] handle = survivor.createEndpointHandle(state);
+                survivor.addLoad(server, 100L);
+                survivor.releaseEndpointLoad(handle, state);
+                survivor.beat();
+            }
+            survivor.repairClusterState();
+            millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            assertEquals(3, survivor.getHazelcastInstance().getCluster().getMembers().size(),
+                    "the crashed member was dropped already; the test measured nothing");
+        } finally {
+            run(rules.formatted(iptables, "-D"));
+        }
+        assertTrue(millis < 1000, "40 tickets took " + millis + " ms");
+        assertTrue(survivor.deferredWrites() > 0, "no write went to the crashed member's partitions");
+        awaitMembers(survivor, 2);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        Map<String, Long> loads = survivor.getLoads(Set.of(servers));
+        while (!loads.equals(Map.of(servers[0], 0L, servers[1], 0L))) {
+            assertTrue(System.nanoTime() < deadline, "loads after the deferred writes: " + loads);
+            Thread.sleep(100);
+            loads = survivor.getLoads(Set.of(servers));
+        }
+    }
+
+    /**
      * Starts two members on 127.0.0.1 and a third, the one to crash, on 127.0.0.2.
      *
      * @param maxNoHeartbeatSeconds hazelcast.max.no.heartbeat.seconds for every member, or null

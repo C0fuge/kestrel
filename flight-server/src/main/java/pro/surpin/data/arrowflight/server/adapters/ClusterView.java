@@ -10,14 +10,17 @@ import org.slf4j.LoggerFactory;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import java.util.function.IntFunction;
 
 /**
  * This node's view of the cluster maps the planner reads: key reads that wait a bounded time,
@@ -47,6 +50,8 @@ public final class ClusterView {
     private final long readWaitNanos;
     private final Map<String, Map<String, Object>> lastValues = new ConcurrentHashMap<>();
     private final Set<String> unresponsive = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> unresponsiveMembers = ConcurrentHashMap.newKeySet();
+    private final IntFunction<List<UUID>> replicasOf;
     private final Map<String, String> probeKeys = new ConcurrentHashMap<>();
 
     /**
@@ -59,6 +64,24 @@ public final class ClusterView {
      */
     public ClusterView(PartitionService partitions, Member localMember,
             Function<Member, String> serverUriOf, long readWaitMillis) {
+        this(partitions, localMember, serverUriOf, readWaitMillis, null);
+    }
+
+    /**
+     * Creates a view over the partitions of one Hazelcast member that also knows the backup
+     * replicas of every partition, which a write waits for as it waits for the owner.
+     *
+     * @param partitions partition service of the local member
+     * @param localMember the local member, never counted unresponsive
+     * @param serverUriOf Flight URI of a member's server, or null when the member does not tell
+     * @param readWaitMillis time a read waits for a member before the member counts unresponsive
+     * @param replicasOf members holding a partition, by partition id: owner first, then the
+     *        backups in order; null or an empty list when unknown (the owner alone counts)
+     */
+    public ClusterView(PartitionService partitions, Member localMember,
+            Function<Member, String> serverUriOf, long readWaitMillis,
+            IntFunction<List<UUID>> replicasOf) {
+        this.replicasOf = replicasOf;
         this.partitions = partitions;
         this.localMember = localMember;
         this.serverUriOf = serverUriOf;
@@ -135,6 +158,43 @@ public final class ClusterView {
         Member owner = owner(key);
         String uri = owner == null ? null : serverUriOf.apply(owner);
         return uri != null && unresponsive.contains(uri);
+    }
+
+    /**
+     * Tells whether a write of a key would wait for a member that stopped answering: its owner,
+     * or one of the first backups a map with that many synchronous backups waits for.
+     *
+     * @param key map key
+     * @param backupCount synchronous backups of the map
+     * @return true when the owner or one of those backups is unresponsive
+     */
+    public boolean replicaUnresponsive(String key, int backupCount) {
+        if (unresponsive.isEmpty() && unresponsiveMembers.isEmpty()) {
+            return false;
+        }
+        if (ownerUnresponsive(key)) {
+            return true;
+        }
+        if (replicasOf == null || backupCount <= 0) {
+            return false;
+        }
+        List<UUID> replicas;
+        try {
+            Partition partition = partitions.getPartition(key);
+            replicas = partition == null ? null : replicasOf.apply(partition.getPartitionId());
+        } catch (RuntimeException e) {
+            return false;
+        }
+        if (replicas == null) {
+            return false;
+        }
+        for (int i = 1; i <= backupCount && i < replicas.size(); i++) {
+            UUID replica = replicas.get(i);
+            if (replica != null && unresponsiveMembers.contains(replica)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -312,6 +372,9 @@ public final class ClusterView {
      */
     private void markUnresponsive(Member member) {
         String uri = member == null || member.equals(localMember) ? null : serverUriOf.apply(member);
+        if (uri != null) {
+            unresponsiveMembers.add(member.getUuid());
+        }
         if (uri != null && unresponsive.add(uri)) {
             LOGGER.warn("Cluster member of {} did not answer within {} ms; plans leave it out"
                     + " until it answers or leaves the cluster", uri,
@@ -326,6 +389,9 @@ public final class ClusterView {
      */
     private void markResponsive(Member member) {
         String uri = member == null ? null : serverUriOf.apply(member);
+        if (member != null) {
+            unresponsiveMembers.remove(member.getUuid());
+        }
         if (uri != null && unresponsive.remove(uri)) {
             LOGGER.warn("Cluster member of {} answers again", uri);
         }
@@ -338,12 +404,15 @@ public final class ClusterView {
      */
     private void forgetMembersThatLeft(Collection<Member> members) {
         Set<String> current = new HashSet<>();
+        Set<UUID> currentMembers = new HashSet<>();
         for (Member member : members) {
+            currentMembers.add(member.getUuid());
             String uri = serverUriOf.apply(member);
             if (uri != null) {
                 current.add(uri);
             }
         }
         unresponsive.retainAll(current);
+        unresponsiveMembers.retainAll(currentMembers);
     }
 }
