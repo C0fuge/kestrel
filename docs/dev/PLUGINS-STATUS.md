@@ -245,10 +245,33 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     (Hive-created tables store `string` for all columns). Tests: `TextArrowReaderTest` 8 (opencsv semantics:
     quotes, doubled quotes, escapes dropped before other chars, unclosed quote drops the field, empty line,
     U+FFFD), `HiveTextTableTest` 5, `HiveTextIntegrationTest` 5 (`openCsvSerdeTablesAnswerInBothModes`).
-    *Next (step 2):* (c) the rest: JsonSerDe (`org.apache.hive.hcatalog.data.JsonSerDe`; check how Hive 3.1.3
-    maps JSON values to column types, case-insensitive keys, malformed lines), then Avro, then views; (d) perf
-    note (text vs Parquet SF1; OpenCSVSerde builds a CSVReader per line as Hive does - measure) and maybe
-    splitting large uncompressed files at line boundaries.
+    *Step 2 (c) part 2 done 2026-10-28 (e8014c2, JsonSerDe):* read from Hive 3.1.3's own sources (hcatalog
+    `JsonSerDe`, serde2 `JsonSerDe`, `HCatSchema`, `Date`/`Timestamp`, `HiveBaseChar`, Java object inspectors):
+    both serdes are the same Jackson 1.9 token walk (not the newer `HiveJsonStructReader` of Hive 4). Ported
+    one to one in `JsonRows` with the same parser (`jackson-core-asl` 1.9.13, new plugin dependency, no deps) so
+    token quirks match: first token must be `{`, keys lower-cased and matched (hcatalog: against lower-cased
+    names; serde2: against declared names), unknown keys skipped with their children, later key wins,
+    hcatalog `_col<n>` keys (`_col01` fails, out of range fails; serde2 fails on them); ints via Jackson
+    (`1.9` -> 1, tinyint 200 -> -56, quoted number / bool / object fail), boolean = `Boolean.valueOf(getText)`,
+    string = `getText` of any token (an object gives `{` and its keys then count for the enclosing object -
+    reproduced), binary UTF-8 bytes, date/timestamp Hive's LENIENT formatters copied (`2020-2-30` ->
+    03-01, a date-only timestamp FAILS in Hive 3.1.3 - reproduced), decimal `HiveDecimal.create` +
+    `enforcePrecisionScale` (storage-api), varchar/char cut by code points, char stripped; map keys via
+    `Integer.valueOf` & co. Hive fails the query on any serde exception, so the plugin fails the read
+    naming file and line (also for unprojected columns - the serde is eager). Arrow-only failures: NULL map
+    key (unreadable decimal key), duplicate keys after conversion (binary keys, sub-microsecond timestamps),
+    dates/timestamps out of range. `HiveTable.json(sd)` by full serde class (OpenX's `JsonSerDe` stays
+    skipped), `TextFormat.json` (+ `json` component in schema ID; header lines; footer and any
+    `timestamp.formats` skip the table), partitions with the other JSON serde fail the query. Tests:
+    `TextArrowReaderTest` 11 (+3: every type and quirk, 23 failing lines, formats/types),
+    `HiveTextTableTest` 6 (+1 metastore: hcatalog + serde2 + gzip + NULL partition, OpenX/formats skipped,
+    partition with other serde), `HiveTextIntegrationTest` 6 (+1: DuckDB `to_json` rows with `S`/`_col0`/
+    unknown keys = Parquet in both modes, fingerprint, join on struct/map).
+    *Next (step 2):* (c) the rest: Avro (`AvroSerDe`; schema from `avro.schema.literal`/`.url` vs columns;
+    DuckDB has an `avro` extension - check it is in ci-assets and reads over our stores, else Java reader via
+    the ORC path), then simple views; (d) perf note (text/CSV/JSON vs Parquet SF1; OpenCSVSerde builds a
+    CSVReader per line as Hive does, JSON builds Java objects per row - measure) and maybe splitting large
+    uncompressed files at line boundaries.
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -266,6 +289,10 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
 - (P4, OpenCSVSerde) tables whose metastore columns are typed (`int`, ...) are skipped: Hive reads every column of
   the serde as string, so the plugin would have to announce strings for declared ints (Trino refuses such tables,
   Hive-created ones store `string`). Read them as strings instead, or cast like Spark does? Skipped until decided.
+
+- (P4, JsonSerDe) an empty line in a JSON table fails the query: Hive 3.1.3's serde fails on it at a file's
+  start and otherwise repeats the previous row (it re-parses the reused line buffer - a Hive bug). Skip empty
+  lines instead (no row), if production files have them?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
@@ -392,3 +419,7 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   40682828658 were cancelled by me so as not to cancel other lanes' runs in the shared `dev-ci-main` concurrency
   group (lane runs 40681442479, 40682559133 were cancelled anyway; 40682965605 covers their commits). Next: P4 step 2
   (c) JsonSerDe, then Avro, views; (d) perf.
+- 2026-10-28 (plugins session): P4 step 2 (c) part 2 - Hive JsonSerDe tables (hcatalog + serde2) under
+  `hive.textTables` (e8014c2; plugin only + tests, comment lines in `arrowflight.properties`; new plugin dependency
+  `jackson-core-asl` 1.9.13 = Hive's parser; CHANGELOG). Local: hive module 59/59 + Checkstyle + SpotBugs,
+  `HiveTextIntegrationTest` 6/6. CI: pending (dispatch package=true).
