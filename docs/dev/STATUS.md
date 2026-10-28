@@ -1708,4 +1708,7 @@
   `ClusterService.internalCallIdentity/liveServerUris`, `FlightSecurity.configure`, `HadoopArrowFlightServer`,
   `ServerComponent`, `CompleteAnswerMerge` (output names; ORDER BY qualified with `merged.`). Branch CI run
   40670031954 green. Details in `docs/dev/LANE3-STATUS.md`.
-
+- 2026-10-28 (plugins lane, FYI): P4 step 1 - Hive text tables via the ArrowStream path, opt-in `hive.textTables`
+  (c258adf, plugin only; core: one comment line in `arrowflight.properties`). Its push cancelled lane 3's dispatch
+  40671772031 (738d1e7, same concurrency group); the plugins dispatch 40672085389 (package=true, includes 738d1e7)
+  is green, pre-release `server-1.0.0-c258adf27dc9`.

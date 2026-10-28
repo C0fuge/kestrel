@@ -356,4 +356,4 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   change, a comment line in `arrowflight.properties`; CHANGELOG). Local: hive module 51 tests (new `TextValuesTest` 4,
   `TextArrowReaderTest` 6, `HiveTextTableTest` 3; `OrcTableReaderTest` 6 on the renamed `TableFilesReader`; UTF-8
   locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40672085389 (c258adf, package=true; it also covers lane 3's
-  738d1e7, whose dispatch 40671772031 my push cancelled - same concurrency group) running (result follows).
+  738d1e7, whose dispatch 40671772031 my push cancelled - same concurrency group) green (build + package), pre-release `server-1.0.0-c258adf27dc9` (text tables opt-in, default off; existing behaviour unchanged). Next: P4 step 2 (a) end-to-end server test, then (b)-(d).
