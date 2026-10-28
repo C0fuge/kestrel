@@ -337,6 +337,33 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns plainFlightCommands from the system configuration.
+     *
+     * @return whether plain Flight descriptors are read
+     */
+    public static boolean plainFlightCommands() {
+        return plainFlightCommands(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code plainFlightCommands} ({@code FLIGHT_PLAIN_COMMANDS}): whether generic Flight
+     * clients may query with plain descriptors, a command holding SQL text or a path naming a
+     * table (ClickHouse {@code arrowFlight}); default false, which refuses them as before.
+     *
+     * @param props configuration source
+     * @return true when on
+     * @throws IllegalArgumentException for a value other than true or false
+     */
+    public static boolean plainFlightCommands(ConfigSource props) {
+        String value = getStringWithEnv("plainFlightCommands", "arrowflight.plainFlightCommands",
+                "FLIGHT_PLAIN_COMMANDS", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("plainFlightCommands must be true or false: " + value);
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own

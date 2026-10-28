@@ -239,6 +239,17 @@ class ConfigAdapterTest {
                 source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS", " /etc/flight/ca.pem "))));
     }
 
+    @Test
+    void plainFlightCommandsAreOffByDefaultAndRefuseOtherValues() throws IOException {
+        assertFalse(ConfigAdapter.plainFlightCommands(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.plainFlightCommands(
+                source(Map.of("plainFlightCommands", "true"), Map.of())));
+        assertTrue(ConfigAdapter.plainFlightCommands(
+                source(Map.of(), Map.of("FLIGHT_PLAIN_COMMANDS", " True "))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.plainFlightCommands(
+                source(Map.of("plainFlightCommands", "yes"), Map.of())));
+    }
+
     /**
      * Regression for the S3 small-query tail (2026-10-28): on object stores the default keeps at
      * least 4 threads, local and HDFS data directories keep the size-aware default, an explicit

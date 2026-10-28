@@ -215,6 +215,12 @@ public class HadoopArrowFlightServer {
                 grpc = grpc.andThen(builder -> builder.intercept(
                         InternalCallAuthenticator.memberAddressCheck(cluster::liveServerUris)));
             }
+            boolean plainCommands = ConfigAdapter.plainFlightCommands();
+            component.producer().acceptPlainCommands(plainCommands);
+            if (plainCommands) {
+                LOGGER.info("plainFlightCommands=true: plain Flight descriptors (SQL text commands, table"
+                        + " paths) are read as queries, with the same authentication and authorization");
+            }
             server = flightSecurity.configure(FlightServer.builder(
                     component.allocator(),
                     location,

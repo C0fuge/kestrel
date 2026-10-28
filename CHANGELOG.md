@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Plain Flight descriptors for generic Flight clients (ClickHouse `arrowFlight`, plain Flight libraries), with the
+  new optional setting `plainFlightCommands` (`FLIGHT_PLAIN_COMMANDS`, default `false`: refused as before):
+  `GetFlightInfo` / `GetSchema` with a command descriptor holding UTF-8 SQL text, or a path descriptor naming a table
+  (`schema.table`, plain identifiers -> `SELECT * FROM schema.table`), then `DoGet` on the tickets. Flight SQL
+  commands keep their handling; same authentication and Ranger checks as Flight SQL queries; the answer is complete
+  unless the client sends `x-flight-result-mode: partial` (P5).
 - Hive plugin: insert-only (MM) transactional tables with the new optional setting `hive.insertOnlyTables=true`
   (default `false`: skipped as before; Hive 3 metastores). The plugin takes one snapshot of committed writes per plan
   (`get_open_txns` + `get_valid_write_ids`) and reads in every table/partition directory what Hive reads at that

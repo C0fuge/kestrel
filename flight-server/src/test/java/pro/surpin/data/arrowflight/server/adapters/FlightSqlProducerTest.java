@@ -699,6 +699,101 @@ class FlightSqlProducerTest {
         return value;
     }
 
+    /**
+     * Verifies plain descriptors (SQL text, table path) are refused unless accepted, then go
+     * through the same Ranger check as Flight SQL queries before anything is described.
+     */
+    @Test
+    void plainDescriptorsAreOptInAndChecked() throws Exception {
+        MetadataService metadataService = mock(MetadataService.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        FlightAuthorization authorization = mock(FlightAuthorization.class);
+        doThrow(CallStatus.UNAUTHORIZED.toRuntimeException()).when(authorization)
+                .requireQuery("alice", "select * from sales.orders");
+        doThrow(CallStatus.UNAUTHORIZED.toRuntimeException()).when(authorization)
+                .requireQuery("alice", "SELECT * FROM sales.orders");
+        FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);
+        when(context.peerIdentity()).thenReturn("alice");
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), mock(BufferAllocator.class),
+                metadataService, mock(QueryPlanner.class), executionService,
+                mock(ClusterService.class), authorization);
+        FlightDescriptor text = FlightDescriptor.command(
+                "select * from sales.orders".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        FlightDescriptor path = FlightDescriptor.path("sales.orders");
+
+        FlightRuntimeException off = org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class, () -> producer.getFlightInfo(context, text));
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, off.status().code());
+        verify(authorization, never()).requireQuery(anyString(), anyString());
+
+        producer.acceptPlainCommands(true);
+        for (FlightDescriptor descriptor : List.of(text, path)) {
+            assertEquals(FlightStatusCode.UNAUTHORIZED, org.junit.jupiter.api.Assertions.assertThrows(
+                    FlightRuntimeException.class, () -> producer.getFlightInfo(context, descriptor))
+                    .status().code());
+            assertEquals(FlightStatusCode.UNAUTHORIZED, org.junit.jupiter.api.Assertions.assertThrows(
+                    FlightRuntimeException.class, () -> producer.getSchema(context, descriptor))
+                    .status().code());
+        }
+        verify(authorization, times(2)).requireQuery("alice", "select * from sales.orders");
+        verify(authorization, times(2)).requireQuery("alice", "SELECT * FROM sales.orders");
+        verify(metadataService, never()).getQuerySchema(anyString());
+        verify(executionService, never()).completeSchema(any(), anyString());
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class, () -> producer.getFlightInfo(context,
+                        FlightDescriptor.path("sales.orders;drop"))).status().code());
+    }
+
+    /**
+     * Verifies a plain descriptor gets the complete answer even where Flight SQL clients get
+     * parts by default, unless its client asks for parts, and Flight SQL commands keep the default.
+     */
+    @Test
+    void plainDescriptorsGetCompleteAnswersUnlessPartsAreAsked() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "select sum(o_totalprice) from tpch.orders";
+        Schema schema = new Schema(List.of(Field.nullable("sum", new ArrowType.FloatingPoint(
+                org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE))));
+        when(executionService.completeSchema(allocator, query, null)).thenReturn(schema);
+        when(executionService.resultSchema(allocator, query)).thenReturn(schema);
+        when(queryPlanner.planComplete(query, null)).thenReturn(new QueryPlan(List.of(), -1L, -1L));
+        when(queryPlanner.plan(query)).thenReturn(new QueryPlan(List.of(), 10L, 1L));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "partial");
+        producer.acceptPlainCommands(true);
+        FlightProducer.CallContext plain = mock(FlightProducer.CallContext.class);
+        FlightProducer.CallContext partial = mock(FlightProducer.CallContext.class);
+        org.apache.arrow.flight.FlightCallHeaders headers = new org.apache.arrow.flight.FlightCallHeaders();
+        headers.insert(ResultModeMiddleware.HEADER, "partial");
+        when(partial.getMiddleware(ResultModeMiddleware.KEY))
+                .thenReturn(new ResultModeMiddleware.Factory().onCallStarted(null, headers, null));
+        FlightDescriptor text = FlightDescriptor.command(
+                (" " + query + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        FlightInfo info = producer.getFlightInfo(plain, text);
+        assertEquals(schema, info.getSchema());
+        assertEquals(text, info.getDescriptor());
+        verify(queryPlanner).planComplete(query, null);
+        verify(queryPlanner, never()).plan(query);
+        assertEquals(schema, producer.getSchema(plain, text).getSchema());
+        verify(executionService, times(2)).completeSchema(allocator, query, null);
+
+        producer.getFlightInfo(partial, text);
+        verify(queryPlanner).plan(query);
+
+        // A Flight SQL command keeps its handling and the server's default (parts).
+        FlightDescriptor flightSql = FlightDescriptor.command(com.google.protobuf.Any.pack(
+                FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build()).toByteArray());
+        producer.getFlightInfo(plain, flightSql);
+        verify(queryPlanner, times(2)).plan(query);
+        verify(queryPlanner, times(1)).planComplete(query, null);
+    }
+
     /** Verifies the default complete mode and the client's request for parts. */
     @Test
     void resultModeComesFromHeaderOrDefault() throws Exception {

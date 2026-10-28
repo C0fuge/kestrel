@@ -87,6 +87,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private final FlightAuthorization authorization;
     /** Merges complete answers from endpoint answers (distributedComplete); null when off. */
     private volatile DistributedComplete distributedComplete;
+    /** Whether plain Flight descriptors (SQL text commands, table paths) are read (plainFlightCommands). */
+    private volatile boolean plainCommands;
     private final String defaultResultMode;
     private final java.util.Set<Integer> knownSqlInfo;
 
@@ -375,6 +377,85 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     public void useDistributedComplete(DistributedComplete distributed) {
         this.distributedComplete = distributed;
+    }
+
+    /**
+     * Lets generic Flight clients query with plain descriptors (opt-in {@code plainFlightCommands}):
+     * a command holding SQL text, or a path naming a table; see {@link PlainFlightCommands}.
+     *
+     * @param accept true to read plain descriptors, false to refuse them as before
+     */
+    public void acceptPlainCommands(boolean accept) {
+        this.plainCommands = accept;
+    }
+
+    /**
+     * Plans a query given as a plain descriptor when those are accepted, and passes every other
+     * descriptor to the Flight SQL handling.
+     *
+     * @param context call context
+     * @param descriptor request descriptor
+     * @return result schema with the endpoints to read it from
+     */
+    @Override
+    public FlightInfo getFlightInfo(FlightProducer.CallContext context, FlightDescriptor descriptor) {
+        String query = plainQuery(descriptor);
+        if (query == null) {
+            return super.getFlightInfo(context, descriptor);
+        }
+        String user = context == null ? null : context.peerIdentity();
+        requireQuery(user, query);
+        LOGGER.info("node={} query=plainDescriptor user={} query='{}'", LogUtil.node(), user, query);
+        return flightInfoForQuery(query, null, descriptor, context, plainCompleteAnswer(context));
+    }
+
+    /**
+     * Describes a query given as a plain descriptor when those are accepted, and passes every
+     * other descriptor to the Flight SQL handling.
+     *
+     * @param context call context
+     * @param descriptor request descriptor
+     * @return result schema
+     */
+    @Override
+    public SchemaResult getSchema(FlightProducer.CallContext context, FlightDescriptor descriptor) {
+        String query = plainQuery(descriptor);
+        if (query == null) {
+            return super.getSchema(context, descriptor);
+        }
+        requireQuery(context == null ? null : context.peerIdentity(), query);
+        return new SchemaResult(plainCompleteAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
+    }
+
+    /**
+     * Returns the query of a plain descriptor.
+     *
+     * @param descriptor request descriptor
+     * @return query, or null for a Flight SQL command or when plain descriptors are not accepted
+     * @throws FlightRuntimeException INVALID_ARGUMENT for a plain descriptor that names no query
+     */
+    private String plainQuery(FlightDescriptor descriptor) {
+        if (!plainCommands || descriptor == null) {
+            return null;
+        }
+        try {
+            return PlainFlightCommands.query(descriptor);
+        } catch (IllegalArgumentException e) {
+            throw CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage()).withCause(e).toRuntimeException();
+        }
+    }
+
+    /**
+     * Tells whether a plain-descriptor call gets the complete answer: yes unless the client asks
+     * for partial results in its header, since a generic client does not merge partial answers.
+     *
+     * @param context call context, or null
+     * @return true for complete-answer mode
+     */
+    private static boolean plainCompleteAnswer(FlightProducer.CallContext context) {
+        ResultModeMiddleware middleware = context == null ? null : context.getMiddleware(ResultModeMiddleware.KEY);
+        String requested = middleware == null ? null : middleware.requested();
+        return requested == null || requested.isBlank() || !"partial".equalsIgnoreCase(requested.trim());
     }
 
     /**
@@ -920,7 +1001,22 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     private FlightInfo flightInfoForQuery(String query, byte[] parameters,
             FlightDescriptor descriptor, FlightProducer.CallContext context) {
-        if (completeAnswer(context)) {
+        return flightInfoForQuery(query, parameters, descriptor, context, completeAnswer(context));
+    }
+
+    /**
+     * Plans a query with parameter values in the given result mode and describes its result.
+     *
+     * @param query SQL query
+     * @param parameters one-row Arrow IPC stream with the values, or null
+     * @param descriptor flight descriptor of the request
+     * @param context call context
+     * @param complete true for the complete answer, false for partial answers per endpoint
+     * @return result schema with the endpoints to read it from
+     */
+    private FlightInfo flightInfoForQuery(String query, byte[] parameters,
+            FlightDescriptor descriptor, FlightProducer.CallContext context, boolean complete) {
+        if (complete) {
             Schema schema = completeSchemaFor(query, parameters);
             try {
                 return new FlightInfo(schema, descriptor,

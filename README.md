@@ -358,6 +358,16 @@ each stream gets budget / open streams (at least 1 MiB, at most the per-stream t
 for its client beyond that. Many concurrent scans then slow down instead of running the node out of
 direct memory (streams CANCELLED "Server sendMessage() failed with Error", container killed).
 
+`plainFlightCommands` (`FLIGHT_PLAIN_COMMANDS`, default false) lets generic Flight clients that do not
+speak Flight SQL query the server: `GetFlightInfo` / `GetSchema` with a command descriptor holding UTF-8 SQL
+text, or with a path descriptor naming a table (`schema.table`, plain identifiers, read as
+`SELECT * FROM schema.table`), then `DoGet` on the returned tickets. Flight SQL commands are told apart by their
+protobuf type and keep their handling. Authentication and Ranger checks are those of Flight SQL queries. The
+answer is complete (a generic client does not merge partial answers) unless the client sends
+`x-flight-result-mode: partial`. Example, ClickHouse: `SELECT * FROM arrowFlight('host:port', 'sales.orders',
+'user', 'password')` (path) or with `SET arrow_flight_request_descriptor_type = 'command'` (SQL text); ClickHouse
+reads every endpoint over its own connection.
+
 `distributedComplete` (`FLIGHT_DISTRIBUTED_COMPLETE`, default false) lets the node that answers a
 complete-mode query compute it with the cluster: it plans the query in parts as partial mode does, reads
 every part from its node with a Flight DoGet as the client's user, and merges the parts in its own DuckDB.
