@@ -49,6 +49,7 @@ public final class HazelcastAdapter implements AutoCloseable {
     private final IMap<String, Long> serverHeartbeats;
     private final IMap<String, Map<String, Long>> serverFiles;
     private final IMap<String, Serializable> clusterSecrets;
+    private final ClusterView view;
 
     /**
      * Creates a new Hazelcast instance using TCP/IP join on the given hosts.
@@ -110,6 +111,8 @@ public final class HazelcastAdapter implements AutoCloseable {
         this.serverHeartbeats = instance.getMap(SERVER_HEARTBEAT_MAP);
         this.serverFiles = instance.getMap(SERVER_FILES_MAP);
         this.clusterSecrets = instance.getMap(CLUSTER_SECRETS_MAP);
+        this.view = new ClusterView(instance.getPartitionService(), instance.getCluster().getLocalMember(),
+                member -> member.getAttribute(SERVER_URI_ATTRIBUTE), ClusterView.DEFAULT_READ_WAIT_MILLIS);
     }
 
     /**
@@ -202,6 +205,25 @@ public final class HazelcastAdapter implements AutoCloseable {
      */
     public HazelcastInstance instance() {
         return instance;
+    }
+
+    /**
+     * Returns this member's view of the cluster maps, whose reads do not wait for a member that
+     * stopped answering.
+     *
+     * @return cluster view
+     */
+    public ClusterView view() {
+        return view;
+    }
+
+    /**
+     * Returns the current members, as this member sees them now, without a remote call.
+     *
+     * @return members, this one included
+     */
+    public Set<Member> members() {
+        return instance.getCluster().getMembers();
     }
 
     @Override

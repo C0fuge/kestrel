@@ -229,26 +229,46 @@ class ClusterMemberLossIntegrationTest {
     }
 
     /**
-     * The other half of the finding above: a crashed member whose address vanished holds the
-     * first plan for hazelcast.max.no.heartbeat.seconds (10 s by default, -D overrides it). The
-     * doomed member listens on 127.0.0.2 and an iptables DROP makes that address silent, which
-     * needs root or password-less sudo (skipped otherwise).
+     * The other half of the finding above, item D3: a crashed member whose address vanished used
+     * to hold every plan for hazelcast.max.no.heartbeat.seconds (10 s). The planner's reads go
+     * through the cluster view now: the first plan waits for the silent member once, for the
+     * read wait (1 s), and leaves it out; later plans do not wait at all. The doomed member
+     * listens on 127.0.0.2 and an iptables DROP makes that address silent, which needs root or
+     * password-less sudo (skipped otherwise; GitHub runners have it).
      */
     @Test
-    void crashedMemberWhoseAddressVanishedHoldsThePlanForTheHeartbeatTimeout() throws Exception {
+    void crashedMemberWhoseAddressVanishedHoldsOnlyTheFirstPlanForTheReadWait() throws Exception {
         String iptables = iptablesCommand();
         Assumptions.assumeTrue(iptables != null, "needs iptables as root or via sudo -n");
-        List<ClusterService> cluster = crashCluster("3");
+        List<ClusterService> cluster = crashCluster(null);
+        ClusterService survivor = cluster.get(0);
         String rules = "%1$s %2$s INPUT -s 127.0.0.2 -j DROP && %1$s %2$s INPUT -d 127.0.0.2 -j DROP";
-        long millis;
+        long first;
+        long later;
         try {
             assertTrue(run(rules.formatted(iptables, "-I")), "the DROP rules were not added");
-            millis = firstPlanMillisAfterCrash(cluster);
+            first = firstPlanMillisAfterCrash(cluster);
+            long started = System.nanoTime();
+            for (int i = 0; i < 5; i++) {
+                assertEquals(Set.of("grpc+tcp://n1:32010", "grpc+tcp://n2:32010"),
+                        survivor.filterLiveServers(survivor.allServerLoads().keySet()));
+                // n2's inventory is missing when it lives on n3's partitions and was never read:
+                // on shared storage the listing still names its files (locality only is lost).
+                Map<String, FileAssignment> located = survivor.fileLocations(true);
+                assertTrue(located.keySet().stream().noneMatch(path -> path.contains("/n3-")),
+                        "the crashed member's inventory: " + located.keySet());
+                assertTrue(located.keySet().stream().filter(path -> path.contains("/n1-")).count() == 10);
+                assertTrue(survivor.hasFileInventory("grpc+tcp://n2:32010"));
+            }
+            later = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) / 5;
+            // Still within Hazelcast's 10 s: the member has not been dropped, only left out.
+            assertEquals(3, survivor.getHazelcastInstance().getCluster().getMembers().size(),
+                    "the crashed member was dropped already; the test measured nothing");
         } finally {
             run(rules.formatted(iptables, "-D"));
         }
-        assertTrue(millis >= 2000, "first plan took " + millis + " ms, the address did not go silent");
-        assertTrue(millis < 8000, "first plan took " + millis + " ms with a 3 s heartbeat timeout");
+        assertTrue(first < 3000, "first plan took " + first + " ms");
+        assertTrue(later < 500, "later plans took " + later + " ms each");
     }
 
     /**
@@ -301,6 +321,9 @@ class ClusterMemberLossIntegrationTest {
      */
     private static long firstPlanMillisAfterCrash(List<ClusterService> cluster) throws Exception {
         ClusterService survivor = cluster.get(0);
+        // As every heartbeat does (3 s): the view knows the members' loads before the crash. A
+        // member's entry on the crashed member's partitions that was never read is not planned.
+        survivor.refreshView();
         cluster.get(cluster.size() - 1).getHazelcastInstance().getLifecycleService().terminate();
         long started = System.nanoTime();
         Set<String> live = survivor.filterLiveServers(survivor.allServerLoads().keySet());

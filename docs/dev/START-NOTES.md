@@ -132,9 +132,12 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   compressed batch instead of answering wrong. Check: same answers with and without the property on a query of a
   few MB, and `arrowflight_flight_compressed_batches_total` rising.
 - A cluster needs the Hazelcast member port reachable between the nodes only (keep it private).
-- A node that crashes with its address (container removed, host down) holds every plan on the other nodes until
-  Hazelcast drops it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>`
-  on every node; lower values also drop nodes that only pause, e.g. in GC). A stopped server leaves at once; a crashed
-  one whose address still refuses connections is dropped within a second.
+- A node that crashes with its address (container removed, host down) stays a cluster member until Hazelcast drops
+  it: `hazelcast.max.no.heartbeat.seconds`, default 10 (`-Dhazelcast.max.no.heartbeat.seconds=<s>` on every node;
+  lower values also drop nodes that only pause, e.g. in GC). Plans no longer wait for it: the first plan after the
+  crash waits up to 1 s for its partitions, then plans leave that node out until it answers again or is dropped
+  (log `did not answer within 1000 ms`). Writes to its partitions (load accounting, tickets with load tracking,
+  heartbeats) still wait. A stopped server leaves at once; a crashed one whose address still refuses connections is
+  dropped within a second.
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.

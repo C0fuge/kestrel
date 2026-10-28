@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.services;
 
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
+import pro.surpin.data.arrowflight.server.adapters.ClusterView;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
@@ -674,6 +675,34 @@ class ClusterServiceTest {
 
         verify(statementCache).deleteAsync("parameters:abc");
         verify(statementCache, never()).remove("parameters:abc");
+        cs.close();
+    }
+
+    /**
+     * Item D3: a server whose member stopped answering is left out of plans, not removed from
+     * the pool, and its inventory entry is not waited for.
+     */
+    @Test
+    void serverWhoseMemberStoppedAnsweringIsLeftOutWithoutWaitingForIt() {
+        String s1 = "grpc://n1:32010";
+        String s2 = "grpc://n2:32010";
+        String s3 = "grpc://n3:32010";
+        ClusterView view = mock(ClusterView.class);
+        when(hazelcast.view()).thenReturn(view);
+        when(hazelcast.members()).thenReturn(Set.of());
+        when(hazelcast.memberServerUris()).thenReturn(Set.of(s1, s2, s3));
+        long now = System.currentTimeMillis();
+        when(view.getAll(eq(serverHeartbeats), eq(Set.of(s1, s2, s3)), any()))
+                .thenReturn(Map.of(s1, now, s2, now, s3, now));
+        when(view.unresponsiveServers()).thenReturn(Set.of(s3));
+        when(view.ownerUnresponsive(s2)).thenReturn(true);
+
+        ClusterService cs = createService(s1);
+        assertEquals(Set.of(s1, s2), cs.filterLiveServers(Set.of(s1, s2, s3)));
+        verify(serverRegistry, never()).remove(s3);
+        verify(serverHeartbeats, never()).remove(s3);
+        assertTrue(cs.hasFileInventory(s2));
+        verify(serverFiles, never()).containsKey(s2);
         cs.close();
     }
 }

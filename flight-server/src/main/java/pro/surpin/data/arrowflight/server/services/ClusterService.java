@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server.services;
 
+import com.hazelcast.map.IMap;
 import com.hazelcast.map.listener.EntryExpiredListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import com.hazelcast.core.HazelcastInstance;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
+import pro.surpin.data.arrowflight.server.adapters.ClusterView;
 import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
@@ -153,6 +155,11 @@ public final class ClusterService implements AutoCloseable {
                 LOGGER.warn("Failed to update heartbeat for {}: {}", serverUri, e.getMessage());
             }
             try {
+                refreshView();
+            } catch (Exception e) {
+                LOGGER.warn("Failed to refresh the cluster view of {}: {}", serverUri, e.getMessage());
+            }
+            try {
                 repairClusterState();
             } catch (Exception e) {
                 LOGGER.warn("Failed to check the cluster state of {}: {}", serverUri, e.getMessage());
@@ -172,11 +179,16 @@ public final class ClusterService implements AutoCloseable {
         long deadline = now - HEARTBEAT_TIMEOUT_SEC * 1000;
 
         Set<String> members = memberServerUris();
-        Map<String, Long> heartbeats = hazelcast.serverHeartbeats().getAll(serverUris);
+        Map<String, Long> heartbeats = readKeys(hazelcast.serverHeartbeats(), serverUris);
+        Set<String> unresponsive = hazelcast.view() == null ? Set.of() : hazelcast.view().unresponsiveServers();
         Set<String> live = new LinkedHashSet<>();
         for (String uri : serverUris) {
             Long lastHb = heartbeats.get(uri);
-            if (members != null && !members.contains(uri)) {
+            if (unresponsive.contains(uri) && !uri.equals(serverUri)) {
+                // Its member stopped answering (crashed, host gone): plans would wait for it until
+                // Hazelcast drops it. Left out, not removed: it is back once it answers.
+                LOGGER.debug("Server {} does not answer, leaving it out of the plan", uri);
+            } else if (members != null && !members.contains(uri)) {
                 // Its Hazelcast member left: the node is gone, whatever the maps still say (a
                 // lost partition can drop its heartbeat entry, which reads as "just registered").
                 LOGGER.warn("Server {} is no longer a cluster member, removing from pool", uri);
@@ -212,7 +224,7 @@ public final class ClusterService implements AutoCloseable {
             // Only the servers of current members can be planned. Key lookups, unlike a query of
             // the whole map (entrySet), do not wait ~10 s after a member left while the cluster
             // settles its partitions: every first plan after a node stopped used to.
-            Map<String, Long> loads = hazelcast.serverRegistry().getAll(members);
+            Map<String, Long> loads = readKeys(hazelcast.serverRegistry(), members);
             for (String uri : members) {
                 Long load = loads.get(uri);
                 if (load != null) {
@@ -290,12 +302,22 @@ public final class ClusterService implements AutoCloseable {
         long t = LogUtil.mark();
         Map<String, Map<String, Long>> inventories = new LinkedHashMap<>();
         Set<String> members = membersOnly ? memberServerUris() : null;
+        if (members != null && hazelcast.view() != null) {
+            // Plans leave out the servers whose members stopped answering, and their files
+            // are in the store's listing.
+            members = new LinkedHashSet<>(members);
+            members.removeAll(hazelcast.view().unresponsiveServers());
+        }
         if (members != null) {
             // Key lookups do not wait for the cluster to settle after a member left, as
             // entrySet does (see allServerLoads).
-            Map<String, Map<String, Long>> found = hazelcast.serverFiles().getAll(members);
+            Map<String, Map<String, Long>> found = readKeys(hazelcast.serverFiles(), members);
             for (String uri : members) {
                 Map<String, Long> inventory = found.get(uri);
+                if (inventory == null && uri.equals(serverUri)) {
+                    // This node's own entry may live on a member that stopped answering.
+                    inventory = localInventory;
+                }
                 if (inventory != null) {
                     inventories.put(uri, inventory);
                 }
@@ -332,7 +354,45 @@ public final class ClusterService implements AutoCloseable {
      * Checks whether a server published its local inventory, including an empty one.
      */
     public boolean hasFileInventory(String serverUri) {
+        if (hazelcast.view() != null && hazelcast.view().ownerUnresponsive(serverUri)) {
+            // The entry lives on a member that stopped answering. Every node publishes its
+            // inventory before it registers, and the inventory gives locality only on the
+            // shared storage such plans read: waiting for the member would hold the plan.
+            return true;
+        }
         return hazelcast.serverFiles().containsKey(serverUri);
+    }
+
+    /**
+     * Reads keys of a cluster map through this node's cluster view: a member that stopped
+     * answering holds the read for the view's read wait at most once, and its keys take the
+     * last values read.
+     *
+     * @param map distributed map
+     * @param keys keys to read
+     * @param <V> value type
+     * @return values found, by key
+     */
+    private <V> Map<String, V> readKeys(IMap<String, V> map, Set<String> keys) {
+        ClusterView view = hazelcast.view();
+        if (view == null) {
+            return map.getAll(keys);
+        }
+        return view.getAll(map, keys, hazelcast.members());
+    }
+
+    /**
+     * Reads the loads and heartbeats of the current members at every heartbeat, so that the
+     * cluster view knows recent values and finds a member that stopped answering before a plan
+     * waits for it.
+     */
+    void refreshView() {
+        Set<String> members = memberServerUris();
+        if (hazelcast.view() == null || members == null) {
+            return;
+        }
+        readKeys(hazelcast.serverRegistry(), members);
+        readKeys(hazelcast.serverHeartbeats(), members);
     }
 
     /**

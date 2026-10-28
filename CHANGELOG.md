@@ -446,6 +446,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Cluster: a node that crashed with its address (host down, container removed) no longer holds every plan on the other
+  nodes until Hazelcast drops it (10 s). The planner reads node loads, heartbeats and inventories through a local cluster
+  view: the first plan waits at most 1 s for the silent member, later plans not at all; its node is left out of plans
+  (not removed from the pool) until any operation on its partitions answers or it leaves the cluster, and its keys take
+  the last values read (refreshed at every heartbeat). `hazelcast.max.no.heartbeat.seconds` stays 10 (item D3).
 - DuckDB threads and memory by host size (item 19b): with `duckDbMemoryLimit` unset every DuckDB connection now gets
   `memory_limit` = the node's DuckDB budget (container `memory.max` or physical memory, minus `-Xmx`, direct memory
   and 15 % headroom) / the connections expected at once (`duckDbMemoryConnections`, default cores / threads, at
