@@ -380,3 +380,15 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   `TextArrowReaderTest` 6, `HiveTextTableTest` 3; `OrcTableReaderTest` 6 on the renamed `TableFilesReader`; UTF-8
   locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40672085389 (c258adf, package=true; it also covers lane 3's
   738d1e7, whose dispatch 40671772031 my push cancelled - same concurrency group) green (build + package), pre-release `server-1.0.0-c258adf27dc9` (text tables opt-in, default off; existing behaviour unchanged). Next: P4 step 2 (a) end-to-end server test, then (b)-(d).
+- 2026-10-28 (plugins session): P4 step 2 (a) dd9175e `HiveTextIntegrationTest` (text tables end to end through
+  the server vs Parquet, both modes, pruning, joins; test only); (b) acb87cb nested text columns (array/map/struct
+  at Hive's level separators, `collection.delim`/`colelction.delim`/`mapkey.delim`; unions, nested map keys, > 7
+  levels skipped; text schema IDs change); (c part 1) cdfbe8d OpenCSVSerde tables via opencsv 2.3 (new plugin
+  dependency, Hive 3.1.3's version; string columns only, typed ones skipped - Open question). Plugin only, no SPI or
+  core code change (comment lines in `arrowflight.properties`); CHANGELOG. Local: hive module 55/55 + Checkstyle +
+  SpotBugs, `HiveTextIntegrationTest` 5/5, `HiveOrcIntegrationTest` 5/5, `HiveCatalogIntegrationTest` 7 (+1 skip).
+  CI: Dev CI run 40682965605 (177dfe3, package=true) green (build + package), pre-release `server-1.0.0-177dfe3e5716`
+  (all behind the `hive.textTables` opt-in, default off). My push runs 40681698511 / 40682819503 and dispatch
+  40682828658 were cancelled by me so as not to cancel other lanes' runs in the shared `dev-ci-main` concurrency
+  group (lane runs 40681442479, 40682559133 were cancelled anyway; 40682965605 covers their commits). Next: P4 step 2
+  (c) JsonSerDe, then Avro, views; (d) perf.
