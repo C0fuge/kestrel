@@ -105,9 +105,10 @@
 > without (and vs `7562a5bdb7b9`). **Next steps of the shared DuckDB** (each small, own pre-release): ~~(a) the describe
 > connection (today still one small DuckDB per worker, 1 thread / 256 MB) as a second catalog of the shared one~~
 > (done 2026-10-28, e751192, see Log: a second node-wide DuckDB, not a catalog of the query one, so describes still
-> read no files); (b) a stand round with Ranger and the hive/iceberg catalogs on; (c) `duckDbStreamingBufferSize` in shared mode
-> (DuckDB freezes this per-connection setting with the lockdown - only via a DuckDB-side default, see Log);
-> (d) default change only after the screening's numbers and the maintainer's decision.
+> read no files); (b) a stand round with Ranger and the hive/iceberg catalogs on; ~~(c) `duckDbStreamingBufferSize` in shared mode~~
+> (done 2026-10-28, 17f4eca, see Log: `duckDbSharedBufferedConnections` connections, default 64, get the buffer
+> before the lockdown and are lent to sessions; screening: the 4/8-stream scans with `-DduckDbSharedDatabase=true
+> -DduckDbStreamingBufferSize=64MiB` vs shared alone); (d) default change only after the screening's numbers and the maintainer's decision.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
