@@ -37,8 +37,10 @@ jobs:
       matrix:
         # <catalog>-s3: the warehouse is an S3 bucket (static keys; the catalog vends none yet).
         # unity-catalog: Unity Catalog OSS, managed Iceberg tables on a local storage root.
+        # iceberg-rest-fixture-ozone-s3: as iceberg-rest-fixture-s3, the S3 server is Apache Ozone's
+        # S3 gateway instead of moto (C3: Ozone as an S3 backend).
         catalog: [ polaris, iceberg-rest-fixture, polaris-s3, iceberg-rest-fixture-s3, lakekeeper-s3,
-                   unity-catalog ]
+                   unity-catalog, iceberg-rest-fixture-ozone-s3 ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -80,10 +82,15 @@ jobs:
           key=$(openssl rand -hex 8)
           secret=$(openssl rand -hex 16)
           echo "::add-mask::$secret"
-          python3 -m venv "$RUNNER_TEMP/moto"
-          "$RUNNER_TEMP/moto/bin/pip" install -q 'moto[server]==5.2.5'
-          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 0.0.0.0 -p 9000 > "$RUNNER_TEMP/s3.log" 2>&1 &
-          for _ in $(seq 60); do curl -fsS -o /dev/null http://localhost:9000/ && break; sleep 1; done
+          if [[ "${{ matrix.catalog }}" == *-ozone-s3 ]]; then
+            # Non-secure Ozone: the gateway accepts any key, as moto.
+            tools/ci/ozone-s3.sh apache/ozone:2.0.0 9000
+          else
+            python3 -m venv "$RUNNER_TEMP/moto"
+            "$RUNNER_TEMP/moto/bin/pip" install -q 'moto[server]==5.2.5'
+            nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 0.0.0.0 -p 9000 > "$RUNNER_TEMP/s3.log" 2>&1 &
+            for _ in $(seq 60); do curl -fsS -o /dev/null http://localhost:9000/ && break; sleep 1; done
+          fi
           AWS_ACCESS_KEY_ID=$key AWS_SECRET_ACCESS_KEY=$secret AWS_DEFAULT_REGION=us-east-1 \
             aws --endpoint-url http://localhost:9000 s3 mb s3://lake
           {
@@ -154,7 +161,7 @@ jobs:
               echo "ICEBERG_REST_IT_ROOT=$wh" >> "$GITHUB_ENV"
               echo "ICEBERG_REST_IT_URI=http://localhost:8181" >> "$GITHUB_ENV"
               ;;
-            iceberg-rest-fixture-s3)
+            iceberg-rest-fixture-s3|iceberg-rest-fixture-ozone-s3)
               docker run -d --name catalog --network host "${s3env[@]}" \
                 -e CATALOG_WAREHOUSE=s3://lake/fixture \
                 -e CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO \
@@ -244,6 +251,9 @@ jobs:
           docker logs catalog 2>&1 | tail -200
           tail -100 "$RUNNER_TEMP/uc/logs/"*.log 2>/dev/null || true
           tail -50 "$RUNNER_TEMP/s3.log" 2>/dev/null || true
+          for c in ozone-scm ozone-om ozone-dn ozone-s3g; do
+            docker logs "$c" 2>/dev/null | tail -60 || true
+          done
 
   # C2 step 1: DuckDB's postgres / mysql scanner extensions under the server's lockdown
   # (tools/ci/DuckDbScannerProbe.java). Records what reads and what client statements get through;

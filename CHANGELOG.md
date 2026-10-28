@@ -124,6 +124,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   optional `ICEBERG_REST_IT_OMIT_COLUMNS` leaves them out of both sides) and its sample table
   `default.marksheet_uniform` answers 500 (the server test shows namespace `ice` only,
   `ICEBERG_REST_IT_NAMESPACES`). Test only.
+- Apache Ozone as an S3 backend (C3): `catalogs-ci.yml` entry `iceberg-rest-fixture-ozone-s3` runs both REST
+  conformance tests with the warehouse on Ozone 2.0.0's S3 gateway (`tools/ci/ozone-s3.sh`: SCM, OM, one datanode,
+  S3 gateway; non-secure, replication ONE) instead of moto: Iceberg S3FileIO writer, the s3 plugin and DuckDB httpfs
+  read it; answers equal the Hadoop reference. Test only.
 - DuckDB delta extension probe (C3 step 1): `catalogs-ci.yml` job `delta` writes Delta tables with Spark 3.5.3 +
   delta-spark 3.3.2 (`tools/ci/delta-fixtures.py`: partitions, deletion vectors, column mapping by name and id,
   checkpoints, versions, schema evolution, types; Spark's answers in `expected.tsv`) and
