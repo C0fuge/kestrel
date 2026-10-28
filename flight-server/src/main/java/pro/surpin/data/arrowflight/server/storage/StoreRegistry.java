@@ -221,6 +221,20 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     }
 
     /**
+     * Tells whether a local data directory is declared a mount every node reads (NFS and the
+     * like): {@code arrowflight.storage.dataDirShared} or {@code FLIGHT_DATA_DIR_SHARED}, default
+     * false. A cluster then plans complete answers and spreads files over all nodes as for HDFS;
+     * a directory that differs between nodes would give answers that miss files.
+     *
+     * @param source configuration source
+     * @return true when declared shared
+     */
+    static boolean dataDirShared(ConfigSource source) {
+        return source.lookup(List.of("dataDirShared", "arrowflight.storage.dataDirShared"),
+                List.of("FLIGHT_DATA_DIR_SHARED")).map(Boolean::parseBoolean).orElse(false);
+    }
+
+    /**
      * What opening a store needs.
      *
      * @param config server configuration
@@ -284,7 +298,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                         : "catalog root " + root, PLUGIN_SCHEMES.get(scheme), plugins);
             }
             DataStore store = HadoopDataStoreProvider.open(root, hadoopConfig,
-                    config.ioFileBufferSize(), storageHost);
+                    config.ioFileBufferSize(), storageHost,
+                    use == StoreUse.DATA_DIRECTORY && dataDirShared(source));
             return new Opened(store, "hadoop",
                     DuckDbSetupValidator.Contribution.ofStore("hadoop", store));
         }

@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -398,7 +398,10 @@ used. Before, the three session actions were UNIMPLEMENTED.
   DuckDB accepts works: subqueries, `WITH`, `UNION`, window functions, any aggregate. A table can
   be named without its schema when no other schema has a table of that name. This is what stock
   JDBC/ODBC/ADBC drivers and BI tools need on a cluster. It needs storage every node can read
-  (HDFS, S3); a cluster on local disks refuses it.
+  (HDFS, S3); a cluster on local disks refuses it. A local data directory that every node mounts
+  (NFS and the like, the same files at the same path) can be declared shared with `dataDirShared=true`
+  (`FLIGHT_DATA_DIR_SHARED`, default false); a directory that differs between nodes would then give
+  answers that miss files.
 - **partial**: one endpoint per node with the part computed from that node's files; the client
   merges. `endpointsPerServer` (`FLIGHT_ENDPOINTS_PER_SERVER`, default 1) splits a node's files
   into up to that many endpoints of similar size, each with its own backup locations, so a client

@@ -82,6 +82,25 @@ class StoreRegistryTest {
         }
     }
 
+    /** Verifies dataDirShared declares a local data directory a mount every node reads. */
+    @Test
+    void dataDirSharedDeclaresALocalMountShared(@TempDir Path dir) {
+        ConfigSource declared = new ConfigSource(Map.of("dataDirShared", "true")::get,
+                new Properties(), Map.of(), null);
+        ConfigSource fromEnvironment = new ConfigSource(Map.<String, String>of()::get,
+                new Properties(), Map.of("FLIGHT_DATA_DIR_SHARED", "true"), null);
+        assertTrue(StoreRegistry.dataDirShared(declared));
+        assertTrue(StoreRegistry.dataDirShared(fromEnvironment));
+        assertFalse(StoreRegistry.dataDirShared(emptySource()));
+
+        try (StoreRegistry registry = StoreRegistry.open(config(dir.toString()), new Configuration(),
+                "localhost", new PluginSettings(null, null, "directory", false), declared,
+                List.of())) {
+            assertEquals("file", registry.dataDirectory().kind());
+            assertTrue(registry.dataDirectory().shared());
+        }
+    }
+
     private static StoreRegistry open(String dataDir, List<DataStoreProvider> builtIns) {
         return StoreRegistry.open(config(dataDir), new Configuration(), "localhost",
                 new PluginSettings(null, null, "directory", false), emptySource(), builtIns);

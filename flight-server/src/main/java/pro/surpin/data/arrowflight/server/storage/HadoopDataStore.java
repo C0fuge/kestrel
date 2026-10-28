@@ -45,6 +45,8 @@ public final class HadoopDataStore implements DataStore {
     private final FileSystem fileSystem;
     private final String dataDirectory;
     private final String storageHost;
+    /** Whether a local data directory is a mount every node reads (dataDirShared). */
+    private final boolean sharedMount;
     /** The data directory as the file system names it; looked up once, it never changes. */
     private volatile URI rootUri;
 
@@ -56,9 +58,23 @@ public final class HadoopDataStore implements DataStore {
      * @param storageHost storage host colocated with this server; loopback block hosts map to it
      */
     public HadoopDataStore(FileSystem fileSystem, String dataDirectory, String storageHost) {
+        this(fileSystem, dataDirectory, storageHost, false);
+    }
+
+    /**
+     * Creates a store over a data directory that may be a local mount every node reads.
+     *
+     * @param fileSystem file system of the data directory
+     * @param dataDirectory data directory as configured
+     * @param storageHost storage host colocated with this server; loopback block hosts map to it
+     * @param sharedMount whether a local data directory is a mount every node reads (NFS)
+     */
+    public HadoopDataStore(FileSystem fileSystem, String dataDirectory, String storageHost,
+            boolean sharedMount) {
         this.fileSystem = Objects.requireNonNull(fileSystem, "fileSystem");
         this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
         this.storageHost = storageHost;
+        this.sharedMount = sharedMount;
     }
 
     @Override
@@ -70,7 +86,7 @@ public final class HadoopDataStore implements DataStore {
     @Override
     public boolean shared() {
         String scheme = fileSystem.getUri().getScheme();
-        return scheme != null && !"file".equalsIgnoreCase(scheme);
+        return sharedMount || scheme != null && !"file".equalsIgnoreCase(scheme);
     }
 
     @Override

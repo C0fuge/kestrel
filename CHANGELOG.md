@@ -26,6 +26,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `writer.time.zone` (a file without it fails on its first timestamp: Hive shows them in its server's zone); a
   partition with another schema, a file cut short and records Hive fails on fail the query naming the file. Codecs
   null/deflate/snappy/bzip2/zstandard. New plugin dependencies: Avro 1.12.0, snappy-java, Jackson 2.17 (P4).
+- `dataDirShared` (`FLIGHT_DATA_DIR_SHARED`, default false): declares a local data directory a mount every node reads
+  (NFS), so a cluster plans complete answers and spreads files over all nodes as on HDFS. Distributed complete mode
+  tested between two server processes with TLS and the token provider (`DistributedTwoProcessTlsTest`: answers equal
+  DuckDB's, merged from 4 endpoints on 2 nodes; a call without the token and a forged internal identity are refused)
+  (item 18, D2 (c) part 1).
 - Startup line `duckdb=externalFileCache perConnection= expectedConnections= expectedMiB= memoryMiB=` when
   `duckDbExternalFileCache=true`, and a WARN `duckdb=externalFileCacheUnbounded` when it is on without a per-connection
   `memory_limit` (`duckDbMemoryLimit=none`). Measured on DuckDB 1.5.6: the cache stays within each connection's
