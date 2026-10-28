@@ -196,6 +196,22 @@ public final class HmsFixture {
     }
 
     /**
+     * Creates a view with its expanded text and declared columns.
+     *
+     * @param db database
+     * @param name view name
+     * @param expanded expanded view text (tables named with their databases)
+     * @param columns declared columns, {@code name type;name type}
+     * @throws TException on metastore errors
+     */
+    public synchronized void createView(String db, String name, String expanded, String columns)
+            throws TException {
+        Table view = new Table(name, db, "test", 0, 0, 0, sd(null, fields(columns), "text"),
+                new ArrayList<>(), new HashMap<>(), expanded, expanded, "VIRTUAL_VIEW");
+        client().create_table(view);
+    }
+
+    /**
      * Adds a partition.
      *
      * @param db database

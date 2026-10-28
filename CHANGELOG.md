@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- SPI 1.6: `Catalog.views(schema)` (default none) and `CatalogView(name, sql, sources, columns, fingerprint)`. Hive
+  plugin (descriptor now SPI 1.6): opt-in `hive.views` (default false) lists simple virtual views whose expanded text
+  `HiveViewSql` translates and whose every source is a table (or a listed view) the catalog shows; casts, untranslated
+  constructs, sources not shown (another format without its opt-in, a database outside `hive.databases`), cycles and
+  materialized views keep a view skipped with a log reason. The server does not read catalog views yet, so nothing
+  changes for clients (P4 views part 2).
 - Iceberg time travel for Iceberg tables registered in a Hive Metastore (item 3 (b)): `FOR VERSION AS OF` /
   `FOR TIMESTAMP AS OF` after such a table name reads the snapshot through the iceberg plugin, as for the iceberg
   catalogs (both result modes); other Hive tables still refuse the clause. SPI 1.5: `TableFormat.asOf(table,

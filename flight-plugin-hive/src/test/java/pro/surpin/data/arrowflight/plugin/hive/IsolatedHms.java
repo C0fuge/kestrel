@@ -117,6 +117,19 @@ final class IsolatedHms {
     }
 
     /**
+     * Creates a view with its expanded text and declared columns.
+     *
+     * @param db database
+     * @param name view name
+     * @param expanded expanded view text
+     * @param columns declared columns, {@code name type;name type}
+     * @throws Exception on metastore errors
+     */
+    void createView(String db, String name, String expanded, String columns) throws Exception {
+        call(fixture, "createView", db, name, expanded, columns);
+    }
+
+    /**
      * Adds a partition.
      *
      * @param db database

@@ -3,11 +3,17 @@ package pro.surpin.data.arrowflight.plugin.hive;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -23,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.arrow.c.ArrowArrayStream;
 import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.orc.TypeDescription;
@@ -32,6 +39,8 @@ import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.AsOf;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
+import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
@@ -52,7 +61,9 @@ import pro.surpin.data.arrowflight.spi.storage.Stores;
  * names them (never guessed from directories), each with its partition values from the
  * metastore. Every location must lie under the catalog's roots before anything below it is
  * listed; a table with a location elsewhere is hidden. Iceberg tables of the metastore go to the
- * iceberg table format when there is one. Names, tables and snapshots are cached for their TTLs;
+ * iceberg table format when there is one. With hive.views, simple views over shown tables are
+ * listed as views (translated to DuckDB SQL by {@link HiveViewSql}). Names, tables and snapshots
+ * are cached for their TTLs;
  * failures are never cached, and a failed listing drops the table's cached metadata.
  */
 final class HiveCatalog implements Catalog {
@@ -71,6 +82,8 @@ final class HiveCatalog implements Catalog {
     private static final long MAX_AVRO_SCHEMA_BYTES = 4L << 20;
     /** Schema files kept before the cache starts again. */
     private static final int MAX_AVRO_SCHEMAS = 10_000;
+    /** Deepest chain of views over views that is followed. */
+    private static final int MAX_VIEW_DEPTH = 16;
 
     private final HiveSettings settings;
     private final Metastore metastore;
@@ -82,6 +95,8 @@ final class HiveCatalog implements Catalog {
     private final String node;
     private volatile Cached<Map<String, String>> schemas;
     private final Map<String, Cached<Map<String, HiveTable>>> tables = new ConcurrentHashMap<>();
+    /** Virtual views of each database as last listed with its tables (hive.views only). */
+    private final Map<String, Cached<Map<String, Table>>> viewTables = new ConcurrentHashMap<>();
     private final Map<TableName, Cached<Optional<TableSnapshot>>> snapshots = new ConcurrentHashMap<>();
     /** Partitioned tables: true when a partition lies outside the roots (table hidden). */
     private final Map<String, Cached<Boolean>> partitionsOutside = new ConcurrentHashMap<>();
@@ -160,6 +175,23 @@ final class HiveCatalog implements Catalog {
                     || !partitionsOutsideRoots(hive)) {
                 result.add(entry.getKey());
             }
+        }
+        return result;
+    }
+
+    @Override
+    public List<CatalogView> views(String schema) throws IOException {
+        if (!settings.views()) {
+            return List.of();
+        }
+        String database = schemaMap().get(schema);
+        if (database == null) {
+            return List.of();
+        }
+        Map<String, Optional<CatalogView>> resolved = new HashMap<>();
+        List<CatalogView> result = new ArrayList<>();
+        for (String name : viewTablesOf(database).keySet()) {
+            view(database, name, resolved, new HashSet<>()).ifPresent(result::add);
         }
         return result;
     }
@@ -368,15 +400,146 @@ final class HiveCatalog implements Catalog {
         List<String> names = new ArrayList<>(metastore.tables(database));
         Collections.sort(names);
         Map<String, HiveTable> result = new TreeMap<>();
+        Map<String, Table> views = new TreeMap<>();
         for (int i = 0; i < names.size(); i += TABLE_BATCH) {
             List<String> batch = names.subList(i, Math.min(names.size(), i + TABLE_BATCH));
             for (Table table : metastore.tableObjects(database, batch)) {
+                if (settings.views() && "VIRTUAL_VIEW".equalsIgnoreCase(table.getTableType())) {
+                    views.put(table.getTableName().toLowerCase(Locale.ROOT), table);
+                    continue;
+                }
                 classified(table).ifPresent(t -> result.put(t.name(), t));
             }
         }
         Map<String, HiveTable> value = Collections.unmodifiableMap(result);
-        tables.put(database, new Cached<>(value, System.currentTimeMillis() + settings.namesTtlMillis()));
+        long expires = System.currentTimeMillis() + settings.namesTtlMillis();
+        viewTables.put(database, new Cached<>(Collections.unmodifiableMap(views), expires));
+        tables.put(database, new Cached<>(value, expires));
         return value;
+    }
+
+    /**
+     * Returns the virtual views of a database, listed with its tables.
+     *
+     * @param database database
+     * @return view name to metastore view, sorted
+     * @throws IOException when the metastore cannot be read
+     */
+    private Map<String, Table> viewTablesOf(String database) throws IOException {
+        Cached<Map<String, Table>> cached = viewTables.get(database);
+        if (cached == null || !cached.fresh(System.currentTimeMillis())) {
+            tablesOf(database, true);
+            cached = viewTables.get(database);
+        }
+        return cached.value();
+    }
+
+    /**
+     * Resolves a view: translated, and every table or view it reads shown by this catalog.
+     *
+     * @param database database of the view
+     * @param name view name
+     * @param resolved views resolved so far, by database and name
+     * @param path views being resolved, which a view may not read again
+     * @return the view, empty when it is not shown (the reason is logged once)
+     * @throws IOException when the metastore cannot be read
+     */
+    private Optional<CatalogView> view(String database, String name,
+            Map<String, Optional<CatalogView>> resolved, Set<String> path) throws IOException {
+        String key = database + "." + name;
+        Optional<CatalogView> done = resolved.get(key);
+        if (done != null) {
+            return done;
+        }
+        Table table = viewTablesOf(database).get(name);
+        if (table == null) {
+            return Optional.empty();
+        }
+        Optional<CatalogView> result;
+        try {
+            result = Optional.of(translatedView(database, table, resolved, path));
+        } catch (IllegalArgumentException e) {
+            if (logged.add("view:" + key + ":" + e.getMessage())) {
+                LOGGER.info("node={} hive=viewSkipped view={} reason='{}'", node, key,
+                        e.getMessage());
+            }
+            result = Optional.empty();
+        }
+        resolved.put(key, result);
+        return result;
+    }
+
+    /**
+     * Translates a view and checks what it reads.
+     *
+     * @param database database of the view
+     * @param table the metastore view
+     * @param resolved views resolved so far
+     * @param path views being resolved
+     * @return the view
+     * @throws IllegalArgumentException with the reason when the view is not shown
+     * @throws IOException when the metastore cannot be read
+     */
+    private CatalogView translatedView(String database, Table table,
+            Map<String, Optional<CatalogView>> resolved, Set<String> path) throws IOException {
+        String name = table.getTableName().toLowerCase(Locale.ROOT);
+        String key = database + "." + name;
+        if (path.size() >= MAX_VIEW_DEPTH) {
+            throw new IllegalArgumentException("views nested deeper than " + MAX_VIEW_DEPTH);
+        }
+        List<Map.Entry<String, String>> declared = new ArrayList<>();
+        List<ColumnSpec> columns = new ArrayList<>();
+        List<FieldSchema> fields = table.getSd() == null || table.getSd().getCols() == null
+                ? List.of() : table.getSd().getCols();
+        for (FieldSchema field : fields) {
+            declared.add(new AbstractMap.SimpleImmutableEntry<>(field.getName(), field.getType()));
+            columns.add(new ColumnSpec(field.getName(), HiveTypes.duckDb(field.getType()), true,
+                    null));
+        }
+        Map<String, String> shown = schemaMap();
+        HiveViewSql.Translated translated = HiveViewSql.translate(table.getViewExpandedText(),
+                declared, db -> {
+                    String schema = settings.schemaPrefix() + db;
+                    return db.equals(shown.get(schema)) ? schema : null;
+                });
+        List<TableName> sources = new ArrayList<>();
+        path.add(key);
+        try {
+            for (HiveViewSql.Source source : translated.sources()) {
+                String schema = settings.schemaPrefix() + source.database();
+                String sourceKey = source.database() + "." + source.table();
+                if (path.contains(sourceKey)) {
+                    throw new IllegalArgumentException("view reads itself through " + sourceKey);
+                }
+                boolean isTable = tables(schema).contains(source.table());
+                if (!isTable && (!viewTablesOf(source.database()).containsKey(source.table())
+                        || view(source.database(), source.table(), resolved, path).isEmpty())) {
+                    throw new IllegalArgumentException("reads " + sourceKey
+                            + ", which is no table or view the catalog shows");
+                }
+                sources.add(new TableName(schema, source.table()));
+            }
+        } finally {
+            path.remove(key);
+        }
+        return new CatalogView(name, translated.sql(), sources, columns,
+                fingerprint(translated.sql()));
+    }
+
+    /**
+     * Hashes a view's DuckDB query (which names its columns and their types).
+     *
+     * @param sql the query
+     * @return hex digest prefix
+     */
+    private static String fingerprint(String sql) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(("hive-view|" + sql).getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 16);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is missing", e);
+        }
     }
 
     /**
