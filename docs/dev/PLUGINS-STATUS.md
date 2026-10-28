@@ -478,5 +478,6 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   2.17.2 now compile; CHANGELOG). No local build (Maven Central rate-limited the session: HTTP 429). CI: Dev CI run
   40712744776 (2cfa23e, push from the catalogs lane, contains both commits) green (build; all modules SUCCESS). My
   push runs 40710493366 / 40711359997 were superseded in the shared `dev-ci-main` group (and 40710493366 cancelled
-  the catalogs lane's dispatch 40710223962 for 411e804 - covered by the green run above). Pre-release: see the next
-  line / the release list (`server-1.0.0-<sha>` from main after cdc0889). Next: P4 `avro.schema.url`, views, perf.
+  the catalogs lane's dispatch 40710223962 for 411e804 - covered by the green run above). Pre-release
+  `server-1.0.0-2cfa23eb62f9` (catalogs lane's dispatch 40715095069, package=true, green; contains both commits;
+  Avro tables behind the `hive.avroTables` opt-in, default off). Next: P4 `avro.schema.url`, views, perf.
