@@ -26,6 +26,10 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
     - ~~Step 2: writes~~ *done 2026-10-28 (aef0a7a, see Log):* deferred writes in `ClusterService`.
     - ~~Step 2b: remaining writes~~ *done 2026-10-28 (see Log):* claim, inventory/secret puts, `close()`.
     - ~~Step 3: `fileLocations(false)` (local disks)~~ *done 2026-10-28 (a9f6def, see Log):* local inventory copy.
+D4. ~~Hazelcast test-port race~~ *done 2026-10-28 (256bddd, see Log):* `TestPorts`.
+D5. (open, no maintainer item yet) D2 observed gap: force the after-first-batch cut path of distributed complete mode
+    (a cut after DuckDB emitted, e.g. a larger wide projection with a later cut) and assert the error, not "error or
+    exact".
 
 ## Log
 
@@ -163,3 +167,16 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   cancelled by another lane's simultaneous dispatch on the same commit, whose run 40778373787 is green: pre-release
   `server-1.0.0-80aa61a15557` contains a9f6def. D3 is complete. Next (no maintainer item yet): the Hazelcast test-port race (retry a member start on a
   BindException from `freePort()`), or the D2 observed gap (force the after-first-batch cut path).
+- 2026-10-28 (lane 3 session, 9th): lock 23:28Z. D4 done (256bddd, rebase-merged into `main`; test-only, no
+  pre-release): the Hazelcast test-port race. Cause: `freePort()` (`ServerSocket(0)`) returns an *ephemeral* port,
+  which any outgoing connection of the JVM (Hazelcast members dialling seeds, gRPC clients) can get as its source port
+  before the test server binds it. New `TestPorts.free()` hands out ports below the system's ephemeral range (start
+  read from `/proc/sys/net/ipv4/ip_local_port_range`, default 32768; JVM-wide distinct, probed by a bind); used by
+  `TestFlightServerHelper`, `ClusterMemberLossIntegrationTest`, `DistributedClusterIntegrationTest`,
+  `DistributedCompletePerfTest`, `DistributedTwoProcessTlsTest`. Found on the way: in this container
+  `Files.readString` returned the /proc file truncated ("3"), so the first version silently fell back to ephemeral
+  ports - now a line read, and `TestPortsTest` asserts the system range is used where readable. Local: those tests +
+  `MultiNodeFailoverTest`, `DistributedCompleteIntegrationTest`, `HadoopArrowFlightServerTest` 33/33 green, all
+  Hazelcast members on 237xx-238xx; checkstyle clean. CI 40788631312 green on the branch (a488311, before the rebase
+  onto core-lane commits). Not changed: `LibsSetTest` and `flight-spark`'s benchmark keep their own `freePort()`
+  (other lanes; single servers). Next: D5, or a maintainer item.

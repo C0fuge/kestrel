@@ -615,6 +615,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- Tests: the cluster and distributed tests (and `TestFlightServerHelper`) take their Hazelcast and Flight ports from
+  `TestPorts`, below the system's ephemeral port range, instead of `ServerSocket(0)`: an ephemeral port could be
+  taken by an outgoing connection between the probe and the bind ("Address already in use" on CI). Test-only.
 - `duckDbThreadsUnderLoad`: a query alone on the node now keeps its `duckDbThreads`, as documented, also when
   `duckDbThreads` exceeds the cores (the default floor of 4 threads on 1-3 core nodes); before, every query on such
   a node ran on the low-thread connection. `SmallQueryThroughputPerfTest` takes `-Dperf.threadsUnderLoad`.

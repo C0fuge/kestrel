@@ -2051,3 +2051,7 @@
   run 40782630486 green (my push run 40782608697 cancelled by it), pre-release `server-1.0.0-e75119218df7`.
   **Screening:** as for step 1 (`-DduckDbSharedDatabase=true` vs without), the describe change should not move
   numbers beyond fewer DuckDB instances per node. Next of the shared DuckDB: steps (b)-(d).
+- 2026-10-28 (lane 3, FYI test helper change): test ports (256bddd): `TestFlightServerHelper` and the cluster /
+  distributed tests take ports from the new `TestPorts.free()` (below the ephemeral range, distinct in the JVM)
+  instead of `ServerSocket(0)`, so outgoing connections can no longer take a test server's port before it binds.
+  New tests needing a free port should use it. Details in `LANE3-STATUS.md`.
