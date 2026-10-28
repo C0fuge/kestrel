@@ -23,7 +23,17 @@
 
 ## Next steps (one per session)
 
-> **Bug first (maintainer, 2026-10-28 11:30, CI build tracking `track-4bb6441569be`): small local ADBC tail at 8 clients.**
+> ~~**Bug first (maintainer, 2026-10-28 11:30, CI build tracking `track-4bb6441569be`): small local ADBC tail at 8 clients.**~~
+> *Investigated 2026-10-28 (cloud session, see Log): not a server regression - a CPU-quota effect.* Under `docker --cpus=2`
+> (CFS quota, as the screening runs) c8 latency is bimodal in **both** builds: p50 11-15 ms, p95 59-63 ms (queries that
+> span a throttled 100 ms period); pinned to 2 cores (`--cpuset-cpus`) p95 is 37-42 ms. 4b47b0c vs 7562a5b, same runner
+> (workflow `small-query-perf.yml`, run 40665245865, plain statements = ADBC's path, client on other cores, 2 rounds):
+> quota c8 p50 0.72/0.80x, p95 0.94/0.93x, p99 0.95/0.95x, q/s +22/+29 %; pinned c8 p50 0.89/0.79x, p95 0.91/0.87x.
+> The p95 is set by the throttle stall, so it stays ~1.0x while p50 falls; the screening's 1.07 is within that stall's
+> run-to-run spread. `duckDbThreads=4` on head does not change the quota tail (p95 61.0/61.6). No code change; for the
+> screening: read c8 tails under `--cpus` as throttling, or add a `--cpuset-cpus` run (see Open question "Quota tails").
+> Original report:
+> **Small local ADBC tail at 8 clients.**
 > `4bb6441569be` vs `7562a5bdb7b9`, same runner, 3/3 rounds: ADBC c8 p95 1.07 (1.10 1.06 1.12), p99 1.15 (1.14 1.16 1.15)
 > while p50 is 0.75; JDBC and 32 clients not affected. Small, but in every round. Look at it together with item 21 (same
 > path): reproduce with `SmallQueryThroughputPerfTest` (ADBC-like prepare/execute, 8 clients, 2 CPUs), check whether a
@@ -602,6 +612,12 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Quota tails (2026-10-28, core lane, for the screening/coordinator).** With `--cpus=2` the c8/c32 p95/p99 of small
+  queries are dominated by CFS throttling (a query that crosses a throttled period waits ~45 ms), in every build; ratios
+  of p95 between builds then mostly measure the stall, not the server. Proposal: the screening adds one pinned run
+  (`--cpuset-cpus`) or reports p50 + q/s as the primary small-query numbers under quota. No server setting can remove
+  the stall short of using less CPU per query. Maintainer's call; nothing changes in the server.
 
 - **Read cache admission default (item 17 (e), 2026-10-28).** `cacheAdmission=reuse` (opt-in) keeps a block only
   on its second miss while it is among the last N not-kept names (N = cache blocks): scans larger than the cache stop
@@ -1673,3 +1689,15 @@
   `RangerAuthorization.union`: Ranger's groups are the auth provider's groups plus the Hadoop group mapping (built-in
   providers add none, so unchanged); `ServerModule` got a 5-arg constructor (4-arg kept). Used by flight-auth-ldap
   group search (P2 step 2). Dev CI 40656572265 green, pre-release `server-1.0.0-e70d80bb7995`.
+- 2026-10-28 (cloud session): maintainer's bug first, ADBC c8 tail (`4bb6441569be` vs `7562a5bdb7b9`). Not reproduced as
+  a regression locally (4 cores: in-process `SmallQueryThroughputPerfTest` under `taskset -c 0,1`, 2 rounds x prepared
+  and statement: new build better at p50/p95/p99, e.g. statement c8 p95 68.2/76.9 -> 60.5/62.6 ms; external server
+  pinned to 2 cores, client on the other 2: statement c8 p95 61.9/54.0 -> 50.5/50.2, p99 78.8/71.4 -> 67.3/68.1).
+  Added (4843cca, 4b47b0c, test/CI only): `-Dperf.server` / `-Dperf.dataDir`, p99 and max in that perf test; manual
+  workflow `small-query-perf.yml` (baseline vs ref, each alone in a 2-CPU container by quota and pinned). Run
+  40665245865 (statement client, 2 rounds): under `--cpus=2` both builds show a bimodal c8 distribution (p50 11-15 ms,
+  p95 59-63 ms = CFS throttling stall), head p50 0.72-0.80x, p95 0.93-0.94x, q/s +22-29 %; pinned head p95 0.87-0.91x.
+  So the screening's c8 p95 1.07 is the throttle stall's spread, not a server change; `duckDbThreads=4` changes nothing
+  there. New Open question "Quota tails". Dev CI push run 40661672025 on 4843cca green; push run on 4b47b0c cancelled
+  by the plugins lane, their dispatch 40665594250 on 1b3a7bb (contains it) green. No pre-release (no runtime change).
+  Next: item 19b (3c, maintainer's new item) or the next stage-3 item per the order above.
