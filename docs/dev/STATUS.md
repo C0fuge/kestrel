@@ -1596,3 +1596,4 @@
   green: pre-release `server-1.0.0-9506620bb170`. Screening: one partial-mode scan in 4/8 endpoints on 2 CPUs with
   `-DduckDbProducingStreams=2` (alone and with `-DduckDbThreadsUnderLoad=1`) vs `7562a5bdb7b9`. Next: item 22 (d)
   (zero-copy writes on the DuckDB stream path), or 3b item 17 (e).
+- 2026-10-28 (maintainer, stand p45f, 3 rounds x 7, pnew method): 45fc0a9e6e02 vs 27f583adccd7 same session, HDFS t4: small c1 p50 JDBC 0.87 / ADBC 0.83, c8/c32 noise, SF10 JDBC 0.90, Trino/scan equal; S3 t8 SF10 22/22 x3 (ADBC c32 53-94 errors per round = item 0g port exhaustion on 45fc, which predates 6acc9cc connection caching; unchanged vs 27f5); 3 nodes heavy4 3.6 s vs 5.2 s (57d2) -> item 0h closed; 0 FAIL in 21 rounds (q18 Trino heap NO-RESULT on 3 nodes as before).
