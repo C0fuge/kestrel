@@ -72,8 +72,8 @@ public final class DuckDbScannerProbe {
         Properties props = new Properties();
         props.setProperty("allow_unsigned_extensions", "true");
         props.setProperty("allow_persistent_secrets", "false");
-        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
-                Statement s = conn.createStatement()) {
+        // Each check gets its own statement: the driver closes a statement whose query failed.
+        try (Connection s = DriverManager.getConnection("jdbc:duckdb:", props)) {
             String ext = extDir.resolve(extension + ".duckdb_extension").toString();
             String secret = "CREATE TEMPORARY SECRET src_secret (TYPE " + type + ", HOST " + lit(host) + ", PORT "
                     + port + ", DATABASE " + lit(database) + ", USER " + lit(user) + ", PASSWORD " + lit(password)
@@ -107,7 +107,17 @@ public final class DuckDbScannerProbe {
             // statements are recorded too).
             query(key, "query fn", s, "SELECT * FROM " + fn + "_query('src', 'SELECT 1 AS one')");
             query(key, "query fn write", s, "SELECT * FROM " + fn + "_query('src', 'CREATE TABLE z (i int)')");
-            query(key, "execute fn", s, "CALL " + fn + "_execute('src', 'CREATE TABLE z (i int)')");
+            query(key, "query fn multi", s, "SELECT * FROM " + fn + "_query('src', 'SELECT 1 AS one; CREATE TABLE"
+                    + " z2 (i int)')");
+            query(key, "query fn multi created", s, "SELECT * FROM " + fn + "_query('src', 'SELECT count(*) AS n"
+                    + " FROM information_schema.tables WHERE table_name = ''z2''')");
+            if ("postgres".equals(type)) {
+                query(key, "remote read-only", s, "SELECT * FROM postgres_query('src', 'SELECT"
+                        + " current_setting(''transaction_read_only'') AS ro')");
+                query(key, "query fn side effect", s, "SELECT * FROM postgres_query('src', 'SELECT"
+                        + " set_config(''application_name'', ''probe'', false) AS v')");
+            }
+            query(key, "execute fn", s,"CALL " + fn + "_execute('src', 'CREATE TABLE z (i int)')");
             if ("postgres".equals(type)) {
                 query(key, "scan fn dsn", s, "SELECT count(*) FROM postgres_scan(" + lit(dsn) + ", 'public', 't')");
                 query(key, "scan fn attached", s, "SELECT count(*) FROM postgres_scan('src', 'public', 't')");
@@ -125,7 +135,7 @@ public final class DuckDbScannerProbe {
         }
     }
 
-    private static boolean must(String key, String check, Statement s, String sql) {
+    private static boolean must(String key, String check, Connection s, String sql) {
         if (!run(key, check, s, sql, null)) {
             failed = true;
             return false;
@@ -133,24 +143,24 @@ public final class DuckDbScannerProbe {
         return true;
     }
 
-    private static void mustQuery(String key, String check, Statement s, String sql, String expected) {
+    private static void mustQuery(String key, String check, Connection s, String sql, String expected) {
         if (!run(key, check, s, sql, expected)) {
             failed = true;
         }
     }
 
-    private static void query(String key, String check, Statement s, String sql) {
+    private static void query(String key, String check, Connection s, String sql) {
         run(key, check, s, sql, null);
     }
 
-    private static boolean run(String key, String check, Statement s, String sql, String expected) {
+    private static boolean run(String key, String check, Connection s, String sql, String expected) {
         String result;
         String detail;
         boolean ok;
-        try {
+        try (Statement st = s.createStatement()) {
             StringBuilder rows = new StringBuilder();
-            if (s.execute(sql)) {
-                try (ResultSet rs = s.getResultSet()) {
+            if (st.execute(sql)) {
+                try (ResultSet rs = st.getResultSet()) {
                     ResultSetMetaData md = rs.getMetaData();
                     int n = 0;
                     while (rs.next() && n++ < 40) {
