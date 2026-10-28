@@ -370,8 +370,35 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     (packaged plugin, real metastore: views over ORC/Parquet/text, ORC x text join, view over view, both modes,
     declared types, GetTables/GetTableTypes, time travel refused). Not done: a Ranger end-to-end test of a denied
     view source (unit-tested in the producer only).
-    *Next:* (d) perf note (text/CSV/JSON/Avro vs Parquet SF1, like `HiveOrcPerfTest`) and splitting large files
-    (Avro at sync markers, uncompressed text at line boundaries) so one big file is not one endpoint.
+    *Step 2 (d) done 2026-10-28 (4690319, 5152e7f, 8216228, 80aa61a):* (1) large Avro and uncompressed text files
+    are split like ORC files (inside the stream, not into endpoints - one Arrow stream per table reference stays):
+    a file over 8 MiB is planned into equal byte ranges of `min(32 MiB, size / readAhead)`, decoded up to 4 at once
+    and handed over in order; an Avro range reads the blocks whose preceding sync marker starts in it
+    (`DataFileReader.sync` + `pastSync`, Hadoop's rule), a text range the lines that start in it (a range after
+    the first starts a byte early and drops its first, partial line; `\n`, `\r`, `\r\n` ends). Compressed text
+    (by suffix) and tables with `skip.header.line.count` stay one range. Tests: every split point and even range
+    sizes give the whole file's rows once and in order (`TextArrowReaderTest`, `AvroArrowReaderTest`, incl. a cut
+    file noticed by the last range), `SplitFilesReaderTest` through `TableFilesReader` (read-ahead 1/3/8, range
+    sizes, open counts, gz and header files one range). (2) `HiveOrcPerfTest` / `hive-orc-perf.yml` also write the
+    lineitem-like table as text (\001, DuckDB `COPY`) and deflate Avro (Java rows) and check their complete
+    answers equal Parquet's. (3) Profile-driven speedups: Avro decodes only projected top-level fields (others
+    skipped through the resolving decoder, so unresolvable files still fail; float/double and nested-record
+    fields still read - a skip cannot widen promotions or follow a nested writer order; the new projection test
+    caught a first version that also skipped fields inside nested records); text fast paths for plain decimals
+    <= 18 digits (unscaled long), `yyyy-mm-dd` dates, all-ASCII strings (equivalence tests against the general
+    parsers, 20k inputs each). SF1, 4 files per table, 4-core runner, best of 3, seconds (complete mode),
+    Parquet / ORC zstd / text / Avro: run 40774271172 (before (3)): count(*) 0.01 / 0.22 / 2.80 / 4.59; Q1-style
+    0.15 / 0.88 / 8.43 / 10.03; Q6-style 0.04 / 0.45 / 6.79 / 8.40; `orderkey < 50000` 0.01 / 0.02 / 3.68 / 6.11;
+    `SELECT *` 1.55 / 1.95 / 14.82 / 12.22. Run 40776750625 (80aa61a, same runner speed - Parquet equal):
+    count(*) 0.01 / 0.19 / 2.70 / 3.44; Q1 0.15 / 0.85 / 4.30 / 9.25; Q6 0.04 / 0.44 / 3.56 / 7.07; orderkey
+    0.01 / 0.02 / 2.95 / 5.01; `SELECT *` 1.58 / 2.05 / 7.42 / 12.71 (partial mode within 5 % of complete).
+    Sizes: Parquet 136 MB, text 798 MB, Avro deflate 201 MB. So text and Avro are 25-60x Parquet on aggregations
+    (no pushdown or statistics, every row parsed): fine for occasional queries, not for heavy BI - converting hot
+    tables to Parquet/ORC is the answer. (Run 40775865607 on 8216228 had a faster runner - not comparable.)
+    *Optional, only if production needs it:* Avro is now dominated by deflate and Avro's generic decoding (profile
+    it like text: JFR through an in-test `jdk.jfr.Recording`, the surefire `argLine` is not passed to the fork);
+    text: the rest is line splitting and Arrow `setSafe`. A Ranger end-to-end test of a denied view source is
+    still open (unit-tested in the producer only). **P4 closed.**
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -573,3 +600,10 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   40764736076, 40765524515 cancelled by later pushes; Dev CI run 40766473788 (9044653, contains all three commits)
   green incl. package -> pre-release `server-1.0.0-9044653333cd` (dispatched by another lane; carries this change).
   Next: P4 (d) perf note + splitting large Avro/text files, see Next steps.
+- 2026-10-28 (plugins session): P4 step 2 (d) - large Avro/uncompressed text files read as parallel byte ranges
+  (4690319), text/Avro tables in the Hive perf test (5152e7f), Avro projection skip (8216228), text fast paths
+  (80aa61a); plugin only (plus the perf test/workflow), no SPI or core change; CHANGELOG. Local (GCS mirror of
+  Central): hive module 88/88, Checkstyle + SpotBugs clean; `HiveOrcPerfTest` at 400k rows (answers equal Parquet).
+  CI: Dev CI push runs 40773505710, 40774236756, 40775370618 cancelled by later pushes; Dev CI run 40776549317
+  (80aa61a, contains all four commits) green; perf runs 40774271172, 40775865607, 40776750625 (numbers under P4);
+  package run 40778373787 (package=true, 80aa61a) dispatched. P4 closed; next session: P5.
