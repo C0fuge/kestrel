@@ -1508,5 +1508,5 @@
   surefire fork never dumps on exit) + a standalone DuckDB JDBC bench: the Flight executor's ~4.5 ms per query is
   DuckDB prepare + execute + Arrow export (~4 ms, same as plain DuckDB) + the describe of the new text (~0.5 ms);
   no Java hot spot left. No server change; findings and the remaining levers in Open question "Item 21 (d)".
-  Test-only change, CI run: see next line. Next: item 22 (one scan in 4-8 parallel streams) while the screening
+  Test-only change, push run 40622807155 green; no pre-release (no runtime change). Next: item 22 (one scan in 4-8 parallel streams) while the screening
   measures `server-1.0.0-881b7c62b373`.
