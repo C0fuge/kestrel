@@ -110,7 +110,7 @@ P1. **ORC tables in the Hive catalog.** *(Done 2026-10-28; opt-in `hive.orcTable
     best of 3, seconds (complete / partial), Parquet vs ORC zlib-zstd: count(*) 0.01 vs 0.08-0.27; Q1-style 0.12
     vs 0.72-0.84 (was 6.6); Q6-style 0.03-0.04 vs 0.36-0.45 (was 6.6); `orderkey < 50000` 0.01 vs 0.02; `SELECT *`
     1.19-1.25 vs 1.51-1.69 (was 7.7). Batch size (4) not tried.
-    *Step 2 (g) done 2026-10-28 (77a8db9, d13fbb3):* a file larger than a quarter of `ORC_RANGE_BYTES` (32 MiB,
+    *Step 2 (g) done 2026-10-28 (77a8db9, 3a78772):* a file larger than a quarter of `ORC_RANGE_BYTES` (32 MiB,
     so 8 MiB) is planned from its footer (`OrcArrowReader.stripes`, on the stream's thread, once per file) into
     groups of whole stripes of at least `min(32 MiB, size / readAhead)`; each group is a read-ahead unit
     (`Reader.Options.range`, ORC reads the stripes that start in it), handed over in file and stripe order. The
@@ -228,3 +228,9 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   runs 40640401475 (dfad426, still with jacoco: Q1 1.5, Q6 0.8, `SELECT *` 4.0 s) and 40641173349 (9506620:
   Q1 0.72-0.84 vs Parquet 0.12, Q6 0.36-0.45 vs 0.03, `SELECT *` 1.5-1.7 vs 1.2; before 6.6 / 6.6 / 7.7).
   Next: step 2 (g) stripe-range read-ahead for single-file tables, batch size, then close P1.
+- 2026-10-28 (plugins session): P1 step 2 (g) - large ORC files read as stripe-group ranges ahead (77a8db9,
+  3a78772; hive plugin only, no core or SPI change; CHANGELOG). Local: hive module 38/38 (`OrcTableReaderTest`
+  6), Checkstyle + SpotBugs clean; local perf 2M rows (batch size 4096/8192/16384: no difference beyond noise,
+  4096 kept). CI: Dev CI run 40643089615 (77a8db9) green; Dev CI run 40644229233 (36b2177, package=true) green,
+  pre-release `server-1.0.0-36b2177d51b4` (ORC opt-in default off; answers unchanged); SF1 one-file perf run
+  40643095396 (77a8db9) = 4-file speed. **P1 closed**; next session starts P2 (LDAP/JWT auth providers).
