@@ -1861,3 +1861,4 @@
   (items 21/22/19b/17 (e)), then the stand rounds; code candidates: item 3 (b) (time travel for Iceberg tables in a
   Hive Metastore - plugin + SPI `TableFormat.asOf`, overlaps the plugins lane), item 1b libs pruning (needs a stand).
 - 2026-10-28 (maintainer, CI build tracking 94ad61021d93): small S3 flag - ADBC c1 p95 1.08 / p99 1.09 vs 7562a5bdb7b9 in 3/3 rounds (p50 better); load +6-7 % at peak, +18-23 % at 128 clients; scan x8 1.18. Likely the same 19b thread count (fixed in 9efe670, floor 4); the screening re-measures the next pre-release - if the S3 c1 tail stays, treat it as a bug.
+- 2026-10-28 (maintainer): the 15:41Z session fixed 19b (9efe670, Dev CI 40720127635 green, tpch-perf 40722015834: default 21.82 s vs -DduckDbThreads=4 21.38 s vs pre-fix 29.48 s) but ended without a pre-release and left LOCK held; package run 40736052279 dispatched on main by the maintainer, LOCK released.
