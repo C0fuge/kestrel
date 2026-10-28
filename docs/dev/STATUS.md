@@ -1924,3 +1924,13 @@
   40746317500 green. No pre-release (default unchanged). Stand (optional): 3-node S3 with
   `-DflightLoadReservationSeconds=120` - abandoned plans stop skewing placement after 2 min. Next: as before (the
   screening's numbers on `server-1.0.0-a110a2279437`, then the stand rounds; code candidate 1b libs pruning).
+- 2026-10-28 (cloud session, core lane): item 21 continued. Found and fixed (936b2d7): since the 19b floor (4
+  threads) `duckDbThreadsUnderLoad` moved every query of a 1-3 core node to the low-thread connection (running x 4 >
+  cores already for one query), contrary to the README; now the switch needs another running query. Tests:
+  `DuckDbAdapterTest.aQueryAloneKeepsItsThreadsWhenTheyExceedTheCores` (regression), `ThreadsUnderLoadIntegrationTest`
+  holds a query running to reach the under-load path deterministically; `SmallQueryThroughputPerfTest` takes
+  `-Dperf.threadsUnderLoad`. Local, 2 cores, prepared client: default c1/c8/c32 54.9/144/156 q/s,
+  `-DduckDbThreadsUnderLoad=1` 54.7/173/211, `-DduckDbThreads=1` 55.1/170/210 (numbers in item 21 note and Open
+  question "Item 21 (b)", which now proposes default 1 on <= 4 cores). Push run 40756863551 cancelled in favour of
+  package run 40756881178 (green), pre-release `server-1.0.0-936b2d7c366c`. Screening: load test on it with and without
+  `-DduckDbThreadsUnderLoad=1`. Next: maintainer queue (2) item 22, (3) 19b step 2, (4) item 16.
