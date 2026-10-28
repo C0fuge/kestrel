@@ -88,8 +88,9 @@ public class TestFlightServerHelper implements AutoCloseable {
             localFs.initialize(URI.create("file:///"), new Configuration());
 
             // Adapters
-            parquetAdapter = new ParquetAdapter(appConfig,
-                    new HadoopDataStore(localFs, appConfig.dataDir(), "localhost"));
+            pro.surpin.data.arrowflight.server.storage.DataStore store =
+                    new HadoopDataStore(localFs, appConfig.dataDir(), "localhost");
+            parquetAdapter = new ParquetAdapter(appConfig, b.sharedStorage ? shared(store) : store);
             duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
                     pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
                     b.threadsUnderLoad, b.cores, new ProducingStreamGate(b.producingStreams),
@@ -99,11 +100,21 @@ public class TestFlightServerHelper implements AutoCloseable {
         // Services
         metadataService = new MetadataService(parquetAdapter);
 
-        hazelcastAdapter = new HazelcastAdapter(appConfig);
-        // Pick the Flight port only after Hazelcast owns its port. Otherwise two
-        // consecutive ephemeral-port probes can return the same released port.
-        int flightPort = b.flightPort != 0 ? b.flightPort : findFreePort();
-        location = Location.forGrpcInsecure("localhost", flightPort);
+        if (b.hazelcastSeeds != null) {
+            // A member of a cluster tells the others its Flight URI: the test picks both ports.
+            if (b.flightPort == 0) {
+                throw new IllegalArgumentException("hazelcastSeeds needs an explicit flightPort");
+            }
+            location = Location.forGrpcInsecure("localhost", b.flightPort);
+            hazelcastAdapter = new HazelcastAdapter(appConfig, location.getUri().toString(),
+                    b.hazelcastSeeds);
+        } else {
+            hazelcastAdapter = new HazelcastAdapter(appConfig);
+            // Pick the Flight port only after Hazelcast owns its port. Otherwise two
+            // consecutive ephemeral-port probes can return the same released port.
+            int flightPort = b.flightPort != 0 ? b.flightPort : findFreePort();
+            location = Location.forGrpcInsecure("localhost", flightPort);
+        }
         clusterService = new ClusterService(hazelcastAdapter, appConfig,
                 location.getUri().toString());
         // endpointsPerServer as the server reads it (tests set it as a system property).
@@ -163,6 +174,30 @@ public class TestFlightServerHelper implements AutoCloseable {
         if (first != null) throw first;
     }
 
+    /**
+     * Presents a local directory as storage every node reads (as HDFS or S3), for clusters of
+     * nodes in one JVM that share it.
+     *
+     * @param store local store
+     * @return the same store, shared
+     */
+    private static pro.surpin.data.arrowflight.server.storage.DataStore shared(
+            pro.surpin.data.arrowflight.server.storage.DataStore store) {
+        return (pro.surpin.data.arrowflight.server.storage.DataStore) java.lang.reflect.Proxy.newProxyInstance(
+                TestFlightServerHelper.class.getClassLoader(),
+                new Class<?>[] {pro.surpin.data.arrowflight.server.storage.DataStore.class},
+                (proxy, method, args) -> {
+                    if ("shared".equals(method.getName()) && method.getParameterCount() == 0) {
+                        return true;
+                    }
+                    try {
+                        return method.invoke(store, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
     private static int findFreePort() throws Exception {
         try (ServerSocket ss = new ServerSocket(0)) {
             return ss.getLocalPort();
@@ -179,6 +214,8 @@ public class TestFlightServerHelper implements AutoCloseable {
         private String resultMode = "partial";
         private int hazelcastPort;
         private int flightPort;
+        private String[] hazelcastSeeds;
+        private boolean sharedStorage;
         private int threads = 1;
         private int threadsUnderLoad;
         private int cores = Runtime.getRuntime().availableProcessors();
@@ -195,6 +232,10 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder resultMode(String m) { this.resultMode = m; return this; }
         public Builder hazelcastPort(int p) { this.hazelcastPort = p; return this; }
         public Builder flightPort(int p) { this.flightPort = p; return this; }
+        /** Joins the Hazelcast members at these host:port seeds; needs hazelcastPort and flightPort. */
+        /** Treats the local data directory as storage every node reads (nodes share it). */
+        public Builder sharedStorage() { this.sharedStorage = true; return this; }
+        public Builder hazelcastSeeds(String... s) { this.hazelcastSeeds = s.clone(); return this; }
         public Builder threads(int t) { this.threads = t; return this; }
         public Builder threadsUnderLoad(int t, int c) { this.threadsUnderLoad = t; this.cores = c; return this; }
         public Builder producingStreams(int p) { this.producingStreams = p; return this; }

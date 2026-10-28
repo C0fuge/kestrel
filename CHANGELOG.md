@@ -47,6 +47,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and must look to the `iceberg-rest` catalog exactly as the same tables in a Hadoop-layout warehouse (names,
   columns, files, row and delete counts, partial-read problems, DuckDB `iceberg_scan` rows). Test only, no runtime
   change.
+- Distributed complete mode, 3-node test (item 18 step 3, lane 3 D2): `DistributedClusterIntegrationTest` runs
+  three complete-mode nodes on one Hazelcast cluster in one JVM over a shared data directory (6 files, two
+  endpoints per node): merged answers equal single-node answers for 9 shapes (incl. wide GROUP BY and a wide
+  unordered projection), a peer stream reset mid-way (TCP relay) and a peer whose Flight service is down fall back
+  to the exact single-node answer (or fail; never a partial answer), and a node that left is not planned. Test only,
+  no runtime change.
 - Distributed complete mode (item 18 step 2, lane 3), opt-in `distributedComplete` / `FLIGHT_DISTRIBUTED_COMPLETE`
   (default false, unchanged): the planning node of a complete answer reads the query's partial-mode endpoints from the
   nodes (Flight DoGet as the client's user, header `x-kestrel-internal-identity` signed with the ticket secret,
