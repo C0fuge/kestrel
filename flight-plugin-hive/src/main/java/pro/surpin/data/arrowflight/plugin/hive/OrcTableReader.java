@@ -32,7 +32,7 @@ import pro.surpin.data.arrowflight.spi.storage.ReadableFile;
  * Reads the ORC files of one table scan one after the other as one Arrow stream: the requested
  * columns in the requested order, data columns as {@link OrcArrowReader} reads them and partition
  * columns as text, a constant per file from its partition values (NULL when missing). A file
- * larger than {@code rangeBytes} is read as consecutive byte ranges, each a group of whole stripes
+ * larger than a quarter of {@code rangeBytes} is read as consecutive byte ranges, each a group of whole stripes
  * from the file's footer of at least its size over {@code readAhead}, at most about
  * {@code rangeBytes} (ORC reads the stripes that start in a range;
  * the first range starts at 0 and the last is open-ended, so the ranges cover the file whatever
@@ -100,7 +100,8 @@ final class OrcTableReader extends ArrowReader {
      * @param batchSize rows per batch
      * @param executor runs the decoding of files
      * @param readAhead ranges decoded at once, at least 1
-     * @param rangeBytes bytes of a file read as one range, at least 1
+     * @param rangeBytes most bytes of a file read as one range (about; whole stripes), at least 1;
+     *     files of more than a quarter of it are split
      * @throws IllegalArgumentException when a requested column is not a column of the table
      */
     OrcTableReader(BufferAllocator allocator, List<TableFile> files, Opener opener,
@@ -215,7 +216,7 @@ final class OrcTableReader extends ArrowReader {
             planned = true;
             nextOffset = 0L;
             rangeStarts.clear();
-            if (file.size() > rangeBytes) {
+            if (file.size() > rangeBytes / 4) {
                 rangeStarts.addAll(plan(file));
             }
         }

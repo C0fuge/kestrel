@@ -268,6 +268,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- Hive ORC tables (`hive.orcTables`): a file larger than 8 MiB is read as several ranges of whole stripes (planned
+  from its footer; at least a quarter of the file's size per range when it is large enough, at most about 32 MiB),
+  each a read-ahead unit next to the other files' (P1 step 2 (g)), so a table of one large file is decoded in
+  parallel too; batches still reach DuckDB in file and stripe order, and the first and last ranges are open, so every
+  stripe is read once whatever the footer or listed size say. Answers unchanged; SF1 lineitem ORC in one file on a
+  4-core runner: Q1-style 0.73-0.83 s, Q6-style 0.37-0.46 s, as fast as the same table in 4 files.
 - Hive ORC tables (`hive.orcTables`): batches of integer, date, double, decimal (<= 18 digits), string and binary
   columns are copied into Arrow in bulk instead of value by value (P1 step 2 (f)). Answers unchanged; local 2M-row
   lineitem ORC: `SELECT *` 2.3 -> 1.9 s, Q1-style 0.8 -> 0.7 s.

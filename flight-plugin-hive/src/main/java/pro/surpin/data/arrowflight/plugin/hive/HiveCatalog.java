@@ -61,7 +61,7 @@ final class HiveCatalog implements Catalog {
     /** ORC files of one table scan decoded at once (their batches still arrive in file order). */
     private static final int ORC_READ_AHEAD = Math.max(1,
             Math.min(4, Runtime.getRuntime().availableProcessors()));
-    /** Bytes of an ORC file read as one read-ahead unit (its stripes that start there). */
+    /** Most bytes of an ORC file read as one read-ahead unit (a group of its stripes). */
     private static final long ORC_RANGE_BYTES = 32L << 20;
 
     private final HiveSettings settings;

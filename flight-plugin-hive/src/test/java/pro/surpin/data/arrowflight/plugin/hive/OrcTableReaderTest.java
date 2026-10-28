@@ -126,7 +126,7 @@ class OrcTableReaderTest {
                     }
                     assertEquals(rows, expected, what);
                     // One footer read to plan, then a read per group of stripes.
-                    long expectedOpens = listed <= range ? 1
+                    long expectedOpens = listed <= range / 4 ? 1
                             : 1 + groups(stripes, Math.min(range, listed / readAhead));
                     assertEquals(expectedOpens, opens[0], what);
                     assertEquals(0L, allocator.getAllocatedMemory(), what);
