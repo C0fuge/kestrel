@@ -107,5 +107,6 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
   the 3 s-heartbeat variant; runs where iptables works: root or sudo -n). Known gap: a member's entry on the silent
   member's partitions that this node never read is absent (refreshView makes that the first 3 s of a node only).
   CI 40739303087 green on the branch (3871f94). On `main`: my package=true dispatch 40741178454 on a110a22 cancelled
-  the plugins lane's dispatch 40739820098 on 929b544 (same concurrency group; a110a22 contains 929b544).
+  the plugins lane's dispatch 40739820098 on 929b544 (same concurrency group; a110a22 contains 929b544); it is
+  green, pre-release `server-1.0.0-a110a2279437` (contains 929b544 too). Next: D3 step 2 (writes).
 
