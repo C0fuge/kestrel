@@ -245,7 +245,7 @@ P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB'
     (Hive-created tables store `string` for all columns). Tests: `TextArrowReaderTest` 8 (opencsv semantics:
     quotes, doubled quotes, escapes dropped before other chars, unclosed quote drops the field, empty line,
     U+FFFD), `HiveTextTableTest` 5, `HiveTextIntegrationTest` 5 (`openCsvSerdeTablesAnswerInBothModes`).
-    *Step 2 (c) part 2 done 2026-10-28 (e8014c2, JsonSerDe):* read from Hive 3.1.3's own sources (hcatalog
+    *Step 2 (c) part 2 done 2026-10-28 (b17866c, JsonSerDe):* read from Hive 3.1.3's own sources (hcatalog
     `JsonSerDe`, serde2 `JsonSerDe`, `HCatSchema`, `Date`/`Timestamp`, `HiveBaseChar`, Java object inspectors):
     both serdes are the same Jackson 1.9 token walk (not the newer `HiveJsonStructReader` of Hive 4). Ported
     one to one in `JsonRows` with the same parser (`jackson-core-asl` 1.9.13, new plugin dependency, no deps) so
@@ -420,6 +420,6 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   group (lane runs 40681442479, 40682559133 were cancelled anyway; 40682965605 covers their commits). Next: P4 step 2
   (c) JsonSerDe, then Avro, views; (d) perf.
 - 2026-10-28 (plugins session): P4 step 2 (c) part 2 - Hive JsonSerDe tables (hcatalog + serde2) under
-  `hive.textTables` (e8014c2; plugin only + tests, comment lines in `arrowflight.properties`; new plugin dependency
+  `hive.textTables` (b17866c; plugin only + tests, comment lines in `arrowflight.properties`; new plugin dependency
   `jackson-core-asl` 1.9.13 = Hive's parser; CHANGELOG). Local: hive module 59/59 + Checkstyle + SpotBugs,
   `HiveTextIntegrationTest` 6/6. CI: pending (dispatch package=true).
