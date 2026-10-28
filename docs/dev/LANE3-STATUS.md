@@ -179,4 +179,6 @@ D5. (open, no maintainer item yet) D2 observed gap: force the after-first-batch 
   `MultiNodeFailoverTest`, `DistributedCompleteIntegrationTest`, `HadoopArrowFlightServerTest` 33/33 green, all
   Hazelcast members on 237xx-238xx; checkstyle clean. CI 40788631312 green on the branch (a488311, before the rebase
   onto core-lane commits). Not changed: `LibsSetTest` and `flight-spark`'s benchmark keep their own `freePort()`
-  (other lanes; single servers). Next: D5, or a maintainer item.
+  (other lanes; single servers). On `main` 256bddd has no CI run yet (the push ended in a `[skip ci]` commit; not
+  dispatched so as not to cancel the core lane's run 40789295791 on 881bbf7, same concurrency group). Next session:
+  confirm a green Dev CI run on `main` containing 256bddd (else dispatch one). Next: D5, or a maintainer item.
