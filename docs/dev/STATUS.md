@@ -176,7 +176,10 @@
 >    threads, at least 2), >= 1 GiB, <= 80 % of memory; threads cores / 4 in 2..16 (S3 >= 4), <= 1 per GiB, >= 2;
 >    `duckDbMemoryLimit=none` = old behaviour; startup line `duckdb=sizing`. **Next of 19b:** screening on the
 >    pre-release (2c/6g gets 1 GiB per connection - TPC-H SF10 and the load test vs `7562a5bdb7b9`, see Open question
->    "Item 19b expected connections"); stand: large hosts, clamp 16 vs 32; step 2 (adaptive threads, opt-in).
+>    "Item 19b expected connections"); stand: large hosts, clamp 16 vs 32; ~~step 2 (adaptive threads, opt-in)~~
+>    (done 2026-10-28, fd9f62f, see Log: opt-in `duckDbThreadsWhenIdle` = more threads for a DoGet that starts alone on
+>    the node; "fewer under concurrency" is the existing `duckDbThreadsUnderLoad`). **Stand (large hosts):** a lone
+>    TPC-H SF10 query on 16+ cores with `duckDbThreadsWhenIdle=<cores>` vs default, and the load test with both on.
 > 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. ~~item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).~~ *Done 2026-10-28 (ea55a4f, in pre-release `server-1.0.0-177dfe3e5716`, see Log):*
@@ -1770,3 +1773,20 @@
   (`perf`), peer bytes / wait counters, and opt-in `distributedComplete` now fails over to an endpoint's backup
   locations before the single-node fallback. Only `DistributedComplete` and its tests changed. Details in
   `LANE3-STATUS.md`.
+- 2026-10-28 (cloud session): item 19b step 2 done (fd9f62f): opt-in `duckDbThreadsWhenIdle` /
+  `arrowflight.duckdb.threadsWhenIdle` / `DUCKDB_THREADS_WHEN_IDLE` (default 0 = off): each Flight worker opens on first
+  use a further DuckDB connection with that many threads (capped at the cores; off when not above `duckDbThreads`); a
+  DoGet that enters its query slot while no other runs on the node uses it to its end; later queries get
+  `duckDbThreads`, or `duckDbThreadsUnderLoad` once the cores are taken (the "fewer under concurrency" half of step 2
+  already existed). Same `memory_limit` as the other connections (README: ~1 GiB per thread, set
+  `duckDbMemoryLimit` to match); startup line `duckdb=threads ... whenIdle=`, `DuckDbAdapter.queriesWhenIdle()`. Tests:
+  `DuckDbAdapterTest` (alone -> 4 threads, next to it -> 2, third -> underLoad 1, cap/off rules), `ConfigAdapterTest`,
+  `ThreadsUnderLoadIntegrationTest` (same answers off / under load / when idle / both, partial + complete). Not
+  measured (no large host here); see item 3c for the stand. CI: push run 40691933422 cancelled by the catalogs lane's
+  push; its run 40692394131 and my package dispatch 40693932375 on 207b74c failed in lane 3's
+  `DistributedClusterIntegrationTest` (a different cut test each time, `mergedAnswers` 1 instead of 0): since D2 (c)
+  part 2 a relay cut before the peer's schema fails over to a backup location and merges, which the two cut tests
+  did not allow. Test-only fix 94ad610 (either exact outcome; merged only with `failovers() > 0`), passes locally
+  3/3. **Lane 3: please check the fix matches your intent.** My push cancelled lane 3's package dispatch 40691235109;
+  package run 40695407602 on 94ad610 (contains c7e436e and fd9f62f) green, pre-release `server-1.0.0-94ad61021d93`.
+  Next: the screening's numbers (items 21/22/19b/17 (e)), then the stand rounds; no open code item left in stage 3.
