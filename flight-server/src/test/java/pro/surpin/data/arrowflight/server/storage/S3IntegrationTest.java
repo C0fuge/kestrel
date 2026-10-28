@@ -523,6 +523,42 @@ class S3IntegrationTest {
     }
 
     /**
+     * Verifies admission on reuse ({@code arrowflight.s3.cacheAdmission=reuse}): answers stay
+     * right, the first two runs of a query read its data from S3 and the third none.
+     */
+    @Test
+    void readCacheAdmissionOnReuseKeepsWhatIsReadAgain() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 4;
+        int perFile = 40_000;
+        Path data = dir.resolve("reuse.parquet");
+        StringBuilder list = new StringBuilder();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < files; i++) {
+                s.execute("COPY (SELECT " + i * perFile + " + range AS id, md5(range::VARCHAR) AS pad FROM range("
+                        + perFile + ")) TO '" + data + "' (FORMAT parquet, ROW_GROUP_SIZE 10000)");
+                s3.put(bucket, "flight-it/m/x" + i + ".parquet", Files.readAllBytes(data));
+                list.append(i == 0 ? "" : ", ").append("'s3://").append(bucket)
+                        .append("/flight-it/m/x").append(i).append(".parquet'");
+            }
+        }
+        long rows = (long) files * perFile;
+        String scan = "SELECT count(*), count(DISTINCT pad) FROM read_parquet([" + list + "])";
+        plugin.properties.put("arrowflight.s3.cacheMegabytes", "64");
+        plugin.properties.put("arrowflight.s3.cacheAdmission", "reuse");
+        threads = 4;
+        open(null);
+        assertTrue(requestsOf(scan, rows)[0] > 0, "first run: read, not kept");
+        assertTrue(requestsOf(scan, rows)[0] > 0, "second run: read again, now kept");
+        assertEquals(0, requestsOf(scan, rows)[0], "third run: answered from the cache");
+        String metrics = MetricsService.render();
+        Matcher skipped = Pattern.compile("\narrowflight_s3_cache_not_admitted_total (\\S+)\n").matcher(metrics);
+        assertTrue(skipped.find(), metrics);
+        assertTrue(Double.parseDouble(skipped.group(1)) > 0, metrics);
+    }
+
+    /**
      * Runs a query and counts the object requests it sent to the {@code m/} files.
      *
      * @param sql query whose first column is a count

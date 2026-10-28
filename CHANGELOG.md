@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- S3 / lakeFS read cache admission (item 17 (e)), opt-in: `arrowflight.s3.cacheAdmission` /
+  `arrowflight.lakefs.cacheAdmission` = `always` (default, unchanged) or `reuse`: a missed block is kept only when it
+  is read again while it is among the last N blocks not kept (N = the cache's blocks), so a scan larger than the cache
+  passes through and leaves what small queries read again; repeated queries hit from their third run on. Metric
+  `arrowflight_<kind>_cache_not_admitted_total`. Measured on the fake S3 why a size rule would not do: DuckDB 1.5.6
+  reads a scan per column chunk (2 KiB - 3 MiB GETs on a lineitem-like table, 122880-row groups) while a
+  `SELECT *` point lookup reads its whole row group (4.5 MiB) in one GET.
 - Cap on the streams inside DuckDB at once (item 22 (c)), opt-in: `duckDbProducingStreams` /
   `arrowflight.duckdb.producingStreams` / `DUCKDB_PRODUCING_STREAMS` (default 0 = no cap, unchanged). A DoGet holds
   one of N turns (handed out in arrival order) only while DuckDB runs its query or computes its next batch, never while
@@ -336,6 +343,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- S3 / lakeFS read cache took about twice its size in heap (item 17 (e), CI screening `COMPARE-CACHE-2026-10-27`:
+  RSS ~5.7 GB with `cacheMegabytes=1024` vs ~2.3 GB off): each 1 MiB block was one array, a humongous object for G1
+  that takes whole regions (256 MiB of blocks used 512 MiB of heap at `-Xmx3g`); a miss of up to 64 MiB was also
+  buffered by the SDK, copied, and copied again per block. Blocks are now held in 256 KiB pieces (256 MiB of blocks =
+  256 MiB of heap) and misses are streamed from S3 into them, no whole-GET buffer. Answers unchanged.
 - Tests: `TestFlightServerHelper` ignored `endpointsPerServer`, so in-process partial-mode scans were always one
   endpoint (`ParallelScanPerfTest` endpoint runs and `ThreadsUnderLoadIntegrationTest` measured one stream); the
   integration tests now assert the split. Test only.

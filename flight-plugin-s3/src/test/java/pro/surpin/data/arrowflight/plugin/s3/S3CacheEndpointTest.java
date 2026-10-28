@@ -14,6 +14,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Arrays;
@@ -116,7 +119,8 @@ class S3CacheEndpointTest {
         assertEquals((double) gets(), values.get("arrowflight_s3_cache_s3_reads_total"));
         assertEquals(2.0 * S3CacheEndpoint.BLOCK_BYTES, values.get("arrowflight_s3_cache_s3_read_bytes_total"));
         assertEquals((double) s3.count("HEAD"), values.get("arrowflight_s3_cache_s3_lookups_total"));
-        assertEquals(10, values.size());
+        assertEquals(0.0, values.get("arrowflight_s3_cache_not_admitted_total"));
+        assertEquals(11, values.size());
     }
 
     /** Verifies the shared endpoint publishes its metrics from its start until its last route closes. */
@@ -209,7 +213,7 @@ class S3CacheEndpointTest {
         S3CacheEndpoint lakefs = new S3CacheEndpoint(S3CacheEndpoint.BLOCK_BYTES, 10, "n1", clock::get, "lakefs");
         try {
             Map<String, Double> values = values(lakefs.samples());
-            assertEquals(10, values.size());
+            assertEquals(11, values.size());
             assertTrue(values.keySet().stream().allMatch(name -> name.startsWith("arrowflight_lakefs_cache_")),
                     values.toString());
         } finally {
@@ -368,6 +372,102 @@ class S3CacheEndpointTest {
         assertNull(S3CacheEndpoint.span("bytes=x-1", 100));
     }
 
+    /**
+     * Verifies admission on reuse: a block is kept from its second read on, and a scan of more
+     * blocks than the cache holds passes through without pushing out the blocks read again.
+     *
+     * @throws IOException when the endpoint cannot start
+     */
+    @Test
+    void admissionOnReuseKeepsBlocksReadAgainAndLetsLargeScansPass() throws IOException {
+        int blocks = 12;
+        byte[] big = bytes(blocks * S3CacheEndpoint.BLOCK_BYTES, 6);
+        s3.put(BUCKET, "data/t/big.parquet", big);
+        S3CacheEndpoint reuse = new S3CacheEndpoint(4L * S3CacheEndpoint.BLOCK_BYTES, 10, "n1", clock::get,
+                "s3", true);
+        S3Settings settings = settings(s3.endpoint(), "AKIABACKEND", "backend-secret");
+        S3CacheEndpoint.Route own = reuse.route(S3Uri.parse("s3://lake/data"), backend, settings);
+        try (S3Client reader = S3DataStore.createClient(settings("http://" + own.duckDbEndpoint(), own.keyId(),
+                own.secret()))) {
+            for (int i = 0; i < 3; i++) {
+                s3.clearRequests();
+                assertArrayEquals(Arrays.copyOfRange(data, 0, 100), range(reader, KEY, 0, 99));
+                assertEquals(i < 2 ? 1 : 0, gets(), "read " + i + ": " + reuse.stats());
+            }
+            // Two full scans of 12 blocks through a 4-block cache: never kept (each block's
+            // second read is 12 names later, past the 4 remembered), the hot block stays.
+            for (int scan = 0; scan < 2; scan++) {
+                for (int b = 0; b < blocks; b++) {
+                    long from = (long) b * S3CacheEndpoint.BLOCK_BYTES;
+                    assertArrayEquals(Arrays.copyOfRange(big, (int) from, (int) from + 100),
+                            range(reader, "data/t/big.parquet", from, from + 99));
+                }
+            }
+            s3.clearRequests();
+            assertArrayEquals(Arrays.copyOfRange(data, 0, 100), range(reader, KEY, 0, 99));
+            assertEquals(0, gets(), "the block read again survives the scans: " + reuse.stats());
+            Map<String, Double> values = values(reuse.samples());
+            assertEquals(1.0, values.get("arrowflight_s3_cache_blocks"));
+            assertEquals(1.0 + 2 * blocks, values.get("arrowflight_s3_cache_not_admitted_total"));
+            assertEquals(0.0, values.get("arrowflight_s3_cache_evictions_total"));
+            assertTrue(reuse.stats().contains("notAdmitted=" + (1 + 2 * blocks)), reuse.stats());
+        } finally {
+            own.close();
+            reuse.close();
+        }
+        assertTrue(S3ReadCache.admitOnReuse("s3", "reuse"));
+        assertTrue(S3ReadCache.admitOnReuse("s3", " Reuse "));
+        assertEquals(false, S3ReadCache.admitOnReuse("s3", "always"));
+        assertEquals(false, S3ReadCache.admitOnReuse("s3", null));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> S3ReadCache.admitOnReuse("lakefs", "lru"));
+        assertTrue(e.getMessage().contains("arrowflight.lakefs.cacheAdmission"), e.getMessage());
+    }
+
+    /**
+     * Verifies a store that ignores Range (sends the whole object) still gives the right bytes of
+     * each block, at the start, the middle and the end of the object.
+     */
+    @Test
+    void aStoreThatIgnoresRangeIsAnsweredRight() {
+        s3.ignoreRange(true);
+        long[][] spans = {{0, 99}, {S3CacheEndpoint.BLOCK_BYTES - 10, S3CacheEndpoint.BLOCK_BYTES + 99},
+            {SIZE - 50, SIZE - 1}};
+        for (long[] span : spans) {
+            assertArrayEquals(Arrays.copyOfRange(data, (int) span[0], (int) span[1] + 1), range(span[0], span[1]),
+                    span[0] + ".." + span[1]);
+        }
+        s3.ignoreRange(false);
+        s3.clearRequests();
+        assertArrayEquals(Arrays.copyOfRange(data, 10, 2 * S3CacheEndpoint.BLOCK_BYTES),
+                range(10, 2L * S3CacheEndpoint.BLOCK_BYTES - 1));
+    }
+
+    /**
+     * Verifies a block is held in pieces small enough never to be a humongous G1 object, and that
+     * any part of it is written back exactly (across piece borders too).
+     *
+     * @throws IOException never, the stream is in memory
+     */
+    @Test
+    void blocksAreHeldInPiecesBelowHalfAHeapRegion() throws IOException {
+        assertTrue(S3BlockCache.Block.PIECE_BYTES <= (1 << 20) / 2 - 16, "below half of G1's smallest region");
+        byte[] bytes = bytes(S3CacheEndpoint.BLOCK_BYTES, 5);
+        S3BlockCache.Block block = S3BlockCache.Block.of(bytes);
+        assertEquals(bytes.length, block.length());
+        int piece = S3BlockCache.Block.PIECE_BYTES;
+        int[][] parts = {{0, bytes.length}, {piece - 3, piece + 5}, {piece, 2 * piece}, {10, 11}, {7, 7},
+            {bytes.length - 1, bytes.length}};
+        for (int[] part : parts) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            block.write(out, part[0], part[1]);
+            assertArrayEquals(Arrays.copyOfRange(bytes, part[0], part[1]), out.toByteArray(),
+                    part[0] + ".." + part[1]);
+        }
+        assertThrows(EOFException.class,
+                () -> S3BlockCache.Block.read(new ByteArrayInputStream(new byte[10]), 11));
+    }
+
     /** Verifies the block cache drops the least recently used block first. */
     @Test
     void blockCacheDropsTheLeastRecentlyUsed() {
@@ -375,13 +475,13 @@ class S3CacheEndpointTest {
         S3BlockCache.BlockKey a = new S3BlockCache.BlockKey("b", "k", "e", 0);
         S3BlockCache.BlockKey b = new S3BlockCache.BlockKey("b", "k", "e", 1);
         S3BlockCache.BlockKey c = new S3BlockCache.BlockKey("b", "k", "e", 2);
-        cache.put(a, new byte[4]);
-        cache.put(b, new byte[4]);
+        cache.put(a, S3BlockCache.Block.of(new byte[4]));
+        cache.put(b, S3BlockCache.Block.of(new byte[4]));
         cache.get(a);
-        cache.put(c, new byte[4]);
+        cache.put(c, S3BlockCache.Block.of(new byte[4]));
         assertNull(cache.get(b));
         assertEquals(8, cache.usedBytes());
-        cache.put(new S3BlockCache.BlockKey("b", "k", "e", 3), new byte[11]);
+        cache.put(new S3BlockCache.BlockKey("b", "k", "e", 3), S3BlockCache.Block.of(new byte[11]));
         assertEquals(8, cache.usedBytes(), "a block larger than the cache is not kept");
         assertThrows(IllegalArgumentException.class, () -> new S3BlockCache(0));
     }
@@ -423,7 +523,15 @@ class S3CacheEndpointTest {
     }
 
     private byte[] range(long from, long to) {
-        return duckDb.getObjectAsBytes(r -> r.bucket(BUCKET).key(KEY).range("bytes=" + from + "-" + to))
+        return range(duckDb, from, to);
+    }
+
+    private static byte[] range(S3Client reader, long from, long to) {
+        return range(reader, KEY, from, to);
+    }
+
+    private static byte[] range(S3Client reader, String key, long from, long to) {
+        return reader.getObjectAsBytes(r -> r.bucket(BUCKET).key(key).range("bytes=" + from + "-" + to))
                 .asByteArray();
     }
 

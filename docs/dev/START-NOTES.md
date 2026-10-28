@@ -62,7 +62,15 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   While it runs, the Prometheus endpoint (`/metrics`) shows `arrowflight_s3_cache_*`: capacity/used bytes and
   blocks (gauges), `hits_total`, `misses_total`, `evictions_total`, `joined_total` (blocks taken from another
   request's read) and the requests it sent to S3 (`s3_reads_total`, `s3_read_bytes_total`, `s3_lookups_total` = HEADs).
-- lakeFS read cache (opt-in, `arrowflight.lakefs.cacheMegabytes` / `arrowflight.lakefs.cacheCheckSeconds`, same
+  The heap it takes is its size: blocks are held in 256 KiB pieces (a 1 MiB array is a humongous G1 object and took
+  2 MiB of heap, so `cacheMegabytes=1024` used ~2 GiB before 2026-10-28) and misses are streamed from S3 into them, no
+  whole-GET buffer. `arrowflight.s3.cacheAdmission` (default `always` = unchanged): `reuse` keeps a missed block only
+  when it is read again while it is among the last blocks not kept (as many names as the cache has blocks), so a scan
+  of more data than the cache (TPC-H SF10 lineitem in a 1 GiB cache) passes through without pushing out what small
+  queries read again; a repeated query is then served from the cache from its third run on. Counter
+  `not_admitted_total`, `notAdmitted=` in the `s3=cacheClosed` line, `admitOnReuse=` in `s3=cacheOpen`.
+- lakeFS read cache (opt-in, `arrowflight.lakefs.cacheMegabytes` / `arrowflight.lakefs.cacheCheckSeconds` /
+  `arrowflight.lakefs.cacheAdmission`, same
   meaning and defaults): DuckDB reads the lakeFS S3 gateway through the same kind of loopback cache, for the whole
   repository (pinned commits never change, so their blocks stay valid). It is a cache of its own, separate from the
   s3 plugin's: with both on, keep the two sizes together below half of `-Xmx`. Log lines `lakefs=cacheOpen` /

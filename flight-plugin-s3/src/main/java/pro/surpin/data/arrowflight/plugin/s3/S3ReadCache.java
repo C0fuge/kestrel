@@ -4,6 +4,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -13,7 +14,8 @@ import pro.surpin.data.arrowflight.spi.storage.StoreContext;
 
 /**
  * One store's way through the node-wide S3 read cache, for plugins built on this one (lakefs):
- * opens the route from the plugin's {@code cacheMegabytes} / {@code cacheCheckSeconds} settings
+ * opens the route from the plugin's {@code cacheMegabytes} / {@code cacheCheckSeconds} /
+ * {@code cacheAdmission} settings
  * and describes the DuckDB secret that reads through it.
  */
 public final class S3ReadCache implements AutoCloseable {
@@ -24,12 +26,17 @@ public final class S3ReadCache implements AutoCloseable {
     public static final String CACHE_CHECK_SECONDS_KEY = "cacheCheckSeconds";
     /** Default of {@link #CACHE_CHECK_SECONDS_KEY}. */
     public static final int DEFAULT_CACHE_CHECK_SECONDS = 10;
+    /** Which missed blocks the read cache keeps: {@code always} or {@code reuse}. */
+    public static final String CACHE_ADMISSION_KEY = "cacheAdmission";
     /** The read cache keys of a plugin namespace. */
     public static final List<ConfigKey> CONFIG_KEYS = List.of(
             ConfigKey.of(CACHE_MEGABYTES_KEY, "MiB of the node-wide S3 read cache DuckDB reads through"
                     + " (JVM heap, at most half of it); 0 = off, DuckDB reads S3 directly", "0"),
             ConfigKey.of(CACHE_CHECK_SECONDS_KEY, "Seconds the read cache trusts an object's version"
-                    + " before it checks it on S3 again", Integer.toString(DEFAULT_CACHE_CHECK_SECONDS)));
+                    + " before it checks it on S3 again", Integer.toString(DEFAULT_CACHE_CHECK_SECONDS)),
+            ConfigKey.of(CACHE_ADMISSION_KEY, "Which blocks read from S3 the read cache keeps: always, or"
+                    + " reuse = only a block read again soon (scans larger than the cache pass through)",
+                    "always"));
 
     private final S3CacheEndpoint.Route route;
 
@@ -57,11 +64,13 @@ public final class S3ReadCache implements AutoCloseable {
         if (bytes == 0) {
             return Optional.empty();
         }
+        boolean admitOnReuse = admitOnReuse(kind, context.config().get(CACHE_ADMISSION_KEY, "always"));
         S3CacheEndpoint.Route route;
         try {
             route = S3CacheEndpoint.register(bytes,
                     context.config().getInt(CACHE_CHECK_SECONDS_KEY, DEFAULT_CACHE_CHECK_SECONDS),
-                    context.nodeName(), root, client, settings, context.metrics(), kind);
+                    context.nodeName(), root, client, settings, context.metrics(), kind,
+                    admitOnReuse);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("Cannot start the S3 read cache: " + e.getMessage(), e);
         }
@@ -90,6 +99,26 @@ public final class S3ReadCache implements AutoCloseable {
                     + (maxHeapBytes >> 20) + " MiB): the cache lives on the heap; raise -Xmx or lower the cache");
         }
         return bytes;
+    }
+
+    /**
+     * Reads the read cache's admission setting.
+     *
+     * @param kind plugin name, for the message
+     * @param value {@code arrowflight.<kind>.cacheAdmission}
+     * @return true for {@code reuse}, false for {@code always}
+     * @throws IllegalArgumentException for any other value
+     */
+    static boolean admitOnReuse(String kind, String value) {
+        String v = value == null ? "always" : value.trim().toLowerCase(Locale.ROOT);
+        if ("always".equals(v) || v.isEmpty()) {
+            return false;
+        }
+        if ("reuse".equals(v)) {
+            return true;
+        }
+        throw new IllegalArgumentException("arrowflight." + kind + "." + CACHE_ADMISSION_KEY
+                + " must be always or reuse: " + value);
     }
 
     /**

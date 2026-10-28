@@ -50,6 +50,7 @@ public final class FakeS3 implements AutoCloseable {
     private final AtomicInteger pageSize = new AtomicInteger(1000);
     private final AtomicLong latencyMillis = new AtomicLong();
     private final AtomicBoolean ignoreIfMatch = new AtomicBoolean();
+    private final AtomicBoolean ignoreRange = new AtomicBoolean();
 
     private FakeS3(HttpServer server, String scheme) {
         this.server = server;
@@ -128,6 +129,15 @@ public final class FakeS3 implements AutoCloseable {
      */
     public void pageSize(int size) {
         pageSize.set(size);
+    }
+
+    /**
+     * Makes GETs ignore Range, as some stores do: the whole object is sent with status 200.
+     *
+     * @param ignore true to ignore Range
+     */
+    public void ignoreRange(boolean ignore) {
+        ignoreRange.set(ignore);
     }
 
     /**
@@ -276,7 +286,7 @@ public final class FakeS3 implements AutoCloseable {
         int start = 0;
         int end = data.length - 1;
         int status = 200;
-        if (range != null && range.startsWith("bytes=")) {
+        if (range != null && range.startsWith("bytes=") && !ignoreRange.get()) {
             String[] parts = range.substring(6).split("-", -1);
             start = Integer.parseInt(parts[0]);
             if (!parts[1].isEmpty()) {
