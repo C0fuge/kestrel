@@ -178,8 +178,11 @@
 >    pre-release (2c/6g gets 1 GiB per connection - TPC-H SF10 and the load test vs `7562a5bdb7b9`, see Open question
 >    "Item 19b expected connections"); stand: large hosts, clamp 16 vs 32; step 2 (adaptive threads, opt-in).
 > 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
-> 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
->    whether production has a local disk is unknown, so it must stay optional).
+> 5. ~~item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
+>    whether production has a local disk is unknown, so it must stay optional).~~ *Done 2026-10-28 (ea55a4f, see Log):*
+>    `cacheDiskPath` + `cacheDiskMegabytes` (s3 and lakefs), write-behind block files, CRC-32C checked, LRU in bytes.
+>    **Stand / screening:** S3 SF10 JDBC + repeated small queries with `cacheMegabytes=256`, `cacheDiskPath` on a local
+>    disk, `cacheDiskMegabytes=16384` vs memory-only 1024: timings, RSS, `diskHits=` / `diskDropped=` in `s3=cacheClosed`.
 > 6. then the stand rounds of items 15, 16, 19 and the other open items as before.
 
 > **Stage 2, approved by the maintainer 2026-10-26 - take these in this order before the other open items** (basis: `docs/dev/TUNING.md`
@@ -214,7 +217,7 @@
 >    endpoint, SigV4-checked random key per store, misses with `If-Match`. **Stand:** S3 SF10 JDBC and the 32-client
 >    small-query step with `arrowflight.s3.cacheMegabytes=1024` (and `-Xmx` >= 2.5g) vs off: timings, RSS, the
 >    `s3=cacheClosed` hit/miss line; expect repeated rounds near the HDFS numbers and no OOM. **Next steps of 17:**
->    (a) local-disk tier with a size cap (Open question: is a local disk available on the production hosts?);
+>    ~~(a) local-disk tier with a size cap~~ (done 2026-10-28, ea55a4f, opt-in, see Log);
 >    ~~(b) lakeFS stores through the cache~~ (done 2026-10-27, 752e272: opt-in `arrowflight.lakefs.cacheMegabytes` /
 >    `cacheCheckSeconds`, own cache per plugin class loader, metrics `arrowflight_lakefs_cache_*`, pre-release
 >    `server-1.0.0-752e272b3ab6`; see Log); ~~(c) single-flight for concurrent misses of one block~~ (done 2026-10-27,
