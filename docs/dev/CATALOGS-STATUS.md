@@ -67,6 +67,39 @@ C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source thr
       download them, as catalogs-ci.yml's fallback does). First step: a CI job that downloads both for v1.5.6, checks
       they load in duckdb_jdbc 1.5.6 with `enable_external_access=false` after `ATTACH` (or what order works under
       the lockdown), and records the result.
+    - Step 1 done (2026-10-28): `catalogs-ci.yml` job `jdbc-scanners` + `tools/ci/DuckDbScannerProbe.java`
+      (PostgreSQL 16.4, MySQL 8.4 containers; extensions from extensions.duckdb.org, kept 14 days as workflow
+      artifact `duckdb-scanner-extensions-v1.5.6`; the job looks for
+      `<name>-v1.5.6-linux_amd64.duckdb_extension` in ci-assets first). Results with the server's order
+      (in-memory secrets, `LOAD '<path>'`, `CREATE TEMPORARY SECRET`, `ATTACH '' AS src (TYPE ..., SECRET s,
+      READ_ONLY)`, then allowed_directories + no autoload + `enable_external_access=false` +
+      `lock_configuration=true`):
+      - Works after the lockdown, both engines: reads, projection and filter pushdown (`Filters: id=2` in the
+        POSTGRES_SCAN / MYSQL_SCAN plan), information_schema of the attached database, NULLs. PostgreSQL runs
+        reads in `READ ONLY` transactions (`transaction_read_only=on`).
+      - Types: pg json/jsonb/char -> VARCHAR, bytea -> BLOB, int[] -> INTEGER[], numeric(18,4) -> DECIMAL(18,4),
+        timestamptz -> TIMESTAMP WITH TIME ZONE, uuid/interval/time native. MySQL: time -> VARCHAR
+        (`mysql_time_as_time=false`), year -> INTEGER, bit(1)/tinyint(1) -> BOOLEAN, bigint unsigned -> UBIGINT,
+        enum/json -> VARCHAR.
+      - Refused after the lockdown: a new `ATTACH` (also with the existing secret), `INSERT` into the read-only
+        attach, `postgres_execute` / `mysql_execute`, non-SELECT and multi-statement text in `*_query`.
+      - **Gets through (must be refused in client SQL before a plugin ships):** `postgres_query('src', '<any
+        SELECT>')` / `mysql_query(...)` run text on the remote database with the plugin's credentials (bypasses
+        per-table checks; side-effect functions like `set_config` ran); `postgres_scan('<any dsn>', ...)`
+        connects to any host with any credentials despite `enable_external_access=false` (network egress from
+        the server); `duckdb_secrets()` shows host/user (already in the server's `REFUSED_FUNCTIONS`);
+        `CREATE OR REPLACE SECRET` and `DETACH` pass DuckDB but not the server's SELECT-only parse check.
+      - Functions the extensions add: postgres_scanner `pg_clear_cache, postgres_attach, postgres_configure_pool,
+        postgres_execute, postgres_hstore_get, postgres_hstore_to_json, postgres_query, postgres_scan,
+        postgres_scan_pushdown, read_postgres_binary`; mysql_scanner `mysql_clear_cache,
+        mysql_debug_execution_plan, mysql_execute, mysql_explain_federated, mysql_query`.
+    - **Next (step 2):** see Q4 first. If allowed: SPI (own commit, additive, version bump) lets a plugin name
+      functions to refuse in client SQL (or: the server refuses every function a plugin's `LOAD` adds, from a
+      `duckdb_functions()` diff), the server adds them to the parse check; then module `flight-plugin-jdbc`
+      (config: per source type/host/port/database/user, password from env/file, never logged; `LOAD` + secret +
+      `ATTACH ... READ_ONLY` via `contributeDuckDb`, tables as catalog views `jdbc_<source>.<schema>.<table>`),
+      tests with Testcontainers-free CI containers as in `jdbc-scanners`. Also upload the two extensions to
+      ci-assets (from the artifact) so CI does not depend on extensions.duckdb.org.
 C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), from HDFS and S3; refuse clearly what it
     cannot read (deletion vectors / column mapping if unsupported). Then: Apache Ozone S3 gateway as an S3 backend test.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
@@ -79,6 +112,15 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   roots, values redacted), fed by a new optional field on the catalog SPI. It touches the DuckDB lockdown
   (security), so: may lane 4 add this (opt-in, off by default, own commits), or should the core lane own the server
   part? Until answered, lane 4 continues with step 3 and C2 and leaves 2b's core part unbuilt.
+
+- Q4 (2026-10-28, C2 step 2, security): the postgres / mysql scanner extensions add table functions that
+  get through the DuckDB lockdown: `postgres_query` / `mysql_query` (any SELECT on the remote database with the
+  plugin's credentials) and `postgres_scan('<dsn>', ...)` (connects to any host). A federation plugin needs them
+  refused in client SQL. Proposal: the server refuses every function a plugin's `LOAD` adds (diff of
+  `duckdb_functions()` before/after the plugin's DuckDB setup, joined to `REFUSED_FUNCTIONS`), opt-in only by
+  installing such a plugin; no change for existing setups. May lane 4 add this to the parse check (own commit,
+  STATUS.md Log line), or should the core lane own it? Until answered, lane 4 builds no plugin that loads these
+  extensions into query connections.
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -125,3 +167,8 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   40719031475 (2498dd4) cancelled by a newer push; run 40720127635 (head 9efe670, includes it) green. New open
   question Q3 (one unloadable table makes a whole catalog unavailable - core lane). C1 done apart from 2b (Q1);
   next: C2.
+- 2026-10-28: C2 step 1 - probe of DuckDB's postgres / mysql scanners v1.5.6 under the server's lockdown
+  (`catalogs-ci.yml` job `jdbc-scanners`, `tools/ci/DuckDbScannerProbe.java`). Test only. Reads, projection and
+  filter pushdown work after the lockdown; `*_query` pass-through and `postgres_scan('<dsn>')` also get through
+  -> new open question Q4 before a plugin is built. Catalogs CI: runs 40730338121 (probe bug: a failed check
+  closed the shared statement), 40730719713, 40731100450 (final probe; all 7 jobs green).

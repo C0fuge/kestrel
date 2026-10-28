@@ -102,6 +102,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   optional `ICEBERG_REST_IT_OMIT_COLUMNS` leaves them out of both sides) and its sample table
   `default.marksheet_uniform` answers 500 (the server test shows namespace `ice` only,
   `ICEBERG_REST_IT_NAMESPACES`). Test only.
+- DuckDB postgres / mysql scanner probe (C2 step 1): `catalogs-ci.yml` job `jdbc-scanners`
+  (`tools/ci/DuckDbScannerProbe.java`) loads `postgres_scanner` / `mysql_scanner` v1.5.6 by path, attaches
+  PostgreSQL 16 / MySQL 8.4 read-only with a temporary secret, applies the server's lockdown and records which
+  reads, pushdowns and client statements get through (results in docs/dev/CATALOGS-STATUS.md). Test only.
 - Iceberg REST catalog tables registered in a Hive metastore (C1 step 3c): on local warehouses
   `RestCatalogServerConformanceTest` registers the REST catalog's metadata files in the in-process metastore (schema
   `hms_ice`, hive plugin -> iceberg plugin); answers equal the REST catalog's, partial equal complete. Test only.
