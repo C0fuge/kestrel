@@ -116,6 +116,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   optional `ICEBERG_REST_IT_OMIT_COLUMNS` leaves them out of both sides) and its sample table
   `default.marksheet_uniform` answers 500 (the server test shows namespace `ice` only,
   `ICEBERG_REST_IT_NAMESPACES`). Test only.
+- DuckDB delta extension probe (C3 step 1): `catalogs-ci.yml` job `delta` writes Delta tables with Spark 3.5.3 +
+  delta-spark 3.3.2 (`tools/ci/delta-fixtures.py`: partitions, deletion vectors, column mapping by name and id,
+  checkpoints, versions, schema evolution, types; Spark's answers in `expected.tsv`) and
+  `tools/ci/DuckDbDeltaProbe.java` reads them with `delta` v1.5.6 under the server's lockdown, locally and on S3
+  (moto), and records what is read correctly and whether paths outside `allowed_directories` are refused. Test only.
 - DuckDB postgres / mysql scanner probe (C2 step 1): `catalogs-ci.yml` job `jdbc-scanners`
   (`tools/ci/DuckDbScannerProbe.java`) loads `postgres_scanner` / `mysql_scanner` v1.5.6 by path, attaches
   PostgreSQL 16 / MySQL 8.4 read-only with a temporary secret, applies the server's lockdown and records which
