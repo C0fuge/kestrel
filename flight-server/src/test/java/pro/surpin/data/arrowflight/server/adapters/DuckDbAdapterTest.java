@@ -143,6 +143,37 @@ class DuckDbAdapterTest {
         assertEquals(11, rows.get());
     }
 
+    /** Verifies flightZeroCopyWrites turns zero-copy on for DuckDB streams, and only when set. */
+    @Test
+    void streamSqlUsesZeroCopyWritesOnlyWhenSet() throws Exception {
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "complete", true, true);
+        for (boolean zeroCopy : new boolean[] {false, true}) {
+            ExecutorService ioPool = Executors.newSingleThreadExecutor();
+            FlightProducer.ServerStreamListener listener =
+                    mock(FlightProducer.ServerStreamListener.class);
+            when(listener.isReady()).thenReturn(true);
+            try (RootAllocator allocator = new RootAllocator();
+                    DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool,
+                            pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(
+                                    List.of(), List.of()),
+                            0, 1, ProducingStreamGate.OFF, zeroCopy)) {
+                adapter.streamSql(allocator, "SELECT range AS id FROM range(0, 250)", listener, true);
+            } finally {
+                ioPool.shutdownNow();
+            }
+            if (zeroCopy) {
+                verify(listener).setUseZeroCopy(true);
+            } else {
+                verify(listener, never()).setUseZeroCopy(true);
+            }
+            verify(listener, org.mockito.Mockito.times(3)).putNext();
+        }
+    }
+
     @Test
     void sqlStringLiteralNormal() {
         assertEquals("'hello'", DuckDbAdapter.sqlStringLiteral("hello"));

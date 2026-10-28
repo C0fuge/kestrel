@@ -232,7 +232,8 @@ public final class ServerModule {
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
         return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
                 ConfigAdapter.duckDbThreadsUnderLoad(), Runtime.getRuntime().availableProcessors(),
-                new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()));
+                new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
+                ConfigAdapter.flightZeroCopyWrites());
     }
 
     /**

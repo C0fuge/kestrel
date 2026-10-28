@@ -51,8 +51,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * process total); asserts only the answers. Run it pinned to few cores (for example
  * {@code taskset -c 0,1}) to see the CPU-bound case. {@code -Dperf.streams=1,4,8},
  * {@code -Dperf.rows}, {@code -Dperf.runs}, {@code -Dperf.threads} (duckDbThreads) and
- * {@code -Dperf.threadsUnderLoad} (duckDbThreadsUnderLoad) and {@code -Dperf.producingStreams}
- * (duckDbProducingStreams) pick the rest.
+ * {@code -Dperf.threadsUnderLoad} (duckDbThreadsUnderLoad), {@code -Dperf.producingStreams}
+ * (duckDbProducingStreams) and {@code -Dperf.zeroCopyWrites} (flightZeroCopyWrites) pick the rest.
  * {@code -Dperf.server=host:port} measures a server started separately (pinned to its own cores, so
  * the in-process clients do not share its CPUs) on the table under {@code -Dperf.dataDir}, which the
  * test writes when it is missing.
@@ -96,7 +96,8 @@ class ParallelScanPerfTest {
                     .dataDir(dir.toString()).resultMode(clients ? "complete" : "partial").threads(threads)
                     .threadsUnderLoad(Integer.getInteger("perf.threadsUnderLoad", 0),
                             Runtime.getRuntime().availableProcessors())
-                    .producingStreams(Integer.getInteger("perf.producingStreams", 0)).start()) {
+                    .producingStreams(Integer.getInteger("perf.producingStreams", 0))
+                    .zeroCopyWrites(Boolean.getBoolean("perf.zeroCopyWrites")).start()) {
                 measure(helper.location, streams, clients,
                         "duckDbThreads " + (threads > 0 ? threads : "default"));
                 ProducingStreamGate gate = helper.duckDbAdapter.producingGate();

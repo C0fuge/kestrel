@@ -152,6 +152,11 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final int cores;
     /** Caps the streams inside DuckDB at once (duckDbProducingStreams); off by default. */
     private final ProducingStreamGate producingGate;
+    /**
+     * Lets gRPC send DuckDB's batch buffers without a copy (flightZeroCopyWrites); safe because
+     * each batch DuckDB exports lives in new buffers that gRPC keeps until it has written them.
+     */
+    private final boolean zeroCopyWrites;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     /** hadoopfs settings the loaded extension does not know, warned about once. */
     private final Set<String> unknownHdfsSettings = ConcurrentHashMap.newKeySet();
@@ -359,7 +364,28 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
             int threadsUnderLoad, int cores, ProducingStreamGate producingGate) {
+        this(appConfig, ioPool, setup, threadsUnderLoad, cores, producingGate, false);
+    }
+
+    /**
+     * Creates DuckDB adapter with duckDbThreadsUnderLoad, a cap on the streams that produce
+     * batches at once and the choice of zero-copy Flight writes.
+     *
+     * @param appConfig        server configuration
+     * @param ioPool           shared I/O thread pool for parallel execution
+     * @param setup            setup written by the DuckDbSetupValidator; empty roots disable the
+     *                         lockdown
+     * @param threadsUnderLoad DuckDB threads of the second connection; 0, or not below
+     *                         duckDbThreads, keeps every query on its thread's one connection
+     * @param cores            processors the node's queries share
+     * @param producingGate    gate of the streams inside DuckDB at once
+     * @param zeroCopyWrites   whether result streams hand their buffers to gRPC without a copy
+     */
+    public DuckDbAdapter(AppConfig appConfig, ExecutorService ioPool, DuckDbSetupPlan setup,
+            int threadsUnderLoad, int cores, ProducingStreamGate producingGate,
+            boolean zeroCopyWrites) {
         this.producingGate = producingGate;
+        this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
         this.storageSetupStatements = setup.statements();
         this.redactor = setup.redactor();
@@ -393,8 +419,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
         LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} producingStreams={}"
-                + " availableProcessors={}", LogUtil.node(), appConfig.duckDbThreads(),
-                this.threadsUnderLoad, producingGate.permits(), this.cores);
+                + " zeroCopyWrites={} availableProcessors={}", LogUtil.node(),
+                appConfig.duckDbThreads(), this.threadsUnderLoad, producingGate.permits(),
+                zeroCopyWrites, this.cores);
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);
@@ -1074,6 +1101,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
             started = true;
+            if (zeroCopyWrites) {
+                listener.setUseZeroCopy(true);
+            }
             if (startListener) {
                 listener.start(duckRoot);
             }

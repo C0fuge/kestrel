@@ -157,6 +157,23 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbProducingStreams"), e.getMessage());
     }
 
+    @Test
+    void flightZeroCopyWritesIsOffByDefaultAndRefusesOtherValues() throws IOException {
+        assertFalse(ConfigAdapter.flightZeroCopyWrites(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.flightZeroCopyWrites(
+                source(Map.of("flightZeroCopyWrites", "true"), Map.of())));
+        assertTrue(ConfigAdapter.flightZeroCopyWrites(
+                source(Map.of("arrowflight.flight.zeroCopyWrites", "TRUE"), Map.of())));
+        assertTrue(ConfigAdapter.flightZeroCopyWrites(
+                source(Map.of(), Map.of("FLIGHT_ZERO_COPY_WRITES", "true"))));
+        assertFalse(ConfigAdapter.flightZeroCopyWrites(
+                source(Map.of("flightZeroCopyWrites", "false"), Map.of())));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.flightZeroCopyWrites(
+                        source(Map.of("flightZeroCopyWrites", "yes"), Map.of())));
+        assertTrue(e.getMessage().contains("flightZeroCopyWrites"), e.getMessage());
+    }
+
     /**
      * Regression for the S3 small-query tail (2026-10-28): on object stores the default keeps at
      * least 4 threads, local and HDFS data directories keep the size-aware default, an explicit

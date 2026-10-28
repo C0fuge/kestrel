@@ -276,6 +276,32 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns flightZeroCopyWrites from the system configuration.
+     *
+     * @return whether DuckDB result streams hand their batches to gRPC without a copy
+     */
+    public static boolean flightZeroCopyWrites() {
+        return flightZeroCopyWrites(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code flightZeroCopyWrites} ({@code FLIGHT_ZERO_COPY_WRITES}): whether streams of
+     * DuckDB results let gRPC send the batch buffers without copying them first; default false.
+     *
+     * @param props configuration source
+     * @return true when on
+     * @throws IllegalArgumentException for a value other than true or false
+     */
+    public static boolean flightZeroCopyWrites(ConfigSource props) {
+        String value = getStringWithEnv("flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites",
+                "FLIGHT_ZERO_COPY_WRITES", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("flightZeroCopyWrites must be true or false: " + value);
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    /**
      * Creates the Flight SQL session store from the system configuration.
      *
      * @return session store
