@@ -179,7 +179,7 @@
 >    "Item 19b expected connections"); stand: large hosts, clamp 16 vs 32; step 2 (adaptive threads, opt-in).
 > 4. ~~item 18 step 2~~ - **moved to lane 3** (`docs/dev/LANE3-STATUS.md`, branch `lane/distributed`, 2026-10-28). Was: distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. ~~item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
->    whether production has a local disk is unknown, so it must stay optional).~~ *Done 2026-10-28 (ea55a4f, see Log):*
+>    whether production has a local disk is unknown, so it must stay optional).~~ *Done 2026-10-28 (ea55a4f, in pre-release `server-1.0.0-177dfe3e5716`, see Log):*
 >    `cacheDiskPath` + `cacheDiskMegabytes` (s3 and lakefs), write-behind block files, CRC-32C checked, LRU in bytes.
 >    **Stand / screening:** S3 SF10 JDBC + repeated small queries with `cacheMegabytes=256`, `cacheDiskPath` on a local
 >    disk, `cacheDiskMegabytes=16384` vs memory-only 1024: timings, RSS, `diskHits=` / `diskDropped=` in `s3=cacheClosed`.
@@ -1748,3 +1748,21 @@
 - 2026-10-28 (lane 3 session): D2 (a) merged into `main` (8d2006c): 3-node in-JVM test of distributed complete mode
   (`DistributedClusterIntegrationTest`, `CuttingRelay`; `TestFlightServerHelper` gains `hazelcastSeeds` and
   `sharedStorage`). Test only. CI 40681311340 green on `lane/distributed`. Details in `LANE3-STATUS.md`.
+- 2026-10-28 (cloud session): 19b step 2 waits for the screening's numbers, so item 17 (a) (ea55a4f): disk tier of the
+  S3 / lakeFS read cache, opt-in `arrowflight.<s3|lakefs>.cacheDiskPath` (absolute) + `cacheDiskMegabytes` (both, and
+  `cacheMegabytes` > 0, else refused at start). `S3DiskCache`: blocks read from S3 also go to a write-behind queue (64
+  blocks, dropped when full - a cache, never a wait) and one writer thread writes them as `<n>.blk` (tmp + atomic
+  move) under `<path>/<kind>-cache/` (mode 700); LRU in bytes in an in-memory index with each file's CRC-32C; a block
+  missing from memory is read from its file before S3 (in `readOwn`, after the single-flight claim, so concurrent
+  misses still read once) and put back in memory; a damaged/short/deleted file is a miss (`errors`), never an answer.
+  Files of an earlier run deleted at start, all at close; `<path>/<kind>-cache.lock` (tryLock) refuses a second
+  server; WARN `cacheDiskSmall` when the file system has less free space than the cap. `cacheAdmission=reuse` gives
+  the disk its own ghost list (cap / 1 MiB names). Metrics `arrowflight_<kind>_cache_disk_*` (10), `disk...=` in
+  `cacheClosed`. Tests: `S3DiskCacheTest` (6: blocks dropped from memory come from disk with 0 GETs, damaged/deleted
+  files read from S3 again, cap + LRU + oversize, lock/start-empty/foreign files kept, reuse admission, settings),
+  `S3IntegrationTest.theReadCacheDiskTierServesWhatTheMemoryDropped` (DuckDB, 1 MiB memory + 64 MiB disk: repeated
+  scan 0 GETs, files deleted at close; CI only - extensions.duckdb.org is blocked in the session). Not measured
+  (no stand here). CI: my dispatches 40681442479 / 40681896929 / 40682559133 were cancelled by other lanes' pushes
+  and dispatches (shared `dev-ci-main` concurrency group); the plugins lane's package run 40682965605 on 177dfe3
+  (contains ea55a4f) green: server 907 tests / 2 skipped, pre-release `server-1.0.0-177dfe3e5716`. Stand/screening:
+  see Next steps item 5. Next: 19b step 2 after the screening, or the stand rounds (items 15, 16, 19).
