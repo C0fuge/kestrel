@@ -18,6 +18,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the columns the query names; partition values come from the metastore. The query's simple filters on integer,
   DOUBLE, DECIMAL, STRING/VARCHAR, BOOLEAN and DATE columns skip ORC stripes and row groups (the server still applies
   every filter). Transactional (ACID) ORC tables stay skipped with a log line. End-to-end server tests follow.
+- End-to-end tests of ORC Hive tables through the server with the packaged hive plugin (P1 step 2 (d),
+  `HiveOrcIntegrationTest`): both result modes answer ORC tables (ZLIB, ZSTD, SNAPPY, LZ4 and uncompressed files)
+  exactly like the same rows in Parquet, incl. partition pruning, filters, group by a partition column and joins of
+  ORC with Parquet and with ORC; the plugin's zstd-jni works next to the server's. Test only.
 - Parallel stream compression (item 20, step (f)): the buffers of a large compressed batch are compressed side by
   side by the stream's thread and helper threads shared by all streams, largest first; the batch is sent once all
   are done (byte for byte the serial batch, no extra batches held). New setting `flightCompressionThreads` /

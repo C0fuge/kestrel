@@ -24,6 +24,7 @@ public final class HiveTestTables {
             "../flight-plugin-hive/target/plugin/hive"));
     private static final Path MODULE = Path.of("../flight-plugin-hive/target");
     private static final String FIXTURE = "pro.surpin.data.arrowflight.plugin.hive.HmsFixture";
+    private static final String ORC = "pro.surpin.data.arrowflight.plugin.hive.OrcTestFiles";
     private static ClassLoader loader;
 
     private HiveTestTables() {
@@ -50,6 +51,35 @@ public final class HiveTestTables {
         Object fixture = inLoader(() -> Class.forName(FIXTURE, true, child).getMethod("shared")
                 .invoke(null));
         return new Hms(fixture);
+    }
+
+    /**
+     * Writes rows [from, to) of the plugin module's ORC test table as an ORC file (OrcTestFiles,
+     * in the metastore's class loader, where orc-core is).
+     *
+     * @param file file to write
+     * @param from first row
+     * @param to row after the last
+     * @param compression ORC compression kind
+     * @throws Exception when it cannot be written
+     */
+    public static void writeOrc(Path file, int from, int to, String compression) throws Exception {
+        ClassLoader child = loader();
+        inLoader(() -> Class.forName(ORC, true, child).getMethod("write", String.class, int.class,
+                int.class, String.class).invoke(null, file.toString(), from, to, compression));
+    }
+
+    /**
+     * Reads a constant of the ORC test table: COLUMNS (metastore notation) or EXPECTED (the
+     * rows in DuckDB SQL, to be followed by {@code FROM range(from, to)}).
+     *
+     * @param name constant name
+     * @return its value
+     * @throws Exception on reflection failure
+     */
+    public static String orcConstant(String name) throws Exception {
+        ClassLoader child = loader();
+        return (String) inLoader(() -> Class.forName(ORC, true, child).getField(name).get(null));
     }
 
     /**

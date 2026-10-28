@@ -8,14 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -31,21 +29,6 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hive.common.type.HiveDecimal;
-import org.apache.hadoop.hive.ql.exec.vector.BytesColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.ColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.DecimalColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.DoubleColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.ListColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.LongColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.MapColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.StructColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.TimestampColumnVector;
-import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
-import org.apache.orc.OrcFile;
-import org.apache.orc.TypeDescription;
-import org.apache.orc.Writer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -69,28 +52,6 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  */
 class HiveOrcTableTest {
 
-    private static final String COLUMNS = "i int;b bigint;s string;dec decimal(12,2);dt date;"
-            + "d double;flag boolean;ch char(4);ts timestamp;arr array<int>;"
-            + "st struct<x:int,y:string>;m map<string,int>";
-    private static final String STRUCT = "struct<i:int,b:bigint,s:string,dec:decimal(12,2),"
-            + "dt:date,d:double,flag:boolean,ch:char(4),ts:timestamp,arr:array<int>,"
-            + "st:struct<x:int,y:string>,m:map<string,int>>";
-    /** The same rows as {@link #fill}, computed by DuckDB over range(from, to). */
-    private static final String EXPECTED = "SELECT range::INTEGER AS i,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE range * 1000000000 END AS b,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE 's' || range || 'ü' END AS s,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE (range * 1.25)::DECIMAL(12,2) END AS dec,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE DATE '2020-01-01' + range::INTEGER END AS dt,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE range::DOUBLE / 8 END AS d,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE range % 2 = 0 END AS flag,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE 'c' || (range % 10) END AS ch,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE TIMESTAMP '2020-06-01 01:30:00'"
-            + " + INTERVAL (range) MINUTE END AS ts,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE [range::INTEGER, range::INTEGER + 1] END AS arr,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE {'x': -range::INTEGER, 'y': 'y' || range}"
-            + " END AS st,"
-            + " CASE WHEN range % 7 = 3 THEN NULL ELSE MAP {'k': range::INTEGER} END AS m";
-
     @TempDir
     static Path dir;
     static IsolatedHms hms;
@@ -105,18 +66,18 @@ class HiveOrcTableTest {
         hms = IsolatedHms.shared();
         root = dir.resolve("lake").toString();
         Path flat = Files.createDirectories(dir.resolve("lake/flat"));
-        orc(flat.resolve("000000_0"), 0, 3000);
-        orc(flat.resolve("000001_0"), 3000, 6000);
+        OrcTestFiles.write(flat.resolve("000000_0"), 0, 3000);
+        OrcTestFiles.write(flat.resolve("000001_0"), 3000, 6000);
         hms.createDatabase("orct");
-        hms.createTable("orct", "flat", "file:" + flat, COLUMNS, "", "orc", null);
+        hms.createTable("orct", "flat", "file:" + flat, OrcTestFiles.COLUMNS, "", "orc", null);
         Path parted = Files.createDirectories(dir.resolve("lake/parted"));
-        hms.createTable("orct", "parted", "file:" + parted, COLUMNS, "region string;day int", "orc",
-                null);
+        hms.createTable("orct", "parted", "file:" + parted, OrcTestFiles.COLUMNS,
+                "region string;day int", "orc", null);
         String air = hms.addPartition("orct", "parted", List.of("AIR", "1"), null);
-        orc(Path.of(air.substring("file:".length())).resolve("a.orc"), 0, 100);
+        OrcTestFiles.write(Path.of(air.substring("file:".length())).resolve("a.orc"), 0, 100);
         String nulls = hms.addPartition("orct", "parted",
                 List.of("__HIVE_DEFAULT_PARTITION__", "2"), null);
-        orc(Path.of(nulls.substring("file:".length())).resolve("n.orc"), 100, 150);
+        OrcTestFiles.write(Path.of(nulls.substring("file:".length())).resolve("n.orc"), 100, 150);
         hms.createTable("orct", "acid", "file:" + dir.resolve("lake/acid"), "a int", "", "orc",
                 Map.of("transactional", "true", "transactional_properties", "insert_only"));
         Path broken = Files.createDirectories(dir.resolve("lake/broken"));
@@ -178,7 +139,7 @@ class HiveOrcTableTest {
                         stream.memoryAddress(), allocator);
                 duckdb.unwrap(DuckDBConnection.class).registerArrowStream("orc_flat", stream);
                 // Both directions of EXCEPT ALL empty: the same multiset of rows.
-                assertEquals(List.of("6000,0,0"), rows(duckdb, "WITH e AS (" + EXPECTED
+                assertEquals(List.of("6000,0,0"), rows(duckdb, "WITH e AS (" + OrcTestFiles.EXPECTED
                         + " FROM range(0, 6000)), a AS (SELECT * FROM orc_flat) SELECT"
                         + " (SELECT count(*) FROM a), (SELECT count(*) FROM (FROM a EXCEPT ALL FROM e)),"
                         + " (SELECT count(*) FROM (FROM e EXCEPT ALL FROM a))"));
@@ -306,67 +267,5 @@ class HiveOrcTableTest {
                 new TestSupport.MapConfig("hive", values), stores, new SecretRedactor(), null));
         stores.freeze();
         return catalog;
-    }
-
-    /** Writes rows [from, to) of {@link #EXPECTED} as an ORC file, row groups of 1000. */
-    private static void orc(Path file, int from, int to) throws IOException {
-        Files.createDirectories(file.getParent());
-        TypeDescription schema = TypeDescription.fromString(STRUCT);
-        try (Writer writer = OrcFile.createWriter(new org.apache.hadoop.fs.Path(file.toUri()),
-                OrcFile.writerOptions(new Configuration(false)).setSchema(schema)
-                        .rowIndexStride(1000))) {
-            VectorizedRowBatch batch = schema.createRowBatch(500);
-            for (int r = from; r < to; r++) {
-                fill(batch.cols, batch.size++, r);
-                if (batch.size == batch.getMaxSize()) {
-                    writer.addRowBatch(batch);
-                    batch.reset();
-                }
-            }
-            if (batch.size > 0) {
-                writer.addRowBatch(batch);
-            }
-        }
-    }
-
-    private static void fill(ColumnVector[] cols, int row, int r) {
-        ((LongColumnVector) cols[0]).vector[row] = r;
-        if (r % 7 == 3) {
-            for (int c = 1; c < cols.length; c++) {
-                cols[c].noNulls = false;
-                cols[c].isNull[row] = true;
-            }
-            return;
-        }
-        for (int c = 1; c < cols.length; c++) {
-            cols[c].isNull[row] = false;
-        }
-        ((LongColumnVector) cols[1]).vector[row] = r * 1_000_000_000L;
-        ((BytesColumnVector) cols[2]).setVal(row, ("s" + r + "ü").getBytes(StandardCharsets.UTF_8));
-        ((DecimalColumnVector) cols[3]).set(row, HiveDecimal.create(BigDecimal.valueOf(r * 125L, 2)));
-        ((LongColumnVector) cols[4]).vector[row] = LocalDate.of(2020, 1, 1).toEpochDay() + r;
-        ((DoubleColumnVector) cols[5]).vector[row] = r / 8.0;
-        ((LongColumnVector) cols[6]).vector[row] = r % 2 == 0 ? 1 : 0;
-        ((BytesColumnVector) cols[7]).setVal(row, ("c" + r % 10).getBytes(StandardCharsets.UTF_8));
-        ((TimestampColumnVector) cols[8]).set(row,
-                Timestamp.valueOf(LocalDateTime.of(2020, 6, 1, 1, 30).plusMinutes(r)));
-        ListColumnVector list = (ListColumnVector) cols[9];
-        list.offsets[row] = list.childCount;
-        list.lengths[row] = 2;
-        list.childCount += 2;
-        list.child.ensureSize(list.childCount, true);
-        ((LongColumnVector) list.child).vector[(int) list.offsets[row]] = r;
-        ((LongColumnVector) list.child).vector[(int) list.offsets[row] + 1] = r + 1;
-        StructColumnVector struct = (StructColumnVector) cols[10];
-        ((LongColumnVector) struct.fields[0]).vector[row] = -r;
-        ((BytesColumnVector) struct.fields[1]).setVal(row, ("y" + r).getBytes(StandardCharsets.UTF_8));
-        MapColumnVector map = (MapColumnVector) cols[11];
-        map.offsets[row] = map.childCount;
-        map.lengths[row] = 1;
-        map.childCount += 1;
-        map.keys.ensureSize(map.childCount, true);
-        map.values.ensureSize(map.childCount, true);
-        ((BytesColumnVector) map.keys).setVal((int) map.offsets[row], "k".getBytes(StandardCharsets.UTF_8));
-        ((LongColumnVector) map.values).vector[(int) map.offsets[row]] = r;
     }
 }
