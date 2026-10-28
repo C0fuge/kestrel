@@ -102,6 +102,40 @@ C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source thr
       ci-assets (from the artifact) so CI does not depend on extensions.duckdb.org.
 C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), from HDFS and S3; refuse clearly what it
     cannot read (deletion vectors / column mapping if unsupported). Then: Apache Ozone S3 gateway as an S3 backend test.
+    - Step 1 done (2026-10-28): `catalogs-ci.yml` job `delta`: Delta tables written by Spark 3.5.3 + delta-spark
+      3.3.2 (`tools/ci/delta-fixtures.py`, Spark's answers in `expected.tsv`), read by `tools/ci/DuckDbDeltaProbe.java`
+      with `delta` v1.5.6 (extension `6059958`, from extensions.duckdb.org, kept 14 days as workflow artifact
+      `duckdb-delta-extension-v1.5.6`; ci-assets checked first) after the server's lockdown, locally and on S3 (moto,
+      scoped `TYPE s3` secret). Results:
+      - **Read correctly after the lockdown, local and S3** (all equal to Spark): plain, partitioned (string/int,
+        NULL partition), deletion vectors (DELETE + UPDATE), column mapping `name` (renamed + dropped column) and
+        `id`, checkpoints (interval 2, delete after the last), schema evolution (added column NULL in old files),
+        time travel `delta_scan(path, version := n)`. `ATTACH '<path>' AS x (TYPE delta)` works before and after
+        the lockdown (also `PIN_SNAPSHOT`, `VERSION n`). Filter + projection pushdown (`DELTA_SCAN Filters: p='x',
+        id>1`). Types: timestamp -> TIMESTAMP WITH TIME ZONE, timestamp_ntz -> TIMESTAMP, decimal(38,10), binary ->
+        BLOB, array/struct/map native. No replacement scan (`FROM '<dir>'` is not a Delta read). HDFS not probed:
+        delta-kernel has its own object store (local, s3, az, gs/r2 via secrets, http(s)), so `hdfs://` tables
+        would need the hadoopfs extension, which delta-kernel does not use - expect "not readable" (step 2 checks).
+      - **Gets through the lockdown (must never reach client SQL):** delta-kernel does its own I/O, which
+        `allowed_directories` / `enable_external_access` only stop at DuckDB's Parquet reader: a table's
+        `_delta_log` outside the allowed directories is read (`DESCRIBE delta_scan(...)` shows its schema,
+        `delta_list_files` its file names, sizes, partition values, DVs), local and on S3 with any matching
+        secret; `delta_scan('https://<host>/...')` connects to any host (10 retries), `s3://` outside every
+        secret's scope goes to the instance metadata service (169.254.169.254). The extension also adds
+        `write_blob(path, blob)` and `copy_dir(src, dst)`, which **write files anywhere the server user can**
+        (checked: both wrote outside the allowed directories after `lock_configuration=true`). Full list of
+        added functions: `copy_dir, delta_domain_metadata, delta_filter_pushdown_log,
+        delta_filter_pushdown_log_tpcds, delta_get_transaction_version, delta_list_files, delta_scan,
+        delta_set_transaction_version, get_delta_test_expression, parse_delta_filter_logline, write_blob`.
+      - No server setup loads `delta` today (plugins request extensions by name through `DuckDbSetup`; none asks
+        for it), so nothing is exposed now.
+    - **Next (step 2), after Q5:** module `flight-plugin-delta` (catalog of Delta tables under configured roots:
+      a directory with `_delta_log` is a table; local + S3 through the stores' roots/secrets), tables as
+      server-written `delta_scan('<root>/<table>')` sources (or `ATTACH ... (TYPE delta)` before the lockdown),
+      `DuckDbSetup.refuseFunctions` with every function above (the SPI already has it: no SPI/core change), and
+      a unit test that the refused list equals the `duckdb_functions()` diff of the bundled extension, so a new
+      extension version cannot add an unrefused function. Partial mode: file list from `delta_list_files`
+      (DVs need the scan, so tables with DVs complete-mode only or refused in partial, to decide). Probe HDFS.
 C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi read-only if DuckDB or a light Java
     reader allows.
 
@@ -121,6 +155,22 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   installing such a plugin; no change for existing setups. May lane 4 add this to the parse check (own commit,
   STATUS.md Log line), or should the core lane own it? Until answered, lane 4 builds no plugin that loads these
   extensions into query connections.
+  Addendum (2026-10-28): the SPI already has `DuckDbSetup.refuseFunctions(String...)` ("the server's own list
+  can only grow"), so a plugin can refuse the functions its extension adds without any core change; the
+  automatic `duckdb_functions()` diff would only be a safety net against a future extension version adding
+  one. Option (a): the jdbc plugin refuses the scanners' functions itself (plugin-only, plus a test that its
+  list equals the diff of the bundled build). Option (b): the core diff as proposed. Lane 4 would go with (a)
+  unless told otherwise, but still waits for a yes because it loads an extension with known lockdown gaps.
+
+- Q5 (2026-10-28, C3 step 2, security): DuckDB's `delta` extension v1.5.6 adds functions that get past the
+  lockdown (C3 step 1 results): `write_blob` / `copy_dir` write files anywhere, and `delta_scan` /
+  `delta_list_files` read Delta logs outside `allowed_directories` and connect to any http(s) host or the
+  instance metadata service. A Delta plugin would load it into every query connection and refuse all eleven
+  added functions in client SQL through the existing `DuckDbSetup.refuseFunctions` (server-written table
+  sources only; plugin-only, no SPI/core change), with a test that the list covers the bundled build. May lane
+  4 build `flight-plugin-delta` on that basis (opt-in: only active when the plugin is installed), or should the
+  parse check refuse extension-added functions generically first (Q4 option b)? Until answered, lane 4 does
+  not load `delta` into server connections.
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -172,3 +222,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   filter pushdown work after the lockdown; `*_query` pass-through and `postgres_scan('<dsn>')` also get through
   -> new open question Q4 before a plugin is built. Catalogs CI: runs 40730338121 (probe bug: a failed check
   closed the shared statement), 40730719713, 40731100450 (final probe; all 7 jobs green).
+- 2026-10-28: C3 step 1 - probe of DuckDB's delta extension v1.5.6 on Spark-written Delta tables under the
+  server's lockdown (`catalogs-ci.yml` job `delta`, `tools/ci/delta-fixtures.py`, `tools/ci/DuckDbDeltaProbe.java`).
+  Test only. Every Delta feature checked (DVs, column mapping name/id, checkpoints, time travel, partitions,
+  evolution, types) reads equal to Spark, local and S3; but `write_blob` / `copy_dir` write anywhere and
+  delta-kernel's own I/O reads logs / connects outside the lockdown -> new open question Q5; Q4 addendum (the SPI's
+  existing `refuseFunctions`). Catalogs CI: runs 40750693235, 40751237504, 40751817639 (delta job green in each,
+  later runs add checks; 40751817639 all 8 jobs green). Dev CI: push runs cancelled by newer pushes; run
+  40751852380 (workflow_dispatch, head 0f8eb5e) still running at session end (change is tools/ci + workflow only).
