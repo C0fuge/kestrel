@@ -201,6 +201,35 @@ P3. **(moved 2026-10-28 to its own repository - do not change `flight-spark` her
 P4. **Hive TEXTFILE/CSV, Avro and JSON tables, then simple Hive views.** DuckDB's readers over the existing HDFS/S3
     setup; SerDe properties (field/line delimiters, null format, escape, skip.header), partition columns. Views: plain
     HiveQL views whose text DuckDB can run after a small translation; refuse the rest clearly.
+    *Step 1 done 2026-10-28 (c258adf, text tables):* decided to read text in the plugin (Java) through the ORC
+    path (`ReadSpec.ArrowStream("text")`, both modes, partition pruning, tickets) instead of DuckDB's `read_csv`:
+    Hive's lazy semantics (unreadable field -> NULL, no quoting, escapes, `\N`, positional fields, missing ->
+    NULL) cannot be expressed with `read_csv` options without core SQL changes, and no SPI/core change is needed
+    this way. Opt-in `hive.textTables` (default false) shows `TextInputFormat` + `LazySimpleSerDe` tables.
+    `TextFormat` (serde params, table params override, as Hive merges them): `field.delim` / `serialization.format`
+    (byte number or first char; ASCII only), `escape.delim`, `serialization.escape.crlf`,
+    `serialization.null.format` (default `\N`), `skip.header.line.count` (per file),
+    `serialization.last.column.takes.rest`; refused (table skipped, log reason): `line.delim` other than LF,
+    `serialization.encoding` other than UTF-8, `skip.footer.line.count`, `timestamp.formats`, escape = delimiter.
+    The format is part of the schema ID (`hive-text|<format>|...`). `TextArrowReader`: lines end at LF/CR/CRLF
+    (Hadoop's LineReader), 64 MiB line limit, `.gz` (multi-member) / `.deflate` / `.bz2` (Hadoop BZip2Codec),
+    `.snappy/.lz4/.zst/.lzo/.br` refused naming the file. `TextValues`: integers with blanks/sign/fraction
+    (dropped), out of range NULL; booleans true/false any case; float/double as Java; decimals HALF_UP to scale,
+    NULL above precision; dates `yyyy-M-d` (rest after a blank ignored), timestamps `yyyy-M-d[ |T]H:m[:s[.f]]`
+    (micros), impossible days NULL; binary Base64-decoded when all bytes are Base64; text UTF-8 with U+FFFD for
+    malformed bytes, VARCHAR/CHAR cut to length, CHAR right-trimmed (as the ORC reader). `TableFilesReader` (was
+    `OrcTableReader`) takes a `Format` strategy (ORC: stripe ranges + SARG; text: one range per file, no hints).
+    A partition whose own serde properties give another format (or another storage format) fails the query
+    naming the partition (Hive reads it with its own; never silently mis-split). Primitive columns only: nested
+    columns skip the table. Tests: `TextValuesTest` 4, `TextArrowReaderTest` 6, `HiveTextTableTest` 3
+    (metastore: opt-in, DuckDB reads the stream as the declared types incl. a gzip file, partitions with header
+    and NULL partition, partition with its own serde refused, footer/nested skipped).
+    *Next (step 2):* (a) end-to-end through the server (`HiveOrcIntegrationTest`-like, text vs Parquet of the
+    same rows, both modes, partition pruning); (b) nested columns (collection delimiter `colelction.delim` /
+    `collection.delim` default \002, map keys `mapkey.delim` \003, nesting levels 4+ as Hive's
+    `LazySerDeParameters` separators); (c) OpenCSVSerde (all columns strings; separatorChar, quoteChar,
+    escapeChar) and JsonSerDe (`org.apache.hive.hcatalog.data.JsonSerDe`), then Avro, then views; (d) perf note
+    (text vs Parquet SF1) and maybe splitting large uncompressed files at line boundaries.
 P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generic Flight clients).** Accept a SQL text
     in a CMD `FlightDescriptor` (not wrapped in a Flight SQL command) for read queries, same auth and Ranger checks;
     test with a ClickHouse container (`arrowFlight` table function) and DuckDB's `adbc` path. This touches core request
@@ -322,3 +351,9 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   provider; existing auth unchanged); push run 40665576701 cancelled by that dispatch (it also superseded the core
   lane's push run 40665228585 for 4b47b0c, which 40665594250 includes). **P2 closed**; next session starts P3
   (Spark connector: Kerberos delegation tokens on YARN executors first).
+- 2026-10-28 (plugins session): P3 skipped (moved to its own repository). P4 step 1 - Hive text tables
+  (`LazySimpleSerDe`) read by the hive plugin, opt-in `hive.textTables` (c258adf; plugin only, no SPI or core code
+  change, a comment line in `arrowflight.properties`; CHANGELOG). Local: hive module 51 tests (new `TextValuesTest` 4,
+  `TextArrowReaderTest` 6, `HiveTextTableTest` 3; `OrcTableReaderTest` 6 on the renamed `TableFilesReader`; UTF-8
+  locale), Checkstyle + SpotBugs clean. CI: Dev CI run 40672085389 (c258adf, package=true; it also covers lane 3's
+  738d1e7, whose dispatch 40671772031 my push cancelled - same concurrency group) running (result follows).
