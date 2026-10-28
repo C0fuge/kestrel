@@ -602,7 +602,7 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   `hive.textTables` (b17866c; plugin only + tests, comment lines in `arrowflight.properties`; new plugin dependency
   `jackson-core-asl` 1.9.13 = Hive's parser; CHANGELOG). Local: hive module 59/59 + Checkstyle + SpotBugs,
   `HiveTextIntegrationTest` 6/6. CI: Dev CI run 40689263636 (f73de96, package=true; push head was `[skip ci]`)
-  green (build + package), pre-release `server-1.0.0-f73de96b8773` (JSON tables behind the `hive.textTables` opt-in,
+  green (build + package), pre-release `server-1.0.0-881bbf73e946` (JSON tables behind the `hive.textTables` opt-in,
   default off). Next: P4 step 2 (c) Avro, then views; (d) perf.
 - 2026-10-28 (plugins session): P4 step 2 (c) part 3 - Hive Avro tables under the new opt-in `hive.avroTables`
   (default false; deb0a99 plugin + unit/metastore tests, cdc0889 server end-to-end test; plugin only, no SPI or core
@@ -658,4 +658,4 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   flight-auth-ldap 36/36 incl. `ClickHouseLdapLoginTest`; Checkstyle + SpotBugs clean. CI: push runs 40788411531,
   40788854220, 40789242301 cancelled by later pushes; Dev CI run 40789295791 (881bbf7, dispatched by the core lane,
   contains all three commits) green incl. the ClickHouse image step and package -> pre-release
-  `server-1.0.0-f73de96b8773`. Next: P5 step 3 (DuckDB `airport` in CI), then close P5.
+  `server-1.0.0-881bbf73e946`. Next: P5 step 3 (DuckDB `airport` in CI), then close P5.
