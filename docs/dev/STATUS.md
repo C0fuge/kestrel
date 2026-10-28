@@ -32,7 +32,7 @@
 > confirmed, make the default per store (S3/remote stores keep >= 4) or otherwise restore the tail without losing the
 > local-disk gains; else bisect between 7562a5b and d22cdac. Take this before continuing item 22 (finish the current
 > step of 22 first if you are in the middle of it).
-> *Done 2026-10-28 (4bb6441, see Log):* confirmed by a local A/B (server over fake S3 + real s3 plugin, 4 cores,
+> *Done 2026-10-28 (4bb6441, package run 40635098385 green, pre-release `server-1.0.0-4bb6441569be`; see Log):* confirmed by a local A/B (server over fake S3 + real s3 plugin, 4 cores,
 > `SmallQueryThroughputPerfTest -Dperf.store=s3`): 2 threads lengthen c1/c8 p95 by 1.13-1.7x. Default is now
 > max(4, cores / 4) (at most 8) when `dataDir` is `s3://`/`s3a://`/`s3n://`/`lakefs://`; local/HDFS unchanged.
 > **Screening:** measure the pre-release against `7562a5bdb7b9` (expect S3 c8/c32 p95 back to ~1.0x, local disk
@@ -1564,3 +1564,14 @@
   40630892523 cancelled (concurrency group). Screening: one scan in 4/8 partial-mode endpoints
   (`endpointsPerServer`) with and without `-DduckDbThreadsUnderLoad=1`. Next: the maintainer's S3 small-query p95 bug
   (bug first), then item 22 (b)-(d).
+- 2026-10-28 (cloud session): maintainer's bug first, S3 small-query p95 (4bb6441). Confirmed the suspect locally:
+  `SmallQueryThroughputPerfTest` got `-Dperf.store=s3` (table on the fake S3 behind the real s3 plugin, latency per
+  request `-Ds3.perf.latencyMs`); 4 cores, prepared point/count queries, 2 vs 4 DuckDB threads, twice each: at 2 ms
+  c1 p95 48/47 vs 34/37 ms, c8 p95 76/79 vs 66/70; at 10 ms c1 107/107 vs 63/66, c8 122/125 vs 104/99; p50 about
+  equal; c32 q/s 237-246 at 2 threads vs 184-207 at 4 (in-process fake S3 + clients saturate the CPU). Fix: with
+  `duckDbThreads` unset/0 and `dataDir` on s3/s3a/s3n/lakefs the default is max(4, cores / 4), at most 8; local/HDFS
+  and explicit values unchanged (`ConfigAdapterTest.duckDbThreadsDefaultKeepsFourOnObjectStores`). Also: unset
+  `-Dperf.threads` in that perf test now means the server's default (was the helper's 1 thread). Package run
+  40635098385 green, pre-release `server-1.0.0-4bb6441569be`; push run 40635080394 cancelled (concurrency group).
+  Screening: S3 small queries c8/c32 vs `7562a5bdb7b9`, local disk unchanged. New Open question "S3 thread default".
+  Next: item 22 (b)-(d) per stage 3 order (or 3b item 17 (e)).
