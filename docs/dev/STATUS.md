@@ -2037,3 +2037,16 @@
   are one pool, so a heavy query can now press others' memory within the node limit (before: per-instance limits);
   query logs stay refused (`enable_logging` etc.). Not yet covered: a Ranger-on stand round (step (b)). Next: the
   screening measures the pre-release with the setting vs without; shared DuckDB steps (a)-(d) in Next steps.
+- 2026-10-28 (cloud session, core lane): item 22 shared DuckDB step (a) (e751192): with `duckDbSharedDatabase` the
+  describe connections (prepare / GetFlightInfo over empty views) are now connections to one node-wide describe
+  DuckDB (1 thread, 256 MB, `enable_external_access=false`, locked - the same setup as the per-worker describe DuckDB
+  before), each with an attached `:memory:` catalog `flight_session_<n>` for its empty views (refused in client SQL
+  like the query catalogs), detached when the thread ends; an invalidated describe DuckDB is replaced as a whole
+  (after a FATAL error both shared DuckDBs are replaced, the error does not tell which one failed). Deliberately not
+  a catalog of the query DuckDB as the plan said: that one has file access (`allowed_directories`), so a describe of
+  `read_parquet(...)` would read data at prepare time - here the describe still reads no files (tested). Off:
+  unchanged. Tests: `DuckDbSharedDatabaseTest` (+2: concurrent describes at different view versions keep their own
+  types, both catalogs in one describe DuckDB, no file access; replacement and detach on thread end). Dev CI package
+  run 40782630486 green (my push run 40782608697 cancelled by it), pre-release `server-1.0.0-e75119218df7`.
+  **Screening:** as for step 1 (`-DduckDbSharedDatabase=true` vs without), the describe change should not move
+  numbers beyond fewer DuckDB instances per node. Next of the shared DuckDB: steps (b)-(d).
