@@ -258,8 +258,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 - Hive plugin, ORC tables: decimals of up to 18 digits are decoded by ORC straight into longs (`USE_DECIMAL64` row
-  batches) and copied to Arrow without a `BigDecimal` per value; Q1-style queries over ORC about 30 % faster
-  (P1 step 2 (e)). Answers unchanged (new test `OrcArrowReaderTest.readsDecimalsOfEveryWidthAndWidenedScales`).
+  batches) and copied to Arrow without a `BigDecimal` per value; Q1-style queries over ORC 5-30 % faster
+  (SF1 on a CI runner ~5 %, 1M rows locally ~30 %; P1 step 2 (e)). Answers unchanged (new test `OrcArrowReaderTest.readsDecimalsOfEveryWidthAndWidenedScales`).
 - Less CPU per small query (item 21, step 1): GetFlightInfo of a complete answer on a node alone in its cluster no
   longer reads the server registry and heartbeat maps (it checked the node count on every query over local
   directories); the per-DoGet `executionPath=` event is written as text instead of through a Jackson tree (same

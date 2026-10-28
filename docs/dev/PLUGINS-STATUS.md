@@ -84,12 +84,28 @@ P1. **ORC tables in the Hive catalog.** Today the Hive plugin reads only Parquet
     `OrcTestFiles` (hive test fixture, shared with `HiveOrcTableTest`) in the metastore's class loader; orc-core,
     orc-format, orc-shims, aircompressor, threeten-extra, zstd-jni added to the hive module's `fixture-libs`.
     Pre-release `server-1.0.0-3fbf5b28b186` (run 40627574196, package=true).
-    **Next step (step 2 (e), last of P1):** the perf note - SF1 lineitem in ORC vs Parquet through the server
-    (complete and partial, `count(*)`, a few TPC-H Q1/Q6-style aggregations; zstd and zlib ORC). Not possible in
-    the session without data: either a manual workflow (generate lineitem with DuckDB's `tpch` extension from
-    `ci-assets`, write ORC with `OrcTestFiles`-style code or `COPY ... (FORMAT orc)` is not available in DuckDB,
-    so a small Java generator in the hive test jar, `perf` tag) or ask the maintainer to run it locally. Then
-    close P1 and start P2.
+    *Step 2 (e) measured 2026-10-28:* `HiveOrcPerfTest` (perf tag, flight-server; manual workflow
+    `hive-orc-perf.yml`, inputs rows/files): lineitem-like table (16 columns, `OrcTestFiles.LINEITEM` SQL = the
+    Java writer `writeLineitem`; DuckDB `tpch` not needed) as Parquet (DuckDB default snappy) and ORC zlib/zstd,
+    4 files each, through the server with the packaged plugin; complete answers of ORC = Parquet (checked every
+    run). SF1 (6M rows) on a 4-core runner, run 40631384599 (1f600b9), best of 3, seconds (complete / partial):
+    sizes Parquet 136 MB, ORC zlib 69 MB, zstd 59 MB; count(*) 0.01 / 0.01 vs ORC 0.28-0.40 / 0.24-0.27; Q1-style
+    0.15 / 0.17 vs 6.6-7.0; Q6-style 0.04 / 0.05 vs 6.6-6.9; `l_orderkey < 50000` (sorted key, SARG skips row
+    groups) 0.01 vs 0.06-0.07; `SELECT *` 1.69 / 1.61 vs 7.7-8.1. So ORC works and pushdown helps, but full
+    scans are ~45x slower than Parquet for aggregations (Parquet: DuckDB's parallel reader with its own
+    pushdown/statistics; ORC: one single-threaded Java stream per table reference, per-value copy into Arrow).
+    First fix ca47448: `USE_DECIMAL64` batches (decimals <= 18 digits decoded into longs) - Q1 at 1M rows locally
+    2.0 -> 1.4 s, but at SF1 (run 40633767991) only ~5 %: Q1 6.26-6.58, Q6 6.20-6.47, `SELECT *`
+    7.3-7.6 s, count(*) 0.37-0.51 - decimals are not the main cost.
+    **Next step (step 2 (f), ORC scan speed, then close P1):** profile one Q6 at SF1 (JFR: `jcmd <ForkedBooter
+    pid> JFR.start` while `HiveOrcPerfTest` runs; `-DargLine` did not produce a recording). Suspects, in order:
+    (1) Q6 (4 columns) costs as much as `SELECT *` (16 columns) - check that `ArrowScanRequests` really projects
+    the endpoint's columns for these queries (a debug log of the `ArrowScan` columns); (2) the row-at-a-time
+    `OrcArrowReader.copy` (switch per value, `setSafe`) -> per-column loops over primitive arrays with
+    `isRepeating`/`noNulls` fast paths, strings via one `ArrowBuf` copy; (3) one stream per table reference ->
+    several streams (one per file group) unioned so DuckDB scans in parallel (`registerArrowStream` per stream +
+    `UNION ALL` view; core `ArrowStreamScans` change, own commit); (4) batch size (`HiveCatalog.ORC_BATCH_ROWS` = 4096) -> try larger. Target:
+    within ~3-5x of Parquet for Q1/Q6. Then a `package=true` pre-release and close P1.
 P2. **Login for generic clients: LDAP/AD and JWT (OIDC/Knox) auth providers.** JDBC/ODBC/ADBC and BI tools can send only
     user/password or a bearer token; with Ranger on, today they need Kerberos. Add auth providers (plugin modules behind
     the existing auth SPI): LDAP bind (ldaps, StartTLS, user DN template or search, group lookup), JWT verification
@@ -174,3 +190,11 @@ P6. Next wave (order may change after the maintainer's answers): Ranger Hive-pol
   skip, UTF-8 locale), hive module 29/29 + Checkstyle + SpotBugs. CI: run 40627574196 (3fbf5b2, dispatched with
   package=true; the push's head was `[skip ci]`) green; pre-release `server-1.0.0-3fbf5b28b186` carries the
   `hive.orcTables` opt-in (default off). zstd-jni of server and plugin coexist. Next: P1 perf note (step 2 (e)).
+- 2026-10-28 (plugins session): P1 step 2 (e) - perf note. `HiveOrcPerfTest` + workflow `hive-orc-perf.yml`
+  (1f600b9, test only; CI run 40631441911 green; SF1 perf run 40631384599: ORC ~45x slower than Parquet on
+  Q1/Q6-style aggregations, 4.7x on `SELECT *`, numbers in P1). First speed-up ca47448 (hive plugin:
+  `USE_DECIMAL64` row batches, `serialize64` for fitting `HiveDecimalWritable`s; new test
+  `readsDecimalsOfEveryWidthAndWidenedScales`; hive module 30/30 + Checkstyle + SpotBugs locally). CI: run
+  40633748155 (ca47448) green, SF1 perf re-run 40633767991 green (~5 % gain at SF1, numbers in P1).
+  No pre-release: `hive.orcTables` is opt-in and answers are unchanged; one is planned when P1 closes.
+
