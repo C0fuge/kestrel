@@ -129,6 +129,15 @@
 >    configured size; and TPC-H SF10 is ~8 % slower with the cache on (does not fit, the cache churns) - bypass the
 >    cache for large sequential reads (size-aware admission). Wins to keep: repeated small queries p95 8-20x faster,
 >    SF1 0.32-0.47x. Take it right after item 20.
+>    *Done 2026-10-28 (99113c9, package run 40645727394 green, pre-release `server-1.0.0-99113c98c1c3`; see Log):* the extra memory was mostly the cache itself: each 1 MiB block was one
+>    array, a humongous G1 object taking a whole 2 MiB region (256 MiB of blocks = 512 MiB of heap at `-Xmx3g`), so
+>    1 GiB of cache used ~2 GiB and the heap filled to `-Xmx`; plus each miss GET (up to 64 MiB) buffered by the SDK and
+>    copied twice. Now 256 KiB pieces + streamed misses (heap = configured size). Size-aware admission does not work
+>    for DuckDB (scans read column chunks of 2 KiB-3 MiB, a `SELECT *` point lookup a whole 4.5 MiB row group), so
+>    instead opt-in `arrowflight.s3.cacheAdmission=reuse` (scan-resistant: kept on the second miss within the cache's
+>    reach). **Screening:** the cache run again (`cacheMegabytes=1024`) on the pre-release: peak RSS (expect ~1 GB
+>    less), SF10 with `always` and with `reuse` vs off, repeated small queries p95 with both. See Open question
+>    "Read cache admission default".
 > 4. item 18 step 2 - distributed complete mode (answers below; opt-in `distributedComplete`, default false).
 > 5. item 17 (a) - local-disk tier of the S3 read cache: opt-in (`arrowflight.s3.cacheDiskPath` + size cap, default off;
 >    whether production has a local disk is unknown, so it must stay optional).
@@ -570,6 +579,12 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **Read cache admission default (item 17 (e), 2026-10-28).** `cacheAdmission=reuse` (opt-in) keeps a block only
+  on its second miss while it is among the last N not-kept names (N = cache blocks): scans larger than the cache stop
+  churning it, but a repeated query hits from its third run instead of its second. If the screening shows SF10
+  back near "off" with `reuse` and the small-query p95 win intact, should `reuse` become the default (an existing
+  opt-in feature's behaviour, hence the question)?
 
 - **S3 thread default (2026-10-28, cloud session).** The fix keeps >= 4 DuckDB threads on S3/lakeFS data
   directories (maintainer's suggestion). Decided by the data directory's scheme only: catalogs whose tables are on
@@ -1597,3 +1612,19 @@
   `-DduckDbProducingStreams=2` (alone and with `-DduckDbThreadsUnderLoad=1`) vs `7562a5bdb7b9`. Next: item 22 (d)
   (zero-copy writes on the DuckDB stream path), or 3b item 17 (e).
 - 2026-10-28 (maintainer, stand p45f, 3 rounds x 7, pnew method): 45fc0a9e6e02 vs 27f583adccd7 same session, HDFS t4: small c1 p50 JDBC 0.87 / ADBC 0.83, c8/c32 noise, SF10 JDBC 0.90, Trino/scan equal; S3 t8 SF10 22/22 x3 (ADBC c32 53-94 errors per round = item 0g port exhaustion on 45fc, which predates 6acc9cc connection caching; unchanged vs 27f5); 3 nodes heavy4 3.6 s vs 5.2 s (57d2) -> item 0h closed; 0 FAIL in 21 rounds (q18 Trino heap NO-RESULT on 3 nodes as before).
+- 2026-10-28 (cloud session): item 17 (e), S3 read cache memory and large scans (99113c9). Cause of most of the extra
+  RSS: each cached 1 MiB block was one `byte[]`, a humongous G1 object occupying a whole 2 MiB region at `-Xmx3g`
+  (local check: 256 MiB of 1 MiB arrays = 512 MiB heap, in 256 KiB pieces = 256 MiB), so `cacheMegabytes=1024`
+  held ~2 GiB and pushed the heap to `-Xmx`; each miss GET (up to 64 blocks) was also buffered whole by the SDK
+  (`getObjectAsBytes`), copied by `asByteArray` and copied again per block. Fix: blocks in 256 KiB pieces, misses
+  streamed from S3 into them (a store ignoring Range still answered right - new `FakeS3.ignoreRange`). Admission:
+  measured on the fake S3 (lineitem-like, 2 x 1.2 M rows, DuckDB 1.5.6, 2/4/8 threads) that request size cannot
+  tell scans from small queries - scans read column chunks of 2 KiB-3 MiB, a `SELECT *` point lookup one 4.5 MiB
+  row group - so no size rule; instead opt-in `arrowflight.s3.cacheAdmission` / `arrowflight.lakefs.cacheAdmission`
+  = `always` (default) | `reuse` (kept on a second miss within the last N not-kept names, N = cache blocks; metric
+  `*_cache_not_admitted_total`). Not measured here: SF10 timing and real RSS (no stand). Tests:
+  `S3CacheEndpointTest` (pieces, reuse admission with scans through a 4-block cache, ignore-Range),
+  `S3IntegrationTest.readCacheAdmissionOnReuseKeepsWhatIsReadAgain`. Package run 40645727394 green, pre-release
+  `server-1.0.0-99113c98c1c3`; push run 40645716991 cancelled (concurrency group). Screening: the cache run with
+  `cacheMegabytes=1024` (RSS, SF10, repeated small queries) with `cacheAdmission` always and reuse vs off. New Open
+  question "Read cache admission default". Next: item 22 (d) (zero-copy writes on a quiet runner) or item 18 step 2.
