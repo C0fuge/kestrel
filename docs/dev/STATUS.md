@@ -32,6 +32,11 @@
 > confirmed, make the default per store (S3/remote stores keep >= 4) or otherwise restore the tail without losing the
 > local-disk gains; else bisect between 7562a5b and d22cdac. Take this before continuing item 22 (finish the current
 > step of 22 first if you are in the middle of it).
+> *Done 2026-10-28 (4bb6441, see Log):* confirmed by a local A/B (server over fake S3 + real s3 plugin, 4 cores,
+> `SmallQueryThroughputPerfTest -Dperf.store=s3`): 2 threads lengthen c1/c8 p95 by 1.13-1.7x. Default is now
+> max(4, cores / 4) (at most 8) when `dataDir` is `s3://`/`s3a://`/`s3n://`/`lakefs://`; local/HDFS unchanged.
+> **Screening:** measure the pre-release against `7562a5bdb7b9` (expect S3 c8/c32 p95 back to ~1.0x, local disk
+> unchanged); if c32 q/s on S3 drops noticeably, see Open question "S3 thread default".
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
@@ -563,6 +568,13 @@
     clearly (> 15 %) without RSS growth at 8 concurrent scans; `false` only if it is faster there too.
 
 ## Open questions
+
+- **S3 thread default (2026-10-28, cloud session).** The fix keeps >= 4 DuckDB threads on S3/lakeFS data
+  directories (maintainer's suggestion). Decided by the data directory's scheme only: catalogs whose tables are on
+  S3 behind a local/HDFS data directory (Iceberg REST/Hive on S3) keep cores / 4 - set `duckDbThreads=4` there, or
+  should the default look at the catalogs' stores too? Local in-process run (CPU-saturated by the fake S3 and the
+  clients) showed c32 q/s -18 % at 4 vs 2 threads while c1/c8 p95 improved; the screening's numbers decide whether
+  `duckDbThreadsUnderLoad` should become the S3 answer for c32.
 
 - **Item 21 (d): what is left per small query is DuckDB (2026-10-28).** Measured locally (2 CPUs, the perf test's
   point lookup / filtered count over 4 local Parquet files): plain DuckDB JDBC on one connection, new text each
