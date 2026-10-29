@@ -464,6 +464,67 @@ jobs:
           tail -50 "$RUNNER_TEMP/s3.log"
           docker exec hdfs bash -c 'tail -30 /var/log/hadoop/*.out' || true
 
+  # C4 (b) probe: Apache Paimon (1.2.0) and Apache Hudi (0.15.0, 1.0.2) tables written by their own Spark
+  # writers (tools/ci/paimon-hudi-fixtures.py), answered by a light reader - the formats' metadata read
+  # in Python, the data files by DuckDB's read_parquet (tools/ci/paimon-hudi-probe.py) - and compared with
+  # Spark's answers. A wrong answer fails the job; refusals are recorded. Also records whether DuckDB
+  # paimon / hudi extensions exist for v1.5.6 (core or community repository).
+  paimon-hudi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 17
+          distribution: temurin
+          cache: maven
+
+      - name: DuckDB paimon / hudi extensions for v1.5.6
+        env:
+          DUCKDB_VERSION: v1.5.6
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/ph-ext"
+          mkdir -p "$ext"
+          for name in paimon hudi; do
+            for repo in https://extensions.duckdb.org https://community-extensions.duckdb.org; do
+              url="$repo/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz"
+              code=$(curl -sS -o "$RUNNER_TEMP/${name}.gz" -w '%{http_code}' --retry 2 "$url" || true)
+              echo "$url -> HTTP $code"
+              if [ "$code" = 200 ]; then
+                gunzip -c "$RUNNER_TEMP/${name}.gz" > "$ext/${name}.duckdb_extension"
+                break
+              fi
+            done
+          done
+          ls -l "$ext"
+          echo "PH_EXT_DIR=$ext" >> "$GITHUB_ENV"
+
+      - name: Fixtures (Spark 3.5.3 + Paimon 1.2.0, Hudi 0.15.0 and 1.0.2)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q pyspark==3.5.3 duckdb==1.5.6 fastavro==1.13.1 \
+            backports.zstd==1.8.0 pyroaring==1.2.0
+          jars="$RUNNER_TEMP/jars"
+          for a in org.apache.paimon:paimon-spark-3.5:1.2.0 org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
+              org.apache.hudi:hudi-spark3.5-bundle_2.12:1.0.2; do
+            ./mvnw -q dependency:copy -Dartifact="$a" -DoutputDirectory="$jars"
+          done
+          out="$RUNNER_TEMP/ph-fixtures"
+          py="$RUNNER_TEMP/py/bin/python"
+          "$py" tools/ci/paimon-hudi-fixtures.py paimon "$out" 1.2.0 "$jars/paimon-spark-3.5-1.2.0.jar"
+          for v in 0.15.0 1.0.2; do
+            "$py" tools/ci/paimon-hudi-fixtures.py hudi "$out" "$v" "$jars/hudi-spark3.5-bundle_2.12-$v.jar"
+          done
+          cat "$out/expected.tsv"
+          echo "PH_FIXTURES=$out" >> "$GITHUB_ENV"
+
+      - name: Probe
+        run: |
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/paimon-hudi-probe.py "$PH_FIXTURES" "$PH_EXT_DIR"
+
   # C4 step 3 (c): insert-only (MM) tables written by a real Hive 4 (tools/ci/hive-mm-writer.sh:
   # inserts, failed inserts, INSERT OVERWRITE, major / minor compaction, gzip text), then read
   # through the server with the hive plugin against a metastore on the same database

@@ -160,6 +160,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Paimon / Hudi light-reader probe (C4 (b)): `catalogs-ci.yml` job `paimon-hudi` writes Apache Paimon 1.2.0 and
+  Apache Hudi 0.15.0 / 1.0.2 tables with Spark 3.5.3 (`tools/ci/paimon-hudi-fixtures.py`: append and primary-key
+  tables, upserts, deletes, deletion vectors, full compaction, INSERT OVERWRITE, schema evolution; copy-on-write,
+  merge-on-read with and without compaction, a commit left inflight) and `tools/ci/paimon-hudi-probe.py` answers
+  them from the formats' own metadata plus DuckDB `read_parquet` (no Paimon / Hudi library), compared with
+  Spark's answers; a wrong answer fails the job, unsupported layouts are refused. Also records whether DuckDB
+  paimon / hudi extensions exist for v1.5.6. Test only.
 - Unity Catalog OSS as an Iceberg REST catalog (C1 step 4): `catalogs-ci.yml` entry `unity-catalog`
   (`unitycatalog/unitycatalog:v0.7.0`, managed tables on a local storage root) runs both REST conformance tests;
   answers equal the Hadoop and Hive metastore references. Unity Catalog refuses Iceberg `time` columns (new
