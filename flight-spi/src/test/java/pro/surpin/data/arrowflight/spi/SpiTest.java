@@ -37,7 +37,7 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.8", SpiVersion.current());
+        assertEquals("1.9", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
@@ -47,7 +47,8 @@ class SpiTest {
         assertTrue(SpiVersion.supports("1.6"));
         assertTrue(SpiVersion.supports("1.7"));
         assertTrue(SpiVersion.supports("1.8"));
-        assertFalse(SpiVersion.supports("1.9"));
+        assertTrue(SpiVersion.supports("1.9"));
+        assertFalse(SpiVersion.supports("1.10"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));

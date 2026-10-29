@@ -20,6 +20,24 @@ public interface DuckDbSetup {
     void loadExtension(String name);
 
     /**
+     * Loads a DuckDB extension as {@link #loadExtension} does and refuses in client queries every
+     * function and table function the extension adds: the server compares
+     * {@code duckdb_functions()} before and after the load, so a later build of the extension
+     * cannot add a function that clients reach. For extensions whose functions do their own I/O
+     * or run text elsewhere (database scanners, lake formats); the plugin writes the statements
+     * that use them itself. Functions that existed before the load stay as they were.
+     *
+     * @param name extension name, for example "postgres_scanner"
+     * @throws IllegalArgumentException when the name is not an extension name
+     * @throws UnsupportedOperationException on a server that cannot do it (the default)
+     * @since SPI 1.9
+     */
+    default void loadExtensionRefusingFunctions(String name) {
+        throw new UnsupportedOperationException(
+                "this server cannot refuse the functions of extension " + name);
+    }
+
+    /**
      * Sets a text setting.
      *
      * @param setting setting name
