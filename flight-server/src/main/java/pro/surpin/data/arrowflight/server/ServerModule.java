@@ -264,11 +264,13 @@ public final class ServerModule {
                         sizing.describeExternalFileCache());
             }
         }
-        return new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
+        DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool, registry.duckDbSetup(),
                 ConfigAdapter.duckDbThreadsUnderLoad(), ConfigAdapter.duckDbThreadsWhenIdle(),
                 Runtime.getRuntime().availableProcessors(),
                 new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
                 ConfigAdapter.flightZeroCopyWrites(), ConfigAdapter.duckDbShared());
+        adapter.useTableSecrets(registry.tableSecrets());
+        return adapter;
     }
 
     /**

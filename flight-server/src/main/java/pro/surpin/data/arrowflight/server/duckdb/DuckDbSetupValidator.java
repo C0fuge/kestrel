@@ -283,7 +283,7 @@ public final class DuckDbSetupValidator {
      * @param schemes allowed schemes
      * @return problem, or null when the root is fine
      */
-    private static String rootProblem(String root, Set<String> schemes) {
+    static String rootProblem(String root, Set<String> schemes) {
         if (root == null || root.isBlank() || !root.equals(root.strip())) {
             return "empty or padded";
         }
@@ -328,13 +328,90 @@ public final class DuckDbSetupValidator {
     }
 
     /**
+     * Checks a secret and writes its statement.
+     *
+     * @param contributor provider name, for errors
+     * @param verb statement start, for example {@code CREATE TEMPORARY SECRET }
+     * @param name secret name, already checked
+     * @param type secret type
+     * @param scope URI prefix the secret applies to
+     * @param roots contributor's roots the scope must lie below
+     * @param options secret options in order
+     * @param s3Twins whether S3 secrets are also scoped to the other S3 scheme forms
+     * @param sensitive receives the sensitive values
+     * @return statement
+     * @throws IllegalArgumentException when the type, an option or the scope is refused
+     */
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    static String secretStatement(String contributor, String verb, String name, String type,
+            String scope, List<String> roots, Map<String, SecretValue> options, boolean s3Twins,
+            List<String> sensitive) {
+        String kind = type == null ? "" : type.toLowerCase(Locale.ROOT);
+        if (!SECRET_TYPES.contains(kind)) {
+            throw refusal(contributor, "secret type " + quote(type) + ", allowed: " + SECRET_TYPES);
+        }
+        String problem = rootProblem(scope, Set.of(Recorder.schemeOf(scope)));
+        if (problem != null || !underRoots(scope, roots)) {
+            throw refusal(contributor, "secret " + name + " scope " + quote(scope)
+                    + " is not below the contributor's roots " + roots);
+        }
+        Map<String, Boolean> allowed = "azure".equals(kind) ? AZURE_OPTIONS : OBJECT_STORE_OPTIONS;
+        StringBuilder sql = new StringBuilder(verb).append(name).append(" (TYPE ").append(kind);
+        for (Map.Entry<String, SecretValue> option : options.entrySet()) {
+            String key = option.getKey();
+            SecretValue value = option.getValue();
+            if (key == null || !OPTION.matcher(key).matches() || !allowed.containsKey(key)) {
+                throw refusal(contributor, "secret " + name + " option " + quote(key)
+                        + ", allowed: " + allowed.keySet());
+            }
+            Objects.requireNonNull(value, "secret option value");
+            sql.append(", ").append(key).append(' ');
+            if (Boolean.TRUE.equals(allowed.get(key))) {
+                if (!"true".equals(value.value()) && !"false".equals(value.value())) {
+                    throw refusal(contributor, "secret " + name + " option " + key
+                            + " must be true or false");
+                }
+                sql.append(value.value());
+            } else {
+                sql.append(literal(value.value()));
+            }
+            if (value.sensitive()) {
+                sensitive.add(value.value());
+            }
+        }
+        List<String> twins = s3Twins && "s3".equals(kind) ? s3Twins(scope) : List.of();
+        if (twins.isEmpty()) {
+            sql.append(", SCOPE ").append(literal(scope)).append(')');
+        } else {
+            // A catalog may name these objects as s3a:// or s3n://: the same credentials.
+            sql.append(", SCOPE [").append(literal(scope));
+            for (String twin : twins) {
+                sql.append(", ").append(literal(twin));
+            }
+            sql.append("])");
+        }
+        return sql.toString();
+    }
+
+    /**
+     * Builds the error for a refused item.
+     *
+     * @param contributor provider name
+     * @param what refused item
+     * @return exception to throw
+     */
+    private static IllegalArgumentException refusal(String contributor, String what) {
+        return new IllegalArgumentException("DuckDB setup of " + contributor + " refused: " + what);
+    }
+
+    /**
      * Tells whether a scope lies below one of some roots.
      *
      * @param scope secret scope
      * @param roots contributor's roots
      * @return true when the scope is a root or below one
      */
-    private static boolean underRoots(String scope, List<String> roots) {
+    static boolean underRoots(String scope, List<String> roots) {
         for (String root : roots) {
             String prefix = root.endsWith("/") ? root : root + "/";
             if (scope.equals(root) || scope.startsWith(prefix)) {
@@ -445,51 +522,9 @@ public final class DuckDbSetupValidator {
         public void createSecret(String name, String type, String scope,
                 Map<String, SecretValue> options) {
             requireIdentifier(name, "secret name");
-            String kind = type == null ? "" : type.toLowerCase(Locale.ROOT);
-            if (!SECRET_TYPES.contains(kind)) {
-                throw refusal("secret type " + quote(type) + ", allowed: " + SECRET_TYPES);
-            }
-            String problem = rootProblem(scope, Set.of(schemeOf(scope)));
-            if (problem != null || !underRoots(scope, roots)) {
-                throw refusal("secret " + name + " scope " + quote(scope)
-                        + " is not below the contributor's roots " + roots);
-            }
-            Map<String, Boolean> allowed = "azure".equals(kind) ? AZURE_OPTIONS : OBJECT_STORE_OPTIONS;
-            StringBuilder sql = new StringBuilder("CREATE TEMPORARY SECRET ").append(name)
-                    .append(" (TYPE ").append(kind);
-            for (Map.Entry<String, SecretValue> option : options.entrySet()) {
-                String key = option.getKey();
-                SecretValue value = option.getValue();
-                if (key == null || !OPTION.matcher(key).matches() || !allowed.containsKey(key)) {
-                    throw refusal("secret " + name + " option " + quote(key) + ", allowed: "
-                            + allowed.keySet());
-                }
-                Objects.requireNonNull(value, "secret option value");
-                sql.append(", ").append(key).append(' ');
-                if (Boolean.TRUE.equals(allowed.get(key))) {
-                    if (!"true".equals(value.value()) && !"false".equals(value.value())) {
-                        throw refusal("secret " + name + " option " + key + " must be true or false");
-                    }
-                    sql.append(value.value());
-                } else {
-                    sql.append(literal(value.value()));
-                }
-                if (value.sensitive()) {
-                    sensitive.add(value.value());
-                }
-            }
-            List<String> twins = s3Twins && "s3".equals(kind) ? s3Twins(scope) : List.of();
-            if (twins.isEmpty()) {
-                sql.append(", SCOPE ").append(literal(scope)).append(')');
-            } else {
-                // A catalog may name these objects as s3a:// or s3n://: the same credentials.
-                sql.append(", SCOPE [").append(literal(scope));
-                for (String twin : twins) {
-                    sql.append(", ").append(literal(twin));
-                }
-                sql.append("])");
-            }
-            secrets.add(new String[] {name, scope, sql.toString()});
+            String sql = secretStatement(contributor, "CREATE TEMPORARY SECRET ", name, type, scope,
+                    roots, options, s3Twins, sensitive);
+            secrets.add(new String[] {name, scope, sql});
         }
 
         @Override

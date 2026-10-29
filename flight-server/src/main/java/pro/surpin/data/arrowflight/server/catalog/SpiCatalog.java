@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import pro.surpin.data.arrowflight.server.duckdb.TableSecrets;
 
 import pro.surpin.data.arrowflight.server.plugin.ThreadContext;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
@@ -24,6 +25,12 @@ public final class SpiCatalog implements Catalog {
     private final Catalog delegate;
     private final ClassLoader loader;
     private final String provider;
+    /** Registry of the tables' storage credentials, or null until {@link #registerSecrets}. */
+    private volatile TableSecrets secrets;
+    /** Catalog name for the secrets. */
+    private volatile String catalogName;
+    /** The catalog's readable roots, normalised, for the secrets. */
+    private volatile List<String> secretRoots = List.of();
 
     /**
      * Wraps a catalog.
@@ -36,6 +43,34 @@ public final class SpiCatalog implements Catalog {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.loader = loader;
         this.provider = Objects.requireNonNull(provider, "provider");
+    }
+
+    /**
+     * Registers the storage credentials of every snapshot this catalog returns from now on, so
+     * that DuckDB connections install them before they read the table's files.
+     *
+     * @param registry registry of table secrets
+     * @param name catalog name
+     * @param roots the catalog's readable roots, normalised
+     */
+    public void registerSecrets(TableSecrets registry, String name, List<String> roots) {
+        this.secretRoots = List.copyOf(roots);
+        this.catalogName = Objects.requireNonNull(name, "name");
+        this.secrets = Objects.requireNonNull(registry, "registry");
+    }
+
+    /**
+     * Registers the credentials of a returned snapshot.
+     *
+     * @param snapshot snapshot, or empty
+     * @return the snapshot
+     */
+    private Optional<TableSnapshot> registered(Optional<TableSnapshot> snapshot) {
+        TableSecrets registry = secrets;
+        if (registry != null && snapshot.isPresent()) {
+            registry.register(catalogName, secretRoots, snapshot.get());
+        }
+        return snapshot;
     }
 
     /**
@@ -71,14 +106,14 @@ public final class SpiCatalog implements Catalog {
     @Override
     public Optional<TableSnapshot> current(TableName table) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
-            return delegate.current(table);
+            return registered(delegate.current(table));
         }
     }
 
     @Override
     public Optional<TableSnapshot> pinned(TableName table, String snapshotId) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
-            return delegate.pinned(table, snapshotId);
+            return registered(delegate.pinned(table, snapshotId));
         }
     }
 
@@ -94,14 +129,14 @@ public final class SpiCatalog implements Catalog {
     public Optional<TableSnapshot> pinnedColumns(TableName table, String snapshotId)
             throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
-            return delegate.pinnedColumns(table, snapshotId);
+            return registered(delegate.pinnedColumns(table, snapshotId));
         }
     }
 
     @Override
     public Optional<TableSnapshot> asOf(TableName table, AsOf point) throws IOException {
         try (ThreadContext ignored = ThreadContext.of(loader)) {
-            return delegate.asOf(table, point);
+            return registered(delegate.asOf(table, point));
         }
     }
 

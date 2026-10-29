@@ -46,6 +46,13 @@ import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.plugin.s3.TestTls;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 
+import pro.surpin.data.arrowflight.server.duckdb.TableSecrets;
+import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.StorageCredential;
+import pro.surpin.data.arrowflight.spi.catalog.TableFile;
+import pro.surpin.data.arrowflight.spi.catalog.TableName;
+import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
+import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -239,6 +246,109 @@ class S3IntegrationTest {
             assertTrue(s3.requests().stream().noneMatch(r -> r.path().contains("elsewhere")),
                     "no request outside the data directory");
         }
+    }
+
+    /**
+     * Verifies that a table's storage credentials (SPI 1.7, for example vended by an Iceberg REST
+     * catalog) are installed after the lockdown as a secret scoped to the table, read that
+     * table's files, are replaced when refreshed, and are dropped when the catalog no longer
+     * returns them; the store's own secret stays for everything else.
+     */
+    @Test
+    void tableSecretsReadOneTableWithItsOwnCredentials() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        open(null);
+        TableSecrets secrets = new TableSecrets();
+        duckDb.useTableSecrets(secrets);
+        // A new file per step: DuckDB's metadata caches would answer a second read of one file.
+        byte[] bytes = Files.readAllBytes(dir.resolve("data.parquet"));
+        String[] files = new String[4];
+        for (int i = 0; i < files.length; i++) {
+            s3.put(bucket, "flight-it/t/x" + i + ".parquet", bytes);
+            files[i] = "s3://" + bucket + "/flight-it/t/x" + i + ".parquet";
+        }
+        List<String> roots = registry.duckDbSetup().roots();
+        assertEquals("AKIAIT", keyOfLastRead(files[0]));
+
+        secrets.register("rest", roots, vended(files, "tok1"));
+        assertEquals("AKIAVENDED", keyOfLastRead(files[1]));
+        assertEquals("tok1", lastRequest().headers().get("x-amz-security-token"));
+        try (Statement s = duckDb.connection().createStatement();
+                ResultSet rs = s.executeQuery("SELECT name, scope::VARCHAR, secret_string"
+                        + " FROM duckdb_secrets() ORDER BY name")) {
+            assertTrue(rs.next());
+            assertEquals("flight_s3", rs.getString(1));
+            assertTrue(rs.next());
+            assertTrue(rs.getString(1).startsWith("table_secret_"), rs.getString(1));
+            assertTrue(rs.getString(2).contains("s3://" + bucket + "/flight-it/t/"), rs.getString(2));
+            assertFalse(rs.getString(3).contains("vended-secret"), "redacted");
+            assertFalse(rs.getString(3).contains("tok1"), "redacted");
+            assertFalse(rs.next());
+        }
+
+        secrets.register("rest", roots, vended(files, "tok2"));
+        assertEquals("AKIAVENDED", keyOfLastRead(files[2]));
+        assertEquals("tok2", lastRequest().headers().get("x-amz-security-token"));
+
+        List<TableFile> plain = new java.util.ArrayList<>();
+        for (String file : files) {
+            plain.add(new TableFile(file, 1, 0, null, java.util.Map.of(), -1, List.of()));
+        }
+        secrets.register("rest", roots, new TableSnapshot(new TableName("ns", "t"), "1", "f", null,
+                null, plain, new ReadSpec.ParquetFiles(false)));
+        assertEquals("AKIAIT", keyOfLastRead(files[3]));
+        assertEquals(null, lastRequest().headers().get("x-amz-security-token"));
+
+        // A credential the catalog returns for files outside its roots is refused, not installed.
+        assertThrows(IllegalArgumentException.class, () -> secrets.register("rest",
+                registry.duckDbSetup().roots(), vended(new String[] {"s3://" + bucket + "/elsewhere/y.parquet"},
+                        "tok3")));
+    }
+
+    /**
+     * Reads a file and returns the access key of the last S3 request.
+     *
+     * @param file S3 URI
+     * @return access key the request was signed with
+     * @throws SQLException when the read fails
+     */
+    private String keyOfLastRead(String file) throws SQLException {
+        s3.clearRequests();
+        try (Statement s = duckDb.connection().createStatement();
+                ResultSet rs = s.executeQuery("SELECT count(*) FROM read_parquet("
+                        + DuckDbAdapter.sqlStringLiteral(file) + ")")) {
+            assertTrue(rs.next());
+            assertEquals(5000, rs.getLong(1));
+        }
+        String authorization = lastRequest().headers().get("authorization");
+        Matcher m = Pattern.compile("Credential=([^/]+)/").matcher(String.valueOf(authorization));
+        assertTrue(m.find(), authorization);
+        return m.group(1);
+    }
+
+    private FakeS3.Request lastRequest() {
+        List<FakeS3.Request> requests = s3.requests();
+        assertFalse(requests.isEmpty(), "the read reached S3");
+        return requests.get(requests.size() - 1);
+    }
+
+    private TableSnapshot vended(String[] locations, String token) {
+        java.util.Map<String, SecretValue> options = new java.util.LinkedHashMap<>();
+        options.put("KEY_ID", SecretValue.plain("AKIAVENDED"));
+        options.put("SECRET", SecretValue.sensitive("vended-secret"));
+        options.put("SESSION_TOKEN", SecretValue.sensitive(token));
+        options.put("REGION", SecretValue.plain("us-east-1"));
+        options.put("ENDPOINT", SecretValue.plain(endpoint.replaceFirst("^https?://", "")));
+        options.put("URL_STYLE", SecretValue.plain("path"));
+        options.put("USE_SSL", SecretValue.of(false));
+        String prefix = locations[0].substring(0, locations[0].lastIndexOf('/'));
+        List<TableFile> tableFiles = new java.util.ArrayList<>();
+        for (String location : locations) {
+            tableFiles.add(new TableFile(location, 1, 0, null, java.util.Map.of(), -1, List.of()));
+        }
+        return new TableSnapshot(new TableName("ns", "t"), "1", "f", null, null, tableFiles,
+                new ReadSpec.ParquetFiles(false),
+                List.of(new StorageCredential(prefix, "s3", options, null)));
     }
 
     /**

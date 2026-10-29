@@ -20,6 +20,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupValidator;
+import pro.surpin.data.arrowflight.server.duckdb.TableSecrets;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.DefaultStoreContext;
@@ -67,6 +68,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
     private final DuckDbSetupPlan duckDbSetup;
     private final List<DataStore> extraStores;
     private final CatalogTables catalogTables;
+    private final TableSecrets tableSecrets;
 
     /**
      * Creates a registry from opened parts.
@@ -78,10 +80,12 @@ public final class StoreRegistry implements Stores, AutoCloseable {
      * @param duckDbSetup checked DuckDB setup of the stores and catalogs
      * @param extraStores stores opened for catalog roots
      * @param catalogTables open catalogs besides the data directory
+     * @param tableSecrets storage credentials the catalogs returned with their tables
      */
+    @SuppressWarnings("checkstyle:ParameterNumber")
     private StoreRegistry(DataStore dataDirectory, String provider, PluginManager plugins,
             SecretRedactor redactor, DuckDbSetupPlan duckDbSetup, List<DataStore> extraStores,
-            CatalogTables catalogTables) {
+            CatalogTables catalogTables, TableSecrets tableSecrets) {
         this.dataDirectory = dataDirectory;
         this.provider = provider;
         this.plugins = plugins;
@@ -89,6 +93,17 @@ public final class StoreRegistry implements Stores, AutoCloseable {
         this.duckDbSetup = duckDbSetup;
         this.extraStores = List.copyOf(extraStores);
         this.catalogTables = catalogTables;
+        this.tableSecrets = tableSecrets;
+    }
+
+    /**
+     * Returns the storage credentials the catalogs returned with their tables (SPI 1.7), which
+     * every DuckDB connection installs before it runs a query.
+     *
+     * @return registry of table secrets
+     */
+    public TableSecrets tableSecrets() {
+        return tableSecrets;
     }
 
     /**
@@ -151,6 +166,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
         Opened dataDirectory = null;
         List<Opened> extraStores = new ArrayList<>();
         List<CatalogTables.Entry> catalogs = new ArrayList<>();
+        TableSecrets tableSecrets = new TableSecrets();
         try {
             dataDirectory = opening.open(dataDir, StoreUse.DATA_DIRECTORY);
             List<DuckDbSetupValidator.Contribution> catalogContributions = new ArrayList<>();
@@ -162,7 +178,8 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                         List.of("FLIGHT_CATALOG_LOCAL_ROOTS_SHARED"))
                         .map(Boolean::parseBoolean).orElse(false);
                 for (String name : settings.catalogs()) {
-                    catalogs.add(openCatalog(name, stores, opening, localRootsShared));
+                    catalogs.add(openCatalog(name, stores, opening, localRootsShared,
+                            tableSecrets));
                 }
                 stores.freeze();
                 for (CatalogTables.Entry entry : catalogs) {
@@ -197,7 +214,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                         extra.provider(), extra.store().duckDbRoots());
             }
             return new StoreRegistry(dataDirectory.store(), dataDirectory.provider(), plugins,
-                    redactor, plan, extras, new CatalogTables(catalogs));
+                    redactor, plan, extras, new CatalogTables(catalogs), tableSecrets);
         } catch (RuntimeException e) {
             new CatalogTables(catalogs).close();
             for (Opened extra : extraStores) {
@@ -426,10 +443,12 @@ public final class StoreRegistry implements Stores, AutoCloseable {
      * @param stores stores handed to the catalog
      * @param opening what opening needs
      * @param localRootsShared whether every node reads the local roots (a shared mount)
+     * @param tableSecrets registry the catalog's table credentials go to
      * @return the open catalog
      */
     private static CatalogTables.Entry openCatalog(String name, CatalogStores stores,
-            Opening opening, boolean localRootsShared) {
+            Opening opening, boolean localRootsShared,
+            TableSecrets tableSecrets) {
         Map.Entry<PluginManager.LoadedPlugin, CatalogProvider> found = opening.plugins()
                 .catalogProvider(name).orElseThrow(() -> new IllegalArgumentException("catalog=" + name
                         + " needs a plugin that provides it (provides.catalog in its descriptor;"
@@ -468,6 +487,7 @@ public final class StoreRegistry implements Stores, AutoCloseable {
             closeQuietly(wrapped);
             throw new IllegalArgumentException("Catalog " + name + " names no readable roots");
         }
+        wrapped.registerSecrets(tableSecrets, name, roots);
         return new CatalogTables.Entry(wrapped, roots, shared);
     }
 

@@ -991,8 +991,7 @@ public final class ExecutionService {
         if (s.files().equals(files)) {
             return resolved;
         }
-        return new CatalogTables.Resolved(resolved.entry(), new TableSnapshot(s.name(),
-                s.snapshotId(), s.fingerprint(), s.columns(), s.partitionColumns(), files, s.read()));
+        return new CatalogTables.Resolved(resolved.entry(), s.withFiles(files));
     }
 
     /**

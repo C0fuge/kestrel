@@ -22,6 +22,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -49,6 +50,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.duckdb.LockdownCheck;
 import pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions;
+import pro.surpin.data.arrowflight.server.duckdb.TableSecrets;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 
 /**
@@ -157,6 +159,15 @@ public final class DuckDbAdapter implements AutoCloseable {
     private volatile Connection sharedRoot;
     /** Guards the replacement of sharedRoot. */
     private final Object sharedRootLock = new Object();
+    /** Storage credentials of single tables, installed before each query; none by default. */
+    private volatile TableSecrets tableSecrets = new TableSecrets();
+    /**
+     * Table secrets installed in the shared DuckDB (they are database-wide), by name; guarded by
+     * itself and reset when sharedRoot is replaced.
+     */
+    private final Map<String, String> sharedTableSecrets = new HashMap<>();
+    /** The shared DuckDB sharedTableSecrets describe; guarded by sharedTableSecrets. */
+    private Connection sharedTableSecretsRoot;
     /**
      * Connections of sharedRoot with duckDbStreamingBufferSize set before the lockdown; replaced
      * with sharedRoot; null when the shared DuckDB is off or the buffer size is not set.
@@ -1246,6 +1257,47 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Installs the storage credentials catalogs return with their tables (SPI 1.7): each
+     * connection brings its DuckDB to the registry's current secrets before it runs a query.
+     *
+     * @param secrets registry of table secrets
+     */
+    public void useTableSecrets(TableSecrets secrets) {
+        this.tableSecrets = java.util.Objects.requireNonNull(secrets, "secrets");
+    }
+
+    /**
+     * Brings a session's DuckDB to the current table secrets. Secrets belong to a DuckDB
+     * database, so sessions of the shared DuckDB share what is installed.
+     *
+     * @param session session about to run a query
+     */
+    private void syncTableSecrets(Session session) {
+        TableSecrets registry = tableSecrets;
+        long version = registry.current().version();
+        if (session.tableSecretsVersion == version) {
+            return;
+        }
+        java.util.function.Consumer<String> problems = problem -> LOGGER.warn(
+                "node={} duckdb=tableSecretRefused error=\"{}\"", LogUtil.node(), problem);
+        try (Statement s = session.conn.createStatement()) {
+            if (session.root == null) {
+                session.tableSecretsVersion = registry.apply(s, session.tableSecrets, problems);
+                return;
+            }
+            synchronized (sharedTableSecrets) {
+                if (sharedTableSecretsRoot != session.root) {
+                    sharedTableSecrets.clear();
+                    sharedTableSecretsRoot = session.root;
+                }
+                session.tableSecretsVersion = registry.apply(s, sharedTableSecrets, problems);
+            }
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("DuckDB statement cannot be created", e);
+        }
+    }
+
+    /**
      * Returns the session this thread's current query runs on.
      *
      * @return the session a query slot chose, else the thread's own
@@ -1262,6 +1314,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             session = local.get();
         }
+        syncTableSecrets(session);
         return session;
     }
 
@@ -2685,6 +2738,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         private final Connection conn;
         private final int maxStatements;
         private long viewsVersion = Long.MIN_VALUE;
+        /** Version of the table secrets this session's DuckDB has. */
+        private long tableSecretsVersion;
+        /** Table secrets installed in this session's own DuckDB, by name. */
+        private final Map<String, String> tableSecrets = new HashMap<>();
         private List<String> viewDrops = List.of();
         /**
          * DuckDB connection with empty views for describing queries, its own DuckDB or one to the
