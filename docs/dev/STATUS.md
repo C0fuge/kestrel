@@ -32,6 +32,16 @@
 > retry wrapper (0g/0e), the opt-in caps leaking into defaults. Bisect on S3 with the CI fake-S3 perf test
 > (`S3ReadPathPerfTest` / `tpch-perf.yml` on S3) between 7562a5b and 9044653, `duckDbMemoryLimit=none` as the first A/B;
 > fix, `package=true` pre-release; the screening re-measures.
+>
+> *Investigated 2026-10-29 (cloud session, run 40794647875, see Log): not reproduced on a local S3 endpoint - head is
+> 1.57x faster than 7562a5b there, and `duckDbMemoryLimit=none` is as slow as 7562a5b.* `tpch-perf.yml` now takes
+> `store=s3` (rclone S3 server on the runner, real s3 plugin + httpfs). SF10, 2 CPUs / 6 GB, best of 2 rounds:
+> default (1024MiB per connection, 4 threads) 283.8 s, `-DduckDbThreads=4` 282.5 s, 7562a5b 444.7 s (warm-up 339.7),
+> head `-DduckDbMemoryLimit=none` 443.9 s; 22/22 same answers. So the per-connection `memory_limit` *helps* on S3 and is
+> not the cause; the plugin path with the read cache off is byte-for-byte the old setup (only refactored). **Still open:**
+> what the screening's S3 setup has that this one lacks (ADBC client, MinIO over a network with latency, another memory
+> profile) - see Open question "S3 screening setup". Next: rerun `tpch-perf.yml store=s3` with the screening's exact
+> container profile once known, or add latency (`tc netem` on the S3 port) to the workflow.
 
 > ~~**Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**~~
 > *Fixed 2026-10-28 (9efe670, see Log):* default threads cores / 4 in 4..16, the per-GiB cap only above 4, per-connection
@@ -704,6 +714,12 @@
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **S3 screening setup (2026-10-29, core lane).** The "Bug first" S3 slowdown (9044653 vs 7562a5b, SF10 ADBC 1.10)
+  does not reproduce with `tpch-perf.yml store=s3` (local rclone S3, Java Flight SQL client, 2 CPUs / 6 GB): head is
+  1.57x faster, and dropping the per-connection `memory_limit` makes it as slow as 7562a5b. Which S3 server, network
+  latency, container profile and server options does the screening use for its S3 runs (and does it pass any
+  `duckDb*` override)? With those the workflow can replay it on the same runner.
 
 - **Maintainer 2026-10-29, answer to "Item 22: one DuckDB scheduler": yes, build it as the opt-in
   `duckDbSharedDatabase` (default false)** *(step 1 built 2026-10-28, 4075216, see Log; a default change is still
@@ -2096,3 +2112,9 @@
   status). Before, a table-level catalog error (e.g. the hive plugin's refused insert-only layout, now an
   IllegalArgumentException) escaped getFlightInfo as a message-less INTERNAL. Commit 63679fe, covered by
   `HiveInsertOnlyIntegrationTest`. See CATALOGS-STATUS.md Q3 addendum for the related CatalogViews behaviour.
+- 2026-10-29 (cloud session, core lane): "Bug first" S3 heavy queries. `tpch-perf.yml` takes `store=s3` (f082b73: an
+  rclone `serve s3` endpoint on the runner over the generated Parquet, real s3 plugin and httpfs from `ci-assets`,
+  generated test keys). Run 40794647875 (SF10, 2 CPUs / 6 GB, -Xmx3g, direct 2g, baseline 7562a5b, extra
+  `-DduckDbMemoryLimit=none`): default 283.8 s, threads4 282.5 s, 7562a5b 444.7 s, head without memory limit 443.9 s
+  (best of 2; 22/22 answers equal). Not reproduced; the 19b per-connection memory limit is a 1.57x gain on S3 here,
+  not the cause. No server change; open question "S3 screening setup" asks for the screening's S3 details.

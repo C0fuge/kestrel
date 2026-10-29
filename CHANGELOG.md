@@ -10,6 +10,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Manual workflow `tpch-perf.yml` takes `store=s3`: the TPC-H Parquet files served by a local S3 endpoint and read
+  through the s3 plugin, to compare builds on S3.
 - Plain Flight descriptors for generic Flight clients (ClickHouse `arrowFlight`, plain Flight libraries), with the
   new optional setting `plainFlightCommands` (`FLIGHT_PLAIN_COMMANDS`, default `false`: refused as before):
   `GetFlightInfo` / `GetSchema` with a command descriptor holding UTF-8 SQL text, or a path descriptor naming a table
