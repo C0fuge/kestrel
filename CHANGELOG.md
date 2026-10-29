@@ -22,6 +22,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cluster's Hive Ranger service (database visibility as `SHOW DATABASES`, select on all columns); a table with a mask,
   row filter or column deny for the caller, or with policies the server cannot evaluate exactly (`{OWNER}`,
   conditions, column patterns, restrictive tag policies), is refused - masks and row filters are not applied yet (P6).
+- `ranger-hive`: end-to-end test in a real Flight SQL server (`RangerHiveFlightSqlTest`: masked, row-filtered and
+  column-denied tables refused in queries, joins and listings in both result modes; unrestricted tables answered).
 - Module `flight-codec-lz4` (release asset `arrow-flight-codec-lz4-<version>.jar`): the server's lz4-java
   LZ4_FRAME codec as an Arrow codec factory (service provider) for Java Flight clients, which otherwise decode LZ4
   streams with commons-compress at a few MB/s to ~180 MB/s; with this jar and lz4-java ahead of

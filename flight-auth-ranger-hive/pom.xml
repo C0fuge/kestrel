@@ -51,6 +51,27 @@
             <version>${hadoop.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- The server's Hadoop client, as on the server class path (for the end-to-end test). -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- TestFlightServerHelper: the end-to-end test runs a real Flight SQL server. -->
+        <dependency>
+            <groupId>pro.surpin.arrowflight</groupId>
+            <artifactId>arrow-flight-server</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
