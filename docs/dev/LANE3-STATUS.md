@@ -39,8 +39,12 @@ D7. ~~Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes tha
       scan; peer wait 13-15 % of merged time. Decision on D2 (b): still no parallel prefetch.
     - Optional: a run with `cpus=2` needs a runner with >= 6 cores (ubuntu-latest has 4: three 2-CPU nodes would
       share 4 cores, while "off" gets its 2 alone); a netem latency input between the nodes.
-D8. Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
-    kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.
+D8. ~~Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
+    kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.~~ *Done
+    2026-10-29 (see Log):* `distributed-restart.yml` + `RollingRestartLoadTest`; found and fixed (opt-in) the
+    graceful-stop `INTERNAL`: `shutdownDrainSeconds`. Follow-ups: Q2 (default of `shutdownDrainSeconds`); the
+    client-side recovery (~6-9 s from "started" to the first answer planned on the node) is mostly the load
+    client's gRPC reconnect backoff - measure with a fresh channel per retry if it matters.
 D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
 D10. Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only), so TPC-H q01 itself is computed by one
     node; D7 measures q01 without its AVG columns. Candidate (additive, opt-in path only): endpoints answer sum + count
@@ -57,6 +61,13 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
     `UNAVAILABLE` re-run the query (the retry plans without the lost member). Other failures stay `INTERNAL`. This is
     wire-visible (status code), hence a question: (a) map to `UNAVAILABLE` as proposed, (b) keep `INTERNAL`.
     No code until answered.
+
+Q2. (2026-10-29, lane 3, D8) **Default of `shutdownDrainSeconds`.** Without a drain (default 0, today's behaviour) a
+    node stopped with SIGTERM cuts the answers it is still sending with `INTERNAL` (HTTP/2 RST_STREAM), which clients
+    and drivers do not retry - seen once per graceful stop under load. With a drain the node leaves the pool, new calls
+    get `UNAVAILABLE` and running answers finish (D8 run: 0 non-retryable failures over 3 graceful + 3 kill -9
+    restarts). Proposal: default 20 s (below Kubernetes' 30 s grace period; `docker stop` waits 10 s unless `-t`).
+    Changes stop behaviour (stops take up to the longest running answer), hence a question: (a) default 20, (b) keep 0.
 
 ## Log
 
@@ -259,3 +270,26 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
   missing - my package=true dispatch 40818496135 was cancelled by the core lane's push cbdc14b; redispatched on
   06833e7 after their run: Dev CI package=true 40821204741 green (it superseded the catalogs lane's push run
   40821054924 on f227d98, which 06833e7 contains), pre-release `server-1.0.0-06833e736572` contains fd6084f (D6). Next: D8 (rolling restart under load), D10 (AVG merge) is additive and small.
+- 2026-10-29 (lane 3 session, 14th): lock 05:27Z. D8 done (95b6b01 + 2a2b8e0, rebase-merged into `main`). New manual
+  workflow `distributed-restart.yml` + `RollingRestartLoadTest` (`perf`; external cluster): reference answers (rows +
+  order-independent checksum, rows checked against DuckDB) on the healthy cluster, then N clients run 7 shapes (q01,
+  q06, q12, DISTINCT, ORDER BY LIMIT, a filtered scan in complete and in partial mode) each call on the next node,
+  reading endpoints from their locations in order; fails on any wrong answer or a code outside `UNAVAILABLE`. The
+  workflow restarts the 3 containers one by one, graceful (`docker stop`) then kill -9, 15 s down, 20 s settle.
+  Found by the first local run: a SIGTERM'd planning node cut its running answer with `INTERNAL` (RST_STREAM;
+  `stop()` called `server.shutdown()` and closed DuckDB/Hazelcast at once). Fix, opt-in (default 0 = unchanged, Q2
+  asks for a default): `shutdownDrainSeconds` / `FLIGHT_SHUTDOWN_DRAIN_SECONDS` - `ClusterService.deregister()`
+  (stops the heartbeat, removes the server from the pool, member stays up), `server.shutdown()`, `awaitTermination`
+  up to the setting, then the old close order (log `shutdownDrain=done|timeout`). Tests: `ShutdownDrainTest`
+  (integration; a running answer read across the drain arrives in full, the drain waits for it - mutation-checked -,
+  new calls `UNAVAILABLE`, server out of `liveServerUris`), `ConfigAdapterTest` +1; README + CHANGELOG. Local:
+  those + `ClusterServiceTest` 53, `ClusterViewTest`, `DistributedClusterIntegrationTest`,
+  `DistributedCompleteIntegrationTest`, `MultiNodeFailoverTest`, checkstyle + spotbugs green; local 3-JVM run with
+  the drain: 2 graceful restarts, 0 non-retryable failures (without it: 1 `INTERNAL`). CI: Dev CI 40824909097 green
+  on the branch; Distributed restart 40826279722 green on `main` 2a2b8e0 (SF1, 12 files, 3 clients,
+  `distributedComplete=true`, drain 20): 0 wrong answers, 464 failures all `UNAVAILABLE` (463 "io exception" = calls
+  to the node that was down, 1 "Network closed"), none of the merged answers planned on healthy nodes failed while a
+  peer died. Per restart (stop s / start -> "started" s / start -> first ok planned on the node s / last error
+  after down s): graceful 1.2-1.7 / 5.0-6.1 / 12.0-12.7 / 26.6-28.4; kill -9 0.1-0.5 / 5.6-6.2 / 12.5-15.6 /
+  27.9-30.0. Package=true Dev CI 40826302585 green, pre-release `server-1.0.0-2a2b8e08191f`. Next: D9 (node join
+  under load; the restart workflow is the base), D10 (AVG merge), Q2.

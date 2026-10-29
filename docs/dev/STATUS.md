@@ -2187,3 +2187,7 @@
   d1f0c78, whose own runs it cancelled), pre-release `server-1.0.0-786782219b1a` with the codec jar. **Coordinator:**
   bundle the jar in the patched JDBC driver / Java clients that ask for lz4 (START-NOTES). Next core code step: none
   known; the core lane waits on the stand round (b) / decision (d) of the shared DuckDB and the S3 screening answer.
+- 2026-10-29 (lane 3, D8): core files touched (2a2b8e0): `HadoopArrowFlightServer.stop()` drains when the new optional
+  `shutdownDrainSeconds` > 0 (default 0 = unchanged), `ClusterService.deregister()` (also used by `close()`). Found by
+  the rolling-restart workflow `distributed-restart.yml`: a graceful stop cut running answers with `INTERNAL`. Default
+  asked in `LANE3-STATUS.md` Q2. Pre-release `server-1.0.0-2a2b8e08191f`.
