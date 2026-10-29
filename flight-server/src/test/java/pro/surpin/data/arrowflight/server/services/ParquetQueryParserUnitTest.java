@@ -169,6 +169,25 @@ class ParquetQueryParserUnitTest {
                 pq.duckDbSql);
     }
 
+    /**
+     * Verifies a join names and rewrites double-quoted tables like bare ones (regression: a quoted
+     * table was left out of the join's tables, so a partial-mode join failed with "schema does not
+     * exist" unless the worker's connection happened to hold the catalog views).
+     */
+    @Test
+    void joinWithQuotedTableNames() {
+        ParquetQueryParser pq = ParquetQueryParser.parse("SELECT p.id FROM sales.products p "
+                + "JOIN \"sales\".\"orders\" t ON p.id = t.id");
+        assertEquals(List.of(new ParquetQueryParser.JoinTable("sales", "products", "p"),
+                new ParquetQueryParser.JoinTable("sales", "orders", "t")), pq.joinTables);
+        assertEquals("SELECT p.id FROM p JOIN t ON p.id = t.id", pq.duckDbSql);
+
+        pq = ParquetQueryParser.parse("SELECT n_name FROM tpch.nation "
+                + "JOIN \"tpch\".\"Region Two\" ON n_regionkey = 1");
+        assertEquals(new ParquetQueryParser.JoinTable("tpch", "Region Two", "Region Two"), pq.joinTables.get(1));
+        assertTrue(pq.duckDbSql.contains("FROM nation JOIN \"Region Two\" ON"), pq.duckDbSql);
+    }
+
     /** Verifies TIME literals keep their fraction and TIMESTAMPTZ literals are understood. */
     @Test
     void timeLiteralsKeepTheirFraction() {

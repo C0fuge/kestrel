@@ -7,6 +7,7 @@ import org.jooq.conf.Settings;
 import org.jooq.impl.DSL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 
 import java.util.ArrayList;
@@ -708,10 +709,17 @@ public class ParquetQueryParser {
 
     // The optional alias must not be the next keyword: in "FROM s.a JOIN s.b ON ..." the word
     // after "s.a" is JOIN, not an alias.
+    // A name part is a word or a double-quoted identifier ("" inside it is one quote).
+    private static final String NAME_PART = "(?:\\w+|\"(?:[^\"]|\"\")+\")";
+
     private static final Pattern TABLE_REF = Pattern.compile(
-            "^(\\w+(?:\\.\\w+)?)(?:\\s+(?:AS\\s+)?(?!(?:JOIN|ON|USING|WHERE|LEFT|RIGHT|FULL|INNER"
+            "^(" + NAME_PART + ")(?:\\.(" + NAME_PART + "))?"
+                    + "(?:\\s+(?:AS\\s+)?(?!(?:JOIN|ON|USING|WHERE|LEFT|RIGHT|FULL|INNER"
                     + "|CROSS|OUTER|NATURAL|GROUP|ORDER|HAVING|LIMIT|OFFSET|UNION|WINDOW)\\b)(\\w+))?",
             Pattern.CASE_INSENSITIVE);
+
+    /** A plain identifier DuckDB reads without quotes. */
+    private static final Pattern PLAIN_NAME = Pattern.compile("[A-Za-z_]\\w*");
 
     /**
      * @param sql SQL query string
@@ -724,11 +732,9 @@ public class ParquetQueryParser {
             String rest = sql.substring(kw.end()).trim();
             Matcher tr = TABLE_REF.matcher(rest);
             if (tr.find()) {
-                String qualified = tr.group(1);
-                String alias = tr.group(2);
-                int dot = qualified.indexOf('.');
-                String schema = dot > 0 ? qualified.substring(0, dot) : null;
-                String table = dot > 0 ? qualified.substring(dot + 1) : qualified;
+                String schema = tr.group(2) != null ? unquoteName(tr.group(1)) : null;
+                String table = unquoteName(tr.group(2) != null ? tr.group(2) : tr.group(1));
+                String alias = tr.group(3);
                 if (alias == null) {
                     alias = table;
                 }
@@ -736,6 +742,26 @@ public class ParquetQueryParser {
             }
         }
         return tables;
+    }
+
+    /**
+     * Returns a name part as DuckDB reads it: a double-quoted identifier without its quotes.
+     *
+     * @param part a word or a double-quoted identifier
+     * @return the name
+     */
+    private static String unquoteName(String part) {
+        return part.startsWith("\"") ? part.substring(1, part.length() - 1).replace("\"\"", "\"") : part;
+    }
+
+    /**
+     * Returns a pattern matching a name part as written: bare or double-quoted, any case.
+     *
+     * @param name the name
+     * @return regular expression
+     */
+    private static String namePattern(String name) {
+        return "(?:" + Pattern.quote(name) + "|" + Pattern.quote(DuckDbAdapter.quoteIdentifier(name)) + ")";
     }
 
     /**
@@ -989,16 +1015,18 @@ public class ParquetQueryParser {
         String result = sql;
         for (JoinTable jt : joinTables) {
             String qualified = jt.schema() != null
-                    ? jt.schema() + "." + jt.table() : jt.table();
+                    ? namePattern(jt.schema()) + "\\." + namePattern(jt.table()) : namePattern(jt.table());
             if (!jt.alias().equals(jt.table())) {
                 result = result.replaceAll(
-                        "(?i)(\\b" + JOIN_ANY_RE + "\\s+)" + Pattern.quote(qualified)
+                        "(?i)(\\b" + JOIN_ANY_RE + "\\s+)" + qualified
                                 + "\\s+(?:AS\\s+)?" + Pattern.quote(jt.alias()),
                         "$1" + Matcher.quoteReplacement(jt.alias()));
             } else {
+                String view = PLAIN_NAME.matcher(jt.table()).matches()
+                        ? jt.table() : DuckDbAdapter.quoteIdentifier(jt.table());
                 result = result.replaceAll(
-                        "(?i)(\\b" + JOIN_ANY_RE + "\\s+|,\\s*)" + Pattern.quote(qualified) + "\\b",
-                        "$1" + Matcher.quoteReplacement(jt.table()));
+                        "(?i)(\\b" + JOIN_ANY_RE + "\\s+|,\\s*)" + qualified + "(?![\\w\"])",
+                        "$1" + Matcher.quoteReplacement(view));
             }
         }
         return result;

@@ -791,6 +791,10 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- Partial mode: a join naming a table with double quotes (`... JOIN "sales"."orders" t ...`) failed with `Catalog
+  Error: ... schema "sales" does not exist` unless the worker's DuckDB connection happened to hold the catalog views
+  from an earlier complete query (flaky `RangerHiveFlightSqlTest` in CI, "second server in one JVM" in the plugins
+  lane's note): the join parser now names and rewrites quoted tables like bare ones. An error, never wrong rows.
 - Node load leak with concurrent identical queries (found by D9): endpoint tickets are deterministic, so clients
   planning the same query at the same time got the same ticket, and its load reservation was overwritten - one
   release then found nothing and the node kept the endpoint's bytes as load for good, so later plans skewed away
