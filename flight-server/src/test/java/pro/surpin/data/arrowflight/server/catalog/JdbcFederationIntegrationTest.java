@@ -174,7 +174,12 @@ class JdbcFederationIntegrationTest {
         assertTrue(schemas.containsAll(List.of("pg", "my")), schemas.toString());
         assertFalse(schemas.stream().anyMatch(s -> s.startsWith("jdbc_attached")), schemas.toString());
         for (String schema : List.of("pg", "my")) {
-            assertEquals(List.of("t", "types"), column(helper.sqlClient().getTables(null, schema, null,
+            List<String> expected = new ArrayList<>(List.of("t", "types"));
+            if ("pg".equals(schema) && tpch != null) {
+                expected.addAll(TPCH);
+            }
+            expected.sort(null);
+            assertEquals(expected, column(helper.sqlClient().getTables(null, schema, null,
                     null, false), "table_name").stream().sorted().toList(), schema);
         }
     }
