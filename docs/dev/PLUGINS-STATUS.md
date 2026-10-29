@@ -891,3 +891,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   commits (40847672478, 40847783421, 40848268191, 40848841146) were all cancelled by newer pushes; run 40849110613
   (ecbd3c7d, contains 46ef1517) was still running at session end - **next session: confirm it green first.**
   Maintainer's FINISH MODE read as go-ahead for the restriction hook; plan (A)-(E) in P6 Next steps. Lock released.
+- 2026-10-29 (plugins session, FINISH MODE): P6 finished - core restriction hook (52446bad, 0e6bcb10; additive
+  `restrictsTables` / `restrictTable` -> `TableRestriction`, `QueryRestrictions` rewrite, restricted queries
+  answered complete and re-derived at DoGet), SPI 1.8 `ColumnSpec.sourceType` (5d9e5c12; hive plugin 6479bb38),
+  ranger-hive masks (19703370, c80d71cf; Hive types, CHAR(n) padded) and row filters (8f10de6f, typed
+  `HiveRowFilter`); `ranger-hive` listings now Hive SHOW semantics, not audited. Earlier run 40849110613 was
+  cancelled; its content is covered by the green runs below. Local: flight-server unit suite 864/864, ranger-hive
+  module 34/34, hive plugin catalog tests, Checkstyle + SpotBugs clean. CI: Dev CI push run 40858061955 (c80d71cf)
+  green; package dispatch 40860291863 (146e6757) green, pre-release `server-1.0.0-146e6757a01f`. Open questions
+  updated (P6 conservative answers; former "P6, audit" answered). PLUGINS LANE DONE. Lock released.
