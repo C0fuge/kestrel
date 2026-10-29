@@ -22,7 +22,41 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       lakekeeper-s3 (`vakamo/lakekeeper` on Docker Hub, PostgreSQL, `tools/ci/lakekeeper-setup.sh`; its metrics
       port moved to 9100). S3 server: moto (`quay.io/minio/minio` refuses anonymous pulls; Docker Hub `minio/minio`
       is gone). All five pass locally (Docker in the session; quay.io and ghcr.io blobs are blocked there).
-    - **Next (step 2b): vended credentials.** Findings so far: (1) DuckDB secrets are created per connection before
+    - Step 2b (i) done (2026-10-29, Q1 answered yes): vended credentials for DuckDB's data reads.
+      SPI 1.7 (own commit 64c03a9): `StorageCredential(prefix, type, options, expiresAt)`,
+      `TableSnapshot.credentials` (old 7-argument constructor kept), `TableSnapshot.withFiles`. Core (own
+      commits 5efec89, 9e7bd88; STATUS.md Log line): `TableSecrets` - `SpiCatalog` registers the credentials of every
+      snapshot it returns; one `CREATE OR REPLACE TEMPORARY SECRET table_secret_<hash>_<i>` per credential, scoped
+      to the deepest directory holding the snapshot's data / delete / metadata files below the prefix (so a
+      warehouse-wide prefix still gives the table directory), checked like `createSecret` (type s3 / gcs / r2,
+      allowlisted options, scope below the catalog's roots; outside -> IllegalArgumentException = that table is
+      skipped), URL_COMPATIBILITY_MODE forced on, expired credentials fail the table; `DuckDbAdapter.session()`
+      brings each DuckDB (per session, or once per shared database) to the current set; refreshed -> replaced,
+      no longer returned -> `DROP TEMPORARY SECRET IF EXISTS`; a refused statement is logged without literals
+      and does not fail other tables' queries. Plugin (8ed1a8d): opt-in `iceberg-rest.vendedCredentials`
+      (default false) sends `X-Iceberg-Access-Delegation: vended-credentials`, maps the S3 entries of
+      `storage-credentials` (or `config`, for the table location) to KEY_ID / SECRET / SESSION_TOKEN / REGION /
+      ENDPOINT / USE_SSL / URL_STYLE + `s3.session-token-expires-at-ms`, reloads a table 5 min before expiry;
+      descriptor SPI 1.7. Tests: `TableSecretsTest`, `SpiCatalogTest`, `S3IntegrationTest
+      .tableSecretsReadOneTableWithItsOwnCredentials` (real httpfs after the lockdown, FakeS3: the table's reads
+      are signed with the vended key + token, refresh switches the token, drop falls back to the store key,
+      `?s3_endpoint=` reaches no other host, values redacted in `duckdb_secrets()`), `VendedCredentialsTest`.
+      Catalogs CI entry `lakekeeper-s3-vended` (Lakekeeper `sts-enabled` against moto's AssumeRole; moto ignores
+      session policies, so Lakekeeper's downscope check fails and the entry sets
+      `LAKEKEEPER__SKIP_STORAGE_VALIDATION=true`): every table carries its own temporary key + token, server
+      answers equal the reference with `vendedCredentials=true`.
+      Security note: secrets live in DuckDB's in-memory secret manager (database-wide), client SQL cannot list
+      them (`duckdb_secrets` / `which_secret` refused) or create / drop secrets (SELECT-only parse check); the
+      worst a misbehaving catalog can do is have its credentials used for other tables in the same directory
+      tree below its own roots.
+    - **Next (step 2b ii):** manifests and footers are still read through the stores with the server's own
+      credentials, so a deployment whose server keys cannot read the warehouse still fails. Give
+      `StoresFileIO` reads under a table with credentials their own S3 GET (copy the s3 plugin's small SigV4,
+      no SDK) and check Java-side footer / statistics reads in the core (`TableStatisticsService`,
+      `PartitionPruner`) for such tables. CI: a moto entry where the s3 plugin's keys are wrong for the
+      warehouse is not possible (moto accepts any key) - use moto IAM enforcement
+      (`INITIAL_NO_AUTH_ACTION_COUNT`) or check the request log's signing key. Also Polaris without
+      `stsUnavailable` (STS endpoint to moto). Original findings: (1) DuckDB secrets are created per connection before
       lockdown (`DuckDbAdapter`, `DataStore.contributeDuckDb`), but `CREATE OR REPLACE TEMPORARY SECRET` and
       `DROP SECRET` still work after `enable_external_access=false` + `lock_configuration=true` (checked with
       duckdb_jdbc 1.5.6); client SQL cannot do it (only SELECTs pass the parse check), so the server could install
@@ -61,7 +95,7 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       server (see Q3), so the server test uses `ICEBERG_REST_IT_NAMESPACES=ice`. Plugin test 3/3, server test 4/4
       (HMS reference included) pass locally. No vended credentials checked (UC's `/credentials` endpoint is listed
       in `/v1/config`; belongs to step 2b).
-    - C1 is complete apart from step 2b (vended credentials), which waits on Q1. Next session: C2.
+    - C1 is complete apart from step 2b (ii) (manifests with the vended credentials, Polaris STS), see above.
 C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source through DuckDB's `postgres` / `mysql`
     extensions (bundle for 1.5.6 offline like the others; check availability), read-only, pushdown of filters/projection,
     credentials from the plugin config (never logged), Ranger checks as for other tables. CI with postgres/mysql

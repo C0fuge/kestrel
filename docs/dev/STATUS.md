@@ -2273,3 +2273,14 @@
   copies of `RangerHiveFlightSqlTest` (each passes alone; unquoted joins pass). Process-wide state suspected (not the
   parse cache, not `PluginRefusedFunctions`); a startup race is not ruled out. That module now forks one JVM per test
   class (46ef1517). An error, never wrong rows.
+- 2026-10-29 (lane 4, core + SPI, FYI): **SPI 1.7** (64c03a9, additive): `TableSnapshot.credentials`
+  (`StorageCredential`), old constructor kept, `TableSnapshot.withFiles`. **Core** (5efec89, 9e7bd88):
+  `duckdb/TableSecrets` - `SpiCatalog` registers the credentials of every snapshot a catalog returns as
+  `CREATE OR REPLACE TEMPORARY SECRET table_secret_*` scoped to the table's file directory below the catalog's
+  roots (checked like `createSecret`, URL_COMPATIBILITY_MODE forced on), and `DuckDbAdapter.session()` brings
+  each DuckDB (or the shared one, once) to the current set before a query; one volatile read when nothing changed,
+  no effect without a catalog that returns credentials (only iceberg-rest with the new opt-in
+  `vendedCredentials`, default false). Maintainer approved in CATALOGS-STATUS Q1. Dev CI run 40849577884 (head
+  9e7bd88) failed only in `RangerHiveFlightSqlTest.restrictedTablesAreRefused:133`, flaky before these commits too
+  (local: 1 of 5 runs on 46ef151 and on 9e7bd88); fixed meanwhile by the plugins lane (4d7c3fa).
+

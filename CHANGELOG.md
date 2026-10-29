@@ -91,6 +91,7 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+<<<<<<< Updated upstream
 - `ranger-hive` applies Ranger Hive column masks: a masked column is read as Hive 3.1.3's mask written in DuckDB
   SQL (same type), in the table and in views over it, both result modes (answered complete). Tables and databases
   are visible with any access (as Hive's SHOW TABLES / SHOW DATABASES; listings no longer audited); a query table
@@ -105,6 +106,15 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   statistics of a restricted table are refused, and anything the rewrite cannot reach (a reference the finder
   misses, time travel on a restricted table, an unknown mask column, a failing provider) is UNAUTHORIZED. No
   change for existing providers. (P6 step 3 A/B; test `TableRestrictionIntegrationTest`, `QueryRestrictionsTest`.)
+=======
+- Iceberg REST vended credentials (lane 4, C1 step 2b; opt-in `arrowflight.iceberg-rest.vendedCredentials`, default
+  false): loadTable asks for temporary S3 credentials (`X-Iceberg-Access-Delegation: vended-credentials`) and DuckDB
+  reads the table's files with them. SPI 1.7 `TableSnapshot.credentials` (`StorageCredential`: prefix, type,
+  options, expiry); the server installs each as a temporary DuckDB secret scoped to the directory of the snapshot's
+  files below the prefix, only below the catalog's roots, refreshed when the catalog returns new ones (the plugin
+  reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Manifests are still read
+  through the server's stores. Catalogs CI entry `lakekeeper-s3-vended`.
+>>>>>>> Stashed changes
 - `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, `arrowflight.duckdb.sharedMaxThreads`, default 8, 0 = no
   cap): with the opt-in `duckDbSharedDatabase` and `duckDbThreads` unset, the node's DuckDB gets min(cores, cap)
   threads instead of all cores (stand p22s at 16 cores: c1/c8 small-query p50 and mixed p99 were worse with 16
