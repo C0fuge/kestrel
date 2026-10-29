@@ -256,5 +256,6 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
   many rows gains little (the client's one stream is the bottleneck). D2 (b) decision kept: no parallel prefetch -
   at most the 13-15 % peer wait to gain, concentrated in the wide shapes. Local check before CI (3 JVMs, 3M-row
   lineitem-like table): same 6 checksums on vs off, all merged. Package: the pre-release with D6 (fd6084f) is still
-  missing - my package=true dispatch 40818496135 was cancelled by the core lane's push cbdc14b; see the end of this
-  line for the redispatch. Next: D8 (rolling restart under load), D10 (AVG merge) is additive and small.
+  missing - my package=true dispatch 40818496135 was cancelled by the core lane's push cbdc14b; redispatched on
+  06833e7 after their run: Dev CI package=true 40821204741 green (it superseded the catalogs lane's push run
+  40821054924 on f227d98, which 06833e7 contains), pre-release `server-1.0.0-06833e736572` contains fd6084f (D6). Next: D8 (rolling restart under load), D10 (AVG merge) is additive and small.
