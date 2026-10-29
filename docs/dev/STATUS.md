@@ -36,6 +36,17 @@
 > (explicit settings win); (b) CI perf check in `tpch-perf.yml` (balanced vs speed, local + S3, peak RSS recorded);
 > (c) CHANGELOG + START-NOTES (what `speed` turns on and its memory cost); (d) one `package=true` pre-release.
 > Then write "ITEM 23 DONE" here; egret measures speed vs balanced vs upstream native.
+>
+> *(a)-(d) done 2026-10-29 (1a25c7e1, see Log), **but `speed` is slower on S3** - not "ITEM 23 DONE" yet.* Dev CI
+> 40937759137 + 40941532522 green, pre-release `server-1.0.0-1a25c7e13802`. TPC-H SF10, 4c/8g (-Xmx3g, direct 2g), 1
+> round: local (run 40937773731) default 13.93 s, threads4 13.75 s, speed 13.76 s, peak 1680 / 1671 / 1770 MiB;
+> **s3 (run 40939989610) default 243.65 s, threads4 241.84 s, speed 323.92 s (1.33x slower), peak ~1650 vs 3252 MiB**;
+> 22/22 same answers everywhere. Prime suspect: the s3 read cache `speed` turns on (`-Xmx`/5 = 614 MiB; one pass reads
+> every file once, so it only adds the loopback hop and heap). Isolation run 40945132304 (`extra=-DresourceProfile=speed
+> -Darrowflight.s3.cacheMegabytes=0`, store=s3) was running at session end. **Next core session:** read that run; if the
+> cache is the cause, drop the read caches from `speed` (one `offer` loop in `ResourceProfile.speed`, the test
+> `speedSizesTheSharedDuckDbByHost` / `smallHeapLeavesTheReadCachesOff`, CHANGELOG/START-NOTES rows), else try
+> `-DresourceProfile=speed -DduckDbSharedDatabase=false` next; then `package=true` and "ITEM 23 DONE".
 
 **WRAP-UP DONE (2026-10-29 13:00, core lane).** Final pre-release `server-1.0.0-1e7b43a4e0c7` (dev-ci `package=true`
 on 1e7b43a4, 7 assets) carries main's last code change; everything after it is `[skip ci]` docs. Plugins and catalogs
@@ -784,6 +795,14 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 23 `speed` details (2026-10-29, core lane, FYI - all opt-in).** (1) The note says "a larger backpressure
+  threshold (16 MiB)", but the effective default is 256 MiB (bundled `arrowflight.properties`); `speed` uses 16 MiB, as
+  TUNING.md measured it necessary with 4 endpoints per node. (2) `duckDbMemoryLimit` under `speed` is 75 % of memory
+  minus heap and direct (node-wide); balanced's shared formula would give 85 % minus both (capped at 80 %), so on big
+  nodes `speed` is a little more conservative than plain `duckDbSharedDatabase=true`. (3) "Explicit" = `-D` or
+  environment (or a plugin's `<ns>.properties`); a value in an `arrowflight.properties` on the class path loses to the
+  profile. Say if any of these should change.
 
 - **Subqueries under an authorization provider (2026-10-29, core lane, FYI - reversible).** The plugins lane's bypass
   fix (f411c13) refused every nested query under a provider; b3bbcce lets them back in with every table named from
@@ -2364,3 +2383,14 @@ S3 slowdown item below stays open for then).
   `JwtSettings` / `JwtVerifier` pass null-tolerant sets to nimbus (the server jar carries nimbus 10.0.1, whose claims
   verifier calls `contains(null)`; unit tests ran on the module's 10.10 and did not see it). Test
   `JwtSettingsTest.setsAnswerContainsNull`. Final pre-release follows from this commit.
+- 2026-10-29 (cloud session, core): **item 23 `resourceProfile`** (1a25c7e1): `ResourceProfile` (adapters) resolves
+  `resourceProfile` / `arrowflight.resourceProfile` / `FLIGHT_RESOURCE_PROFILE` (`balanced` default = no change, the
+  host is not even read; `speed`; anything else refuses to start). `speed` defaults live in a new `ConfigSource` layer
+  (`withProfileDefaults`, read after `-D`, environment and plugin files, before `arrowflight.properties`;
+  `ConfigSource.system()` applies it, `systemWithoutProfile()` does not; `PropertiesPluginConfig` reads it for the
+  plugin caches). Startup line `resourceProfile profile=... key=value ... key=value(explicit)` (ServerModule). Tests
+  `ResourceProfileTest` (4c/6g, 16c/32g, 64c/256g; explicit -D/env wins; explicit `duckDbSharedMaxThreads` keeps
+  its cap; shared off keeps the per-connection memory limit; small heap leaves caches off). CHANGELOG + START-NOTES
+  rows/section. CI: Dev CI 40937759137 (push) and 40941532522 (`package=true`, pre-release
+  `server-1.0.0-1a25c7e13802`, 7 assets) green; TPC-H perf 40937773731 (local: speed = default) and 40939989610 (s3:
+  speed 1.33x slower, 2x peak memory) - see Next steps item 23; isolation run 40945132304 (s3 cache off) dispatched.
