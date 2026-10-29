@@ -91,6 +91,15 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+- Authorization SPI: row filters and column masks. `FlightAuthorization.restrictsTables()` (default false) and
+  `restrictTable(principal, schema, table, columns)` -> `TableRestriction` (allowed, row filter SQL, mask SQL per
+  column; default = `canReadTable`). For a provider that restricts, each reference to a restricted table (after
+  view expansion) is read as `(SELECT * REPLACE (CAST((<mask>) AS <type>) AS c, ...) FROM s.t WHERE (<filter>))`;
+  such queries are answered complete by one node (also when asked in parts, one endpoint), the restriction is
+  derived again at DoGet for the redeeming user (a partial ticket of an unrestricted user is refused), table
+  statistics of a restricted table are refused, and anything the rewrite cannot reach (a reference the finder
+  misses, time travel on a restricted table, an unknown mask column, a failing provider) is UNAUTHORIZED. No
+  change for existing providers. (P6 step 3 A/B; test `TableRestrictionIntegrationTest`, `QueryRestrictionsTest`.)
 - `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, `arrowflight.duckdb.sharedMaxThreads`, default 8, 0 = no
   cap): with the opt-in `duckDbSharedDatabase` and `duckDbThreads` unset, the node's DuckDB gets min(cores, cap)
   threads instead of all cores (stand p22s at 16 cores: c1/c8 small-query p50 and mixed p99 were worse with 16

@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -2225,6 +2226,35 @@ public final class DuckDbAdapter implements AutoCloseable {
             String sql, pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
         return describeComplete(allocator, sql, List.of(), views);
+    }
+
+    /**
+     * Describes the columns of a query's result in this thread's describe DuckDB (views without
+     * rows; nothing is read).
+     *
+     * @param sql query
+     * @param views current view definitions
+     * @return column name to DuckDB type, in result order
+     * @throws Exception when DuckDB rejects the query
+     */
+    public Map<String, String> describeColumns(String sql,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
+            throws Exception {
+        Session session = session();
+        try {
+            Connection conn = describeConnection(session, sql, views);
+            Map<String, String> columns = new LinkedHashMap<>();
+            try (Statement statement = conn.createStatement();
+                    ResultSet rows = statement.executeQuery("DESCRIBE " + sql)) {
+                while (rows.next()) {
+                    columns.put(rows.getString("column_name"), rows.getString("column_type"));
+                }
+            }
+            return columns;
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
     }
 
     /**

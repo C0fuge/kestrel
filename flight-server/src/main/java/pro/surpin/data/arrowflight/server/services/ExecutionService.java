@@ -278,6 +278,31 @@ public final class ExecutionService {
     }
 
     /**
+     * Describes the columns of one table as the complete-answer DuckDB reads it.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return column name to DuckDB type, in table order
+     * @throws IllegalArgumentException when DuckDB cannot read the table
+     * @throws java.io.UncheckedIOException when a catalog cannot be read
+     */
+    public Map<String, String> tableColumns(String schema, String table) {
+        String query = "SELECT * FROM " + DuckDbAdapter.quoteIdentifier(schema) + "."
+                + DuckDbAdapter.quoteIdentifier(table);
+        try {
+            String sql = catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null);
+            return duckDbAdapter.describeColumns(sql, catalogViews.current());
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
+            throw e;
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+        }
+    }
+
+    /**
      * Lists the views of every catalog schema.
      *
      * @return schema name to its views sorted by name; empty without catalogs

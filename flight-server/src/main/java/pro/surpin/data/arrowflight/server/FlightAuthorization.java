@@ -31,6 +31,35 @@ public interface FlightAuthorization extends AutoCloseable {
     boolean canReadTable(String principal, String schema, String table);
 
     /**
+     * Tells whether this provider may restrict tables with row filters or column masks, so the
+     * server asks {@link #restrictTable} for each table a query reads. A provider that does
+     * answers {@link #canReadTable} true for a table it allows only with restrictions (listings
+     * and the table checks of {@link #requireQuery} use it).
+     *
+     * @return false by default: tables are read whole or not at all
+     */
+    default boolean restrictsTables() {
+        return false;
+    }
+
+    /**
+     * Returns what a principal may read of one table a query reads; asked only when
+     * {@link #restrictsTables} is true.
+     *
+     * @param principal authenticated caller identity
+     * @param schema schema name
+     * @param table table name
+     * @param columns every column of the table, name to DuckDB type, in table order
+     * @return the restriction; by default {@link TableRestriction#UNRESTRICTED} when
+     *         {@link #canReadTable} allows the table, else {@link TableRestriction#DENIED}
+     */
+    default TableRestriction restrictTable(String principal, String schema, String table,
+            java.util.Map<String, String> columns) {
+        return canReadTable(principal, schema, table)
+                ? TableRestriction.UNRESTRICTED : TableRestriction.DENIED;
+    }
+
+    /**
      * Requires access to each table read by a query.
      *
      * @param principal authenticated caller identity

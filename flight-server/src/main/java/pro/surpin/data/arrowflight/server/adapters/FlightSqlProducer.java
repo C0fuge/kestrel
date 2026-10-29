@@ -53,6 +53,7 @@ import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import pro.surpin.data.arrowflight.server.metrics.ExecutionPathRecorder;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.services.CatalogViews;
+import pro.surpin.data.arrowflight.server.services.QueryRestrictions;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
 import pro.surpin.data.arrowflight.server.services.ExecutionService;
@@ -273,8 +274,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             }
             ParquetAdapter.validateName(request.schema());
             ParquetAdapter.validateName(request.table());
-            requireQuery(context == null ? null : context.peerIdentity(),
-                    "SELECT * FROM " + request.schema() + "." + request.table());
+            if (checkQuery(context == null ? null : context.peerIdentity(),
+                    "SELECT * FROM " + request.schema() + "." + request.table()).restricted()) {
+                // Statistics would show values of filtered rows and masked columns.
+                throw CallStatus.UNAUTHORIZED.withDescription("Schema or table access denied")
+                        .toRuntimeException();
+            }
             TableStatisticsService.TableStatistics statistics = queryPlanner.tableStatistics(
                     request.schema(), request.table(), request.columns());
             listener.onNext(new Result(TableStatisticsService.toJson(statistics)
@@ -404,9 +409,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             return super.getFlightInfo(context, descriptor);
         }
         String user = context == null ? null : context.peerIdentity();
-        requireQuery(user, query);
+        boolean restricted = checkQuery(user, query).restricted();
         LOGGER.info("node={} query=plainDescriptor user={} query='{}'", LogUtil.node(), user, query);
-        return flightInfoForQuery(query, null, descriptor, context, plainCompleteAnswer(context));
+        return flightInfoForQuery(query, null, descriptor, context,
+                restricted || plainCompleteAnswer(context));
     }
 
     /**
@@ -423,8 +429,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         if (query == null) {
             return super.getSchema(context, descriptor);
         }
-        requireQuery(context == null ? null : context.peerIdentity(), query);
-        return new SchemaResult(plainCompleteAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
+        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
+                .restricted();
+        return new SchemaResult(restricted || plainCompleteAnswer(context)
+                ? completeSchemaFor(query) : schemaForQuery(query));
     }
 
     /**
@@ -693,7 +701,13 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         String failureReason = null;
         try (DuckDbAdapter.QuerySlot slot = executionService.enterQuery()) {
             String user = context == null ? null : context.peerIdentity();
-            String expanded = requireQuery(user, query);
+            QueryRestrictions.Result checked = checkQuery(user, query);
+            String expanded = checked.sql();
+            if (checked.restricted() && !state.complete()) {
+                // Planned in parts before a restriction applied: never read unrestricted.
+                throw CallStatus.UNAUTHORIZED.withDescription("Schema or table access denied")
+                        .toRuntimeException();
+            }
             if (state.complete()) {
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);
                 DistributedComplete distributed = distributedComplete;
@@ -838,25 +852,28 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         long t = LogUtil.mark();
         ByteString handle = copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8));
         String query = command.getQuery();
-        requireQuery(context == null ? null : context.peerIdentity(), query);
+        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
+                .restricted();
         String qid = qid(handle);
         LogUtil.logTiming(t, "schema.resolveQuery", "qid=" + qid);
-        return flightInfoForQuery(query, descriptor, context);
+        return flightInfoForQuery(query, null, descriptor, context,
+                restricted || completeAnswer(context));
     }
 
     /**
      * Requires access to every table a query reads: the tables it names and, for each catalog
      * view it names, every table and view that view reads (a view never gives more access than
-     * its tables give).
+     * its tables give); then applies the provider's row filters and column masks ({@link QueryRestrictions}); a
+     * restricted query is always answered complete by this node.
      *
      * @param principal caller identity, or null
      * @param query client SQL
-     * @return the query with its catalog views replaced by their queries (the query itself when
-     *         it names none)
+     * @return the query with its catalog views replaced by their queries and its restricted
+     *         tables by their allowed rows and values (the query itself when there is neither)
      * @throws FlightRuntimeException UNAUTHORIZED when a table may not be read, INVALID_ARGUMENT
      *         when a view cannot be read as written, UNAVAILABLE when the schemas cannot be listed
      */
-    private String requireQuery(String principal, String query) {
+    private QueryRestrictions.Result checkQuery(String principal, String query) {
         authorization.requireQuery(principal, query);
         CatalogViews.Expanded expanded;
         try {
@@ -869,7 +886,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     .toRuntimeException();
         }
         if (expanded == null || expanded.sources().isEmpty()) {
-            return query;
+            return QueryRestrictions.apply(principal, query, authorization, this::tableColumns);
         }
         for (TableName source : expanded.sources()) {
             if (!authorization.canReadTable(principal, source.schema(), source.table())) {
@@ -879,7 +896,30 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         .toRuntimeException();
             }
         }
-        return expanded.sql();
+        return QueryRestrictions.apply(principal, expanded.sql(), authorization, this::tableColumns);
+    }
+
+    /**
+     * Describes a table's columns for a restriction.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return column name to DuckDB type
+     * @throws FlightRuntimeException NOT_FOUND for an unknown table, INVALID_ARGUMENT when DuckDB
+     *         cannot read it, UNAVAILABLE when its catalog cannot be read
+     */
+    private Map<String, String> tableColumns(String schema, String table) {
+        try {
+            return executionService.tableColumns(schema, table);
+        } catch (IllegalArgumentException e) {
+            String message = String.valueOf(e.getMessage());
+            CallStatus status = message.startsWith("Catalog Error")
+                    ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
+            throw status.withDescription(message).withCause(e).toRuntimeException();
+        } catch (java.io.UncheckedIOException e) {
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
+        }
     }
 
     /**
@@ -975,33 +1015,6 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INTERNAL.withDescription(failureDescription(e))
                     .withCause(e).toRuntimeException();
         }
-    }
-
-    /**
-     * Plans a query and describes its result.
-     *
-     * @param query SQL query
-     * @param descriptor flight descriptor of the request
-     * @param context call context, which may ask for a result mode
-     * @return result schema with the endpoints to read it from
-     */
-    private FlightInfo flightInfoForQuery(String query, FlightDescriptor descriptor,
-            FlightProducer.CallContext context) {
-        return flightInfoForQuery(query, null, descriptor, context);
-    }
-
-    /**
-     * Plans a query with parameter values and describes its result.
-     *
-     * @param query SQL query
-     * @param parameters one-row Arrow IPC stream with the values, or null
-     * @param descriptor flight descriptor of the request
-     * @param context call context, which may ask for a result mode
-     * @return result schema with the endpoints to read it from
-     */
-    private FlightInfo flightInfoForQuery(String query, byte[] parameters,
-            FlightDescriptor descriptor, FlightProducer.CallContext context) {
-        return flightInfoForQuery(query, parameters, descriptor, context, completeAnswer(context));
     }
 
     /**
@@ -1220,8 +1233,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightProducer.CallContext context, FlightProducer.StreamListener<Result> listener) {
         try {
             String query = request.getQuery();
-            requireQuery(context == null ? null : context.peerIdentity(), query);
-            boolean complete = completeAnswer(context);
+            boolean complete = checkQuery(context == null ? null : context.peerIdentity(), query)
+                    .restricted() || completeAnswer(context);
             Schema arrowSchema = complete ? completeSchemaFor(query) : schemaForQuery(query);
             Schema parameterSchema = complete ? completeParameterSchemaFor(query) : new Schema(List.of());
             FlightSql.ActionCreatePreparedStatementResult result =
@@ -1337,8 +1350,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         if (parameters == null && handle.statementId() != null) {
             parameters = clusterService.recallParameters(handle.statementId());
         }
-        requireQuery(context == null ? null : context.peerIdentity(), handle.sql());
-        return flightInfoForQuery(handle.sql(), parameters, descriptor, context);
+        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(),
+                handle.sql()).restricted();
+        return flightInfoForQuery(handle.sql(), parameters, descriptor, context,
+                restricted || completeAnswer(context));
     }
 
     /**
@@ -1361,17 +1376,21 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightSql.CommandPreparedStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         String query = parseHandle(command.getPreparedStatementHandle()).sql();
-        requireQuery(context == null ? null : context.peerIdentity(), query);
-        return new SchemaResult(completeAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
+        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
+                .restricted();
+        return new SchemaResult(restricted || completeAnswer(context)
+                ? completeSchemaFor(query) : schemaForQuery(query));
     }
 
     @Override
     public SchemaResult getSchemaStatement(FlightSql.CommandStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         String query = command.getQuery();
-        requireQuery(context == null ? null : context.peerIdentity(), query);
+        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
+                .restricted();
         LOGGER.debug("getSchemaStatement: {}", query);
-        return new SchemaResult(completeAnswer(context) ? completeSchemaFor(query) : schemaForQuery(query));
+        return new SchemaResult(restricted || completeAnswer(context)
+                ? completeSchemaFor(query) : schemaForQuery(query));
     }
 
     @Override
