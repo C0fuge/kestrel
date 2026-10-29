@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Manual workflow `distributed-join.yml` (lane 3, D9) and `NodeJoinUnderLoadIntegrationTest`: a node joins (and
+  then leaves) a cluster under query load; no wrong answers, no failures, the new node is planned on. The load
+  client (`RollingRestartLoadTest`) takes `-Dload.joinServers` / `-Dload.joinFile` and prints the first time an
+  endpoint is planned on each node.
 - `ranger-hive` authorization provider: table decisions are audited to Ranger (one `select` per table; denials by
   column restrictions with their reason); security-zone policies covered by tests.
 - Optional authorization provider `ranger-hive` (module `flight-auth-ranger-hive`, `auth/ranger-hive/` in the

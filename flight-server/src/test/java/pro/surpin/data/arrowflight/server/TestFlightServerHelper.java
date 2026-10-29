@@ -118,8 +118,10 @@ public class TestFlightServerHelper implements AutoCloseable {
             int flightPort = b.flightPort != 0 ? b.flightPort : findFreePort();
             location = Location.forGrpcInsecure("localhost", flightPort);
         }
+        // Registered once the Flight server listens, as HadoopArrowFlightServer does: a node
+        // joining a running cluster must not be planned before it can answer.
         clusterService = new ClusterService(hazelcastAdapter, appConfig,
-                location.getUri().toString());
+                location.getUri().toString(), false);
         // endpointsPerServer as the server reads it (tests set it as a system property).
         queryPlanner = new QueryPlanner(parquetAdapter, clusterService,
                 QueryPlanner.DEFAULT_BACKUP_LOCATIONS, appConfig.endpointsPerServer());
@@ -152,6 +154,7 @@ public class TestFlightServerHelper implements AutoCloseable {
         }
         server = serverBuilder.build();
         server.start();
+        clusterService.register();
 
         flightClient = FlightClient.builder(allocator, location).build();
         sqlClient = new FlightSqlClient(flightClient);

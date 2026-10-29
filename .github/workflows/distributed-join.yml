@@ -1,0 +1,249 @@
+# Manual check of nodes joining and leaving a cluster under query load (lane 3, D9): generates TPC-H
+# SF<sf> lineitem as <files> Parquet files in one directory every node mounts (-DdataDirShared=true),
+# starts three server containers of this ref (one Hazelcast cluster on the runner's host network,
+# seeds naming all four members, -DdistributedComplete=<distributed>) and runs
+# RollingRestartLoadTest (<clients> clients, each call on the next node) while a fourth node
+# starts, joins and is planned on (the clients plan on it too once it logged its start), and is
+# then stopped gracefully (-DshutdownDrainSeconds=<drain>). Fails when an answer differs from the
+# three-node cluster's (or DuckDB's row count), a query failed with a code that is not retryable
+# (UNAVAILABLE), or no endpoint was planned on the fourth node. Reports the join timings (start ->
+# member started, -> inventory registered, -> first endpoint planned on it, -> first answer planned
+# on it) and the errors per phase. Not part of Dev CI.
+name: Distributed join
+
+on:
+  workflow_dispatch:
+    inputs:
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+      files:
+        description: "lineitem Parquet files"
+        type: string
+        default: "12"
+      clients:
+        description: "concurrent load clients"
+        type: string
+        default: "3"
+      distributed:
+        description: "distributedComplete"
+        type: string
+        default: "true"
+      settle:
+        description: "seconds of load before the join, after it and after the leave"
+        type: string
+        default: "30"
+      drain:
+        description: "shutdownDrainSeconds of the nodes"
+        type: string
+        default: "20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distributed-join-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref (no tests)
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          ./mvnw -pl flight-server test-compile -Dcheckstyle.skip -Dspotbugs.skip
+          mkdir -p "$RUNNER_TEMP/jars"
+          cp -r flight-server/target/arrow-flight-server-1.0.0-shaded.jar flight-server/target/libs "$RUNNER_TEMP/jars/"
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: Generate TPC-H SF${{ inputs.sf }} lineitem and the queries
+        run: |
+          set -euo pipefail
+          pip install -q duckdb==1.5.6 || pip install -q duckdb
+          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" "${{ inputs.files }}" <<'EOF'
+          import os, sys, duckdb
+          tmp, sf, files = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
+          table, queries = os.path.join(tmp, "data", "tpch", "lineitem"), os.path.join(tmp, "queries")
+          os.makedirs(table, exist_ok=True)
+          os.makedirs(queries, exist_ok=True)
+          db = duckdb.connect()
+          db.execute("INSTALL tpch; LOAD tpch")
+          db.execute(f"CALL dbgen(sf={sf})")
+          for f in range(files):
+              db.execute(f"COPY (SELECT * FROM lineitem WHERE l_orderkey % {files} = {f}) TO "
+                         f"'{os.path.join(table, f'part-{f:03d}.parquet')}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+          scan = ("SELECT l_orderkey, l_linenumber, l_extendedprice, l_shipdate FROM lineitem"
+                  " WHERE l_shipdate >= CAST('1998-01-01' AS date) AND l_discount >= 0.08")
+          shapes = {
+              "q01": "SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, sum(l_extendedprice) AS sum_base_price,"
+                     " sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price, count(*) AS count_order FROM lineitem"
+                     " WHERE l_shipdate <= CAST('1998-09-02' AS date) GROUP BY l_returnflag, l_linestatus"
+                     " ORDER BY l_returnflag, l_linestatus",
+              "q06": "SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem"
+                     " WHERE l_shipdate >= CAST('1994-01-01' AS date) AND l_shipdate < CAST('1995-01-01' AS date)"
+                     " AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24",
+              "q12": "SELECT l_shipmode, sum(CASE WHEN l_linenumber <= 2 THEN 1 ELSE 0 END) AS high_line_count,"
+                     " sum(CASE WHEN l_linenumber > 2 THEN 1 ELSE 0 END) AS low_line_count FROM lineitem"
+                     " WHERE l_shipmode IN ('MAIL', 'SHIP') AND l_commitdate < l_receiptdate AND l_shipdate < l_commitdate"
+                     " AND l_receiptdate >= CAST('1994-01-01' AS date) AND l_receiptdate < CAST('1995-01-01' AS date)"
+                     " GROUP BY l_shipmode ORDER BY l_shipmode",
+              "w1_distinct": "SELECT DISTINCT l_suppkey FROM lineitem WHERE l_quantity > 45 ORDER BY l_suppkey",
+              "w2_order_limit": "SELECT l_orderkey, l_extendedprice FROM lineitem WHERE l_shipmode = 'AIR'"
+                     " ORDER BY l_extendedprice DESC, l_orderkey LIMIT 100",
+              "w3_scan": scan,
+              "partial_scan": scan,
+          }
+          for name, q in shapes.items():
+              rows = len(db.execute(q).fetchall())
+              with open(os.path.join(queries, f"{name}.sql"), "w") as f:
+                  f.write(q.replace(" FROM lineitem", " FROM tpch.lineitem"))
+              with open(os.path.join(queries, f"{name}.rows"), "w") as f:
+                  f.write(str(rows))
+              print(f"{name} duckdb rows {rows}")
+          EOF
+          du -sh "$RUNNER_TEMP/data/tpch/lineitem"
+
+      - name: Join and leave a node under load
+        run: |
+          set +e -u
+          ev="$RUNNER_TEMP/timeline.txt"; : > "$ev"
+          seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703,127.0.0.1:5704
+          now() { date +%s%3N; }
+          # Three cores for four nodes (ubuntu-latest has 4, one for the client): 0.75 CPU each.
+          for i in 0 1 2 3; do
+            docker create --name "srv$i" --network host --cpus=0.75 --memory=2g \
+              -v "$RUNNER_TEMP/jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
+              eclipse-temurin:21-jre \
+              java -Xmx768m -XX:MaxDirectMemorySize=512m --add-opens=java.base/java.lang=ALL-UNNAMED \
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+              -Dhazelcast.phone.home.enabled=false -DnumServers=4 -DresultMode=complete -DendpointsPerServer=2 \
+              -DdistributedComplete="${{ inputs.distributed }}" -DdataDirShared=true \
+              -DshutdownDrainSeconds="${{ inputs.drain }}" -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+              --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$seeds" --metrics-enabled false > /dev/null
+          done
+          ready() { # node, since (RFC 3339) - waits up to 120 s for the start line of this run
+            local _
+            for _ in $(seq 240); do
+              docker logs --since "$2" "srv$1" 2>&1 | grep -q 'Server Arrow Flight SQL started' && return 0
+              sleep 0.5
+            done
+            return 1
+          }
+          t=$(date -u +%FT%T.%NZ)
+          for i in 0 1 2; do docker start "srv$i" > /dev/null; done
+          for i in 0 1 2; do ready "$i" "$t" || { echo "node $i did not start"; docker logs "srv$i" 2>&1 | tail -n 30; exit 1; }; done
+          sleep 10
+          stop="$RUNNER_TEMP/stop"; joinf="$RUNNER_TEMP/joined"; rm -f "$stop" "$joinf"
+          ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= \
+            -Dtest=RollingRestartLoadTest -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dload.servers=127.0.0.1:32010,127.0.0.1:32011,127.0.0.1:32012 -Dload.joinServers=127.0.0.1:32013 \
+            -Dload.joinFile="$joinf" -Dload.queries="$RUNNER_TEMP/queries" \
+            -Dload.clients="${{ inputs.clients }}" -Dload.stopFile="$stop" > "$RUNNER_TEMP/client.log" 2>&1 &
+          client=$!
+          for _ in $(seq 300); do grep -q '^load start' "$RUNNER_TEMP/client.log" && break; kill -0 "$client" 2>/dev/null || break; sleep 1; done
+          if ! grep -q '^load start' "$RUNNER_TEMP/client.log"; then
+            echo "client did not start the load"; tail -n 60 "$RUNNER_TEMP/client.log"; exit 1
+          fi
+          sleep "${{ inputs.settle }}"
+          echo "baseline $(now)" >> "$ev"
+          t=$(date -u +%FT%T.%NZ)
+          echo "start 3 join $(now)" >> "$ev"
+          docker start srv3 > /dev/null
+          if ready 3 "$t"; then echo "ready 3 join $(now)" >> "$ev"; touch "$joinf"; else echo "notready 3 join $(now)" >> "$ev"; fi
+          sleep "${{ inputs.settle }}"
+          echo "settled 3 join $(now)" >> "$ev"
+          echo "down 3 leave $(now)" >> "$ev"
+          docker stop -t 30 srv3 > /dev/null
+          echo "stopped 3 leave $(now)" >> "$ev"
+          sleep "${{ inputs.settle }}"
+          echo "settled 3 leave $(now)" >> "$ev"
+          touch "$stop"
+          wait "$client"; rc=$?
+          echo "end $(now)" >> "$ev"
+          cat "$ev"
+          grep -E '^(reference|summary|load|location) ' "$RUNNER_TEMP/client.log"
+          for i in 0 1 2 3; do
+            echo "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged')," \
+              "fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')," \
+              "peerLost $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=peerLost')" >> "$RUNNER_TEMP/nodes.txt"
+            docker logs -t "srv$i" > "$RUNNER_TEMP/srv$i.log" 2>&1
+          done
+          cat "$RUNNER_TEMP/nodes.txt"
+          if [ "$rc" -ne 0 ] || ! grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/client.log"; then
+            grep -E 'ERROR|FAIL|expected|wrong' "$RUNNER_TEMP/client.log" | head -n 30
+            exit 1
+          fi
+          if ! grep -q '^location [0-9]* grpc+tcp://127.0.0.1:32013' "$RUNNER_TEMP/client.log"; then
+            echo "no endpoint was planned on the joined node"; exit 1
+          fi
+
+      - name: Join report
+        if: always()
+        run: |
+          set -u
+          ev="$RUNNER_TEMP/timeline.txt"; log="$RUNNER_TEMP/client.log"
+          [ -s "$ev" ] || { echo "(no timeline)" > "$RUNNER_TEMP/report.txt"; exit 0; }
+          ms() { date -d "$1" +%s%3N; } # docker log timestamp -> epoch ms
+          start=$(awk '$1 == "start" { print $4 }' "$ev")
+          ready=$(awk '$1 == "ready" { print $4 }' "$ev")
+          reg=$(grep -m1 'Registered .* local Parquet file' "$RUNNER_TEMP/srv3.log" 2>/dev/null | cut -d' ' -f1)
+          loc=$(awk '$1 == "location" && $3 ~ /:32013/ { print $2; exit }' "$log")
+          first=$(awk -v s="${start:-0}" '$1 == "event" && $4 == "n3" && $6 == "ok" && $2 > s { print $2; exit }' "$log")
+          {
+            echo "join (after docker start): started ${ready:+$(( (ready - start) ))ms}," \
+              "inventory registered ${reg:+$(( $(ms "$reg") - start ))ms}," \
+              "first endpoint planned on it ${loc:+$(( loc - start ))ms}," \
+              "first answer planned on it ${first:+$(( first - start ))ms}"
+            # Outcomes per phase: before the join, join -> settled, leave -> settled.
+            awk 'FNR == NR { if ($1 == "baseline") b = $2; if ($1 == "start") j = $4; if ($1 == "down") l = $4
+                             if ($1 == "end") e = $2; next }
+                 $1 == "event" { t = $2; p = t < j ? "before" : (t < l ? "join" : "leave")
+                   k = ($6 == "ok") ? "ok" : $6 " " $7; n[p " " k]++ }
+                 END { for (x in n) print "phase " x ": " n[x] }' "$ev" "$log" | sort
+          } > "$RUNNER_TEMP/report.txt"
+          echo >> "$RUNNER_TEMP/report.txt"
+          grep '^event ' "$log" | awk '$6 != "ok" { $1 = ""; $2 = ""; $3 = ""; $5 = ""; $NF = ""; print }' \
+            | sed -E 's/^ +//; s/[0-9]+ rows/N rows/g; s/ +$//' | cut -c1-200 | sort | uniq -c | sort -rn | head -n 25 >> "$RUNNER_TEMP/report.txt"
+          cat "$RUNNER_TEMP/report.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Node join under load, TPC-H SF${{ inputs.sf }} lineitem, 3+1 nodes, distributedComplete=${{ inputs.distributed }}, ${{ inputs.clients }} clients: $GITHUB_SHA"
+            echo
+            echo '```'
+            grep -E '^(summary|reference|location) ' "$RUNNER_TEMP/client.log" 2>/dev/null || echo "(no client result)"
+            cat "$RUNNER_TEMP/nodes.txt" 2>/dev/null || true
+            echo
+            cat "$RUNNER_TEMP/report.txt" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributed-join-logs
+          path: |
+            ${{ runner.temp }}/client.log
+            ${{ runner.temp }}/timeline.txt
+            ${{ runner.temp }}/srv*.log
+          retention-days: 7

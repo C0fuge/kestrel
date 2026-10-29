@@ -59,6 +59,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code event <epoch ms> c<client> n<node> <name> ok|wrong|error <code> <ms>}, and a summary.
  * Fails when an answer differs from its reference (never allowed, whatever the nodes do) or a
  * query failed with a code outside {@code -Dload.retryable} (default {@code UNAVAILABLE}).
+ * For a node joining under load (D9, {@code distributed-join.yml}), {@code -Dload.joinServers}
+ * names nodes the clients plan on only once the file {@code -Dload.joinFile} exists (they take
+ * the indexes after the {@code load.servers} nodes); the first time any endpoint's first location
+ * is a node, a line {@code location <epoch ms> <uri>} is printed.
  */
 @Tag("perf")
 class RollingRestartLoadTest {
@@ -96,15 +100,25 @@ class RollingRestartLoadTest {
             String[] hostPort = server.trim().split(":");
             nodes.add(Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1])));
         }
+        String joinServers = System.getProperty("load.joinServers", "");
+        for (String server : joinServers.split(",")) {
+            if (!server.isBlank()) {
+                String[] hostPort = server.trim().split(":");
+                nodes.add(Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1])));
+            }
+        }
+        int initialNodes = servers.split(",").length;
+        String joinFile = System.getProperty("load.joinFile");
+        Join join = new Join(initialNodes, joinFile == null ? null : Path.of(joinFile), out());
         int clients = Integer.parseInt(System.getProperty("load.clients", "3"));
         long deadline = System.currentTimeMillis() + 1000L * Long.parseLong(System.getProperty("load.maxSeconds", "1800"));
         Set<String> retryable = Set.of(System.getProperty("load.retryable", "UNAVAILABLE").split(","));
-        PrintStream out = System.out;
+        PrintStream out = out();
         try (BufferAllocator allocator = new RootAllocator()) {
             Reader reference = new Reader(allocator);
             try {
                 for (Query q : queries) {
-                    q.reference = reference.answer(nodes.get(0), q);
+                    q.reference = reference.answer(nodes.get(0), q, join);
                     if (q.rows >= 0) {
                         assertEquals(q.rows, q.reference[0], q.name + ": reference rows differ from DuckDB's");
                     }
@@ -120,7 +134,7 @@ class RollingRestartLoadTest {
             for (int c = 0; c < clients; c++) {
                 int client = c;
                 runs.add(pool.submit(() -> {
-                    loop(allocator, client, nodes, queries, Path.of(stopFile), deadline, outcomes, out);
+                    loop(allocator, client, nodes, join, queries, Path.of(stopFile), deadline, outcomes, out);
                     return null;
                 }));
             }
@@ -149,25 +163,26 @@ class RollingRestartLoadTest {
      * @param allocator Arrow allocator
      * @param client    index of the client
      * @param nodes     node locations
+     * @param join      nodes planned on only after the join file exists
      * @param queries   queries with their reference answers
      * @param stop      stop file
      * @param deadline  latest end, epoch ms
      * @param outcomes  outcome counters
      * @param out       event output
      */
-    private static void loop(BufferAllocator allocator, int client, List<Location> nodes, List<Query> queries,
-            Path stop, long deadline, Map<String, AtomicLong> outcomes, PrintStream out) {
+    private static void loop(BufferAllocator allocator, int client, List<Location> nodes, Join join,
+            List<Query> queries, Path stop, long deadline, Map<String, AtomicLong> outcomes, PrintStream out) {
         Reader reader = new Reader(allocator);
         try {
             long call = client;
             while (!Files.exists(stop) && System.currentTimeMillis() < deadline) {
-                int node = (int) (call % nodes.size());
+                int node = (int) (call % join.active(nodes.size()));
                 Query q = queries.get((int) ((call / nodes.size() + client) % queries.size()));
                 call++;
                 long t0 = System.nanoTime();
                 String outcome;
                 try {
-                    long[] answer = reader.answer(nodes.get(node), q);
+                    long[] answer = reader.answer(nodes.get(node), q, join);
                     outcome = answer[0] == q.reference[0] && answer[1] == q.reference[1] ? "ok"
                             : String.format(Locale.ROOT, "wrong rows %d sum %016x", answer[0], answer[1]);
                 } catch (FlightRuntimeException e) {
@@ -184,6 +199,66 @@ class RollingRestartLoadTest {
             }
         } finally {
             reader.close();
+        }
+    }
+
+    /**
+     * Standard output, where the workflow reads the lines.
+     *
+     * @return {@code System.out}
+     */
+    private static PrintStream out() {
+        return System.out;
+    }
+
+    /** Nodes that join during the run, and the first time each node is planned. */
+    private static final class Join {
+        /** Nodes planned on from the start. */
+        private final int initial;
+        /** File whose existence adds the joining nodes, or null. */
+        private final Path file;
+        /** Output of the {@code location} lines. */
+        private final PrintStream out;
+        /** Locations seen as an endpoint's first location. */
+        private final Set<URI> planned = ConcurrentHashMap.newKeySet();
+        /** Whether the join file was seen. */
+        private volatile boolean joined;
+
+        /**
+         * Creates the join state.
+         *
+         * @param initial nodes planned on from the start
+         * @param file    join file, or null
+         * @param out     output
+         */
+        Join(int initial, Path file, PrintStream out) {
+            this.initial = initial;
+            this.file = file;
+            this.out = out;
+        }
+
+        /**
+         * Number of nodes the clients plan on now.
+         *
+         * @param all all nodes
+         * @return the initial nodes, or all once the join file exists
+         */
+        int active(int all) {
+            if (!joined && file != null && Files.exists(file)) {
+                joined = true;
+            }
+            return joined || file == null ? all : initial;
+        }
+
+        /**
+         * Records an endpoint's first location, printing it the first time.
+         *
+         * @param location location
+         */
+        void planned(Location location) {
+            if (planned.add(location.getUri())) {
+                out.printf(Locale.ROOT, "location %d %s%n", System.currentTimeMillis(), location.getUri());
+            }
         }
     }
 
@@ -278,10 +353,11 @@ class RollingRestartLoadTest {
          *
          * @param node node to plan on
          * @param q    query
+         * @param join records the endpoints' first locations
          * @return rows read and the order-independent checksum
          * @throws IOException never in practice, declared by the stream close
          */
-        long[] answer(Location node, Query q) throws IOException {
+        long[] answer(Location node, Query q, Join join) throws IOException {
             CallOption timeout = CallOptions.timeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             FlightInfo info = new FlightSqlClient(client(node)).execute(q.sql, q.header, timeout);
             long rows = 0;
@@ -295,6 +371,7 @@ class RollingRestartLoadTest {
                 if (locations.isEmpty()) {
                     locations.add(node);
                 }
+                join.planned(locations.get(0));
                 for (int i = 0;; i++) {
                     long[] part;
                     try {
