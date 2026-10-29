@@ -183,8 +183,10 @@
 >    is not a separate Python package - pyarrow Flight is the C++ client); ~~(f) parallel per-buffer compression within
 >    a batch and the `tc netem` 10 ms / 1 Gbit CI perf test~~ (done 2026-10-28, cadd1ac, pre-release
 >    `server-1.0.0-cadd1aca9c23`; `flightCompressionThreads`, workflow `compression-perf.yml`: zstd 429 MB/s vs plain 90
->    at 10 ms / 1 Gbit on synthetic lineitem, ratio 4.9 - see Log). **Item 20 done**; open follow-up: lz4 reads
->    by Java clients are bound by commons-compress's decoder (~180 MB/s), pyarrow/ADBC are not.
+>    at 10 ms / 1 Gbit on synthetic lineitem, ratio 4.9 - see Log). **Item 20 done**; ~~open follow-up: lz4 reads
+>    by Java clients are bound by commons-compress's decoder (~180 MB/s), pyarrow/ADBC are not~~ (done 2026-10-29,
+>    see Log: module `flight-codec-lz4`, release asset `arrow-flight-codec-lz4-<version>.jar` for Java clients, ~2 GB/s
+>    decode; the patched JDBC driver / Trino plugin bundle it - coordinator).
 > 2. item 21 (new) - **small single-table queries under load.** On 2 CPUs upstream native reaches ~84 queries/s vs ours
 >    ~50 (both CPU-bound from 8 clients); c1 latency is already ours. So this is CPU per query, not waiting: profile one
 >    query end to end under 8-32 clients (async-profiler or JFR in a 2-CPU container), list where the CPU goes
@@ -2165,3 +2167,23 @@
   604/621 MB at 4 endpoints, 826/825 at 8; complete-mode clients x4 697/883 MB, x8 1244/1242 MB at 416/536 and
   364/576 MB/s; JVM-side memory equal - the extra peak is native and follows throughput. The screening's +17-19 % is
   within item 22's +25 % goal. No server change; Dev CI 40819051451 green. Default change still needs (b) + decision.
+- 2026-10-29 (cloud session, core lane): item 20 follow-up, LZ4 decode for Java clients (7867822). No open core code
+  item was left (stage-3 items wait on the stand / screening / maintainer), so took item 20's open follow-up: Java
+  Flight clients decoded `arrow-compression: lz4` streams with commons-compress. New module `flight-codec-lz4`
+  (`arrow-flight-codec-lz4`, arrow-vector and lz4-java provided): the server's `Lz4FrameCodec` moved there (public)
+  plus `Lz4CodecFactory`, a `CompressionCodec$Factory` service provider offering LZ4_FRAME only (none without
+  lz4-java, so Arrow falls back). Arrow picks the first factory per codec type in class path order: clients put the
+  jar + lz4-java before `arrow-compression` (README, START-NOTES; the patched JDBC driver / Trino plugin bundle it -
+  coordinator). Decode: frames of independent blocks without block checksums or dictionary (ours, commons-compress's
+  with content checksum, lz4-java's with content size) go block by block with `LZ4SafeDecompressor` straight into the
+  output ArrowBuf; block checksums, concatenated frames and anything else take the old lz4-java stream path. Header
+  checksum, content size, content checksum and the announced length are checked (wrong ones fail). Server: shaded jar's
+  service file lists our factory before `CommonsCompressionFactory` (also gives the server a working LZ4 decoder for
+  uploads, which lacked commons-compress); compressed bytes unchanged. Local `Lz4DecodePerfTest` (perf, 8 MiB random
+  small longs, ratio 1.93, 1 thread): ours 1965 MB/s, commons-compress 15 MB/s. Release asset
+  `arrow-flight-codec-lz4-<version>.jar` added to the package job. Tests: `Lz4FrameCodecTest` (moved, +4: block path
+  for own/commons frames, other writers' frames both paths, checksum/length failures, factory + service loader);
+  server `StreamCompression*Test` green locally. Dev CI package run 40824399521 green (also covers the plugins lane's
+  d1f0c78, whose own runs it cancelled), pre-release `server-1.0.0-786782219b1a` with the codec jar. **Coordinator:**
+  bundle the jar in the patched JDBC driver / Java clients that ask for lz4 (START-NOTES). Next core code step: none
+  known; the core lane waits on the stand round (b) / decision (d) of the shared DuckDB and the S3 screening answer.
