@@ -334,12 +334,13 @@ record HiveTable(String database, String name, Kind kind, String location,
      * Maps a column.
      *
      * @param field metastore column
-     * @return column with its DuckDB type
+     * @return column with its DuckDB type and its Hive type
      * @throws IllegalArgumentException when the type has no counterpart
      */
     private static ColumnSpec column(FieldSchema field) {
         try {
-            return new ColumnSpec(field.getName(), HiveTypes.duckDb(field.getType()), true, null);
+            return new ColumnSpec(field.getName(), HiveTypes.duckDb(field.getType()), true, null,
+                    field.getType());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("column " + field.getName() + " has type "
                     + field.getType() + ": " + e.getMessage(), e);

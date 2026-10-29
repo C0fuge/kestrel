@@ -119,6 +119,9 @@ class HiveCatalogTest {
             for (ColumnSpec column : types.columns()) {
                 declared.add(column.name() + " " + column.duckDbType());
             }
+            // The Hive types travel along (SPI 1.8), so that CHAR(n) is told from string.
+            assertEquals(List.of("string", "varchar(10)", "char(3)"), types.columns().stream()
+                    .filter(column -> column.duckDbType().equals("VARCHAR")).map(ColumnSpec::sourceType).toList());
             assertEquals(List.of("ti TINYINT", "si SMALLINT", "i INTEGER", "bi BIGINT", "b BOOLEAN",
                     "f FLOAT", "d DOUBLE", "dec DECIMAL(12,2)", "s VARCHAR", "vc VARCHAR",
                     "ch VARCHAR", "dt DATE", "ts TIMESTAMP", "bin BLOB", "arr INTEGER[]",

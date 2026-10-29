@@ -500,7 +500,7 @@ final class HiveCatalog implements Catalog {
         for (FieldSchema field : fields) {
             declared.add(new AbstractMap.SimpleImmutableEntry<>(field.getName(), field.getType()));
             columns.add(new ColumnSpec(field.getName(), HiveTypes.duckDb(field.getType()), true,
-                    null));
+                    null, field.getType()));
         }
         Map<String, String> shown = schemaMap();
         HiveViewSql.Translated translated = HiveViewSql.translate(table.getViewExpandedText(),

@@ -93,8 +93,8 @@ class HiveViewCatalogTest {
             assertEquals(List.of("across", "counted", "named"), sorted(views.keySet()));
             CatalogView named = views.get("named");
             assertEquals(List.of(new TableName("h_hvw", "people")), named.sources());
-            assertEquals(List.of(new ColumnSpec("id", "INTEGER", true, null),
-                    new ColumnSpec("n", "VARCHAR", true, null)), named.columns());
+            assertEquals(List.of(new ColumnSpec("id", "INTEGER", true, null, "int"),
+                    new ColumnSpec("n", "VARCHAR", true, null, "string")), named.columns());
             assertEquals(List.of(new TableName("h_hvw", "named")), views.get("counted").sources());
             assertEquals(List.of(new TableName("h_hvw2", "other")), views.get("across").sources());
             assertNotEquals(named.fingerprint(), views.get("counted").fingerprint());
