@@ -1,7 +1,7 @@
 # Manual check of nodes joining and leaving a cluster under query load (lane 3, D9): generates TPC-H
 # SF<sf> lineitem as <files> Parquet files in one directory every node mounts (-DdataDirShared=true),
 # starts three server containers of this ref (one Hazelcast cluster on the runner's host network,
-# seeds naming all four members, -DdistributedComplete=<distributed>) and runs
+# -DdistributedComplete=<distributed>) and runs
 # RollingRestartLoadTest (<clients> clients, each call on the next node) while a fourth node
 # starts, joins and is planned on (the clients plan on it too once it logged its start), and is
 # then stopped gracefully (-DshutdownDrainSeconds=<drain>). Fails when an answer differs from the
@@ -122,21 +122,25 @@ jobs:
         run: |
           set +e -u
           ev="$RUNNER_TEMP/timeline.txt"; : > "$ev"
-          seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703,127.0.0.1:5704
+          # A node waits at startup for every member named in --hosts: the first three name each other,
+          # the joining node all four (it joins the running cluster through any of them).
+          seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703
           now() { date +%s%3N; }
           # Three cores for four nodes (ubuntu-latest has 4, one for the client): 0.75 CPU each.
           for i in 0 1 2 3; do
+            hosts=$seeds; n=3
+            if [ "$i" = 3 ]; then hosts=$seeds,127.0.0.1:5704; n=4; fi
             docker create --name "srv$i" --network host --cpus=0.75 --memory=2g \
               -v "$RUNNER_TEMP/jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
               eclipse-temurin:21-jre \
               java -Xmx768m -XX:MaxDirectMemorySize=512m --add-opens=java.base/java.lang=ALL-UNNAMED \
               --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-              -Dhazelcast.phone.home.enabled=false -DnumServers=4 -DresultMode=complete -DendpointsPerServer=2 \
+              -Dhazelcast.phone.home.enabled=false -DnumServers=$n -DresultMode=complete -DendpointsPerServer=2 \
               -DdistributedComplete="${{ inputs.distributed }}" -DdataDirShared=true \
               -DshutdownDrainSeconds="${{ inputs.drain }}" -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
-              --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$seeds" --metrics-enabled false > /dev/null
+              --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$hosts" --metrics-enabled false > /dev/null
           done
           ready() { # node, since (RFC 3339) - waits up to 120 s for the start line of this run
             local _
