@@ -562,5 +562,5 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   without attachments run exactly the old statements); the core lane's golden regeneration c75715ab crossed it and
   was reverted by them (6ddebf26). TPC-H SF0.1 added (C2 step 3). Final: Dev CI 40868732917 and Catalogs CI
   40868732813 green on 1e7b43a4. Pre-release: Dev CI dispatch 40870896985 (package=true, head 1e7b43a4, plugin set
-  now includes `jdbc`) running at session end - if another lane's push cancels it, dispatch again.
+  now includes `jdbc`) green: pre-release `server-1.0.0-1e7b43a4e0c7` (7 assets).
   **CATALOGS LANE DONE.**
