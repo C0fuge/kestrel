@@ -29,14 +29,18 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
 D4. ~~Hazelcast test-port race~~ *done 2026-10-28 (256bddd, see Log):* `TestPorts`.
 D5. ~~D2 observed gap: force the after-first-batch cut path~~ *done 2026-10-29 (see Log):*
     `DistributedCompleteCutAfterFirstBatchTest`.
-D6. (open, no maintainer item yet) Next lane-3 item to be set by the maintainer (the status-code candidate is Q1 below). Candidates: a real multi-host perf
-    run of distributed complete mode (`-Dperf.rows`, D2 (b) prefetch decision); the client-visible status of a
-    peer lost after the first batch is INTERNAL with DuckDB's `arrow_scan` text wrapping the peer's UNAVAILABLE
-    (UNAVAILABLE would let clients retry - a wire-visible change, so an Open question first).
+D6. **Q1 answered (maintainer 2026-10-29): yes** - rethrow as `UNAVAILABLE` ("peer lost during distributed complete
+    answer; retry") when a peer stream ended with UNAVAILABLE/transport error after the first batch; other failures
+    stay INTERNAL; opt-in path only; test + doc line.
+D7. Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that merge: q01, q06, q12-like aggregates,
+    filtered scans) on vs off, rows/s and wall time; decide the D2 (b) prefetch question from it.
+D8. Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
+    kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.
+D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
 
 ## Open questions
 
-Q1. (2026-10-29, lane 3, open) **Status code when a peer is lost after the client's first batch** (opt-in
+Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is lost after the client's first batch** (opt-in
     `distributedComplete` only). Today the client gets `INTERNAL` with DuckDB's `arrow_scan: get_next failed(): ...`
     text that wraps the peer's `UNAVAILABLE` (asserted by `DistributedCompleteCutAfterFirstBatchTest`). The answer is
     never silently partial; only the code differs. Proposal: when the merge fails after the first batch and a peer
