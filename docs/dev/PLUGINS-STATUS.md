@@ -439,7 +439,15 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     step of Dev CI and a case to `GenericFlightClientsIntegrationTest`, skipped when the extension cannot be
     installed); it may need Airport-specific actions/metadata - if so, note it and do not add them. Then close
     P5. ClickHouse `INSERT` (DoPut) stays unsupported (read-only server; it fails as before).
-P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
+    *Step 3 done 2026-10-29 (0de9086, test + docs only):* (b) DuckDB `airport` (community build, first DuckDB of
+    2.0.0 / 1.5.6 / 1.4.5 with one; Dev CI step "DuckDB airport extension", `-Dairport.it.python`, skipped with a
+    warning when none installs): `airport_take_flight` gets the schema of a path (dotted / elements) or SQL-text
+    descriptor, but reads rows only through Airport's own `endpoints` DoAction (msgpack parameters), which the
+    server does not implement -> the query fails with `Unrecognized request: endpoints`, never with wrong rows.
+    `GenericFlightClientsIntegrationTest.duckdbAirportGetsSchemaButNeedsItsEndpointsAction` pins that; README and
+    CHANGELOG say airport is unsupported (use DuckDB's ADBC Flight SQL path). Not added (Open questions). **P5
+    closed.**
+P6. **(next)** Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
     `docs/dev/CATALOGS-STATUS.md`).
 
 ## Open questions
@@ -472,6 +480,10 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   (INVALID_ARGUMENT), only when the setting is on; Flight SQL commands are recognised by their protobuf type URL and
   unchanged. Plain answers default to complete regardless of `resultMode`, since generic clients concatenate
   endpoints. Should a path also accept quoted / non-ASCII table names (today plain identifiers only)?
+
+- (P5, optional) DuckDB's `airport` extension needs Airport-specific DoActions (`endpoints`, msgpack-encoded,
+  maybe more for catalogs) to read rows; not added per P5 (DuckDB users have the ADBC Flight SQL path). Add an
+  opt-in Airport compatibility layer if DuckDB users want `airport_take_flight` / `ATTACH ... (TYPE AIRPORT)`?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
@@ -659,3 +671,11 @@ P6. Ranger Hive-policy reuse with column masking / row filters (catalogs, federa
   40788854220, 40789242301 cancelled by later pushes; Dev CI run 40789295791 (881bbf7, dispatched by the core lane,
   contains all three commits) green incl. the ClickHouse image step and package -> pre-release
   `server-1.0.0-881bbf73e946`. Next: P5 step 3 (DuckDB `airport` in CI), then close P5.
+- 2026-10-29 (plugins session): P5 step 3 - DuckDB `airport` extension against plain descriptors (0de9086, test,
+  Dev CI step, README/CHANGELOG; no code change): schema works, reading needs Airport's own `endpoints` action, which
+  is not added (Open questions); the test pins the clear refusal. Probe runs on temporary branch
+  `probe/airport-plugins` (40792710735 found the `endpoints` action, 40793004644 green); the session could not
+  delete that branch (proxy 403) - maintainer: please delete it. Local (GCS mirror of Central): flight-server
+  test-compile + Checkstyle clean (the test skips without the extension; airport hosts are blocked in the cloud
+  session). CI: Dev CI push run 40793321181 (0de9086) cancelled by a later push; Dev CI run 40794638660 (f082b73,
+  contains 0de9086) green incl. the airport step. No pre-release (no runtime change). **P5 closed**; next: P6.
