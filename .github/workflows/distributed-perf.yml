@@ -2,7 +2,7 @@
 # as <files> Parquet files in one directory every node mounts (-DdataDirShared=true), starts three
 # server containers of this ref (one Hazelcast cluster on the runner's host network, each limited
 # to <cpus> CPUs and <memory>) once with -DdistributedComplete=false and once with true, and runs
-# lineitem-only TPC-H shapes that merge (q01 without its AVG columns - AVG is not mergeable yet -,
+# lineitem-only TPC-H shapes that merge (q01 with its AVG columns since D10,
 # q06, a q12-like aggregate without the orders join, a wide GROUP BY, a filtered scan, a DISTINCT,
 # an ORDER BY LIMIT) through TpchPerfTest against the first node: one warm-up pass, then <rounds>.
 # Fails when an answer differs between off and on (rows + order-independent checksum, and the row
@@ -94,6 +94,7 @@ jobs:
               "q01": "SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, sum(l_extendedprice) AS sum_base_price,"
                      " sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,"
                      " sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge, sum(l_discount) AS sum_disc,"
+                     " avg(l_quantity) AS avg_qty, avg(l_extendedprice) AS avg_price, avg(l_discount) AS avg_disc,"
                      " count(*) AS count_order FROM lineitem WHERE l_shipdate <= CAST('1998-09-02' AS date)"
                      " GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus",
               "q06": "SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem"
