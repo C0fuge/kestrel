@@ -11,6 +11,7 @@ import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -50,11 +51,12 @@ record JwtSettings(URL jwksUrl, Path jwksFile, String issuer, Set<String> audien
     private static final Pattern CLAIM = Pattern.compile("[A-Za-z0-9_:/-]+(\\.[A-Za-z0-9_:/-]+)*");
 
     /**
-     * Copies the collections.
+     * Copies the collections. The copies answer {@code contains(null)} with false: the nimbus claims verifier asks that,
+     * and an immutable {@code Set.copyOf} throws on it (older nimbus versions on the server class path).
      */
     JwtSettings {
-        audiences = Set.copyOf(audiences);
-        algorithms = Set.copyOf(algorithms);
+        audiences = Collections.unmodifiableSet(new LinkedHashSet<>(audiences));
+        algorithms = Collections.unmodifiableSet(new LinkedHashSet<>(algorithms));
     }
 
     /**

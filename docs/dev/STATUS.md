@@ -2346,3 +2346,7 @@ S3 slowdown item below stays open for then).
   written, LOCK-CATALOGS empty, main green at 1e7b43a4 (run 40868732917), and lane 4's `package=true` already published
   `server-1.0.0-1e7b43a4e0c7` from that commit (only `[skip ci]` docs since). No new dispatch needed; wrote
   "WRAP-UP DONE" at the top of Next steps. No code change, no CI run.
+- 2026-10-29 (maintainer's local coordinator): JWT audience NPE reported by the clients repo (C1) fixed after WRAP-UP:
+  `JwtSettings` / `JwtVerifier` pass null-tolerant sets to nimbus (the server jar carries nimbus 10.0.1, whose claims
+  verifier calls `contains(null)`; unit tests ran on the module's 10.10 and did not see it). Test
+  `JwtSettingsTest.setsAnswerContainsNull`. Final pre-release follows from this commit.

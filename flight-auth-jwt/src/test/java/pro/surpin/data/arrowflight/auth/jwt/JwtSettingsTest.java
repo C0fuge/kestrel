@@ -78,6 +78,16 @@ class JwtSettingsTest {
     }
 
     /** Missing, conflicting, insecure and malformed settings are refused. */
+    /** The nimbus claims verifier asks {@code contains(null)}; an immutable {@code Set.of} copy would throw. */
+    @Test
+    void setsAnswerContainsNull() {
+        Map<String, String> values = minimal();
+        values.put("FLIGHT_JWT_AUDIENCE", "flight");
+        JwtSettings settings = JwtSettings.fromEnvironment(values);
+        assertFalse(settings.audiences().contains(null));
+        assertFalse(settings.algorithms().contains(null));
+    }
+
     @Test
     void refusesBadSettings() {
         Map<String, String> none = minimal();

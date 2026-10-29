@@ -28,6 +28,7 @@ import java.security.KeyStore;
 import java.text.ParseException;
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -116,7 +117,7 @@ final class JwtVerifier {
         processor.setJWSKeySelector(new JWSVerificationKeySelector<>(settings.algorithms(), keys));
         DefaultJWTClaimsVerifier<SecurityContext> claims = new DefaultJWTClaimsVerifier<>(
                 settings.audiences(), new JWTClaimsSet.Builder().issuer(settings.issuer()).build(),
-                Set.of("iss", "aud", "exp", settings.userClaim()), null);
+                new LinkedHashSet<>(List.of("iss", "aud", "exp", settings.userClaim())), null);
         claims.setMaxClockSkew(settings.clockSkewSeconds());
         processor.setJWTClaimsSetVerifier(claims);
     }

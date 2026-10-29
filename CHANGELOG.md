@@ -849,6 +849,9 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- JWT login (`FLIGHT_AUTH_PROVIDER=jwt`) with `FLIGHT_JWT_AUDIENCE` set failed at start with a NullPointerException:
+  the accepted audiences were an immutable `Set.copyOf`, and the nimbus claims verifier on the server class path
+  (10.0.1, older than the module's 10.10) asks `contains(null)`. The settings now hold null-tolerant copies.
 - Partial mode: a join naming a table with double quotes (`... JOIN "sales"."orders" t ...`) failed with `Catalog
   Error: ... schema "sales" does not exist` unless the worker's DuckDB connection happened to hold the catalog views
   from an earlier complete query (flaky `RangerHiveFlightSqlTest` in CI, "second server in one JVM" in the plugins
