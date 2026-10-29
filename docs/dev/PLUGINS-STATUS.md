@@ -601,12 +601,6 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   re-check the restriction at DoGet (policy changes between GetFlightInfo and DoGet), at the cost of one extra
   Ranger evaluation per endpoint?
 
-- (security fix 2026-10-29, f411c13, please confirm) Under an authorization provider, queries with a subquery are
-  now refused (INVALID_ARGUMENT) because their tables were not checked (a data leak, fixed at once). Users who ran
-  `IN (SELECT ...)` / `EXISTS` over tables they may read lose that. Keep the refusal, or have the core lane check
-  subquery tables properly (DuckDB's `json_serialize_sql`, already run by the complete-mode parse check, names
-  every base table) and allow them again?
-
 - (P6, audit) `ranger-hive` audits every table decision, including the per-table filter of `GetTables` (as the
   core `ranger` provider does): a BI tool listing a large catalog writes one audit record per table and listing.
   Keep, or skip auditing allowed listing checks (would need the server to tell a listing from a read - a small
@@ -848,5 +842,8 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   (`FlightAuthorization.requireQuery` + `ParquetQueryParser.checkedTables` / `TableReferences.nestedQuery`,
   regression test `FlightAuthorizationSubqueryTest`; CHANGELOG Security; `STATUS.md` Log; maintainer notified).
   Local: module tests 22/22; flight-server authorization tests (incl. `SharedDatabaseAuthorizationIntegrationTest`,
-  `FlightSqlProducerTest`) green; Checkstyle + SpotBugs clean. CI: Dev CI push run 40842467785 (0b94507) running at commit time.
+  `FlightSqlProducerTest`) green; Checkstyle + SpotBugs clean. CI: Dev CI push run 40842467785 (0b94507) green; package dispatch 40844289066 cancelled by later pushes.
   New Open question (subquery refusal). Next: hive plugin variant of the end-to-end test.
+- 2026-10-29 (plugins session, end): the subquery refusal of f411c13 was replaced by the core lane in b3bbcce (tables of
+  nested queries named from DuckDB's `json_serialize_sql` and checked; `RangerHiveFlightSqlTest` adjusted there), so
+  that Open question is gone; its CI / pre-release is the core lane's run 40845151877. Lock released.
