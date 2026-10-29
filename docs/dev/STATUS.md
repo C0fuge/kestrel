@@ -23,6 +23,13 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-10-29 13:00 - WRAP-UP MODE (token budget).** No new features, no new investigations. Only:
+> (1) item 22: the thread cap for the shared DuckDB on large nodes (small change, speed) + CI test; (2) finish what is
+> half-done and keep CI green; (3) final consolidation: CHANGELOG and START-NOTES describe every setting added since
+> 7562a5bdb7b9 with its default, one final `package=true` pre-release from main. Other lanes are paused (catalogs,
+> distributed, connectors); the plugins lane only finishes P6's current step. When (1)-(3) are done, write
+> "WRAP-UP DONE" at the top of Next steps and stop taking items.
+
 > **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than
 > 7562a5bdb7b9.** Same-runner flags in four tracked builds: d22cdac (S3 small p95), 94ad610 (S3 ADBC c1 p95 1.08),
 > 2cfa23e (S3 SF1 JDBC 1.14), **9044653 (S3 TPC-H SF10 ADBC 1.10, rounds 1.06/1.10/1.21, 260.5 -> 285.7 s) - this build

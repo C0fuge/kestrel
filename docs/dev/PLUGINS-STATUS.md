@@ -5,6 +5,9 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-10-29 13:00 - WRAP-UP:** finish the current P6 step (CI green, Log), then write "P6 paused for
+> wrap-up" and stop; take no new items.
+
 > **Maintainer, 2026-10-28 15:00 - native first.** Integrations must talk Arrow Flight / Flight SQL natively (Arrow batches
 > end to end, parallel endpoints, pushdown), not through a JDBC/ODBC layer, wherever the consumer allows it - as done for
 > StarRocks (native catalog instead of the JDBC bridge), Trino and Spark. JDBC/ODBC stay supported for tools that only
