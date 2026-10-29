@@ -39,6 +39,9 @@ D7. Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that 
 D8. Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
     kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.
 D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
+D10. Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only), so TPC-H q01 itself is computed by one
+    node; D7 measures q01 without its AVG columns. Candidate (additive, opt-in path only): endpoints answer sum + count
+    for an AVG, the merge divides (type as DuckDB's avg: DOUBLE, DECIMAL avg -> DOUBLE); test equality vs single node.
 
 ## Open questions
 
