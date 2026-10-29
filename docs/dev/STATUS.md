@@ -2208,3 +2208,8 @@
   regression test). Dev CI run 40830188389 green; package run 40831727414 green, pre-release
   `server-1.0.0-85a790826156`. Left for (d): stand round (b) and the maintainer's decision. Next core code step: none
   known (S3 screening answer, shared-DuckDB stand round and decision pending).
+- 2026-10-29 (lane 3, merged into `main`): `ClusterService` load reservations fixed (16edbb7) - concurrent identical
+  queries shared one reservation key (deterministic tickets), one release found nothing and the node kept the bytes
+  as load for good; a key now holds one reservation per planned endpoint (`LoadReservations`). `shutdownDrainSeconds`
+  defaults to 20 s (d4a136f, Q2 of LANE3-STATUS). `TestFlightServerHelper` registers a node after its Flight server
+  starts (as the server does). Details: `LANE3-STATUS.md` D9/D11.

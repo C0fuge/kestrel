@@ -45,10 +45,21 @@ D8. ~~Rolling restart under load: 3 nodes, a client loop of mixed queries, resta
     graceful-stop `INTERNAL`: `shutdownDrainSeconds`. Follow-ups: Q2 (default of `shutdownDrainSeconds`); the
     client-side recovery (~6-9 s from "started" to the first answer planned on the node) is mostly the load
     client's gRPC reconnect backoff - measure with a fresh channel per retry if it matters.
-D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
+D9. ~~Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat
+    timings.~~ *Done 2026-10-29 (see Log):* `NodeJoinUnderLoadIntegrationTest` + `distributed-join.yml`; found and
+    fixed a permanent node-load leak with concurrent identical queries (`LoadReservations`). Follow-up: the leave half
+    of the workflow sends calls to the stopped node until the client drops it (load client only, retryable).
 D10. Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only), so TPC-H q01 itself is computed by one
     node; D7 measures q01 without its AVG columns. Candidate (additive, opt-in path only): endpoints answer sum + count
     for an AVG, the merge divides (type as DuckDB's avg: DOUBLE, DECIMAL avg -> DOUBLE); test equality vs single node.
+
+D11. ~~Q2 answered (maintainer 2026-10-29): `shutdownDrainSeconds` default 20 s, START-NOTES, `docker stop -t 25`.~~
+    *Done 2026-10-29 (see Log).*
+D12. Candidate (found in D9, needs no approval: test/infra only unless it changes behaviour): mixed-version clusters
+    during a rolling upgrade - a node before `LoadReservations` cannot read a reservation key holding several
+    reservations (only identical concurrent plans produce one); measure with the restart workflow across two
+    builds, or decide it is acceptable for an upgrade window (loads then expire after `flightLoadReservationSeconds`
+    only if the key still exists).
 
 ## Open questions
 
@@ -63,7 +74,7 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
     No code until answered.
 
 Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) default 20 s**, document it in START-NOTES and
-    note that `docker stop` needs `-t 25` or more) **Default of `shutdownDrainSeconds`.** Without a drain (default 0, today's behaviour) a
+    note that `docker stop` needs `-t 25` or more; **done, D11**) **Default of `shutdownDrainSeconds`.** Without a drain (default 0, today's behaviour) a
     node stopped with SIGTERM cuts the answers it is still sending with `INTERNAL` (HTTP/2 RST_STREAM), which clients
     and drivers do not retry - seen once per graceful stop under load. With a drain the node leaves the pool, new calls
     get `UNAVAILABLE` and running answers finish (D8 run: 0 non-retryable failures over 3 graceful + 3 kill -9
@@ -294,3 +305,32 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   after down s): graceful 1.2-1.7 / 5.0-6.1 / 12.0-12.7 / 26.6-28.4; kill -9 0.1-0.5 / 5.6-6.2 / 12.5-15.6 /
   27.9-30.0. Package=true Dev CI 40826302585 green, pre-release `server-1.0.0-2a2b8e08191f`. Next: D9 (node join
   under load; the restart workflow is the base), D10 (AVG merge), Q2.
+- 2026-10-29 (lane 3 session, 15th): lock 06:25Z. D9 done, plus a bug it found, plus Q2/D11 (rebase-merged into
+  `main`: 16edbb7 fix, fd96f59 D9, d4a136f D11, 7b988c7 workflow fix). **Bug (fixed, runtime change):** node loads
+  leaked for good under concurrent identical queries - endpoint tickets are deterministic, so identical plans share
+  one load-reservation key; the second `put` overwrote the first reservation and one release found nothing (the
+  expiry listener cannot help: the key was removed). In the in-JVM test loads climbed to MBs per node after a few
+  hundred queries and a node got no endpoints at all for > 60 s (`assignWithoutLocality` picks the least loaded).
+  Fix in `ClusterService`: a reservation key holds one reservation per planned endpoint (`HandleState` as before when
+  one, new `LoadReservations` when several), updated by `putIfAbsent` / `get` + `replace` / `remove(k, v)` CAS loops,
+  `setTtl` after a `replace` (Hazelcast 5.7 `replace` drops the entry's TTL - checked); a release takes this node's
+  reservation first (the one a claim moved here), a claim moves one. Ticket format unchanged. Tests:
+  `ClusterServiceTest` +2 (`identicalConcurrentPlansAreEachReleased`, `claimMovesOneOfIdenticalReservations`; the
+  mocks of the reservation calls now use a map), 55/55. **D9:** `NodeJoinUnderLoadIntegrationTest` (integration; 2
+  nodes + 1 joining, 3 clients, merged complete / single-node complete / partial read endpoint by endpoint): 0 wrong,
+  0 failures, the joined node planned 0.1-0.7 s after its member is up, loads back to 0 after the load (fails on the
+  old code), merged answers on 3 nodes; local 8/8. `TestFlightServerHelper` now registers a node after its Flight
+  server listens, as `HadoopArrowFlightServer` does (before, a joining test node was planned while its port was not
+  open: partial reads failed, merges fell back). `distributed-join.yml` (manual): 3 containers + a 4th that joins
+  then leaves (`docker stop`, drain 20); `RollingRestartLoadTest` takes `-Dload.joinServers` / `-Dload.joinFile` and
+  prints `location` lines. Run 40834551789 green on 7b988c7 (SF1, 12 files, 3 clients, 0.75 CPU per node): join
+  phase 129 ok / 0 errors, leave phase 125 ok + 40 `UNAVAILABLE` "io exception" (all calls planned on the stopped
+  node by the load client, retryable), merged 308 answers, 0 fallbacks, 0 peerLost; node 4: inventory registered
+  8.1 s after `docker start`, "started" 11.1 s, first endpoint planned on it 11.6 s, first answer planned on it
+  19.0 s. (First run 40834082260 failed at startup: a node waits for every member in `--hosts`; fixed in 7b988c7.)
+  **D11:** `shutdownDrainSeconds` default 20 (`ConfigAdapter.DEFAULT_SHUTDOWN_DRAIN_SECONDS`), README, START-NOTES
+  (`docker stop -t 25`), CHANGELOG (Changed); `ConfigAdapterTest`, `ShutdownDrainTest`,
+  `HadoopArrowFlightServerTest` green. CI: Dev CI 40832718976 green on the branch (619e2f9, all three commits);
+  package=true Dev CI on `main`: 40834079848 on d4a136f built green but its release step got HTTP 403 ("Resource
+  not accessible by integration", a package run 25 min earlier had published); redispatched once: 40835849089 on
+  7b988c7 green, pre-release `server-1.0.0-7b988c720821`. Lock released 07:46Z. Next: D10 (AVG merge), D12.
