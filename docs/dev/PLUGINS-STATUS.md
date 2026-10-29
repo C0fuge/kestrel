@@ -479,7 +479,27 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     functions and arguments Hive would refuse -> `IllegalArgumentException` (the provider will deny). Tests
     `HiveMaskTest` 6/6 (all mask types of Ranger's Hive service definition; DuckDB vs Hive's algorithms over
     Unicode strings, CHAR(8), tinyint..bigint incl. MIN/MAX and random values, dates incl. impossible days).
-    Not wired: no runtime change. *Next step (2):* the policy evaluator as planned above.
+    Not wired: no runtime change.
+    *Step 2 done 2026-10-29 (f455b87):* `HivePolicies(RangerBasePlugin, groups)` - read from Ranger 2.8.0's
+    `RangerHiveAuthorizer` sources: `canSeeDatabase` / `canSeeTable` = `_any` access on the database / table
+    resource (as Hive's SHOW DATABASES / SHOW TABLES filters; a column-level policy inside makes them visible),
+    `readTable(principal, HiveTable(database, table, owner), referencedColumns)` -> `TableAccess(allowed,
+    rowFilter, masks, reason)`: `select` per referenced column (lower case, as Hive), table-level `select` only
+    when no column is referenced (count(*) - needs a policy on column `*`; a column-level deny is not seen by
+    it, hence per-column checks); row filter = `evalRowFilterPolicies` on the table (Hive's raw expression,
+    translated in step 4); masks = `evalDataMaskPolicies` per referenced column -> `HiveMask` (service
+    definition transformer; MASK_NULL; CUSTOM value parsed as a mask function, null value = NULL; any other
+    custom expression or a `{colType}` transformer denies the table). `{OWNER}` policies through the table owner
+    (`setOwnerUser`), Ranger roles from `getRolesFromUserAndGroups`, user = UGI short name (as the core
+    `RangerAuthorization`). Every failure (no identity, group lookup error, policies not loaded, evaluation
+    error) denies. `hadoop-common` added as `provided`. Tests `HivePoliciesTest` 5/5 with a real
+    `RangerBasePlugin` fed with `ServicePolicies` + `ranger-servicedef-hive.json` (column-level allow, table
+    `*`, group policy, column deny, `{OWNER}`, row filter, mask types incl. CUSTOM and MASK_NONE, fail closed).
+    Not wired: no runtime change. *Next step (3):* core hooks - write the design (provider factory with
+    provider groups; per-table restriction hook giving the provider referenced columns + Hive types; reference
+    replacement `(SELECT <masks> FROM t WHERE <filter>)` in both modes, views and tickets) into Open questions
+    first, then the `FlightAuthorizationProviderFactory.create(env, providerGroups)` default (own core commit,
+    STATUS.md Log line).
 
 ## Open questions
 
@@ -717,3 +737,8 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   no runtime change, so no CHANGELOG line or pre-release). Local (GCS mirror of Central): `HiveMaskTest` 6/6,
   Checkstyle + SpotBugs clean. CI: Dev CI push runs 40801711288, 40802647736, 40804099018 cancelled by other lanes'
   pushes; Dev CI run 40805065855 (6558c3d, contains a1aa21f) green (build). Next: P6 step 2 (policy evaluator).
+- 2026-10-29 (plugins session): P6 step 2 - `HivePolicies` (Ranger Hive service evaluator: visibility by `_any`,
+  select per column, row filter, masks via `HiveMask`, fail closed; f455b87, module `flight-auth-ranger-hive` only,
+  nothing registered, so no CHANGELOG line or pre-release). Local (Maven Central): `HivePoliciesTest` 5/5,
+  `HiveMaskTest` 6/6, Checkstyle + SpotBugs clean. CI: Dev CI run 40812949194 (f455b87) - running. Next: P6 step 3
+  (core hook design into Open questions, then the provider-groups factory default).
