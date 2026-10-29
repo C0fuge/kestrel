@@ -3,11 +3,13 @@ package pro.surpin.data.arrowflight.server.services;
 import com.google.protobuf.Any;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.arrow.flight.CallOption;
+import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.HeaderCallOption;
 import org.apache.arrow.flight.Location;
@@ -40,6 +42,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -50,13 +53,17 @@ import java.util.function.Function;
  * ({@link CompleteAnswerMerge}). An endpoint answer that fails before its schema is read from the
  * endpoint's backup locations in order. Queries whose shape does not merge, plans of one endpoint,
  * and failures before the first batch reaches the client keep today's path (this node computes the
- * answer alone); a failure after the first batch fails the query.
+ * answer alone); a failure after the first batch fails the query: with {@code UNAVAILABLE} when an
+ * endpoint answer was lost (the peer's stream ended with {@code UNAVAILABLE} or a transport error),
+ * so that clients retry and the retry plans without the lost member, else as the merge failed.
  */
 public final class DistributedComplete implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DistributedComplete.class);
     private static final AtomicLong NEXT = new AtomicLong();
     private static final String VIEW_PREFIX = "__kestrel_endpoint_answers_";
+    /** Start of the {@code UNAVAILABLE} description when an endpoint answer was lost. */
+    static final String PEER_LOST = "peer lost during distributed complete answer; retry";
 
     private final QueryPlanner planner;
     private final ClusterService cluster;
@@ -69,6 +76,7 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong peerBytes = new AtomicLong();
     private final AtomicLong peerWaitNanos = new AtomicLong();
     private final AtomicLong failovers = new AtomicLong();
+    private final AtomicLong peersLost = new AtomicLong();
 
     /**
      * Creates the distributed path of complete answers.
@@ -121,8 +129,8 @@ public final class DistributedComplete implements AutoCloseable {
      * @param listener the client's stream
      * @return true when the answer was streamed (the caller completes the listener); false when
      *         nothing was sent and the caller computes the answer alone
-     * @throws Exception when the merge failed after the first batch was sent, or the client
-     *         cancelled
+     * @throws Exception when the merge failed after the first batch was sent ({@code UNAVAILABLE}
+     *         when an endpoint answer was lost), or the client cancelled
      */
     public boolean stream(String query, String user, FlightProducer.ServerStreamListener listener)
             throws Exception {
@@ -147,6 +155,7 @@ public final class DistributedComplete implements AutoCloseable {
         long start = System.nanoTime();
         DeferredStart client = new DeferredStart(listener);
         List<FlightStream> streams = new ArrayList<>(endpoints.size());
+        EndpointAnswers answers = null;
         try {
             CallOption identity = identityOption(user);
             for (FlightEndpoint endpoint : endpoints) {
@@ -161,7 +170,7 @@ public final class DistributedComplete implements AutoCloseable {
             String name = VIEW_PREFIX + NEXT.incrementAndGet();
             String sql = CompleteAnswerMerge.mergeSql(parsed, name, columns,
                     expected.getFields().stream().map(Field::getName).toList());
-            EndpointAnswers answers = new EndpointAnswers(allocator, streams, schema);
+            answers = new EndpointAnswers(allocator, streams, schema);
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
             } finally {
@@ -178,7 +187,18 @@ public final class DistributedComplete implements AutoCloseable {
             return true;
         } catch (Exception e) {
             cancel(streams);
-            if (client.sentBatch() || listener.isCancelled()) {
+            if (listener.isCancelled()) {
+                throw e;
+            }
+            if (client.sentBatch()) {
+                Throwable peerFailure = answers == null ? null : answers.failure();
+                if (peerLost(peerFailure)) {
+                    peersLost.incrementAndGet();
+                    LOGGER.warn("node={} distributedComplete=peerLost reason='{}' endpoints={} query='{}'",
+                            LogUtil.node(), peerFailure.getMessage(), endpoints.size(), query);
+                    throw CallStatus.UNAVAILABLE.withDescription(PEER_LOST + ": " + peerFailure.getMessage())
+                            .withCause(e).toRuntimeException();
+                }
                 throw e;
             }
             LOGGER.warn("node={} distributedComplete=fallback reason='{}' endpoints={} query='{}'",
@@ -198,6 +218,36 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public long mergedAnswers() {
         return merged.get();
+    }
+
+    /**
+     * Counts the answers that failed after their first batch because an endpoint answer was lost
+     * (the client got {@code UNAVAILABLE}).
+     *
+     * @return answers failed as retryable
+     */
+    public long peersLost() {
+        return peersLost.get();
+    }
+
+    /**
+     * Tells whether an endpoint answer's failure means its peer was lost: the stream ended with
+     * {@code UNAVAILABLE}, or a transport error ({@link IOException}) is among its causes.
+     *
+     * @param failure failure of an endpoint answer's stream; null when none failed
+     * @return true when the query may be retried without the lost member
+     */
+    static boolean peerLost(Throwable failure) {
+        if (failure instanceof FlightRuntimeException flight
+                && flight.status().code() == FlightStatusCode.UNAVAILABLE) {
+            return true;
+        }
+        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof IOException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -425,8 +475,11 @@ public final class DistributedComplete implements AutoCloseable {
         private final List<FlightStream> streams;
         private final Schema schema;
         private int current;
-        private long bytes;
-        private long waitNanos;
+        /** Read by the caller after DuckDB's scan thread wrote them. */
+        private final AtomicLong bytes = new AtomicLong();
+        private final AtomicLong waitNanos = new AtomicLong();
+        /** First failure of an endpoint stream; written by DuckDB's scan thread. */
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
         /**
          * Creates the reader over endpoint streams of one schema.
@@ -447,11 +500,17 @@ public final class DistributedComplete implements AutoCloseable {
             while (current < streams.size()) {
                 FlightStream stream = streams.get(current);
                 long waitStart = System.nanoTime();
-                boolean next = stream.next();
-                waitNanos += System.nanoTime() - waitStart;
+                boolean next;
+                try {
+                    next = stream.next();
+                } catch (RuntimeException e) {
+                    failure.compareAndSet(null, e);
+                    throw e;
+                }
+                waitNanos.addAndGet(System.nanoTime() - waitStart);
                 if (next) {
                     try (ArrowRecordBatch batch = new VectorUnloader(stream.getRoot()).getRecordBatch()) {
-                        bytes += batch.computeBodyLength();
+                        bytes.addAndGet(batch.computeBodyLength());
                         loadRecordBatch(batch);
                     }
                     return true;
@@ -463,7 +522,7 @@ public final class DistributedComplete implements AutoCloseable {
 
         @Override
         public long bytesRead() {
-            return bytes;
+            return bytes.get();
         }
 
         /**
@@ -472,7 +531,16 @@ public final class DistributedComplete implements AutoCloseable {
          * @return nanoseconds
          */
         long waitNanos() {
-            return waitNanos;
+            return waitNanos.get();
+        }
+
+        /**
+         * Returns the first failure of an endpoint stream read through this reader.
+         *
+         * @return the failure, or null when none failed
+         */
+        Throwable failure() {
+            return failure.get();
         }
 
         @Override

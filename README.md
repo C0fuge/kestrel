@@ -381,7 +381,9 @@ Only query shapes whose merge is exact are distributed (one table; plain columns
 `GROUP BY` of selected columns, `DISTINCT`, `ORDER BY` over output columns, `LIMIT` except on aggregates;
 no parameters, no time travel) and only when the plan has at least two parts; the answer has the same
 columns as on one node. Every other query, and any refusal or peer failure before the first batch reaches
-the client, keeps the single-node path; a failure after the first batch fails the query. Node-to-node calls
+the client, keeps the single-node path; a failure after the first batch fails the query: with `UNAVAILABLE`
+("peer lost during distributed complete answer; retry") when a part's stream ended with `UNAVAILABLE` or a
+transport error (a node lost or restarting; a retry plans without it), else with `INTERNAL`. Node-to-node calls
 carry the client's user in a header signed with the cluster's ticket secret, accepted only from the
 addresses of live cluster members and only by nodes with the setting on (set it on every node). **With the
 setting on, the ticket secret allows impersonating any user from a member's address: protect the cluster

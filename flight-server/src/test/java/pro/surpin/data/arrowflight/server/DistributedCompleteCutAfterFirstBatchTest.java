@@ -22,7 +22,6 @@ import java.sql.Statement;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -97,8 +96,8 @@ class DistributedCompleteCutAfterFirstBatchTest {
 
     /**
      * Verifies a reset of the endpoint answers after the client's first batch fails the query:
-     * the client sees an error after some rows, the node counts neither a merge nor a fallback,
-     * and the error does not blame the client's query.
+     * the client sees {@code UNAVAILABLE} ("peer lost ...; retry") after some rows, so that it
+     * retries, and the node counts a lost peer but neither a merge nor a fallback.
      *
      * @throws Exception on failure
      */
@@ -127,8 +126,11 @@ class DistributedCompleteCutAfterFirstBatchTest {
             assertNotNull(failure, "the cut answer ended without an error after " + rows + " of " + total
                     + " rows (relayed " + relayedAtCut + " bytes before the cut)");
             assertTrue(rows > 0 && rows < total, "rows before the error: " + rows + " of " + total);
-            assertNotEquals(FlightStatusCode.INVALID_ARGUMENT, failure.status().code(),
-                    "a lost endpoint answer is not the client's fault: " + failure.getMessage());
+            assertEquals(FlightStatusCode.UNAVAILABLE, failure.status().code(),
+                    "a lost endpoint answer is retryable: " + failure.getMessage());
+            assertTrue(failure.getMessage().contains("peer lost during distributed complete answer; retry"),
+                    failure.getMessage());
+            assertEquals(1, distributed.peersLost(), "peers lost");
             assertEquals(0, distributed.mergedAnswers(), "merged");
             assertEquals(0, distributed.fallbacks(), "fell back after the first batch");
         } finally {

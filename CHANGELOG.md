@@ -525,6 +525,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- `distributedComplete` (opt-in): a query whose merged answer fails after the client's first batch because a peer's
+  part stream ended with `UNAVAILABLE` or a transport error now fails with `UNAVAILABLE` ("peer lost during
+  distributed complete answer; retry") instead of `INTERNAL`, so clients and drivers that retry on `UNAVAILABLE`
+  re-run it; other failures stay `INTERNAL` (lane 3 D6, maintainer's answer to Q1).
 - Cluster: a node that crashed with its address (host down, container removed) no longer holds every plan on the other
   nodes until Hazelcast drops it (10 s). The planner reads node loads, heartbeats and inventories through a local cluster
   view: the first plan waits at most 1 s for the silent member, later plans not at all; its node is left out of plans
