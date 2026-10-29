@@ -255,6 +255,18 @@ def table_dir(fixtures, label):
     return os.path.join(fixtures, fmt, name)
 
 
+def extension_answer(con, loaded, label, where, want, path):
+    """Records what a loaded DuckDB paimon / hudi extension answers for the table (never fails the probe)."""
+    ext, fn = ("paimon", "paimon_scan") if label.startswith("paimon/") else ("hudi", "read_hudi")
+    if ext not in loaded:
+        return
+    try:
+        got = "|".join(str(v) for v in con.sql(answer_sql(f"SELECT * FROM {fn}({lit(path)})", where)).fetchone())
+        report(f"{fn} {label}", where, "ok" if got == want else f"differs (expected {want})", got)
+    except duckdb.Error as e:
+        report(f"{fn} {label}", where, "error", e)
+
+
 def main(fixtures, ext_dir):
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     print("duckdb", duckdb.__version__)
@@ -272,9 +284,11 @@ def main(fixtures, ext_dir):
                 report("extension " + name, "", "loaded", ", ".join(added))
             except duckdb.Error as e:
                 report("extension " + name, "", "load failed", e)
+    loaded = {r[0] for r in con.sql("SELECT extension_name FROM duckdb_extensions() WHERE loaded").fetchall()}
     with open(os.path.join(fixtures, "expected.tsv"), encoding="utf-8") as f:
         expected = [line.rstrip("\n").split("\t") for line in f if line.strip()]
     for label, where, want in expected:
+        extension_answer(con, loaded, label, where, want, table_dir(fixtures, label))
         reader = paimon_source if label.startswith("paimon/") else hudi_source
         try:
             source, note = reader(table_dir(fixtures, label))

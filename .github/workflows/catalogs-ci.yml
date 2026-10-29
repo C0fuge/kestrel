@@ -491,7 +491,7 @@ jobs:
             for repo in https://extensions.duckdb.org https://community-extensions.duckdb.org; do
               url="$repo/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz"
               code=$(curl -sS -o "$RUNNER_TEMP/${name}.gz" -w '%{http_code}' --retry 2 "$url" || true)
-              echo "$url -> HTTP $code"
+              echo "$url -> HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
               if [ "$code" = 200 ]; then
                 gunzip -c "$RUNNER_TEMP/${name}.gz" > "$ext/${name}.duckdb_extension"
                 break
