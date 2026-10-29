@@ -2205,4 +2205,6 @@
   identity = user). Found and fixed: with any authorization provider, a query the table check cannot parse (`UNION`,
   unparsable text) escaped `FlightAuthorization.requireQuery` as a message-less INTERNAL with an ERROR stack; now
   INVALID_ARGUMENT with the parser's reason, as without authorization (still refused; `RangerAuthorizationTest`
-  regression test). Dev CI run 40830188389 green. Left for (d): stand round (b) and the maintainer's decision.
+  regression test). Dev CI run 40830188389 green; package run 40831727414 green, pre-release
+  `server-1.0.0-85a790826156`. Left for (d): stand round (b) and the maintainer's decision. Next core code step: none
+  known (S3 screening answer, shared-DuckDB stand round and decision pending).
