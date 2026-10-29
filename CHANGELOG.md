@@ -9,6 +9,87 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Settings since 7562a5bdb7b9 (summary of the entries below)
+
+Every setting added, or whose default changed, since build `7562a5bdb7b9` (2026-10-27), with its default as of this
+build. Unless a row says otherwise a new setting's default keeps the earlier behaviour. Server settings take the `-D`
+name, the `arrowflight.*` property or (where listed) the environment variable, in that order of precedence; plugin
+settings are `arrowflight.<plugin>.<key>` properties; the auth providers read environment variables only.
+
+**Defaults that changed**
+
+| Setting | Default now | Before |
+|---|---|---|
+| `duckDbThreads` (`arrowflight.duckdb.threads`) | unset/0 = cores / 4 between 4 and 16 per connection, above 4 at most one per GiB of the connection's `memory_limit` (startup lines `duckdb=threads`, `duckdb=sizing`) | fixed 4 |
+| `duckDbMemoryLimit` (`arrowflight.duckdb.memoryLimit`) | unset = per connection (memory - `-Xmx` - direct memory - 15 %) / `duckDbMemoryConnections`, at least 1 GiB, at most 80 % of memory; `none` = DuckDB's own; a size (e.g. `4GB`) wins | DuckDB's 80 % of RAM per instance |
+| `shutdownDrainSeconds` (`arrowflight.server.shutdownDrainSeconds`, `FLIGHT_SHUTDOWN_DRAIN_SECONDS`) | 20: a stopping node leaves the pool, refuses new calls `UNAVAILABLE`, lets running answers finish (`docker stop -t 25`) | did not exist; stop cut running answers (`INTERNAL`); `0` restores that |
+
+**New server settings (opt-in or unchanged behaviour by default)**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `duckDbMemoryConnections` (`arrowflight.duckdb.memoryConnections`, `DUCKDB_MEMORY_CONNECTIONS`) | 0 = cores / (cores / 4 between 2 and 16), at least 2 | connections the default `memory_limit` is split between |
+| `duckDbThreadsWhenIdle` (`arrowflight.duckdb.threadsWhenIdle`, `DUCKDB_THREADS_WHEN_IDLE`) | 0 = off | threads of a query that starts alone on the node |
+| `duckDbThreadsUnderLoad` (`arrowflight.duckdb.threadsUnderLoad`, `DUCKDB_THREADS_UNDER_LOAD`) | 0 = off | threads of a query that starts while the node's cores are taken |
+| `duckDbProducingStreams` (`arrowflight.duckdb.producingStreams`, `DUCKDB_PRODUCING_STREAMS`) | 0 = no cap | DoGet streams computing inside DuckDB at once |
+| `duckDbSharedDatabase` (`arrowflight.duckdb.sharedDatabase`, `DUCKDB_SHARED_DATABASE`) | false | one DuckDB per node for every worker connection |
+| `duckDbSharedMaxThreads` (`arrowflight.duckdb.sharedMaxThreads`, `DUCKDB_SHARED_MAX_THREADS`) | 8 (0 = no cap) | shared DuckDB threads = min(cores, cap) unless `duckDbThreads` is set |
+| `duckDbSharedBufferedConnections` (`arrowflight.duckdb.sharedBufferedConnections`, `DUCKDB_SHARED_BUFFERED_CONNECTIONS`) | 64 | shared DuckDB connections that carry `duckDbStreamingBufferSize` (only with both set) |
+| `flightCompression` (`arrowflight.flight.compression`) | `none` | codec (`zstd`/`lz4`) of DoGet calls without the `arrow-compression` header or session option; keep `none` while stock JDBC drivers read |
+| `flightCompressionLevel` (`arrowflight.flight.compressionLevel`) | 1 | zstd level 1..22 |
+| `flightCompressionMinBytes` (`arrowflight.flight.compressionMinBytes`) | 65536 | smaller batches go plain |
+| `flightCompressionThreads` (`arrowflight.flight.compressionThreads`) | 0 = one per core, at most 8 | compress a batch's columns side by side; 1 = serial |
+| `flightZeroCopyWrites` (`arrowflight.flight.zeroCopyWrites`, `FLIGHT_ZERO_COPY_WRITES`) | false | gRPC sends DuckDB's exported buffers without a copy |
+| `flightSessionIdleSeconds` (`arrowflight.flight.sessionIdleSeconds`) | 3600 | Flight SQL session (SetSessionOptions) idle expiry |
+| `flightSessionMax` (`arrowflight.flight.sessionMax`) | 10000 | sessions per node |
+| `plainFlightCommands` (`arrowflight.plainFlightCommands`, `FLIGHT_PLAIN_COMMANDS`) | false | plain Arrow Flight clients (SQL command / `schema.table` path descriptors, e.g. ClickHouse) |
+| `flightLoadReservationSeconds` (`arrowflight.cluster.loadReservationSeconds`, `FLIGHT_LOAD_RESERVATION_SECONDS`) | 600 | how long an unread planned endpoint counts as node load |
+| `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
+| `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
+| `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
+
+**New plugin settings (all off by default)**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `arrowflight.s3.cacheMegabytes` / `arrowflight.lakefs.cacheMegabytes` | 0 = off | node-wide read cache in the JVM heap (at most half of `-Xmx`) |
+| `arrowflight.s3.cacheCheckSeconds` / `arrowflight.lakefs.cacheCheckSeconds` | 10 | seconds an object's version is trusted before it is checked again |
+| `arrowflight.s3.cacheAdmission` / `arrowflight.lakefs.cacheAdmission` | `always` | `reuse` = keep a missed block only when it is read again soon |
+| `arrowflight.s3.cacheDiskPath` / `arrowflight.lakefs.cacheDiskPath` | empty = memory only | local directory of the disk tier (with `cacheDiskMegabytes`) |
+| `arrowflight.s3.cacheDiskMegabytes` / `arrowflight.lakefs.cacheDiskMegabytes` | 0 | size of the disk tier |
+| `arrowflight.hive.orcTables` | false | show and read ORC tables (ACID ORC stays skipped) |
+| `arrowflight.hive.textTables` | false | show and read text, OpenCSVSerde and JsonSerDe tables |
+| `arrowflight.hive.avroTables` | false | show and read Avro tables |
+| `arrowflight.hive.insertOnlyTables` | false | show insert-only (MM) transactional tables (Hive 3) |
+| `arrowflight.hive.views` | false | list simple Hive views the plugin can translate |
+| `arrowflight.iceberg-rest.vendedCredentials` | false | ask the REST catalog for temporary per-table storage credentials |
+
+**New auth providers (new modules in the `flight-auth-...tar.zst` asset; nothing changes unless selected)**
+
+| Setting | Default |
+|---|---|
+| `FLIGHT_AUTH_PROVIDER=ldap`: `FLIGHT_LDAP_URL`, `FLIGHT_LDAP_SESSION_SECRET` | required |
+| `FLIGHT_LDAP_USER_DN_TEMPLATE` or `FLIGHT_LDAP_USER_SEARCH_BASE` | exactly one required |
+| `FLIGHT_LDAP_USER_SEARCH_FILTER` / `FLIGHT_LDAP_USER_ATTRIBUTE` | `(uid={0})` / unset = the login name |
+| `FLIGHT_LDAP_BIND_DN`, `FLIGHT_LDAP_BIND_PASSWORD` (or `_FILE`) | unset |
+| `FLIGHT_LDAP_START_TLS` / `FLIGHT_LDAP_ALLOW_PLAINTEXT` | false / false |
+| `FLIGHT_LDAP_TRUSTSTORE`, `_TYPE`, `_PASSWORD` | unset = JVM trust / `PKCS12` / unset |
+| `FLIGHT_LDAP_CONNECT_TIMEOUT_MS` / `FLIGHT_LDAP_RESPONSE_TIMEOUT_MS` / `FLIGHT_LDAP_SESSION_MINUTES` | 5000 / 10000 / 10 |
+| `FLIGHT_LDAP_GROUP_SEARCH_BASE` / `_FILTER` / `FLIGHT_LDAP_GROUP_NAME_ATTRIBUTE` | unset = no directory groups / `(\|(member={1})(uniqueMember={1})(memberUid={0}))` / `cn` |
+| `FLIGHT_AUTH_PROVIDER=jwt`: `FLIGHT_JWT_JWKS_URL` or `FLIGHT_JWT_JWKS_FILE` | exactly one required |
+| `FLIGHT_JWT_ISSUER`, `FLIGHT_JWT_AUDIENCE` | required |
+| `FLIGHT_JWT_USER_CLAIM` / `FLIGHT_JWT_GROUPS_CLAIM` | `sub` / unset = no token groups |
+| `FLIGHT_JWT_ALGORITHMS` | RS256/384/512, PS256/384/512, ES256/384/512 |
+| `FLIGHT_JWT_CLOCK_SKEW_SECONDS` / `FLIGHT_JWT_JWKS_CACHE_MINUTES` / `FLIGHT_JWT_JWKS_REFRESH_LIMIT_SECONDS` | 60 / 15 / 30 |
+| `FLIGHT_JWT_TRUSTSTORE`, `_TYPE`, `_PASSWORD` | unset = JVM trust / `PKCS12` / unset |
+| `FLIGHT_JWT_CONNECT_TIMEOUT_MS` / `FLIGHT_JWT_READ_TIMEOUT_MS` | 5000 / 10000 |
+| `FLIGHT_JWT_BASIC_PASSWORD` | false (true = the token may come as a Basic password) |
+| `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`: `RANGER_HIVE_SERVICE_NAME`, `RANGER_ADMIN_URL` | required |
+| `RANGER_HIVE_SCHEMA_PREFIX` | empty (set it to the hive catalog's `schemaPrefix`) |
+
+Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
+compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
 ### Added
 - `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, `arrowflight.duckdb.sharedMaxThreads`, default 8, 0 = no
   cap): with the opt-in `duckDbSharedDatabase` and `duckDbThreads` unset, the node's DuckDB gets min(cores, cap)
