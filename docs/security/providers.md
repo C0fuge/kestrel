@@ -116,9 +116,10 @@ kind (text, number, date, boolean), `IS [NOT] NULL`, `[NOT] IN`, `[NOT] BETWEEN`
 pattern, `AND` / `OR` / `NOT`, parentheses, `lower` / `upper` (`lcase` / `ucase`) and `current_user()` (the
 caller's short name). Refused (`UNAUTHORIZED`), never answered unfiltered or unmasked: tables whose row filter
 uses anything else (other functions, arithmetic, casts, subqueries, comparisons of different kinds such as a date
-column with a string literal - Hive and DuckDB convert those differently), a `MASK_SHOW_LAST_4`-style mask on a
-text column (a Hive `CHAR(n)` column pads values; the server does not know the
-Hive type yet), other masks on nested columns, other `CUSTOM` expressions. Also refused, because the server cannot
+column with a string literal - Hive and DuckDB convert those differently), masks other than `MASK_NULL` on nested
+columns, other `CUSTOM` expressions. Masks use the column's Hive type from the hive catalog (a `CHAR(n)` value is
+masked padded, as Hive does); for a table whose catalog gives no Hive type a `MASK_SHOW_LAST_4`-style mask on a
+text column is refused. Also refused, because the server cannot
 evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
 (table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
 pattern or column exclusion in a restrictive policy, and every table while restrictive tag-based policies exist.
@@ -127,8 +128,7 @@ policies decide for the tables in it). Each table decision of a query is audited
 destinations (`ranger-hive-audit.xml` on the class path, as for Hive) as one `select` on the table; a table refused
 because of a column restriction is audited as denied with the reason and policy id -1. Visibility (schemas,
 `GetTables` listings) is not audited (as Hive's SHOW filters). A query's restriction is derived again when an
-endpoint is read, for the user who reads it. `MASK_HASH` on a Hive `CHAR(n)` column hashes the value without its
-padding (Hive hashes the padded value).
+endpoint is read, for the user who reads it.
 
 ## Add an authentication provider
 
@@ -142,7 +142,7 @@ The descriptor contains the factory's fully qualified class name. Put the JAR on
 
 ## Add an authorization provider
 
-Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; for a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation it names every table from DuckDB's own parse of the text (`json_serialize_sql`; CTE names count where they are in scope) and checks each one. Table functions (`read_parquet(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such a query cannot be checked and are refused with INVALID_ARGUMENT. A provider that applies row filters or column masks answers `restrictsTables()` true and returns a `TableRestriction` (allowed, row filter SQL, mask SQL per column) from `restrictTable(principal, schema, table, columns)`, where `columns` are all the table's columns with their DuckDB types; the server then reads each reference to a restricted table as `(SELECT * REPLACE (CAST((<mask>) AS <type>) AS c, ...) FROM s.t WHERE (<filter>))`, answers such queries complete, and refuses (`UNAUTHORIZED`) a query whose reads of the table it cannot all rewrite. `canReadTable` then decides visibility and the first check of each query table; the restriction decides what is read. Register it with:
+Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; for a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation it names every table from DuckDB's own parse of the text (`json_serialize_sql`; CTE names count where they are in scope) and checks each one. Table functions (`read_parquet(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such a query cannot be checked and are refused with INVALID_ARGUMENT. A provider that applies row filters or column masks answers `restrictsTables()` true and returns a `TableRestriction` (allowed, row filter SQL, mask SQL per column) from `restrictTable(principal, schema, table, columns)`, where `columns` are all the table's columns (`ColumnSpec`: name, DuckDB type, and the catalog's own type in `sourceType` when a catalog declares one, e.g. Hive `char(10)`); the server then reads each reference to a restricted table as `(SELECT * REPLACE (CAST((<mask>) AS <type>) AS c, ...) FROM s.t WHERE (<filter>))`, answers such queries complete, and refuses (`UNAUTHORIZED`) a query whose reads of the table it cannot all rewrite. `canReadTable` then decides visibility and the first check of each query table; the restriction decides what is read. Register it with:
 
 ```text
 META-INF/services/pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory

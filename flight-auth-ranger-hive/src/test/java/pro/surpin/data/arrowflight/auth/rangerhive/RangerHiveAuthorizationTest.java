@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory;
 import pro.surpin.data.arrowflight.server.TableRestriction;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -117,30 +118,50 @@ class RangerHiveAuthorizationTest {
         assertFalse(authorization.canReadTable("mallory", "hive_sales", "orders"));
         assertFalse(authorization.canReadTable("sam", "sales", "customers"));
         assertFalse(authorization.canReadTable("sam", "hive_sales", null));
-        Map<String, String> orders = new LinkedHashMap<>();
-        orders.put("id", "INTEGER");
-        orders.put("SSN", "VARCHAR");
+        List<ColumnSpec> orders = List.of(column("id", "INTEGER", null), column("SSN", "VARCHAR", null));
         assertEquals(new TableRestriction(true, null, Map.of("SSN", "CAST(NULL AS VARCHAR)")),
                 authorization.restrictTable("sam", "hive_sales", "orders", orders));
         assertEquals(TableRestriction.UNRESTRICTED,
                 authorization.restrictTable("tess", "hive_sales", "orders", orders));
         assertEquals(TableRestriction.UNRESTRICTED,
-                authorization.restrictTable("sam", "hive_sales", "customers", Map.of("id", "INTEGER")));
+                authorization.restrictTable("sam", "hive_sales", "customers",
+                        List.of(column("id", "INTEGER", null))));
         assertEquals(TableRestriction.DENIED, authorization.restrictTable("mallory", "hive_sales", "orders", orders));
         assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "sales", "orders", orders));
-        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "hive_sales", "orders", Map.of()));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "hive_sales", "orders", List.of()));
         // Show-last on text needs the Hive type (CHAR(n) pads); on numbers it is written.
-        assertEquals(TableRestriction.DENIED,
-                authorization.restrictTable("sam", "hive_sales", "payments", Map.of("card", "VARCHAR")));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "hive_sales", "payments",
+                List.of(column("card", "VARCHAR", null))));
         TableRestriction card = authorization.restrictTable("sam", "hive_sales", "payments",
-                Map.of("card", "BIGINT"));
+                List.of(column("card", "BIGINT", null)));
         assertTrue(card.restricts());
         assertTrue(card.masks().get("card").contains("\"card\""), card.masks().toString());
+        TableRestriction text = authorization.restrictTable("sam", "hive_sales", "payments",
+                List.of(column("card", "VARCHAR", "string")));
+        TableRestriction padded = authorization.restrictTable("sam", "hive_sales", "payments",
+                List.of(column("card", "VARCHAR", "char(8)")));
+        assertTrue(text.restricts());
+        assertTrue(padded.restricts());
+        assertTrue(padded.masks().get("card").contains("rpad("), padded.masks().toString());
+        assertFalse(text.masks().get("card").contains("rpad("), text.masks().toString());
         // MASK_NULL nulls a list column, as Hive does; other masks refuse nested columns.
         assertEquals(new TableRestriction(true, null, Map.of("ssn", "CAST(NULL AS VARCHAR[])")),
-                authorization.restrictTable("sam", "hive_sales", "orders", Map.of("ssn", "VARCHAR[]")));
-        assertEquals(TableRestriction.DENIED,
-                authorization.restrictTable("sam", "hive_sales", "payments", Map.of("card", "INTEGER[]")));
+                authorization.restrictTable("sam", "hive_sales", "orders",
+                        List.of(column("ssn", "VARCHAR[]", "array<string>"))));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "hive_sales", "payments",
+                List.of(column("card", "INTEGER[]", null))));
+    }
+
+    /**
+     * Creates a column.
+     *
+     * @param name column name
+     * @param duckDbType DuckDB type
+     * @param hiveType Hive type, or null
+     * @return the column
+     */
+    private static ColumnSpec column(String name, String duckDbType, String hiveType) {
+        return new ColumnSpec(name, duckDbType, true, null, hiveType);
     }
 
     /** DuckDB types map to the Hive types the masks treat apart. */

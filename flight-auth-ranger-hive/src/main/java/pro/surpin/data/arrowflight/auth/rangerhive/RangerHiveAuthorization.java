@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.TableRestriction;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -114,21 +115,24 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
 
     @Override
     public TableRestriction restrictTable(String principal, String schema, String table,
-            Map<String, String> columns) {
+            List<ColumnSpec> columns) {
         String database = database(schema);
         if (database == null || table == null || columns == null || columns.isEmpty()) {
             return TableRestriction.DENIED;
         }
         HivePolicies.HiveTable hiveTable = new HivePolicies.HiveTable(database, table, null);
         // The table decision comes first, so that a denial is audited too.
-        HivePolicies.TableAccess access = policies.readColumns(principal, hiveTable, List.copyOf(columns.keySet()));
+        HivePolicies.TableAccess access = policies.readColumns(principal, hiveTable,
+                columns.stream().map(ColumnSpec::name).toList());
         if (!access.allowed() || !policies.canSeeDatabase(principal, database)) {
             return TableRestriction.DENIED;
         }
         String rowFilter = null;
         if (access.rowFilter() != null) {
             try {
-                rowFilter = HiveRowFilter.sql(access.rowFilter(), columns,
+                Map<String, String> types = new LinkedHashMap<>();
+                columns.forEach(column -> types.put(column.name(), column.duckDbType()));
+                rowFilter = HiveRowFilter.sql(access.rowFilter(), types,
                         UserGroupInformation.createRemoteUser(principal).getShortUserName());
             } catch (IllegalArgumentException e) {
                 LOGGER.info("Ranger Hive row filter on {}.{} cannot be applied, table denied: {}", database, table,
@@ -137,24 +141,24 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
             }
         }
         Map<String, String> masks = new LinkedHashMap<>();
-        for (Map.Entry<String, String> column : columns.entrySet()) {
-            HiveMask mask = access.masks().get(column.getKey().toLowerCase(Locale.ROOT));
+        for (ColumnSpec column : columns) {
+            HiveMask mask = access.masks().get(column.name().toLowerCase(Locale.ROOT));
             if (mask == null) {
                 continue;
             }
-            String duckDbType = column.getValue();
-            String hiveType = hiveType(duckDbType);
-            if (mask.showsLast() && "string".equals(hiveType)) {
-                // A Hive CHAR(n) column is VARCHAR here; its padded value would show other characters.
+            String duckDbType = column.duckDbType();
+            String hiveType = column.sourceType() != null ? column.sourceType() : hiveType(duckDbType);
+            if (column.sourceType() == null && mask.showsLast() && "string".equals(hiveType)) {
+                // Without the Hive type a CHAR(n) column looks like a string; its padded value shows other characters.
                 LOGGER.info("Ranger Hive show-last mask on {}.{}.{} needs the Hive type, table denied", database,
-                        table, column.getKey());
+                        table, column.name());
                 return TableRestriction.DENIED;
             }
             try {
-                masks.put(column.getKey(), mask.sql(quote(column.getKey()), hiveType, duckDbType));
+                masks.put(column.name(), mask.sql(quote(column.name()), hiveType, duckDbType));
             } catch (IllegalArgumentException e) {
                 LOGGER.info("Ranger Hive mask on {}.{}.{} cannot be applied, table denied: {}", database, table,
-                        column.getKey(), e.getMessage());
+                        column.name(), e.getMessage());
                 return TableRestriction.DENIED;
             }
         }
@@ -163,8 +167,8 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
     }
 
     /**
-     * Names the Hive type a column of a DuckDB type has, for the masks: the types Hive's mask functions treat
-     * apart, a complex type for nested columns (refused), and the DuckDB name for every other primitive (masked
+     * Names the Hive type a column of a DuckDB type has, for the masks of a column whose catalog gave no Hive
+     * type: the types Hive's mask functions treat apart, a complex type for nested columns (refused), and the DuckDB name for every other primitive (masked
      * to NULL as Hive does).
      *
      * @param duckDbType DuckDB type of the column

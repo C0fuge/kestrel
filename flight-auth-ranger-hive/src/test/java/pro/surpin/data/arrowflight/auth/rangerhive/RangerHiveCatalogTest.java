@@ -208,6 +208,12 @@ class RangerHiveCatalogTest {
             }
             List<String> view = rows("SELECT i, s FROM " + DB + ".v_orc WHERE i = 12", "sam", mode);
             assertEquals(List.of("12|xnnx|"), view, mode);
+            // Hive hashes a CHAR(4) value with its padding: the Hive type reaches the provider (SPI 1.8).
+            for (int i : List.of(5, 10, 17)) {
+                String hash = i % 7 == 3 ? "null" : sha256("c" + (i % 10) + "  ");
+                assertEquals(List.of(hash + "|"), rows("SELECT ch FROM " + DB + ".o_pq WHERE i = " + i, "sam", mode),
+                        mode + " " + i);
+            }
             List<String> table = rows("SELECT i, s FROM " + DB + ".o_pq", "sam", mode);
             assertEquals(ROWS.get("o_pq"), table.size(), mode);
             assertTrue(table.stream().allMatch(row -> row.endsWith("|null|")), mode + ": " + table.get(0));
@@ -232,6 +238,18 @@ class RangerHiveCatalogTest {
             assertTrue(expected.size() < ROWS.get("v_join"), mode);
             assertEquals(expected, filtered, mode);
         }
+    }
+
+    /**
+     * Hashes a text as Hive's mask_hash does.
+     *
+     * @param text the value
+     * @return lower-case hex SHA-256 of its UTF-8 bytes
+     * @throws Exception when SHA-256 is missing
+     */
+    private static String sha256(String text) throws Exception {
+        return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8)));
     }
 
     /** A view granted without its source table is refused: the server checks views with invoker rights. */
@@ -261,8 +279,8 @@ class RangerHiveCatalogTest {
 
     /**
      * Policies of the test Hive service: staff read the database; contractors are denied {@code o.dec}; sam has a
-     * mask on {@code o_pq.s} (MASK_NULL) and {@code o.s} (MASK) and a row filter on {@code t}; vera may read view
-     * {@code v_pq} only.
+     * mask on {@code o_pq.s} (MASK_NULL), {@code o_pq.ch} (MASK_HASH of a char(4)) and {@code o.s} (MASK) and a row
+     * filter on {@code t}; vera may read view {@code v_pq} only.
      *
      * @return service policies
      * @throws Exception when Ranger's Hive service definition cannot be read
@@ -295,7 +313,12 @@ class RangerHiveCatalogTest {
         orcMask.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem(RangerHiveFlightSqlTest.select(),
                 new RangerPolicyItemDataMaskInfo("MASK", null, null), List.of("sam"), List.of(), List.of(),
                 List.of(), false)));
-        return RangerHiveFlightSqlTest.servicePolicies(List.of(access, deny, mask, filter, view, orcMask));
+        RangerPolicy charHash = RangerHiveFlightSqlTest.policy(7, RangerPolicy.POLICY_TYPE_DATAMASK,
+                RangerHiveFlightSqlTest.resources(DB, "o_pq", "ch"));
+        charHash.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem(RangerHiveFlightSqlTest.select(),
+                new RangerPolicyItemDataMaskInfo("MASK_HASH", null, null), List.of("sam"), List.of(), List.of(),
+                List.of(), false)));
+        return RangerHiveFlightSqlTest.servicePolicies(List.of(access, deny, mask, filter, view, orcMask, charHash));
     }
 
     /**

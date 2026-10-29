@@ -99,11 +99,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - `ranger-hive` applies Ranger Hive column masks: a masked column is read as Hive 3.1.3's mask written in DuckDB
   SQL (same type), in the table and in views over it, both result modes (answered complete). Tables and databases
   are visible with any access (as Hive's SHOW TABLES / SHOW DATABASES; listings no longer audited); a query table
-  needs `select` on all its columns. Still refused: row filters, show-last masks on text columns (Hive CHAR(n)
-  padding unknown), other masks on nested columns. (P6 step 3 C.)
+  needs `select` on all its columns. Masks use the Hive type the hive catalog declares (SPI 1.8 `sourceType`;
+  CHAR(n) masked padded); still refused: non-NULL masks on nested columns, and show-last masks on text columns of
+  tables without a declared Hive type. (P6 step 3 C.)
 - Authorization SPI: row filters and column masks. `FlightAuthorization.restrictsTables()` (default false) and
   `restrictTable(principal, schema, table, columns)` -> `TableRestriction` (allowed, row filter SQL, mask SQL per
-  column; default = `canReadTable`). For a provider that restricts, each reference to a restricted table (after
+  column; default = `canReadTable`); `columns` = every column as `ColumnSpec` (DuckDB type, catalog type). For a provider that restricts, each reference to a restricted table (after
   view expansion) is read as `(SELECT * REPLACE (CAST((<mask>) AS <type>) AS c, ...) FROM s.t WHERE (<filter>))`;
   such queries are answered complete by one node (also when asked in parts, one endpoint), the restriction is
   derived again at DoGet for the redeeming user (a partial ticket of an unrestricted user is refused), table
