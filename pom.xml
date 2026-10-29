@@ -9,6 +9,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>flight-spi</module>
+        <module>flight-codec-lz4</module>
         <module>flight-plugin-fixture</module>
         <module>flight-plugin-s3</module>
         <module>flight-plugin-lakefs</module>

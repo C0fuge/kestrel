@@ -12,6 +12,7 @@ import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightServerMiddleware;
 import org.apache.arrow.flight.RequestContext;
+import pro.surpin.data.arrowflight.codec.Lz4FrameCodec;
 
 /**
  * Carries the Arrow IPC body compression of one call's streams: the codec a client asks for with

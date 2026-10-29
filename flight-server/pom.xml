@@ -155,6 +155,13 @@
             <artifactId>arrow-flight-spi</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- LZ4_FRAME codec on lz4-java: shaded into the server jar, also a release asset for Java
+             clients. -->
+        <dependency>
+            <groupId>pro.surpin.arrowflight</groupId>
+            <artifactId>arrow-flight-codec-lz4</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- Test plugin for the plugin loader tests: only orders the reactor (built first); its
              jars are read from ../flight-plugin-fixture/target, never put on the classpath. -->

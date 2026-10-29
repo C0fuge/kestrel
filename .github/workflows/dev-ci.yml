@@ -183,6 +183,9 @@ jobs:
           mkdir -p "$out"
           cp "flight-server/target/arrow-flight-server-${version}-shaded.jar" \
             "$out/arrow-flight-server-${version}-${sha}-linux.jar"
+          # LZ4 codec for Java Flight clients (put before arrow-compression, with lz4-java).
+          cp "flight-codec-lz4/target/arrow-flight-codec-lz4-${version}.jar" \
+            "$out/arrow-flight-codec-lz4-${version}.jar"
           tools/make-plugin-dir.sh "$RUNNER_TEMP/pd" s3 lakefs iceberg hive
           # Hadoop client libraries the shaded jar leaves to the deployment (flight-server target/libs,
           # checked by LibsSetTest in the build job): java -cp '<jar>:libs/*'.

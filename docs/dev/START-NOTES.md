@@ -6,6 +6,8 @@ test suite passed on the same commit. Linux x86-64 / ARM64 only (`-Plinux-only`)
 ## Assets
 
 - `arrow-flight-server-@VERSION@-@SHA@-linux.jar`: the shaded server jar.
+- `arrow-flight-codec-lz4-@VERSION@.jar`: for Java Flight *clients* only (the server jar already contains it): the
+  LZ4 codec that decodes `arrow-compression: lz4` streams fast; needs lz4-java, goes before `arrow-compression`.
 - `flight-plugins-@VERSION@-@SHA@.tar.zst`: `plugins/{s3,lakefs,iceberg,hive}/` (jars + a `SHA256SUMS` per plugin).
 - `flight-server-libs-@VERSION@-@SHA@.tar.zst`: `libs/`, the Hadoop client libraries the shaded jar leaves to the
   deployment (Hadoop is `provided`; the server does not start without them), mediated against the jar's own
@@ -122,15 +124,17 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   (SetSessionOptions; the session lives on the node that created it); `flightCompression=zstd|lz4` makes it the
   default for calls without either, which breaks every client without the codec - leave it at `none` while stock
   JDBC drivers read from the node. pyarrow and ADBC (C++/Go) decode both codecs as they are (checked in CI by
-  `CompressionClientsIntegrationTest`); Java Flight clients need `arrow-compression` + `zstd-jni` (zstd) or
-  `commons-compress` (lz4) on their class path. `lz4` needs lz4-java from `libs/` on the server. Counters
+  `CompressionClientsIntegrationTest`); Java Flight clients need `arrow-compression` + `zstd-jni` (zstd) or,
+  for lz4, the release asset `arrow-flight-codec-lz4-@VERSION@.jar` + lz4-java placed before `arrow-compression` on
+  their class path (~2 GB/s decode; `commons-compress` also works but decodes at a few MB/s to ~180 MB/s). `lz4` needs lz4-java from `libs/` on the server. Counters
   `arrowflight_flight_compress*` on `/metrics`; level `flightCompressionLevel` (1), batches under
   `flightCompressionMinBytes` (64 KiB) go plain; `flightCompressionThreads` (0 = one per core, at most 8; 1 = off)
   compresses the columns of a large batch side by side.
 - JDBC: the stock Arrow Flight SQL JDBC driver cannot decode compressed batches, so it must not ask (and the server
   default must stay `none` for it). Our patched driver can, once it carries the codecs: (1) bundle
   `org.apache.arrow:arrow-compression` (same Arrow version as the driver) and `com.github.luben:zstd-jni` (and
-  `org.apache.commons:commons-compress` for lz4) in the driver jar, relocated the same way as its Arrow classes, with
+  for lz4 `arrow-flight-codec-lz4` + lz4-java, ahead of `arrow-compression` so its factory entry comes first) in
+  the driver jar, relocated the same way as its Arrow classes, with
   the `META-INF/services/...CompressionCodec$Factory` entry merged (ServicesResourceTransformer) so the driver's
   `FlightStream` finds the codec factory; (2) the driver already sends URL properties it does not know as call
   headers, so `jdbc:arrow-flight-sql://host:32010/?arrow-compression=zstd` asks for zstd on every call (the server

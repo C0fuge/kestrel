@@ -401,10 +401,15 @@ Result streams can be sent with Arrow IPC body compression (Zstandard or LZ4 fra
 off unless asked: a client sends the call header `arrow-compression: zstd` or `lz4` (or `none`) on its DoGet
 calls, and must be able to decode compressed batches (pyarrow, ADBC C++/Go - both checked in CI by
 `CompressionClientsIntegrationTest`; Java Flight with
-`arrow-compression` and `zstd-jni` for zstd, or `commons-compress` for lz4, on its class path; the stock Flight
+`arrow-compression` and `zstd-jni` for zstd, and for lz4 our `arrow-flight-codec-lz4` jar with lz4-java (or
+Arrow's own `commons-compress` codec, which decodes at a few MB/s to ~180 MB/s) on its class path; the stock Flight
 SQL JDBC driver cannot). `flightCompression=zstd` (or `lz4`) makes it the default for calls without the
 header, which breaks clients without the codec. `flightCompressionLevel` (default 1) is the Zstandard level;
-LZ4 has no level and costs less CPU per byte for a lower ratio. The server compresses LZ4 with lz4-java from
+LZ4 has no level and costs less CPU per byte for a lower ratio. The release asset
+`arrow-flight-codec-lz4-<version>.jar` (module `flight-codec-lz4`) is the server's LZ4 codec as an Arrow codec
+factory (service provider): a Java client puts it and `lz4-java` (`at.yawk.lz4:lz4-java` or `org.lz4:lz4-java`)
+on its class path *before* `arrow-compression`, because Arrow takes the first factory per codec in class path
+order; it then decodes LZ4 at ~2 GB/s per thread (`Lz4DecodePerfTest`). The server compresses LZ4 with lz4-java from
 the runtime libs set (`libs/`); without it `lz4` is refused. Batches with fewer than
 `flightCompressionMinBytes` body bytes (default 65536) go plain, and a stream whose first 4 compressed batches
 do not shrink by a tenth sends the rest plain. The buffers (columns) of a large batch are compressed side by side

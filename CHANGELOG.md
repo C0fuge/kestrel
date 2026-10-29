@@ -16,6 +16,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cluster's Hive Ranger service (database visibility as `SHOW DATABASES`, select on all columns); a table with a mask,
   row filter or column deny for the caller, or with policies the server cannot evaluate exactly (`{OWNER}`,
   conditions, column patterns, restrictive tag policies), is refused - masks and row filters are not applied yet (P6).
+- Module `flight-codec-lz4` (release asset `arrow-flight-codec-lz4-<version>.jar`): the server's lz4-java
+  LZ4_FRAME codec as an Arrow codec factory (service provider) for Java Flight clients, which otherwise decode LZ4
+  streams with commons-compress at a few MB/s to ~180 MB/s; with this jar and lz4-java ahead of
+  `arrow-compression` on the class path ~2 GB/s per thread. Decoding now writes frames of independent blocks (the
+  server's, commons-compress's) block by block into the output buffer; other frames go through lz4-java's stream as
+  before. The server's compressed bytes are unchanged.
 - Manual workflow `distributed-perf.yml` (lane 3, D7): three server containers of the ref (one cluster, shared
   TPC-H lineitem directory, `--cpus`/`--memory` per node) measured with `distributedComplete` off vs on over seven
   lineitem shapes that merge; fails when the answers differ or an "on" answer was not merged, reports times and rows/s.

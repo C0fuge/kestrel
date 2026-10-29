@@ -23,6 +23,7 @@ import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pro.surpin.data.arrowflight.codec.Lz4FrameCodec;
 import pro.surpin.data.arrowflight.server.metrics.CompressionMetrics;
 
 /**
