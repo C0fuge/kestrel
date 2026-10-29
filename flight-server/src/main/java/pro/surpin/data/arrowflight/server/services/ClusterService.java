@@ -13,9 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -37,6 +39,7 @@ import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.model.HandleState;
+import pro.surpin.data.arrowflight.server.model.LoadReservations;
 
 /**
  * Manages server registration, heartbeats, load tracking, and statement cache lifecycle.
@@ -175,10 +178,10 @@ public final class ClusterService implements AutoCloseable {
         watchInventories();
 
         hazelcast.onStatementExpired((EntryExpiredListener<String, Serializable>) event -> {
-            Serializable value = event.getOldValue();
-            if (value instanceof HandleState state && state.serverUri() != null
-                    && state.loadTracked()) {
-                subtractLoad(state.serverUri(), state.bytes());
+            for (HandleState state : LoadReservations.units(event.getOldValue())) {
+                if (state.serverUri() != null && state.loadTracked()) {
+                    subtractLoad(state.serverUri(), state.bytes());
+                }
             }
         });
     }
@@ -807,7 +810,8 @@ public final class ClusterService implements AutoCloseable {
     /**
      * Creates a signed self-contained handle for a server-directed Flight endpoint. A
      * load-tracked endpoint's bytes stay reserved on its node until the endpoint is released or
-     * the reservation lifetime passes.
+     * the reservation lifetime passes. Handles are deterministic: concurrent identical plans get
+     * the same handle, and its reservation key then holds one reservation per plan.
      *
      * @param state endpoint execution state
      * @return authenticated handle bytes
@@ -816,8 +820,7 @@ public final class ClusterService implements AutoCloseable {
         byte[] handle = endpointTicketCodec.encode(state);
         if (state.loadTracked()) {
             String key = loadReservationKey(handle);
-            writeOrDefer(key, "reserve endpoint load", () -> hazelcast.statementCache().put(
-                    key, state, loadReservationSeconds, TimeUnit.SECONDS));
+            writeOrDefer(key, "reserve endpoint load", () -> reserve(key, state));
         }
         return handle;
     }
@@ -848,8 +851,9 @@ public final class ClusterService implements AutoCloseable {
         }
         String key = loadReservationKey(handle);
         writeOrDefer(key, "release endpoint load", () -> {
-            Serializable reservation = hazelcast.statementCache().remove(key);
-            if (reservation instanceof HandleState reserved) {
+            // This node's own reservation first: the one a claim moved here.
+            HandleState reserved = takeReservation(key, serverUri);
+            if (reserved != null) {
                 subtractLoad(reserved.serverUri(), reserved.bytes());
             }
         });
@@ -877,18 +881,98 @@ public final class ClusterService implements AutoCloseable {
         // While the reservation lives on a member that stopped answering (often the planned node
         // itself), the move waits in the background; the release of the same key queues behind it.
         writeOrDefer(key, "claim endpoint load", () -> {
-            Serializable reservation = hazelcast.statementCache().remove(key);
-            if (reservation instanceof HandleState reserved && !serverUri.equals(reserved.serverUri())) {
-                subtractLoad(reserved.serverUri(), reserved.bytes());
-                addLoad(serverUri, reserved.bytes());
-                hazelcast.statementCache().put(key, new HandleState(reserved.query(),
-                        reserved.filePaths(), serverUri, reserved.bytes(), true, false,
-                        reserved.parameters()), loadReservationSeconds, TimeUnit.SECONDS);
-            } else if (reservation != null) {
-                hazelcast.statementCache().put(key, reservation, loadReservationSeconds,
-                        TimeUnit.SECONDS);
+            IMap<String, Serializable> cache = hazelcast.statementCache();
+            while (true) {
+                Serializable held = cache.get(key);
+                List<HandleState> units = new ArrayList<>(LoadReservations.units(held));
+                int moved = -1;
+                for (int i = 0; i < units.size() && moved < 0; i++) {
+                    if (!serverUri.equals(units.get(i).serverUri())) {
+                        moved = i;
+                    }
+                }
+                if (moved < 0) {
+                    return;
+                }
+                HandleState reserved = units.get(moved);
+                units.set(moved, new HandleState(reserved.query(), reserved.filePaths(), serverUri,
+                        reserved.bytes(), true, false, reserved.parameters()));
+                if (replaceReservations(key, held, LoadReservations.of(units))) {
+                    subtractLoad(reserved.serverUri(), reserved.bytes());
+                    addLoad(serverUri, reserved.bytes());
+                    return;
+                }
             }
         });
+        return true;
+    }
+
+    /**
+     * Adds an endpoint's reservation to its key, next to the reservations of identical plans.
+     *
+     * @param key reservation key
+     * @param state endpoint state
+     */
+    private void reserve(String key, HandleState state) {
+        IMap<String, Serializable> cache = hazelcast.statementCache();
+        while (true) {
+            Serializable held = cache.putIfAbsent(key, state, loadReservationSeconds, TimeUnit.SECONDS);
+            if (held == null) {
+                return;
+            }
+            List<HandleState> units = new ArrayList<>(LoadReservations.units(held));
+            units.add(state);
+            if (replaceReservations(key, held, LoadReservations.of(units))) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * Takes one reservation from a key.
+     *
+     * @param key reservation key
+     * @param prefer node whose reservation is taken first
+     * @return the reservation taken, or null when the key holds none
+     */
+    private HandleState takeReservation(String key, String prefer) {
+        IMap<String, Serializable> cache = hazelcast.statementCache();
+        while (true) {
+            Serializable held = cache.get(key);
+            List<HandleState> units = new ArrayList<>(LoadReservations.units(held));
+            if (units.isEmpty()) {
+                return null;
+            }
+            int taken = 0;
+            for (int i = 0; i < units.size(); i++) {
+                if (prefer.equals(units.get(i).serverUri())) {
+                    taken = i;
+                    break;
+                }
+            }
+            HandleState reserved = units.remove(taken);
+            Serializable rest = LoadReservations.of(units);
+            if (rest == null ? cache.remove(key, held) : replaceReservations(key, held, rest)) {
+                return reserved;
+            }
+        }
+    }
+
+    /**
+     * Replaces a reservation key's value if it is still the one read, keeping the reservation
+     * lifetime (a replace alone leaves the entry without one).
+     *
+     * @param key reservation key
+     * @param held value read
+     * @param value new value
+     * @return false when another write changed the key first
+     */
+    private boolean replaceReservations(String key, Serializable held, Serializable value) {
+        IMap<String, Serializable> cache = hazelcast.statementCache();
+        if (!cache.replace(key, held, value)) {
+            return false;
+        }
+        cache.setTtl(key, loadReservationSeconds, TimeUnit.SECONDS);
         return true;
     }
 

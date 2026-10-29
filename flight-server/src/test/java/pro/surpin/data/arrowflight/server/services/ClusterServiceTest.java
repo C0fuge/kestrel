@@ -327,9 +327,9 @@ class ClusterServiceTest {
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"},
                 "s1", 100L, true);
+        reservationsBackedByMap(null, false);
         ClusterService cs = createService("s1");
         byte[] handle = cs.createEndpointHandle(state);
-        when(statementCache.remove(anyString())).thenReturn(state, null);
 
         cs.releaseEndpointLoad(handle, state);
         cs.releaseEndpointLoad(handle, state);
@@ -344,14 +344,15 @@ class ClusterServiceTest {
         stubHazelcast();
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        reservationsBackedByMap(null, false);
         ClusterService cs = new ClusterService(hazelcast, APP_CONFIG, "backup", true, 120L);
         byte[] handle = cs.createEndpointHandle(state);
-        verify(statementCache).put(startsWith("__arrowflight-ticket-load-v1:"), eq(state),
+        verify(statementCache).putIfAbsent(startsWith("__arrowflight-ticket-load-v1:"), eq(state),
                 eq(120L), eq(java.util.concurrent.TimeUnit.SECONDS));
 
-        when(statementCache.remove(anyString())).thenReturn(state);
         assertTrue(cs.claimEndpointLoad(handle, state));
-        verify(statementCache, times(2)).put(startsWith("__arrowflight-ticket-load-v1:"), any(),
+        // The claim replaces the value, which drops its lifetime: it is set again.
+        verify(statementCache).setTtl(startsWith("__arrowflight-ticket-load-v1:"),
                 eq(120L), eq(java.util.concurrent.TimeUnit.SECONDS));
         verify(statementCache, never()).put(startsWith("__arrowflight-ticket-load-v1:"), any(),
                 eq(10L), eq(java.util.concurrent.TimeUnit.MINUTES));
@@ -377,15 +378,111 @@ class ClusterServiceTest {
         return backing;
     }
 
+    /**
+     * Backs the statement cache mock's reservation calls (putIfAbsent with a lifetime, get,
+     * conditional remove and replace, setTtl) with a real map, as Hazelcast applies them.
+     *
+     * @param gate calls of the reservation keys wait for it, or null
+     * @param gateReservation whether the reservation (putIfAbsent) waits too, else only reads
+     * @return the backing map
+     */
+    private Map<String, Serializable> reservationsBackedByMap(java.util.concurrent.CountDownLatch gate,
+            boolean gateReservation) {
+        Map<String, Serializable> backing = new java.util.concurrent.ConcurrentHashMap<>();
+        Runnable await = () -> {
+            try {
+                if (gate != null) {
+                    gate.await();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        when(statementCache.putIfAbsent(startsWith("__arrowflight-ticket-load-v1:"), any(), anyLong(), any())).thenAnswer(i -> {
+            if (gateReservation) {
+                await.run();
+            }
+            return backing.putIfAbsent(i.getArgument(0), i.getArgument(1));
+        });
+        when(statementCache.get(startsWith("__arrowflight-ticket-load-v1:"))).thenAnswer(i -> {
+            await.run();
+            return backing.get((String) i.getArgument(0));
+        });
+        when(statementCache.remove(startsWith("__arrowflight-ticket-load-v1:"), any())).thenAnswer(
+                i -> backing.remove(i.getArgument(0), i.getArgument(1)));
+        when(statementCache.replace(startsWith("__arrowflight-ticket-load-v1:"), any(), any())).thenAnswer(
+                i -> backing.replace(i.getArgument(0), i.getArgument(1), i.getArgument(2)));
+        when(statementCache.setTtl(startsWith("__arrowflight-ticket-load-v1:"), anyLong(), any())).thenReturn(true);
+        return backing;
+    }
+
+    /**
+     * Verifies identical endpoints planned at the same time (deterministic tickets, one
+     * reservation key) are each reserved and released: the node's load returns to zero and the
+     * key is gone. Before, the second plan overwrote the first reservation and one release found
+     * nothing, so the node kept the bytes as load for good (D9).
+     */
+    @Test
+    void identicalConcurrentPlansAreEachReleased() {
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("s1", 0L);
+        Map<String, Serializable> cache = reservationsBackedByMap(null, false);
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "s1", 100L, true);
+        ClusterService cs = createService("s1");
+        byte[] first = cs.createEndpointHandle(state);
+        cs.addLoad("s1", 100L);
+        byte[] second = cs.createEndpointHandle(state);
+        cs.addLoad("s1", 100L);
+        assertArrayEquals(first, second, "tickets are deterministic");
+        assertEquals(2, pro.surpin.data.arrowflight.server.model.LoadReservations.units(
+                cache.values().iterator().next()).size());
+
+        cs.releaseEndpointLoad(first, state);
+        assertEquals(100L, registry.get("s1"));
+        cs.releaseEndpointLoad(second, state);
+        assertEquals(0L, registry.get("s1"));
+        assertTrue(cache.isEmpty(), "reservation left: " + cache);
+        verify(statementCache, atLeastOnce()).setTtl(startsWith("__arrowflight-ticket-load-v1:"), eq(600L),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
+        cs.close();
+    }
+
+    /** Verifies a claim moves one of several identical reservations, and each release finds its own. */
+    @Test
+    void claimMovesOneOfIdenticalReservations() {
+        Map<String, Long> registry = registryBackedByMap();
+        registry.put("primary", 200L);
+        registry.put("backup", 0L);
+        Map<String, Serializable> cache = reservationsBackedByMap(null, false);
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        ClusterService backup = createService("backup");
+        byte[] handle = backup.createEndpointHandle(state);
+        backup.createEndpointHandle(state);
+
+        assertTrue(backup.claimEndpointLoad(handle, state));
+        assertEquals(100L, registry.get("primary"));
+        assertEquals(100L, registry.get("backup"));
+
+        backup.releaseEndpointLoad(handle, state);
+        assertEquals(100L, registry.get("primary"));
+        assertEquals(0L, registry.get("backup"), "the backup's release takes the claimed reservation");
+        backup.releaseEndpointLoad(handle, state);
+        assertEquals(0L, registry.get("primary"));
+        assertTrue(cache.isEmpty(), "reservation left: " + cache);
+        backup.close();
+    }
+
     /** Verifies a stale node removed from the registry is not added back by a late release. */
     @Test
     void releaseEndpointLoadDoesNotBringBackARemovedNode() {
         Map<String, Long> registry = registryBackedByMap();
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "gone", 100L, true);
+        reservationsBackedByMap(null, false);
         ClusterService cs = createService("s1");
         byte[] handle = cs.createEndpointHandle(state);
-        when(statementCache.remove(anyString())).thenReturn(state);
 
         cs.releaseEndpointLoad(handle, state);
 
@@ -402,24 +499,21 @@ class ClusterServiceTest {
         registry.put("backup", 20L);
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        Map<String, Serializable> cache = reservationsBackedByMap(null, false);
         ClusterService cs = createService("backup");
         byte[] handle = cs.createEndpointHandle(state);
-        when(statementCache.remove(anyString())).thenReturn(state);
 
         assertTrue(cs.claimEndpointLoad(handle, state));
 
         assertEquals(50L, registry.get("primary"));
         assertEquals(120L, registry.get("backup"));
-        org.mockito.ArgumentCaptor<Serializable> moved =
-                org.mockito.ArgumentCaptor.forClass(Serializable.class);
-        verify(statementCache, atLeastOnce()).put(startsWith("__arrowflight-ticket-load-v1:"),
-                moved.capture(), eq(600L), eq(java.util.concurrent.TimeUnit.SECONDS));
-        HandleState reservation = (HandleState) moved.getValue();
+        HandleState reservation = (HandleState) cache.values().iterator().next();
         assertEquals("backup", reservation.serverUri());
         assertEquals(100L, reservation.bytes());
+        verify(statementCache).setTtl(startsWith("__arrowflight-ticket-load-v1:"), eq(600L),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
 
         // The release at the end of the stream now lowers the backup node's load.
-        when(statementCache.remove(anyString())).thenReturn(reservation, (Serializable) null);
         cs.releaseEndpointLoad(handle, state);
         cs.releaseEndpointLoad(handle, state);
         assertEquals(50L, registry.get("primary"));
@@ -435,9 +529,9 @@ class ClusterServiceTest {
         registry.put("backup", 0L);
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
+        reservationsBackedByMap(null, false);
         ClusterService cs = createService("backup");
         byte[] handle = cs.createEndpointHandle(state);
-        when(statementCache.remove(anyString())).thenReturn(state);
 
         assertTrue(cs.plannedElsewhere(state));
         cs.claimEndpointLoadLater(handle, state).join();
@@ -454,7 +548,7 @@ class ClusterServiceTest {
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
         ClusterService cs = createService("backup");
         byte[] handle = cs.createEndpointHandle(state);
-        when(statementCache.remove(anyString())).thenThrow(new IllegalStateException("member gone"));
+        when(statementCache.get(anyString())).thenThrow(new IllegalStateException("member gone"));
 
         cs.claimEndpointLoadLater(handle, state).join();
         cs.close();
@@ -472,10 +566,9 @@ class ClusterServiceTest {
         byte[] handle = planned.createEndpointHandle(state);
         assertFalse(planned.claimEndpointLoad(handle, state));
         assertFalse(planned.claimEndpointLoad(handle, HandleState.forCompleteAnswer("SELECT 1")));
-        verify(statementCache, never()).remove(anyString());
+        verify(statementCache, never()).get(startsWith("__arrowflight-ticket-load-v1:"));
 
         ClusterService backup = createService("backup");
-        when(statementCache.remove(anyString())).thenReturn(null);
         assertTrue(backup.claimEndpointLoad(handle, state));
         assertEquals(100L, registry.get("primary"));
         assertEquals(0L, registry.get("backup"));
@@ -483,7 +576,7 @@ class ClusterServiceTest {
         HandleState untracked = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, false);
         assertTrue(backup.claimEndpointLoad(handle, untracked));
-        verify(statementCache, times(1)).remove(anyString());
+        verify(statementCache, times(1)).get(startsWith("__arrowflight-ticket-load-v1:"));
         planned.close();
         backup.close();
     }
@@ -918,14 +1011,8 @@ class ClusterServiceTest {
         when(hazelcast.view()).thenReturn(view);
         Map<String, Long> registry = registryBackedByMap();
         registry.put(s1, 0L);
-        Map<String, Serializable> cache = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
-        when(statementCache.put(anyString(), any(), anyLong(), any())).thenAnswer(invocation -> {
-            answer.await();
-            return cache.put(invocation.getArgument(0), invocation.getArgument(1));
-        });
-        when(statementCache.remove(anyString())).thenAnswer(
-                invocation -> cache.remove((String) invocation.getArgument(0)));
+        Map<String, Serializable> cache = reservationsBackedByMap(answer, true);
         ClusterService cs = createService(s1);
         when(view.replicaUnresponsive(anyString(), anyInt())).thenAnswer(
                 invocation -> ((String) invocation.getArgument(0)).startsWith("__arrowflight-ticket-load"));
@@ -1015,14 +1102,8 @@ class ClusterServiceTest {
         Map<String, Long> registry = registryBackedByMap();
         registry.put("primary", 100L);
         registry.put("backup", 0L);
-        Map<String, Serializable> cache = new java.util.concurrent.ConcurrentHashMap<>();
         java.util.concurrent.CountDownLatch answer = new java.util.concurrent.CountDownLatch(1);
-        when(statementCache.put(anyString(), any(), anyLong(), any())).thenAnswer(
-                invocation -> cache.put(invocation.getArgument(0), invocation.getArgument(1)));
-        when(statementCache.remove(anyString())).thenAnswer(invocation -> {
-            answer.await();
-            return cache.remove((String) invocation.getArgument(0));
-        });
+        Map<String, Serializable> cache = reservationsBackedByMap(answer, false);
         HandleState state = HandleState.forServerFiles(
                 "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "primary", 100L, true);
         ClusterService cs = createService("backup");

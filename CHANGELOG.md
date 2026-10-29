@@ -676,6 +676,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- Node load leak with concurrent identical queries (found by D9): endpoint tickets are deterministic, so clients
+  planning the same query at the same time got the same ticket, and its load reservation was overwritten - one
+  release then found nothing and the node kept the endpoint's bytes as load for good, so later plans skewed away
+  from it (in the in-JVM test a node got no endpoints at all). A reservation key now holds one reservation per
+  planned endpoint (`LoadReservations` when there are several; atomic `putIfAbsent`/`replace`, lifetime kept); a
+  claim by a backup node moves one of them. Ticket format unchanged.
 - With an authorization provider on (`FLIGHT_AUTHORIZATION_PROVIDER`), a query whose tables the check cannot
   name (e.g. `UNION`, a statement that does not parse) failed with a message-less `INTERNAL`; it is now refused with
   `INVALID_ARGUMENT` and the parser's reason, as without authorization. Still refused, only the status changes.
