@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -103,9 +102,15 @@ class HiveInsertOnlyTableTest {
         write(table, "mmd", 1, true);
         Files.createDirectories(table.resolve("delete_delta_0000001_0000001_0000"));
         try (Catalog catalog = open(Map.of())) {
-            IOException e = assertThrows(IOException.class,
+            // A problem of this table, not of the catalog: an IOException would make the server treat
+            // the whole metastore as unreadable and hide this table's siblings.
+            HiveCatalog.UnreadableTableException e = assertThrows(
+                    HiveCatalog.UnreadableTableException.class,
                     () -> catalog.current(new TableName("mmdb", "mmd")));
             assertTrue(e.getMessage().contains("delete delta"), e.getMessage());
+            write(table, "mmd", 2, true);
+            assertThrows(HiveCatalog.UnreadableTableException.class,
+                    () -> catalog.current(new TableName("mmdb", "mmd")), "never kept, still refused");
         }
     }
 

@@ -213,6 +213,10 @@ final class HiveCatalog implements Catalog {
             Optional<TableSnapshot> snapshot;
             try {
                 snapshot = plan(table);
+            } catch (UnreadableTableException e) {
+                // This table only, not the catalog: its siblings stay readable.
+                invalidate(table);
+                throw e;
             } catch (IOException | RuntimeException e) {
                 // Never keep a failure; drop what may have led to it.
                 invalidate(table);
@@ -931,6 +935,9 @@ final class HiveCatalog implements Catalog {
             throw new IOException("Interrupted while listing partitions", e);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
+            if (cause instanceof UnreadableTableException unreadable) {
+                throw unreadable;
+            }
             throw cause instanceof IOException io ? io
                     : new IOException("Cannot list a partition: " + cause, cause);
         } finally {
@@ -950,8 +957,9 @@ final class HiveCatalog implements Catalog {
      * @param writes snapshot of committed writes (insert-only tables: only the base, deltas or
      *     original files it chooses), else null
      * @return files, in path order
-     * @throws IOException when the location cannot be listed, or an insert-only directory cannot
-     *     be read correctly at the snapshot
+     * @throws IOException when the location cannot be listed
+     * @throws UnreadableTableException when an insert-only directory cannot be read correctly at
+     *     the snapshot
      */
     private List<TableFile> list(String location, Map<String, String> values,
             InsertOnlyDirectories.Snapshot writes) throws IOException {
@@ -996,7 +1004,8 @@ final class HiveCatalog implements Catalog {
      * @param writes snapshot of committed writes
      * @param location the directory's location, for messages
      * @return names of the chosen entries directly inside the directory
-     * @throws IOException when it cannot be listed or read correctly at the snapshot
+     * @throws IOException when it cannot be listed
+     * @throws UnreadableTableException when it cannot be read correctly at the snapshot
      */
     private static List<String> chooseInsertOnly(DataStore store, String directory, String prefix,
             List<DataFile> files, InsertOnlyDirectories.Snapshot writes, String location)
@@ -1018,7 +1027,7 @@ final class HiveCatalog implements Catalog {
         } catch (UncheckedIOException e) {
             throw e.getCause();
         } catch (IllegalStateException e) {
-            throw new IOException("Insert-only table directory " + location
+            throw new UnreadableTableException("Insert-only table directory " + location
                     + " cannot be read at the metastore's snapshot: " + e.getMessage(), e);
         }
     }
@@ -1059,6 +1068,27 @@ final class HiveCatalog implements Catalog {
         String database = names == null ? null : names.value().get(table.schema());
         if (database != null) {
             tables.remove(database);
+        }
+    }
+
+    /**
+     * A table whose files cannot be read correctly (an insert-only layout refused at the
+     * metastore's snapshot): a problem of that table, not of the catalog, so the server leaves
+     * out this table only and refuses its queries with the message (INVALID_ARGUMENT), while the
+     * metastore's other tables stay readable. An {@link IOException} from {@link #current} means
+     * the catalog cannot be read.
+     */
+    static final class UnreadableTableException extends IllegalArgumentException {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Creates the exception.
+         *
+         * @param message what cannot be read and why
+         * @param cause the refusal
+         */
+        UnreadableTableException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 }

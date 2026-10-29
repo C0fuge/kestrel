@@ -622,6 +622,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- Hive plugin, `hive.insertOnlyTables=true`: an insert-only table whose layout is refused (e.g. a `delete_delta_*`
+  directory) no longer makes the server treat the whole metastore as unreadable. Before, the refusal was reported like
+  a metastore outage, so the catalog views refresh left out every table listed after it (all schemas of that
+  metastore); now only that table is left out (WARN `views=skipTable`), complete queries of it answer NOT_FOUND and
+  partial ones INVALID_ARGUMENT with the reason. Server: a table-level error of a catalog while choosing the result
+  mode no longer escapes as a message-less INTERNAL error; planning reports it (C4 step 3).
 - Tests: the cluster and distributed tests (and `TestFlightServerHelper`) take their Hazelcast and Flight ports from
   `TestPorts`, below the system's ephemeral port range, instead of `ServerSocket(0)`: an ephemeral port could be
   taken by an outgoing connection between the probe and the bind ("Address already in use" on CI). Test-only.
