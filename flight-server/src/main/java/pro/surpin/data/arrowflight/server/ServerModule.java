@@ -29,6 +29,7 @@ import pro.surpin.data.arrowflight.server.adapters.HazelcastAdapter;
 import pro.surpin.data.arrowflight.server.adapters.HostLimits;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
+import pro.surpin.data.arrowflight.server.adapters.ResourceProfile;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
@@ -252,6 +253,8 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
+        LOGGER.info("node={} resourceProfile {}", LogUtil.node(),
+                ResourceProfile.resolve(ConfigSource.systemWithoutProfile(), HostLimits::detect).describe());
         DuckDbSizing sizing = ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect());
         LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(), sizing.describe());
         if (config.duckDbExternalFileCache()) {

@@ -122,7 +122,7 @@ public final class PropertiesPluginConfig implements PluginConfig {
 
     /**
      * Looks a plain key up in every source: system properties, environment, the namespace's
-     * file, then {@code arrowflight.properties}.
+     * file, the resource profile, then {@code arrowflight.properties}.
      *
      * @param key key name
      * @param declared declared key or null
@@ -139,6 +139,7 @@ public final class PropertiesPluginConfig implements PluginConfig {
         return source.firstSystemProperty(names)
                 .or(() -> source.firstEnvironment(environment))
                 .or(() -> source.pluginFileProperty(namespace, key))
+                .or(() -> source.firstProfileDefault(names))
                 .or(() -> source.firstFileProperty(names));
     }
 

@@ -28,6 +28,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |
 | `duckDbMemoryConnections` (`arrowflight.duckdb.memoryConnections`, `DUCKDB_MEMORY_CONNECTIONS`) | 0 = cores / (cores / 4 between 2 and 16), at least 2 | connections the default `memory_limit` is split between |
 | `duckDbThreadsWhenIdle` (`arrowflight.duckdb.threadsWhenIdle`, `DUCKDB_THREADS_WHEN_IDLE`) | 0 = off | threads of a query that starts alone on the node |
 | `duckDbThreadsUnderLoad` (`arrowflight.duckdb.threadsUnderLoad`, `DUCKDB_THREADS_UNDER_LOAD`) | 0 = off | threads of a query that starts while the node's cores are taken |
@@ -92,6 +93,13 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+
+- **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
+  changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
+  (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores), node-wide `duckDbMemoryLimit` of
+  75 % of memory minus heap and direct memory, `flightZeroCopyWrites=true`, `endpointsPerServer=4`,
+  `flightBackpressureThresholdBytes`=16 MiB and the s3/lakeFS read caches at `-Xmx`/5 each. `-D` and environment
+  settings win; startup line `resourceProfile profile=... (explicit)`. Unknown profile names stop the server.
 - SPI 1.8: `ColumnSpec.sourceType` - the column type as the catalog declares it (a Hive type such as `char(10)`),
   null when unknown; the four-argument constructor stays. Plugins built against 1.8 need a 1.8 server.
 - `ranger-hive` applies Ranger Hive row filters whose expression is in a typed subset (`HiveRowFilter`: columns,

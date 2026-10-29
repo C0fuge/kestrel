@@ -13,12 +13,16 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 
+import pro.surpin.data.arrowflight.server.adapters.HostLimits;
+import pro.surpin.data.arrowflight.server.adapters.ResourceProfile;
+
 /**
  * Where configuration values come from, in the server's order: system properties (every name in
  * turn), then environment variables, then {@code arrowflight.properties} on the class path (every
  * name in turn), so the bundled file only supplies defaults. Blank values count as unset. Plugin
  * namespaces may also have a file {@code <configDir>/<ns>.properties}, read after the environment
- * and before {@code arrowflight.properties}.
+ * and before {@code arrowflight.properties}. Defaults of a resource profile
+ * ({@code resourceProfile}) are read after those and before {@code arrowflight.properties}.
  */
 public final class ConfigSource {
 
@@ -29,6 +33,7 @@ public final class ConfigSource {
     private final Map<String, String> environment;
     private final Path pluginConfigDir;
     private final Map<String, Properties> pluginFiles = new ConcurrentHashMap<>();
+    private final Map<String, String> profileDefaults;
 
     /**
      * Creates a source.
@@ -40,20 +45,57 @@ public final class ConfigSource {
      */
     public ConfigSource(UnaryOperator<String> systemProperties, Properties properties,
             Map<String, String> environment, Path pluginConfigDir) {
+        this(systemProperties, properties, environment, pluginConfigDir, Map.of());
+    }
+
+    /**
+     * Creates a source with the defaults of a resource profile.
+     *
+     * @param systemProperties reads a system property
+     * @param properties the properties file
+     * @param environment process environment
+     * @param pluginConfigDir directory of {@code <ns>.properties} files, or null
+     * @param profileDefaults values by property name, read after the environment and the plugin files
+     */
+    private ConfigSource(UnaryOperator<String> systemProperties, Properties properties,
+            Map<String, String> environment, Path pluginConfigDir, Map<String, String> profileDefaults) {
         this.systemProperties = Objects.requireNonNull(systemProperties, "systemProperties");
         this.properties = Objects.requireNonNull(properties, "properties");
         this.environment = Map.copyOf(environment);
         this.pluginConfigDir = pluginConfigDir;
+        this.profileDefaults = Map.copyOf(profileDefaults);
     }
 
     /**
      * Reads the server's own sources: system properties, {@code arrowflight.properties} and the
-     * environment, without a plugin configuration directory.
+     * environment, without a plugin configuration directory, with the defaults of the configured
+     * resource profile.
+     *
+     * @return source
+     * @throws IllegalArgumentException for an unknown resource profile
+     */
+    public static ConfigSource system() {
+        ConfigSource raw = systemWithoutProfile();
+        return ResourceProfile.resolve(raw, HostLimits::detect).applyTo(raw);
+    }
+
+    /**
+     * Reads the server's own sources without the defaults of a resource profile.
      *
      * @return source
      */
-    public static ConfigSource system() {
+    public static ConfigSource systemWithoutProfile() {
         return new ConfigSource(System::getProperty, loadProperties(), System.getenv(), null);
+    }
+
+    /**
+     * Returns this source with the defaults of a resource profile.
+     *
+     * @param defaults values by property name, read after the environment and the plugin files
+     * @return source
+     */
+    public ConfigSource withProfileDefaults(Map<String, String> defaults) {
+        return new ConfigSource(systemProperties, properties, environment, pluginConfigDir, defaults);
     }
 
     /**
@@ -63,12 +105,12 @@ public final class ConfigSource {
      * @return source
      */
     public ConfigSource withPluginConfigDir(Path directory) {
-        return new ConfigSource(systemProperties, properties, environment, directory);
+        return new ConfigSource(systemProperties, properties, environment, directory, profileDefaults);
     }
 
     /**
      * Looks up names in order: every name as a system property, then the environment variables,
-     * then every name in the properties file.
+     * then every name among the profile defaults, then every name in the properties file.
      *
      * @param names property names
      * @param environmentNames environment variable names
@@ -77,6 +119,7 @@ public final class ConfigSource {
     public Optional<String> lookup(List<String> names, List<String> environmentNames) {
         return firstSystemProperty(names)
                 .or(() -> firstEnvironment(environmentNames))
+                .or(() -> firstProfileDefault(names))
                 .or(() -> firstFileProperty(names));
     }
 
@@ -107,6 +150,22 @@ public final class ConfigSource {
             Optional<String> value = environment(name);
             if (value.isPresent()) {
                 return value;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Reads the first of some names that the resource profile sets.
+     *
+     * @param names property names
+     * @return value, empty when the profile sets none of them
+     */
+    public Optional<String> firstProfileDefault(List<String> names) {
+        for (String name : names) {
+            String value = profileDefaults.get(name);
+            if (value != null) {
+                return Optional.of(value);
             }
         }
         return Optional.empty();

@@ -171,6 +171,24 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 - Without TLS settings the server refuses to start unless `FLIGHT_ALLOW_INSECURE=true` (isolated test setups only).
 - Changes since the previous build: `CHANGELOG.md` at @COMMIT@.
 
+## Resource profile `speed` (item 23)
+
+`-DresourceProfile=speed` (or `FLIGHT_RESOURCE_PROFILE=speed`) turns on, as defaults, what was measured as faster;
+`balanced` (default) changes nothing. A setting given as `-D` or in the environment (or in a plugin's
+`<ns>.properties`) wins over the profile; the profile wins over the bundled `arrowflight.properties`. Startup line
+`resourceProfile profile=speed <key>=<value> ...` (operator values marked `(explicit)`).
+
+| Setting | `speed` value | Cost |
+|---|---|---|
+| `duckDbSharedDatabase` | true | one DuckDB per node: node-wide thread pool and memory limit |
+| `duckDbSharedMaxThreads` | 0 (no cap) | |
+| `duckDbThreads` | all cores (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
+| `duckDbMemoryLimit` | node-wide 75 % of memory - `-Xmx` - direct memory, at least 1 GiB (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 12 GiB for DuckDB (balanced: 1 GiB per connection) |
+| `flightZeroCopyWrites` | true | |
+| `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
+| `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |
+| `arrowflight.s3.cacheMegabytes`, `arrowflight.lakefs.cacheMegabytes` | `-Xmx` / 5 each, when that is at least 64 MiB | read cache on the JVM heap; both together 40 % of the heap (named stores keep theirs) |
+
 ## Settings since 7562a5bdb7b9
 
 Every setting added, or whose default changed, since build `7562a5bdb7b9` (2026-10-27), with its default as of this
@@ -190,6 +208,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |
 | `duckDbMemoryConnections` (`arrowflight.duckdb.memoryConnections`, `DUCKDB_MEMORY_CONNECTIONS`) | 0 = cores / (cores / 4 between 2 and 16), at least 2 | connections the default `memory_limit` is split between |
 | `duckDbThreadsWhenIdle` (`arrowflight.duckdb.threadsWhenIdle`, `DUCKDB_THREADS_WHEN_IDLE`) | 0 = off | threads of a query that starts alone on the node |
 | `duckDbThreadsUnderLoad` (`arrowflight.duckdb.threadsUnderLoad`, `DUCKDB_THREADS_UNDER_LOAD`) | 0 = off | threads of a query that starts while the node's cores are taken |
