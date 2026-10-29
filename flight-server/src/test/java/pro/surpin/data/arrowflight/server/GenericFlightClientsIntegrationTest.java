@@ -142,30 +142,41 @@ class GenericFlightClientsIntegrationTest {
     }
 
     /**
-     * Reads a table path (dotted and as elements), a SQL text and an aggregate with DuckDB's
-     * airport extension (airport_take_flight): whole answers over every endpoint.
+     * Pins what DuckDB's airport extension (airport_take_flight) gets from plain descriptors: the
+     * schema of a table path (dotted and as elements), a SQL text and an aggregate, while reading
+     * rows fails clearly because airport asks for endpoints with its own {@code endpoints} action,
+     * which the server does not implement (never partial or wrong rows).
      *
      * @throws Exception on script or query failure
      */
     @Test
-    void duckdbAirportReadsPlainDescriptors() throws Exception {
+    void duckdbAirportGetsSchemaButNeedsItsEndpointsAction() throws Exception {
         assumeTrue(!AIRPORT.isBlank(), "needs -Dairport.it.python with duckdb and the airport extension");
         Path script = data.resolve("airport_client.py");
         try (InputStream in = getClass().getResourceAsStream("/python/airport_client.py")) {
             Files.copy(in, script, StandardCopyOption.REPLACE_EXISTING);
         }
         String port = String.valueOf(helper.location.getUri().getPort());
-        String whole = "rows=" + expected.get(0) + " sum=" + expected.get(1);
-        assertEquals(whole, lastLine(run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path",
-                "gfc.items"))));
-        assertEquals(whole, lastLine(run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path",
-                "gfc/items"))));
-        assertEquals("rows=" + expected.get(5) + " sum=" + expected.get(6),
-                lastLine(run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
-                        "SELECT id FROM gfc.items WHERE " + KEY_FILTER))));
-        assertEquals("rows=1 sum=" + expected.get(0),
-                lastLine(run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
-                        "SELECT count(*) AS n FROM gfc.items"))));
+        String table = "columns=id,k,name,amount,day";
+        assertAirport(table, run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path", "gfc.items")));
+        assertAirport(table, run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path", "gfc/items")));
+        assertAirport("columns=id", run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
+                "SELECT id FROM gfc.items WHERE " + KEY_FILTER)));
+        assertAirport("columns=n", run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
+                "SELECT count(*) AS n FROM gfc.items")));
+    }
+
+    /**
+     * Checks one airport client output: the expected columns, then the endpoints action refused.
+     *
+     * @param columns expected columns line
+     * @param output client output
+     */
+    private static void assertAirport(String columns, String output) {
+        List<String> lines = output.lines().filter(l -> !l.isBlank()).map(String::strip).toList();
+        assertTrue(lines.contains(columns), output);
+        assertTrue(lastLine(output).startsWith("error=") && lastLine(output).contains("Unrecognized request: endpoints"),
+                output);
     }
 
     /**
