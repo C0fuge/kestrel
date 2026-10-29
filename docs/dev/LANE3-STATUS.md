@@ -29,10 +29,22 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
 D4. ~~Hazelcast test-port race~~ *done 2026-10-28 (256bddd, see Log):* `TestPorts`.
 D5. ~~D2 observed gap: force the after-first-batch cut path~~ *done 2026-10-29 (see Log):*
     `DistributedCompleteCutAfterFirstBatchTest`.
-D6. (open, no maintainer item yet) Next lane-3 item to be set by the maintainer. Candidates: a real multi-host perf
+D6. (open, no maintainer item yet) Next lane-3 item to be set by the maintainer (the status-code candidate is Q1 below). Candidates: a real multi-host perf
     run of distributed complete mode (`-Dperf.rows`, D2 (b) prefetch decision); the client-visible status of a
     peer lost after the first batch is INTERNAL with DuckDB's `arrow_scan` text wrapping the peer's UNAVAILABLE
     (UNAVAILABLE would let clients retry - a wire-visible change, so an Open question first).
+
+## Open questions
+
+Q1. (2026-10-29, lane 3, open) **Status code when a peer is lost after the client's first batch** (opt-in
+    `distributedComplete` only). Today the client gets `INTERNAL` with DuckDB's `arrow_scan: get_next failed(): ...`
+    text that wraps the peer's `UNAVAILABLE` (asserted by `DistributedCompleteCutAfterFirstBatchTest`). The answer is
+    never silently partial; only the code differs. Proposal: when the merge fails after the first batch and a peer
+    stream ended with `UNAVAILABLE` (or a transport error), `DistributedComplete.stream` rethrows as `UNAVAILABLE`
+    ("peer lost during distributed complete answer; retry"), so clients and the JDBC/ADBC drivers that retry on
+    `UNAVAILABLE` re-run the query (the retry plans without the lost member). Other failures stay `INTERNAL`. This is
+    wire-visible (status code), hence a question: (a) map to `UNAVAILABLE` as proposed, (b) keep `INTERNAL`.
+    No code until answered.
 
 ## Log
 
@@ -197,3 +209,6 @@ D6. (open, no maintainer item yet) Next lane-3 item to be set by the maintainer.
   `DistributedCompleteIntegrationTest`, `TestPortsTest`, checkstyle. CI 40795299170 green on the branch (a9e1807).
   Merge push to `main` ends in this `[skip ci]` commit so as not to cancel the other lane's dispatch 40794647875;
   next session: confirm a green Dev CI run on `main` containing the D5 commit. Next: D6 (maintainer item).
+- 2026-10-29 (lane 3 session, 11th): lock 01:28Z. Confirmed the D5 commit b693ad2 green on `main` (Dev CI 40798070064
+  on 01884e2). The only open item, D6, waits for the maintainer to choose it; wrote the status-code candidate as Q1
+  (Open questions, proposal (a) `UNAVAILABLE`) so it can be answered. No code change. Next: D6 / Q1 answer.
