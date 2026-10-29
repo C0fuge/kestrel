@@ -13,7 +13,8 @@
  * paimon_wh/db.db/meta / hudi_meta (no data files). ATTACH checks run last and are detached again: a lazy attach
  * that cannot be read makes every later catalog lookup on the connection fail. With PROBE_S3_ENDPOINT
  * (host:port), PROBE_S3_KEY, PROBE_S3_SECRET, PROBE_S3_ROOT (s3://bucket/prefix/, the fixture directory uploaded
- * there) and PROBE_S3_OUTSIDE (the same copies as PROBE_OUTSIDE_DIR) the S3 path is probed too; with PROBE_HDFS_ROOT (the fixture directory on HDFS) the HDFS path.
+ * there) and PROBE_S3_OUTSIDE (the same copies as PROBE_OUTSIDE_DIR) the S3 path is probed too; with
+ * PROBE_HDFS_ROOT (the fixture directory on HDFS) the HDFS path.
  *
  * The connection is set up as the server sets up a query connection (in-memory secrets, LOAD by path, secrets,
  * then allowed_directories + no extension autoload + enable_external_access=false + lock_configuration=true).
