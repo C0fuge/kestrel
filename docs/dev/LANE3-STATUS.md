@@ -27,9 +27,12 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
     - ~~Step 2b: remaining writes~~ *done 2026-10-28 (see Log):* claim, inventory/secret puts, `close()`.
     - ~~Step 3: `fileLocations(false)` (local disks)~~ *done 2026-10-28 (a9f6def, see Log):* local inventory copy.
 D4. ~~Hazelcast test-port race~~ *done 2026-10-28 (256bddd, see Log):* `TestPorts`.
-D5. (open, no maintainer item yet) D2 observed gap: force the after-first-batch cut path of distributed complete mode
-    (a cut after DuckDB emitted, e.g. a larger wide projection with a later cut) and assert the error, not "error or
-    exact".
+D5. ~~D2 observed gap: force the after-first-batch cut path~~ *done 2026-10-29 (see Log):*
+    `DistributedCompleteCutAfterFirstBatchTest`.
+D6. (open, no maintainer item yet) Next lane-3 item to be set by the maintainer. Candidates: a real multi-host perf
+    run of distributed complete mode (`-Dperf.rows`, D2 (b) prefetch decision); the client-visible status of a
+    peer lost after the first batch is INTERNAL with DuckDB's `arrow_scan` text wrapping the peer's UNAVAILABLE
+    (UNAVAILABLE would let clients retry - a wire-visible change, so an Open question first).
 
 ## Log
 
@@ -182,3 +185,15 @@ D5. (open, no maintainer item yet) D2 observed gap: force the after-first-batch 
   (other lanes; single servers). On `main` 256bddd has no CI run yet (the push ended in a `[skip ci]` commit; not
   dispatched so as not to cancel the core lane's run 40789295791 on 881bbf7, same concurrency group). Next session:
   confirm a green Dev CI run on `main` containing 256bddd (else dispatch one). Next: D5, or a maintainer item.
+- 2026-10-29 (lane 3 session, 10th): lock 00:25Z. Confirmed 256bddd green on `main` (Dev CI 40794638660 on f082b73).
+  D5 done (test only, no pre-release; rebase-merged into `main`): `DistributedCompleteCutAfterFirstBatchTest`
+  (`integration`, one node, 4 files x 100k rows, `endpointsPerServer=4`, `batchSize=1024`) reads the endpoint
+  answers through `CuttingRelay` at 1 MB/s and calls the new `cutNow()` as soon as the client has its first batch:
+  the client gets an error after 1024 of 320000 rows (INTERNAL, `arrow_scan: get_next failed(): ... UNAVAILABLE`, not
+  INVALID_ARGUMENT), `mergedAnswers()` and `fallbacks()` stay 0, and a later healthy run merges the full answer.
+  DuckDB read ~2.3-2.6 MB of ~7 MB before its first emission (read-ahead), so the cut lands mid-stream with margin.
+  Mutation check: `stream()` returning true instead of rethrowing after the first batch makes the test fail
+  (silently partial answer). Local: 3/3 green, plus `DistributedClusterIntegrationTest`,
+  `DistributedCompleteIntegrationTest`, `TestPortsTest`, checkstyle. CI 40795299170 green on the branch (a9e1807).
+  Merge push to `main` ends in this `[skip ci]` commit so as not to cancel the other lane's dispatch 40794647875;
+  next session: confirm a green Dev CI run on `main` containing the D5 commit. Next: D6 (maintainer item).
