@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
+> Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
+> scans at 2-3x our memory). Add **`resourceProfile`** (`-DresourceProfile` / env `FLIGHT_RESOURCE_PROFILE`), values
+> `balanced` (default, today's behaviour, nothing changes) and **`speed`**: trade memory and CPU for speed by turning on
+> what we already measured as faster - `duckDbSharedDatabase=true` (with `duckDbSharedMaxThreads` = all cores),
+> `flightZeroCopyWrites=true`, `duckDbThreads` = cores (not the 19b size rule), a larger DuckDB memory limit (node-wide,
+> e.g. 75 % of the container/host memory minus the JVM heap and direct budget), `endpointsPerServer` 4 for partial scans,
+> a larger backpressure threshold (16 MiB) and the S3/lakeFS read cache on with a size from free memory (the s3 plugin's
+> cache settings). Any setting the operator sets explicitly wins over the profile. Log one startup line with the
+> effective values. Steps: (a) ConfigAdapter + profile resolution + unit tests for 4/16/64-core and 6/32/256 GB profiles
+> (explicit settings win); (b) CI perf check in `tpch-perf.yml` (balanced vs speed, local + S3, peak RSS recorded);
+> (c) CHANGELOG + START-NOTES (what `speed` turns on and its memory cost); (d) one `package=true` pre-release.
+> Then write "ITEM 23 DONE" here; egret measures speed vs balanced vs upstream native.
+
 **WRAP-UP DONE (2026-10-29 13:00, core lane).** Final pre-release `server-1.0.0-1e7b43a4e0c7` (dev-ci `package=true`
 on 1e7b43a4, 7 assets) carries main's last code change; everything after it is `[skip ci]` docs. Plugins and catalogs
 lanes wrote DONE, lane 3 is paused. The core lane takes no further items until the maintainer lifts FINISH MODE (the
