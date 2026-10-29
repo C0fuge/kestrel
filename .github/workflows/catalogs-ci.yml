@@ -468,10 +468,11 @@ jobs:
   # writers (tools/ci/paimon-hudi-fixtures.py), answered by a light reader - the formats' metadata read
   # in Python, the data files by DuckDB's read_parquet (tools/ci/paimon-hudi-probe.py) - and compared with
   # Spark's answers. A wrong answer fails the job; refusals are recorded. Also records whether DuckDB
-  # paimon / hudi extensions exist for v1.5.6 (core or community repository).
+  # paimon / hudi extensions exist for v1.5.6 (core or community repository), and probes those
+  # extensions under the server's lockdown (tools/ci/DuckDbPaimonHudiProbe.java: local, S3, HDFS).
   paimon-hudi:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -480,26 +481,47 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: DuckDB paimon / hudi extensions for v1.5.6
+      - name: DuckDB paimon / hudi extensions for v1.5.6 (+ httpfs, hadoopfs from ci-assets)
         env:
+          GH_TOKEN: ${{ github.token }}
           DUCKDB_VERSION: v1.5.6
         run: |
           set -euo pipefail
           ext="$RUNNER_TEMP/ph-ext"
-          mkdir -p "$ext"
+          mkdir -p "$ext" "$RUNNER_TEMP/all-ext"
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
+          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
+          for name in httpfs hadoopfs; do
+            cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension" \
+              | head -n 1)" "$ext/${name}.duckdb_extension"
+          done
           for name in paimon hudi; do
-            for repo in https://extensions.duckdb.org https://community-extensions.duckdb.org; do
-              url="$repo/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz"
-              code=$(curl -sS -o "$RUNNER_TEMP/${name}.gz" -w '%{http_code}' --retry 2 "$url" || true)
-              echo "$url -> HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
-              if [ "$code" = 200 ]; then
-                gunzip -c "$RUNNER_TEMP/${name}.gz" > "$ext/${name}.duckdb_extension"
-                break
-              fi
-            done
+            file="${name}-${DUCKDB_VERSION}-linux_amd64.duckdb_extension"
+            if gh release download ci-assets --repo "$GITHUB_REPOSITORY" --pattern "$file" --dir "$RUNNER_TEMP"; then
+              echo "$name: ci-assets" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              for repo in https://extensions.duckdb.org https://community-extensions.duckdb.org; do
+                url="$repo/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz"
+                code=$(curl -sS -o "$RUNNER_TEMP/${name}.gz" -w '%{http_code}' --retry 2 "$url" || true)
+                echo "$url -> HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
+                if [ "$code" = 200 ]; then
+                  gunzip -c "$RUNNER_TEMP/${name}.gz" > "$RUNNER_TEMP/$file"
+                  break
+                fi
+              done
+            fi
+            cp "$RUNNER_TEMP/$file" "$ext/${name}.duckdb_extension"
           done
           ls -l "$ext"
+          sha256sum "$ext"/*
           echo "PH_EXT_DIR=$ext" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: duckdb-paimon-hudi-extensions-v1.5.6
+          path: ${{ runner.temp }}/*-v1.5.6-linux_amd64.duckdb_extension
+          retention-days: 14
 
       - name: Fixtures (Spark 3.5.3 + Paimon 1.2.0, Hudi 0.15.0 and 1.0.2)
         run: |
@@ -524,6 +546,59 @@ jobs:
       - name: Probe
         run: |
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/paimon-hudi-probe.py "$PH_FIXTURES" "$PH_EXT_DIR"
+
+      # Lockdown probe (DuckDbPaimonHudiProbe): copies outside the allowed directories, locally and on S3
+      # (moto as in the delta job), and the fixtures on HDFS.
+      - name: Outside copies, S3 and HDFS
+        run: |
+          set -euo pipefail
+          outside="$RUNNER_TEMP/ph-outside"
+          mkdir -p "$outside/paimon_meta" "$outside/hudi_meta"
+          cp -r "$PH_FIXTURES/paimon/db.db/app" "$outside/paimon_app"
+          for d in snapshot schema manifest; do cp -r "$PH_FIXTURES/paimon/db.db/app/$d" "$outside/paimon_meta/"; done
+          cp -r "$PH_FIXTURES/hudi-1.0.2/cow" "$outside/hudi_cow"
+          cp -r "$PH_FIXTURES/hudi-1.0.2/cow/.hoodie" "$outside/hudi_meta/"
+          echo "PROBE_OUTSIDE_DIR=$outside" >> "$GITHUB_ENV"
+          key=$(openssl rand -hex 8)
+          secret=$(openssl rand -hex 16)
+          echo "::add-mask::$secret"
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install -q 'moto[server]==5.2.5'
+          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 0.0.0.0 -p 9000 > "$RUNNER_TEMP/s3.log" 2>&1 &
+          for _ in $(seq 60); do curl -fsS -o /dev/null http://localhost:9000/ && break; sleep 1; done
+          export AWS_ACCESS_KEY_ID=$key AWS_SECRET_ACCESS_KEY=$secret AWS_DEFAULT_REGION=us-east-1
+          aws --endpoint-url http://localhost:9000 s3 mb s3://lake
+          aws --endpoint-url http://localhost:9000 s3 cp --recursive --quiet "$PH_FIXTURES" s3://lake/ph/
+          aws --endpoint-url http://localhost:9000 s3 cp --recursive --quiet "$outside" s3://lake/outside/
+          {
+            echo "PROBE_S3_ENDPOINT=localhost:9000"
+            echo "PROBE_S3_KEY=$key"
+            echo "PROBE_S3_SECRET=$secret"
+            echo "PROBE_S3_ROOT=s3://lake/ph/"
+            echo "PROBE_S3_OUTSIDE=s3://lake/outside/"
+          } >> "$GITHUB_ENV"
+          tools/ci/hdfs-single.sh "$PH_FIXTURES" /ph
+          echo "PROBE_HDFS_ROOT=hdfs://localhost:8020/ph/" >> "$GITHUB_ENV"
+
+      # In an Ubuntu 20.04 JDK container: the hadoopfs build links libssl.so.1.1 (not on ubuntu-latest).
+      - name: Lockdown probe
+        run: |
+          set -euo pipefail
+          ./mvnw -q dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
+          jar="$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar"
+          docker run --rm --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD/tools/ci:/probe:ro" \
+            -v "$jar:/duckdb.jar:ro" -e GITHUB_STEP_SUMMARY -e PROBE_S3_ENDPOINT -e PROBE_S3_KEY \
+            -e PROBE_S3_SECRET -e PROBE_S3_ROOT -e PROBE_S3_OUTSIDE -e PROBE_OUTSIDE_DIR -e PROBE_HDFS_ROOT \
+            eclipse-temurin:17-jdk-focal bash -c 'apt-get update -qq > /dev/null \
+              && apt-get install -y -qq libxml2 > /dev/null \
+              && java -cp /duckdb.jar /probe/DuckDbPaimonHudiProbe.java "$0" "$1"' "$PH_EXT_DIR" "$PH_FIXTURES"
+          echo "outside after the probe:"; find "$PROBE_OUTSIDE_DIR" -maxdepth 2 | sort
+
+      - name: S3 and HDFS logs
+        if: failure()
+        run: |
+          tail -50 "$RUNNER_TEMP/s3.log" || true
+          docker exec hdfs bash -c 'tail -30 /var/log/hadoop/*.out' || true
 
   # C4 step 3 (c): insert-only (MM) tables written by a real Hive 4 (tools/ci/hive-mm-writer.sh:
   # inserts, failed inserts, INSERT OVERWRITE, major / minor compaction, gzip text), then read
