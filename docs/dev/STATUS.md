@@ -747,6 +747,12 @@
 
 ## Open questions
 
+- **Subqueries under an authorization provider (2026-10-29, core lane, FYI - reversible).** The plugins lane's bypass
+  fix (f411c13) refused every nested query under a provider; b3bbcce lets them back in with every table named from
+  DuckDB's own parse (`QueryTables`, `json_serialize_sql`) and checked. Still refused there: table functions,
+  `DESCRIBE`/`SHOW` sources, catalog-qualified names, names without a schema that are no CTE in scope. If the
+  maintainer prefers the stricter refusal, revert b3bbcce (tests then expect INVALID_ARGUMENT again).
+
 - **S3 screening setup (2026-10-29, core lane).** The "Bug first" S3 slowdown (9044653 vs 7562a5b, SF10 ADBC 1.10)
   does not reproduce with `tpch-perf.yml store=s3` (local rclone S3, Java Flight SQL client, 2 CPUs / 6 GB): head is
   1.57x faster, and dropping the per-connection `memory_limit` makes it as slow as 7562a5b. Which S3 server, network
@@ -2231,3 +2237,17 @@
   worked in complete mode before); a proper check of subquery tables (e.g. from DuckDB's `json_serialize_sql`, as the
   parse check already runs) would let them back in - core lane's call. Test `FlightAuthorizationSubqueryTest`.
 - 2026-10-29 (maintainer, laptop stand p22s): item 22 shared DuckDB on 2a2b8e08191f vs off vs 7562a5b, server containers 4c/8g and 16c/24g (-Xmx3g, direct 2g), HDFS SF10, ADBC + raw Flight, 3 rounds, 22/22 equal answers, 0 errors/OOM. 4c/8g: shared TPC-H 11.19 vs 12.35 s (7562 9.81), small c8 p50 22 vs 34 ms, c8/c32 q/s +26 %, mixed (8 small + 2 heavy) small p50 47 vs 89 ms; node limit 1843 MiB full in heavy4/mixed, spill <= 435 MB. 16c/24g (shared threads=16): TPC-H 8.52 vs 11.10 s (7562 12.03), heavy 0.73-0.87x, but c1 p50 14.0 vs 11.5 ms, c8 p50 +16 %, mixed small p99 285 vs 190 ms, RSS +31 % (anon +66 %), CPU +14 %; raw scans 1/4/8 no gain. Isolation black-box: 0/56 cross-catalog reads, other TEMP views invisible, DDL/SET/secrets/logs refused; multi-user/Ranger not testable on the stand. **Maintainer decision: not the default yet.** Next for item 22: (1) a thread cap for the shared DuckDB on large nodes (e.g. min(cores, 8) by default, measure c1/c8 tails and mixed p99 at 16 cores); (2) step (b): multi-user + Ranger-filtered views isolation tests with shared mode in CI; (3) size the node memory limit with the +30-66 % native memory seen here. Then the stand re-runs shared vs off.
+- 2026-10-29 (cloud session, core lane): subqueries under an authorization provider (b3bbcce) - the plugins lane's
+  hand-off ("a proper check of subquery tables ... core lane's call"); no other core code item was open. New
+  `QueryTables`: one small in-memory DuckDB (1 thread, 64MB, no external access, no extension autoload, locked
+  config) serializes the text with `json_serialize_sql`; every `BASE_TABLE` of the tree is named (CTE names skipped
+  only where in scope: a CTE sees itself and earlier CTEs, the body sees all, sibling subqueries do not), anything a
+  check cannot name (`TABLE_FUNCTION`, `SHOW_REF`, catalog-qualified names, unknown `from_table` kinds) is refused;
+  256-entry cache per text. `FlightAuthorization.requireQuery` uses it whenever `ParquetQueryParser.hasNestedQuery`
+  (subquery, CTE, set operation; the plain FROM wrapper keeps the old path, plain queries unchanged and pay nothing).
+  So `UNION`/`WITH`/`IN (SELECT ...)` run again for allowed callers (complete mode; partial mode still refuses
+  nested queries) and are UNAUTHORIZED for others. Tests: `FlightAuthorizationSubqueryTest` (33 cases incl. CTE
+  shadowing, sibling scopes, lateral, time travel, recursive CTE, table functions, DESCRIBE), `RangerAuthorizationTest`
+  (UNION now checked), `RangerHiveFlightSqlTest` (restricted users UNAUTHORIZED, `tess` gets answers in complete
+  mode); `SharedDatabaseAuthorizationIntegrationTest` unchanged and green. Dev CI package run 40845151877 green (build + package; the push run 40845149128 was superseded), pre-release `server-1.0.0-b3bbcce19996`. **Stand:** with `ranger`/`ranger-hive`, a subquery / CTE / UNION query by a user with and without access to the inner table. Next core code step:
+  none known (S3 screening answer, shared-DuckDB stand round and decision pending).
