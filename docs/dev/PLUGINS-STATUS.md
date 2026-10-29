@@ -539,11 +539,40 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     policy is neither readable nor listed. **It found a core authorization bypass** (any provider): tables read only
     inside subqueries or joined with quoted names were never checked - fixed in core commit f411c13 (see
     `STATUS.md` Log, CHANGELOG Security; subqueries now refused under a provider).
-    *Next step:* the hive plugin variant of the end-to-end test (a Hive catalog schema, e.g. as
-    `HiveViewIntegrationTest` builds it with `StoreRegistry.open`, plus `.authorization(...)`; catalog views: view
-    and source tables checked, invoker rights). After the maintainer's answer on the restriction hook (Open
-    questions, "P6 step 3"): core restriction hook (own commits), (4) row filters via the `HiveViewSql` whitelist,
-    (5) end-to-end with masks applied.
+    *Step 3 (c iv) done 2026-10-29 (test only):* `RangerHiveCatalogTest` (integration, module test; the server
+    test-jar's `HiveTestTables` + `StoreRegistry.open` with the packaged hive plugin and the in-process metastore,
+    `hive.orcTables/textTables/views=true`): database `hvranger` with an ORC table (Arrow stream reads), a Parquet
+    and a text table, views `v_orc`, `v_pq`, `v_join` (ORC x text). An unrestricted reader gets every table and
+    view in full (both modes); a column deny on the ORC table refuses it and `v_orc` / `v_join`; a mask (Parquet)
+    and a row filter (text) refuse those tables and `v_pq` / `v_join`, in plain queries, count(*), joins and
+    IN-subqueries, both modes; a view granted without its source table is refused (invoker rights, see Open
+    questions "P4, views"); GetTables lists only readable tables and views; the database is visible to a user
+    with a policy only on a view inside it (`_any`). No code change was needed.
+    **Found on the way (core, not fixed here):** a Flight SQL server started second in one JVM answers a
+    partial-mode join with quoted names (`... JOIN "sales"."orders" t ...`) with INVALID_ARGUMENT `Catalog Error:
+    Table with name "sales.orders" does not exist because schema "sales" does not exist` - reproduced with two
+    copies of `RangerHiveFlightSqlTest` (each alone passes; the same query unquoted passes). Process-wide state
+    suspected (not `ParquetQueryParser`'s parse cache, its parses are immutable; not `PluginRefusedFunctions`);
+    an error, never wrong rows, and one server per JVM in production - but a race at startup is not ruled out.
+    The module now runs one JVM per test class (`reuseForks=false`). Noted in `STATUS.md` Log for the core lane.
+    *Next steps (FINISH MODE, maintainer 2026-10-29 13:15 = go-ahead for the restriction-hook proposal in Open
+    questions "P6 step 3"; its two sub-questions are taken with the proposal's conservative answers: all columns
+    when the server cannot tell, no extra Ranger check at DoGet - the HMAC-signed ticket carries the rewritten SQL):*
+    (A) core, own commit, additive: `TableRestriction` record (`allowed`, `rowFilter` DuckDB SQL or null,
+    `masks` column -> DuckDB SQL; `UNRESTRICTED`, `DENIED`) and `FlightAuthorization.restrictTable(principal,
+    schema, table, columns)` default = `canReadTable ? UNRESTRICTED : DENIED`; `columns` = name -> declared type
+    of the referenced columns (all for `*` / unsure). (B) core: `requireQuery` -> per referenced table
+    `restrictTable`; a restricted table's references (the `TableReferences` positions `CatalogViews.arrowStreams`
+    already replaces: FROM / JOIN / comma, after view expansion) become `(SELECT <mask or col> AS col, ... FROM
+    s.t WHERE <filter>) AS <alias or t>`; partial mode: a restricted query is answered complete (one endpoint), so
+    the parts/planner path needs no change; anything not rewritable (unqualified name, table function, a reference
+    the rewrite cannot place) -> UNAUTHORIZED. Tests in flight-server with a fake provider (mask, filter, both,
+    self-join, view source, both modes, ticket replay keeps the rewrite). (C) ranger-hive: `restrictTable` from
+    `HivePolicies.readTable` (masks via `HiveMask.sql`, needs Hive types: from the server's declared column types
+    mapped back, or the catalog's Hive types if the core passes them - decide in (A)); (D) row filters: Hive
+    expression -> DuckDB through the `HiveViewSql` whitelist, else deny; (E) extend `RangerHiveCatalogTest`:
+    masked values = Hive's algorithm, filtered rows, both modes; docs (README, START-NOTES), CHANGELOG, then
+    write "PLUGINS LANE DONE".
 
 ## Open questions
 
@@ -851,3 +880,11 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   nested queries named from DuckDB's `json_serialize_sql` and checked; `RangerHiveFlightSqlTest` adjusted there), so
   that Open question is gone; its CI / pre-release is the core lane's run 40845151877. Lock released.
 - 2026-10-29 (maintainer): lane 4 (catalogs) starts full ACID ORC tables in the hive module (CATALOGS-STATUS Q6) - new classes, small commits; plugins lane please rebase often.
+- 2026-10-29 (plugins session): P6 step 3 (c iv) - `RangerHiveCatalogTest` (46ef1517, test only: hive plugin +
+  metastore, ORC/Parquet/text tables and views, column deny / mask / row filter refuse tables and their views, invoker
+  rights, listings, both modes). Found: a second Flight SQL server in one JVM fails a partial-mode quoted-name join
+  ("schema does not exist") - module now forks per test class; FYI in `STATUS.md` Log for the core lane. Local:
+  module `verify` + Checkstyle + SpotBugs green, 26/26 tests. CI: Dev CI runs on 46ef1517 and the lanes' later
+  commits (40847672478, 40847783421, 40848268191, 40848841146) were all cancelled by newer pushes; run 40849110613
+  (ecbd3c7d, contains 46ef1517) was still running at session end - **next session: confirm it green first.**
+  Maintainer's FINISH MODE read as go-ahead for the restriction hook; plan (A)-(E) in P6 Next steps. Lock released.

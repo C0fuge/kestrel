@@ -2266,3 +2266,10 @@
   and 40847783421 and push runs up to 40848268191 were cancelled by other lanes' pushes (concurrency group); push run
   40848841146 (head 8ed1a8dd, contains 0e9b9b5d) was still running at session end - next session: confirm it green;
   the pre-release for this change is the finish-mode (3) final `package=true` one.
+- 2026-10-29 (plugins lane, FYI for the core lane, not fixed): a Flight SQL server started **second in one JVM**
+  answers a partial-mode join with quoted names (`SELECT p.id FROM sales.products p JOIN "sales"."orders" t ON
+  p.id = t.id`) with INVALID_ARGUMENT `Catalog Error: Table with name "sales.orders" does not exist because schema
+  "sales" does not exist`; the first server in the JVM answers it. Reproduced in `flight-auth-ranger-hive` with two
+  copies of `RangerHiveFlightSqlTest` (each passes alone; unquoted joins pass). Process-wide state suspected (not the
+  parse cache, not `PluginRefusedFunctions`); a startup race is not ruled out. That module now forks one JVM per test
+  class (46ef1517). An error, never wrong rows.
