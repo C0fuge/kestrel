@@ -227,4 +227,7 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
   SpotBugs). README + CHANGELOG (Changed). Local: those + `DistributedCompleteIntegrationTest`,
   `DistributedClusterIntegrationTest` 12/12, checkstyle + spotbugs clean. CI 40807468661 green on the branch
   (cc0867a, before the rebase onto other lanes' commits). On `main` the merge push ends in this `[skip ci]` commit;
-  package=true dispatch on `main` follows (run id in the next line). Next: D7 (perf on 3 containers in CI).
+  package=true dispatches on `main` were cancelled by other lanes' pushes (same concurrency group): 40808931423 on
+  95158856, 40811713278 on f8929cf; Dev CI 40810360247 green on 54181e9 (contains fd6084f). No pre-release with D6
+  yet - next session: confirm a pre-release containing fd6084f, else dispatch package=true on `main` when no other
+  run is in progress. Next: D7 (perf on 3 containers in CI).
