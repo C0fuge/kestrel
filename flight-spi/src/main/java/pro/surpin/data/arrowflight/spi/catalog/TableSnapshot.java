@@ -15,10 +15,12 @@ import java.util.Objects;
  *                         also declared in {@code columns}, with its type
  * @param files data files, in a stable order
  * @param read how the files are read
+ * @param credentials temporary storage credentials for the files (since SPI 1.7); empty when
+ *                    the server's own store credentials read them
  */
 public record TableSnapshot(TableName name, String snapshotId, String fingerprint,
         List<ColumnSpec> columns, List<String> partitionColumns, List<TableFile> files,
-        ReadSpec read) {
+        ReadSpec read, List<StorageCredential> credentials) {
 
     /**
      * Checks the parts and copies the lists.
@@ -30,6 +32,7 @@ public record TableSnapshot(TableName name, String snapshotId, String fingerprin
      * @param partitionColumns partition columns
      * @param files data files
      * @param read read specification
+     * @param credentials storage credentials
      */
     public TableSnapshot {
         Objects.requireNonNull(name, "name");
@@ -39,5 +42,35 @@ public record TableSnapshot(TableName name, String snapshotId, String fingerprin
         columns = columns == null ? List.of() : List.copyOf(columns);
         partitionColumns = partitionColumns == null ? List.of() : List.copyOf(partitionColumns);
         files = files == null ? List.of() : List.copyOf(files);
+        credentials = credentials == null ? List.of() : List.copyOf(credentials);
+    }
+
+    /**
+     * Creates a snapshot read with the server's own store credentials.
+     *
+     * @param name table name
+     * @param snapshotId snapshot ID
+     * @param fingerprint content fingerprint
+     * @param columns declared columns
+     * @param partitionColumns partition columns
+     * @param files data files
+     * @param read read specification
+     */
+    public TableSnapshot(TableName name, String snapshotId, String fingerprint,
+            List<ColumnSpec> columns, List<String> partitionColumns, List<TableFile> files,
+            ReadSpec read) {
+        this(name, snapshotId, fingerprint, columns, partitionColumns, files, read, List.of());
+    }
+
+    /**
+     * Returns this snapshot with other files, keeping everything else.
+     *
+     * @param otherFiles files of the copy
+     * @return snapshot with those files
+     * @since SPI 1.7
+     */
+    public TableSnapshot withFiles(List<TableFile> otherFiles) {
+        return new TableSnapshot(name, snapshotId, fingerprint, columns, partitionColumns,
+                otherFiles, read, credentials);
     }
 }

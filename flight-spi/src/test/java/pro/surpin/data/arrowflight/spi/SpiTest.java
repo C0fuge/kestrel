@@ -14,6 +14,7 @@ import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.StorageCredential;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableFormat;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
@@ -36,7 +37,7 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.6", SpiVersion.current());
+        assertEquals("1.7", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
@@ -44,7 +45,8 @@ class SpiTest {
         assertTrue(SpiVersion.supports("1.4"));
         assertTrue(SpiVersion.supports("1.5"));
         assertTrue(SpiVersion.supports("1.6"));
-        assertFalse(SpiVersion.supports("1.7"));
+        assertTrue(SpiVersion.supports("1.7"));
+        assertFalse(SpiVersion.supports("1.8"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -100,6 +102,29 @@ class SpiTest {
         assertEquals(List.of(), snapshot.columns());
         assertEquals(List.of(), tableFile.deletes().get(0).equalityFieldIds());
         assertThrows(NullPointerException.class, () -> new ReadSpec.IcebergMetadata(null));
+        assertEquals(List.of(), snapshot.credentials());
+    }
+
+    @Test
+    void snapshotsCarryStorageCredentials() {
+        Map<String, SecretValue> options = new java.util.LinkedHashMap<>();
+        options.put("KEY_ID", SecretValue.plain("AKIA"));
+        options.put("SECRET", SecretValue.sensitive("hunter2"));
+        StorageCredential credential = new StorageCredential("s3://b/wh/t", "s3", options,
+                java.time.Instant.EPOCH);
+        options.clear();
+        assertEquals(List.of("KEY_ID", "SECRET"), List.copyOf(credential.options().keySet()));
+        assertFalse(credential.toString().contains("hunter2"));
+        assertThrows(NullPointerException.class,
+                () -> new StorageCredential(null, "s3", Map.of(), null));
+
+        TableFile file = new TableFile("s3://b/wh/t/f.parquet", 10, 0, null, Map.of(), -1, List.of());
+        TableSnapshot snapshot = new TableSnapshot(new TableName("s", "t"), "1", "f", null, null,
+                List.of(file), new ReadSpec.ParquetFiles(false), List.of(credential));
+        TableSnapshot fewer = snapshot.withFiles(List.of());
+        assertEquals(List.of(), fewer.files());
+        assertEquals(List.of(credential), fewer.credentials());
+        assertEquals(snapshot.read(), fewer.read());
     }
 
     @Test
