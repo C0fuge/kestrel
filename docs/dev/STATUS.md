@@ -34,6 +34,14 @@
 > again (c1/c8 p50, mixed p99, TPC-H) on the pre-release. **Next for the core lane: (3)** consolidation of CHANGELOG +
 > START-NOTES (every setting since 7562a5bdb7b9 with its default) and the final `package=true` pre-release; (2) nothing
 > half-done known in the core lane.
+>
+> *(3) docs done 2026-10-29 (e8cb1c78):* CHANGELOG `[Unreleased]` and START-NOTES carry one table "Settings since
+> 7562a5bdb7b9" (changed defaults, new server, plugin and auth-provider settings, each with its default). *(2):* main
+> CI was red (`RangerHiveFlightSqlTest`, quoted-name partial join) - fixed in 4d7c3fa3, green in run 40858061955.
+> **Open for (3):** the final `package=true` pre-release. Run 40860291863 (dispatched by the plugins lane on 146e675,
+> contains both) was running at session end; next core session: if it published `server-1.0.0-146e6757a01f` and
+> nothing runtime-relevant landed since, write "WRAP-UP DONE" here; otherwise dispatch one more `package=true` from
+> main once the plugins/catalogs lanes have stopped pushing (each push cancels the running Dev CI).
 
 > **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than
 > 7562a5bdb7b9.** Same-runner flags in four tracked builds: d22cdac (S3 small p95), 94ad610 (S3 ADBC c1 p95 1.08),
@@ -2291,3 +2299,16 @@
   `FlightSqlProducer.checkQuery` in every query path) and 0e6bcb10 (`restrictTable` takes `List<ColumnSpec>`); SPI
   1.8 5d9e5c12 (`ColumnSpec.sourceType`, additive; hive plugin descriptor now `spi=1.8`). No change for providers
   that do not restrict (defaults). Tests `QueryRestrictionsTest`, `TableRestrictionIntegrationTest`.
+- 2026-10-29 (cloud session, core, finish mode (2)+(3)): (3) consolidated settings table "Settings since 7562a5bdb7b9"
+  in CHANGELOG + START-NOTES (e8cb1c78; 22 server settings incl. the changed defaults of `duckDbThreads`,
+  `duckDbMemoryLimit`, `shutdownDrainSeconds`, 11 plugin settings incl. `iceberg-rest.vendedCredentials`, LDAP / JWT /
+  ranger-hive env settings). (2) main CI red since 9e7bd88 (run 40849577884): `RangerHiveFlightSqlTest` partial-mode
+  join `JOIN "sales"."orders" t` -> "schema sales does not exist". Root cause (also the plugins lane's "second server in
+  one JVM" note): `ParquetQueryParser.extractJoinTables` took only bare `schema.table`, so a quoted table was neither
+  given a join view nor rewritten and resolved only on a worker connection that still held the catalog views from an
+  earlier complete query (thread-dependent, hence flaky). Fixed in 4d7c3fa3 (quoted name parts unquoted when
+  extracted, matched bare or quoted when rewritten; regression test `ParquetQueryParserUnitTest.joinWithQuotedTableNames`).
+  The module's `reuseForks=false` workaround (46ef1517) is no longer needed but harmless - left to the plugins lane.
+  CI: my dispatches 40852025940 (cancelled, red base) and 40853247713 (cancelled by other lanes' pushes); push run
+  40858061955 on c80d71cf (contains the fix) green. Final pre-release: plugins-lane dispatch 40860291863 on 146e675
+  running at session end (see Next steps).
