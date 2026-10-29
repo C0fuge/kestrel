@@ -18,6 +18,11 @@
         no provider registered yet. Runs on the server class path (auth/ranger-hive), not in the plugin loader.
     </description>
 
+    <properties>
+        <!-- The server's Hadoop (flight-server/pom.xml): provided by the deployment. -->
+        <hadoop.version>3.5.0</hadoop.version>
+    </properties>
+
     <!-- The server's versions (gRPC, Netty, Jackson, ...) for the provided server class path. -->
     <dependencyManagement>
         <dependencies>
@@ -36,6 +41,13 @@
             <groupId>pro.surpin.arrowflight</groupId>
             <artifactId>arrow-flight-server</artifactId>
             <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- UserGroupInformation: Ranger users are short names, as in the server's Ranger checks. -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+            <version>${hadoop.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
