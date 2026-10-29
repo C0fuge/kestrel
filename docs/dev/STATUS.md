@@ -2312,3 +2312,10 @@
   CI: my dispatches 40852025940 (cancelled, red base) and 40853247713 (cancelled by other lanes' pushes); push run
   40858061955 on c80d71cf (contains the fix) green. Final pre-release: plugins-lane dispatch 40860291863 on 146e675
   running at session end (see Next steps).
+- 2026-10-29 (lane 4, core + SPI, FYI): **SPI 1.9** (14e86e09, additive): `DuckDbSetup.loadExtensionRefusingFunctions`
+  (default throws UnsupportedOperationException). **Core** (22e90670): `DuckDbSetupValidator` marks that LOAD
+  (`DuckDbSetupPlan.refusingStatements`, 6-argument constructor kept); `DuckDbAdapter.runStorageSetup` runs
+  `SELECT DISTINCT lower(function_name) FROM duckdb_functions()` before and after it and adds the new names to
+  `PluginRefusedFunctions`. Inactive until a plugin asks for it (none yet; the jdbc federation plugin will).
+  Maintainer approved in CATALOGS-STATUS Q4 (b). Lane 4 also changed the iceberg plugin (af1fb7ff): manifests of
+  tables with vended credentials are read with them (plugin only).

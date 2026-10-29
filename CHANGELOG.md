@@ -118,6 +118,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   files below the prefix, only below the catalog's roots, refreshed when the catalog returns new ones (the plugin
   reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Catalogs CI entry
   `lakekeeper-s3-vended`.
+- SPI 1.9: `DuckDbSetup.loadExtensionRefusingFunctions(name)` - loads an extension and refuses in client queries
+  every function and table function it adds (the server compares `duckdb_functions()` before and after the load, so
+  a later build of the extension cannot add an unrefused one; names that existed before stay allowed; startup line
+  `duckdb=extensionFunctionsRefused`). For plugins whose extensions do their own I/O (the coming jdbc federation
+  plugin). No change for existing plugins. (Lane 4, Q4 (b); tests `DuckDbSetupValidatorTest`, `DuckDbAdapterTest`.)
 - Iceberg REST vended credentials, manifests (lane 4, C1 step 2b (ii)): with `vendedCredentials` the plugin also
   reads a table's manifest lists and manifests with the vended S3 credentials (its own SigV4-signed HEAD / ranged GET
   on the JDK HTTP client, no AWS SDK; endpoint, region, path style and session token from the vended config), for
