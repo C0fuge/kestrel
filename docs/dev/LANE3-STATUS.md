@@ -29,7 +29,7 @@ D3. Faster detection of a crashed member (`STATUS.md` Open question, item 0d fol
 D4. ~~Hazelcast test-port race~~ *done 2026-10-28 (256bddd, see Log):* `TestPorts`.
 D5. ~~D2 observed gap: force the after-first-batch cut path~~ *done 2026-10-29 (see Log):*
     `DistributedCompleteCutAfterFirstBatchTest`.
-D6. **Q1 answered (maintainer 2026-10-29): yes** - rethrow as `UNAVAILABLE` ("peer lost during distributed complete
+D6. ~~**Q1 answered (maintainer 2026-10-29): yes**~~ *done 2026-10-29 (fd6084f, see Log).* Rethrow as `UNAVAILABLE` ("peer lost during distributed complete
     answer; retry") when a peer stream ended with UNAVAILABLE/transport error after the first batch; other failures
     stay INTERNAL; opt-in path only; test + doc line.
 D7. Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that merge: q01, q06, q12-like aggregates,
@@ -216,3 +216,15 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
 - 2026-10-29 (lane 3 session, 11th): lock 01:28Z. Confirmed the D5 commit b693ad2 green on `main` (Dev CI 40798070064
   on 01884e2). The only open item, D6, waits for the maintainer to choose it; wrote the status-code candidate as Q1
   (Open questions, proposal (a) `UNAVAILABLE`) so it can be answered. No code change. Next: D6 / Q1 answer.
+- 2026-10-29 (lane 3 session, 12th): lock 02:28Z. D6 done (fd6084f, rebase-merged into `main`): when a merged answer
+  fails after the client's first batch, `DistributedComplete.stream` checks the first failure of an endpoint stream
+  (recorded by `EndpointAnswers`, `failure()`); if it is `UNAVAILABLE` or has an `IOException` among its causes
+  (`peerLost`), the client gets `UNAVAILABLE` "peer lost during distributed complete answer; retry: <peer error>"
+  (counter `peersLost()`, log `distributedComplete=peerLost`); any other failure, or a merge that fails without an
+  endpoint failure, keeps its error (`INTERNAL`). Tests: `DistributedCompletePeerLostTest` (unit, classifier),
+  `DistributedCompleteCutAfterFirstBatchTest` now asserts `UNAVAILABLE` + the text + `peersLost()==1` (it got
+  `INTERNAL` before). `EndpointAnswers` counters are `AtomicLong` now (read by the caller after DuckDB's scan thread;
+  SpotBugs). README + CHANGELOG (Changed). Local: those + `DistributedCompleteIntegrationTest`,
+  `DistributedClusterIntegrationTest` 12/12, checkstyle + spotbugs clean. CI 40807468661 green on the branch
+  (cc0867a, before the rebase onto other lanes' commits). On `main` the merge push ends in this `[skip ci]` commit;
+  package=true dispatch on `main` follows (run id in the next line). Next: D7 (perf on 3 containers in CI).
