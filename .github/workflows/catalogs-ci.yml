@@ -35,12 +35,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # <catalog>-s3: the warehouse is an S3 bucket (static keys; the catalog vends none yet).
+        # <catalog>-s3: the warehouse is an S3 bucket (static keys; the catalog vends none).
+        # lakekeeper-s3-vended: Lakekeeper vends temporary credentials (moto STS AssumeRole); the
+        # plugin asks for them (vendedCredentials) and DuckDB reads the data files with them.
         # unity-catalog: Unity Catalog OSS, managed Iceberg tables on a local storage root.
         # iceberg-rest-fixture-ozone-s3: as iceberg-rest-fixture-s3, the S3 server is Apache Ozone's
         # S3 gateway instead of moto (C3: Ozone as an S3 backend).
         catalog: [ polaris, iceberg-rest-fixture, polaris-s3, iceberg-rest-fixture-s3, lakekeeper-s3,
-                   unity-catalog, iceberg-rest-fixture-ozone-s3 ]
+                   lakekeeper-s3-vended, unity-catalog, iceberg-rest-fixture-ozone-s3 ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -76,7 +78,7 @@ jobs:
       # anonymous pulls since 2026-10; moto accepts any key, so the keys only travel), bucket
       # "lake"; the catalogs run on the host network and use the same keys (test-only, generated).
       - name: Start S3
-        if: endsWith(matrix.catalog, '-s3')
+        if: contains(matrix.catalog, '-s3')
         run: |
           set -euo pipefail
           key=$(openssl rand -hex 8)
@@ -209,6 +211,16 @@ jobs:
                 echo "ICEBERG_REST_IT_WAREHOUSE=conformance"
               } >> "$GITHUB_ENV"
               ;;
+            lakekeeper-s3-vended)
+              tools/ci/lakekeeper-setup.sh vakamo/lakekeeper:v0.13.8 conformance lake lakekeeper \
+                http://localhost:9000 "$S3_KEY" "$S3_SECRET" sts
+              {
+                echo "ICEBERG_REST_IT_ROOT=s3://lake/lakekeeper"
+                echo "ICEBERG_REST_IT_URI=http://localhost:8181/catalog"
+                echo "ICEBERG_REST_IT_WAREHOUSE=conformance"
+                echo "ICEBERG_REST_IT_VENDED=true"
+              } >> "$GITHUB_ENV"
+              ;;
           esac
 
       - name: Conformance test
@@ -235,7 +247,7 @@ jobs:
           ./mvnw test -pl flight-server -Dtest=RestCatalogServerConformanceTest \
             -Dsurefire.failIfNoSpecifiedTests=false -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           # The metastore reference runs on local warehouses only (one skip on the S3 entries).
-          S3_ENTRY=${{ endsWith(matrix.catalog, '-s3') }} python3 - <<'EOF'
+          S3_ENTRY=${{ contains(matrix.catalog, '-s3') }} python3 - <<'EOF'
           import os, xml.etree.ElementTree as ET
           s = ET.parse("flight-server/target/surefire-reports/"
                        "TEST-pro.surpin.data.arrowflight.server.catalog.RestCatalogServerConformanceTest.xml").getroot()

@@ -126,6 +126,9 @@ class RestCatalogServerConformanceTest {
         // Catalogs with tables of their own (Unity Catalog's samples) show the test's namespace only.
         env("ICEBERG_REST_IT_NAMESPACES")
                 .ifPresent(v -> sys.put("arrowflight.iceberg-rest.namespaces", v));
+        // A vending catalog: DuckDB reads the data files with the table's temporary credentials.
+        env("ICEBERG_REST_IT_VENDED")
+                .ifPresent(v -> sys.put("arrowflight.iceberg-rest.vendedCredentials", v));
         env("ICEBERG_REST_IT_SCOPE").ifPresent(v -> {
             writer.put("scope", v);
             sys.put("arrowflight.iceberg-rest.scope", v);

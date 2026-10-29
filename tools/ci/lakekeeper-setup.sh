@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Starts Lakekeeper (with a PostgreSQL container, both on the host network; authentication off)
-# and creates warehouse <warehouse> in bucket <bucket> under <key prefix> on an S3 endpoint
-# without STS, with static keys (Lakekeeper vends none). Test-only credentials.
+# and creates warehouse <warehouse> in bucket <bucket> under <key prefix> on an S3 endpoint with
+# static keys; without STS Lakekeeper vends none, with "sts" (8th argument) it vends temporary
+# credentials from the endpoint's AssumeRole (moto). Test-only credentials.
 # Lakekeeper's metrics port moves to 9100: 9000 is the S3 endpoint.
-# Usage: lakekeeper-setup.sh <image> <warehouse> <bucket> <key prefix> <s3 endpoint> <key> <secret>
+# Usage: lakekeeper-setup.sh <image> <warehouse> <bucket> <key prefix> <s3 endpoint> <key> <secret> [sts]
 set -euo pipefail
-image=$1 warehouse=$2 bucket=$3 prefix=$4 endpoint=$5 key=$6 secret=$7
+image=$1 warehouse=$2 bucket=$3 prefix=$4 endpoint=$5 key=$6 secret=$7 sts=${8:-}
+if [[ "$sts" == sts ]]; then
+  sts_json='"sts-enabled": true, "sts-role-arn": "arn:aws:iam::123456789012:role/lakekeeper"'
+else
+  sts_json='"sts-enabled": false'
+fi
 pg=$(openssl rand -hex 12)
 docker run -d --name lakekeeper-pg --network host -e "POSTGRES_PASSWORD=$pg" \
   -e POSTGRES_DB=lakekeeper postgres:17-alpine
@@ -21,7 +27,7 @@ curl -fsS -X POST http://localhost:8181/management/v1/bootstrap -H 'Content-Type
 curl -fsS -X POST http://localhost:8181/management/v1/warehouse -H 'Content-Type: application/json' -d @- <<JSON
 {"warehouse-name": "$warehouse",
  "storage-profile": {"type": "s3", "bucket": "$bucket", "key-prefix": "$prefix", "region": "us-east-1",
-   "endpoint": "$endpoint", "path-style-access": true, "flavor": "s3-compat", "sts-enabled": false},
+   "endpoint": "$endpoint", "path-style-access": true, "flavor": "s3-compat", $sts_json},
  "storage-credential": {"type": "s3", "credential-type": "access-key",
    "aws-access-key-id": "$key", "aws-secret-access-key": "$secret"}}
 JSON

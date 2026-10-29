@@ -1,7 +1,9 @@
 package pro.surpin.data.arrowflight.plugin.iceberg;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.spi.catalog.Catalog;
 import pro.surpin.data.arrowflight.spi.catalog.DeleteFile;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
+import pro.surpin.data.arrowflight.spi.catalog.StorageCredential;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
@@ -50,7 +53,8 @@ import pro.surpin.data.arrowflight.spi.storage.StoreUse;
  * {@code ICEBERG_REST_IT_WAREHOUSE}, {@code ICEBERG_REST_IT_CREDENTIAL} (OAuth2 id:secret),
  * {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_OAUTH_URI},
  * {@code ICEBERG_REST_IT_OMIT_COLUMNS} (columns of table {@code types} the catalog refuses, left
- * out of both warehouses).
+ * out of both warehouses), {@code ICEBERG_REST_IT_VENDED=true} (the catalog vends temporary S3
+ * credentials: the plugin asks for them and every table must carry them).
  */
 @Tag("rest-catalogs")
 class RestCatalogConformanceTest {
@@ -116,6 +120,9 @@ class RestCatalogConformanceTest {
             settings.put("oauthUri", v);
             writer.put("oauth2-server-uri", v);
         });
+        if (vended()) {
+            settings.put("vendedCredentials", "true");
+        }
         restMetadata = IcebergFixtures.writeRest(writer, omitted());
     }
 
@@ -128,6 +135,16 @@ class RestCatalogConformanceTest {
     static Set<String> omitted() {
         return env("ICEBERG_REST_IT_OMIT_COLUMNS").map(v -> Set.of(v.split("\\s*,\\s*")))
                 .orElse(Set.of());
+    }
+
+    /**
+     * Tells whether the catalog vends credentials and the plugin asks for them
+     * ({@code ICEBERG_REST_IT_VENDED=true}).
+     *
+     * @return true for a vending catalog
+     */
+    private static boolean vended() {
+        return env("ICEBERG_REST_IT_VENDED").map(Boolean::parseBoolean).orElse(false);
     }
 
     private static Optional<String> env(String name) {
@@ -182,6 +199,17 @@ class RestCatalogConformanceTest {
                         actual.read(), table);
                 assertEquals(Locations.normalize(restMetadata.get(table)),
                         Locations.normalize(read.metadataLocation()), table);
+                if (vended()) {
+                    // Temporary credentials of the catalog's own, not the warehouse's static keys.
+                    assertFalse(actual.credentials().isEmpty(), table);
+                    for (StorageCredential credential : actual.credentials()) {
+                        assertNotEquals(env("ICEBERG_REST_IT_S3_ACCESS_KEY").orElse(""),
+                                credential.options().get("KEY_ID").value(), table);
+                        assertTrue(credential.options().containsKey("SESSION_TOKEN"), table);
+                    }
+                } else {
+                    assertEquals(List.of(), actual.credentials(), table);
+                }
             }
         }
     }
