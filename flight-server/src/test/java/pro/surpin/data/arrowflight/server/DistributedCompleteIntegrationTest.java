@@ -53,7 +53,9 @@ class DistributedCompleteIntegrationTest {
                 // File 3 has no row with k = 9; v is unique over the table.
                 statement.execute("COPY (SELECT (i % " + (f == 3 ? 9 : 10) + ")::INTEGER AS k,"
                         + " (i * " + FILES + " + " + f + ")::BIGINT AS v, (i / 4.0)::DOUBLE AS d,"
-                        + " 'n' || (i % 13) AS name FROM range(1000) r(i))"
+                        + " 'n' || (i % 13) AS name,"
+                        + " ((i * 7919 + " + f + ") % 100003 / 100.0)::DECIMAL(15,2) AS amount"
+                        + " FROM range(1000) r(i))"
                         + " TO '" + table.resolve("part-" + f + ".parquet") + "' (FORMAT PARQUET)");
             }
         }
@@ -101,7 +103,11 @@ class DistributedCompleteIntegrationTest {
             "SELECT DISTINCT name FROM s.t ORDER BY name",
             "SELECT v, name FROM s.t WHERE v % 7 = 0 ORDER BY v DESC LIMIT 5",
             "SELECT v, k FROM s.t WHERE v < 40 ORDER BY 1",
-            "SELECT k, count(*) AS n FROM s.t WHERE k = 9 GROUP BY k ORDER BY k");
+            "SELECT k, count(*) AS n FROM s.t WHERE k = 9 GROUP BY k ORDER BY k",
+            "SELECT avg(v) AS a FROM s.t",
+            "SELECT k, avg(amount) AS aa, count(*) AS n, avg(v), avg(d) AS ad FROM s.t"
+                    + " GROUP BY k ORDER BY aa DESC",
+            "SELECT k, avg(CASE WHEN k < 5 THEN amount END) AS half FROM s.t GROUP BY k ORDER BY 1");
 
     /**
      * Verifies merged answers equal the answers the node computes alone.
@@ -129,7 +135,8 @@ class DistributedCompleteIntegrationTest {
     @Test
     void refusedShapeKeepsSingleNodePath() throws Exception {
         for (String query : List.of("SELECT k, count(*) AS n FROM s.t GROUP BY k ORDER BY k LIMIT 3",
-                "SELECT avg(v) AS a FROM s.t")) {
+                "SELECT avg(DISTINCT v) AS a FROM s.t",
+                "SELECT k, avg(v) FROM s.t GROUP BY k ORDER BY avg(v)")) {
             String alone = answer(query);
             useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
             assertEquals(alone, answer(query), query);

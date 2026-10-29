@@ -378,7 +378,9 @@ not implement, so its query fails with `Unrecognized request: endpoints` (use Du
 complete-mode query compute it with the cluster: it plans the query in parts as partial mode does, reads
 every part from its node with a Flight DoGet as the client's user, and merges the parts in its own DuckDB.
 Only query shapes whose merge is exact are distributed (one table; plain columns, `count`/`sum`/`min`/`max`,
-`GROUP BY` of selected columns, `DISTINCT`, `ORDER BY` over output columns, `LIMIT` except on aggregates;
+plain `avg` - the parts answer `sum` and `count`, the merge divides as DuckDB's `avg` does, so DECIMAL and integer
+averages are bit-identical while the unscaled sum stays below 2^53 and may differ in the last bit beyond it, as
+floating-point averages and sums may -, `GROUP BY` of selected columns, `DISTINCT`, `ORDER BY` over output columns, `LIMIT` except on aggregates;
 no parameters, no time travel) and only when the plan has at least two parts; the answer has the same
 columns as on one node. Every other query, and any refusal or peer failure before the first batch reaches
 the client, keeps the single-node path; a failure after the first batch fails the query: with `UNAVAILABLE`

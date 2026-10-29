@@ -264,6 +264,16 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Prepares SQL text as {@link #parse} does before the SQL parser reads it.
+     *
+     * @param query SQL text
+     * @return SQL text as the SQL parser reads it
+     */
+    static String normalized(String query) {
+        return flattenSubqueryWrapper(castTypedLiterals(withoutTrailingSemicolon(query)));
+    }
+
+    /**
      * Drops the statement terminator many clients append.
      *
      * @param query SQL text

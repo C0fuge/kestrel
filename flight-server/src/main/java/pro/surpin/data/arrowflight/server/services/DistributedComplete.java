@@ -22,6 +22,7 @@ import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.IpcOption;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
@@ -51,7 +52,9 @@ import java.util.function.Function;
  * query in parts, reads every endpoint from its node with a Flight DoGet as the client's user
  * ({@link InternalCallIdentity}), and merges the endpoint answers in its own DuckDB
  * ({@link CompleteAnswerMerge}). An endpoint answer that fails before its schema is read from the
- * endpoint's backup locations in order. Queries whose shape does not merge, plans of one endpoint,
+ * endpoint's backup locations in order. A query with plain averages is planned as its
+ * {@link AverageMerge} part query (sums and counts) and the averages are divided out in the merge.
+ * Queries whose shape does not merge, plans of one endpoint,
  * and failures before the first batch reaches the client keep today's path (this node computes the
  * answer alone); a failure after the first batch fails the query: with {@code UNAVAILABLE} when an
  * endpoint answer was lost (the peer's stream ended with {@code UNAVAILABLE} or a transport error),
@@ -135,12 +138,22 @@ public final class DistributedComplete implements AutoCloseable {
     public boolean stream(String query, String user, FlightProducer.ServerStreamListener listener)
             throws Exception {
         ParquetQueryParser parsed = mergeable(query);
+        AverageMerge averages = null;
+        String partQuery = query;
         if (parsed == null) {
-            return false;
+            averages = AverageMerge.of(query);
+            if (averages == null) {
+                return false;
+            }
+            partQuery = averages.partQuery();
+            parsed = mergeable(partQuery);
+            if (parsed == null) {
+                return false;
+            }
         }
         QueryPlan plan;
         try {
-            plan = planner.plan(query);
+            plan = planner.plan(partQuery);
         } catch (IOException | RuntimeException e) {
             LOGGER.info("node={} distributedComplete=fallback reason='planning: {}' query='{}'",
                     LogUtil.node(), e.getMessage(), query);
@@ -168,8 +181,10 @@ public final class DistributedComplete implements AutoCloseable {
             client.expect(expected);
             List<String> columns = schema.getFields().stream().map(Field::getName).toList();
             String name = VIEW_PREFIX + NEXT.incrementAndGet();
-            String sql = CompleteAnswerMerge.mergeSql(parsed, name, columns,
-                    expected.getFields().stream().map(Field::getName).toList());
+            List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
+            String sql = averages == null
+                    ? CompleteAnswerMerge.mergeSql(parsed, name, columns, outputNames)
+                    : averages.mergeSql(parsed, name, columns, sumScales(schema), outputNames);
             answers = new EndpointAnswers(allocator, streams, schema);
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
@@ -209,6 +224,27 @@ public final class DistributedComplete implements AutoCloseable {
         } finally {
             closeAll(streams);
         }
+    }
+
+    /**
+     * Reads the scale of each endpoint answer column for {@link AverageMerge#average}.
+     *
+     * @param schema schema of the endpoint answers
+     * @return per column, the decimal scale, 0 for an integer, null for any other type
+     */
+    static List<Integer> sumScales(Schema schema) {
+        List<Integer> scales = new ArrayList<>(schema.getFields().size());
+        for (Field field : schema.getFields()) {
+            ArrowType type = field.getType();
+            if (type instanceof ArrowType.Decimal decimal) {
+                scales.add(decimal.getScale());
+            } else if (type instanceof ArrowType.Int) {
+                scales.add(0);
+            } else {
+                scales.add(null);
+            }
+        }
+        return scales;
     }
 
     /**

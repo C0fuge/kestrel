@@ -10,6 +10,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Distributed complete mode (opt-in `distributedComplete`) merges plain `avg` items (lane 3, D10): the parts are
+  planned with `sum` and `count` in place of each average and the merge divides as DuckDB's `avg` does (DECIMAL
+  and integer averages bit-identical to the single-node answer while the unscaled sum is below 2^53). TPC-H q01
+  is now computed by the cluster; `avg(DISTINCT ...)`, `FILTER`/`OVER` and `ORDER BY avg(...)` keep the
+  single-node path.
 - Manual workflow `distributed-join.yml` (lane 3, D9) and `NodeJoinUnderLoadIntegrationTest`: a node joins (and
   then leaves) a cluster under query load; no wrong answers, no failures, the new node is planned on. The load
   client (`RollingRestartLoadTest`) takes `-Dload.joinServers` / `-Dload.joinFile` and prints the first time an

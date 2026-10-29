@@ -49,13 +49,9 @@ public final class CompleteAnswerMerge {
         if (parsed.completeAnswerReason != null) {
             return parsed.completeAnswerReason;
         }
-        if (parsed.orderBy != null) {
-            for (String item : parsed.orderBy.split(",")) {
-                String trimmed = item.trim();
-                if (!ORDER_ITEM.matcher(trimmed).matches() && !ORDER_ORDINAL.matcher(trimmed).matches()) {
-                    return "ORDER BY " + trimmed;
-                }
-            }
+        String orderRefusal = orderRefusal(parsed);
+        if (orderRefusal != null) {
+            return orderRefusal;
         }
         if (parsed.hasAggregation) {
             if (parsed.limit != null) {
@@ -69,6 +65,25 @@ public final class CompleteAnswerMerge {
                 if (parsed.selectExprs.stream().noneMatch(e -> e.func == AggFunc.COLUMN
                         && sameColumn(e.inputColumn, groupColumn))) {
                     return "The GROUP BY column '" + groupColumn + "' is not selected";
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Tells why the ORDER BY of a query cannot be applied to its merged answer.
+     *
+     * @param parsed parsed client query
+     * @return the first ORDER BY item that is neither a column name nor a select-list position,
+     *         or null
+     */
+    static String orderRefusal(ParquetQueryParser parsed) {
+        if (parsed.orderBy != null) {
+            for (String item : parsed.orderBy.split(",")) {
+                String trimmed = item.trim();
+                if (!ORDER_ITEM.matcher(trimmed).matches() && !ORDER_ORDINAL.matcher(trimmed).matches()) {
+                    return "ORDER BY " + trimmed;
                 }
             }
         }
@@ -129,7 +144,7 @@ public final class CompleteAnswerMerge {
                 .append(outputNames == null ? "*" : renamed(partColumns, outputNames))
                 .append(" FROM (").append(sql).append(") AS merged");
         if (parsed.orderBy != null) {
-            outer.append(" ORDER BY ").append(orderBy(parsed, partColumns));
+            outer.append(" ORDER BY ").append(orderBy(parsed, partColumns, "merged"));
         }
         if (parsed.limit != null) {
             outer.append(" LIMIT ").append(parsed.limit);
@@ -196,11 +211,12 @@ public final class CompleteAnswerMerge {
      * Rewrites the ORDER BY of a query over the merged answer, where only output names exist.
      *
      * @param parsed parsed client query
-     * @param partColumns column names of the endpoint answers
+     * @param partColumns column names of the relation being ordered
+     * @param relation name of the relation being ordered
      * @return ORDER BY items over the output names
      * @throws IllegalArgumentException when an item is not an output column
      */
-    private static String orderBy(ParquetQueryParser parsed, List<String> partColumns) {
+    static String orderBy(ParquetQueryParser parsed, List<String> partColumns, String relation) {
         requireDistinctNames(partColumns);
         List<String> items = new ArrayList<>();
         for (String item : parsed.orderBy.split(",")) {
@@ -221,7 +237,7 @@ public final class CompleteAnswerMerge {
                         + " is not an output column and cannot be merged from endpoint answers");
             }
             // Qualified: an output name of the complete answer must not shadow the input column.
-            items.add("merged." + DuckDbAdapter.quoteIdentifier(name) + named.group(2));
+            items.add(relation + "." + DuckDbAdapter.quoteIdentifier(name) + named.group(2));
         }
         return String.join(", ", items);
     }
