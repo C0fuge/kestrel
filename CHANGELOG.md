@@ -18,6 +18,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as the built-in `ranger` provider does; the default calls `create(environment)`, so existing providers are unchanged.
 - Manual workflow `tpch-perf.yml` takes `store=s3`: the TPC-H Parquet files served by a local S3 endpoint and read
   through the s3 plugin, to compare builds on S3; `s3latency` (e.g. `10ms`) adds a round trip to that endpoint only.
+- `tpch-perf.yml` input `clients=N`: every pass on N concurrent Java clients (each starting at another query, answers
+  checked per client, failed queries reported per query); every configuration reports the container's peak memory.
 - `tpch-perf.yml` input `client=adbc` runs the 22 queries through the ADBC Flight SQL driver (Go, via Python;
   `tools/ci/tpch-adbc.py`) instead of the Java Flight SQL client, as the CI screening measures.
 - Plain Flight descriptors for generic Flight clients (ClickHouse `arrowFlight`, plain Flight libraries), with the
