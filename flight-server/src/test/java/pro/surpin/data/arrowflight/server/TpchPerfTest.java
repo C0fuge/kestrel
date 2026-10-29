@@ -7,6 +7,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import org.apache.arrow.flight.CallOption;
@@ -38,7 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code total r<n> <seconds> s} line per pass. The checksum is order-independent with
  * floating-point values rounded, so runs with other thread counts can be compared. Asserts the
  * row count of every answer: the one in {@code qNN.rows} next to the query when present, else
- * at least one row.
+ * at least one row. {@code -Dperf.clients=N} (default 1) runs each pass on N concurrent clients,
+ * each starting at another query, and tags their lines {@code c0} .. {@code c<N-1>}; a pass's
+ * total is then its wall-clock time. Failed queries and wrong row counts are printed per query
+ * and fail the test at the end.
  */
 @Tag("perf")
 class TpchPerfTest {
@@ -67,33 +74,95 @@ class TpchPerfTest {
             expectedRows.add(Files.exists(rows) ? Long.parseLong(Files.readString(rows).trim()) : -1L);
         }
         int rounds = Integer.parseInt(System.getProperty("perf.rounds", "2"));
+        int clients = Integer.parseInt(System.getProperty("perf.clients", "1"));
         FlightCallHeaders headers = new FlightCallHeaders();
         headers.insert("x-flight-result-mode", System.getProperty("perf.mode", "complete"));
         CallOption header = new HeaderCallOption(headers);
         String[] hostPort = external.split(":");
-        try (BufferAllocator allocator = new RootAllocator();
-                FlightClient flight = FlightClient.builder(allocator,
-                        Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]))).build()) {
-            FlightSqlClient client = new FlightSqlClient(flight);
-            for (int r = 0; r <= rounds; r++) {
-                long total = 0;
-                for (int i = 0; i < sqls.size(); i++) {
-                    long t0 = System.nanoTime();
-                    long[] answer = read(client, client.execute(sqls.get(i), header), header);
-                    long nanos = System.nanoTime() - t0;
-                    total += nanos;
-                    String name = files.get(i).getFileName().toString().replace(".sql", "");
-                    if (expectedRows.get(i) >= 0) {
-                        assertEquals(expectedRows.get(i).longValue(), answer[0], name + " rows");
-                    } else {
-                        assertTrue(answer[0] > 0, name + " answered no rows");
-                    }
-                    System.out.printf(Locale.ROOT, "%s r%d %9.1f ms rows %d sum %016x%n",
-                            name, r, nanos / 1e6, answer[0], answer[1]);
+        Location location = Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]));
+        List<String> names = files.stream().map(f -> f.getFileName().toString().replace(".sql", "")).toList();
+        AtomicInteger failures = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(clients);
+        try (BufferAllocator allocator = new RootAllocator()) {
+            List<FlightClient> flights = new ArrayList<>();
+            try {
+                for (int c = 0; c < clients; c++) {
+                    flights.add(FlightClient.builder(allocator, location).build());
                 }
-                System.out.printf(Locale.ROOT, "total r%d %.2f s%s%n", r, total / 1e9, r == 0 ? " (warm-up)" : "");
+                for (int r = 0; r <= rounds; r++) {
+                    int pass = r;
+                    long t0 = System.nanoTime();
+                    long[] sums = new long[clients];
+                    List<Future<?>> runs = new ArrayList<>();
+                    for (int c = 0; c < clients; c++) {
+                        int client = c;
+                        runs.add(pool.submit(() -> {
+                            sums[client] = runPass(new FlightSqlClient(flights.get(client)), header, sqls, names,
+                                    expectedRows, pass, client, clients, failures);
+                            return null;
+                        }));
+                    }
+                    for (Future<?> run : runs) {
+                        run.get();
+                    }
+                    long nanos = clients == 1 ? sums[0] : System.nanoTime() - t0;
+                    System.out.printf(Locale.ROOT, "total r%d %.2f s%s%n", r, nanos / 1e9,
+                            r == 0 ? " (warm-up)" : "");
+                }
+            } finally {
+                pool.shutdownNow();
+                for (FlightClient flight : flights) {
+                    flight.close();
+                }
             }
         }
+        assertEquals(0, failures.get(), "queries failed or answered wrong row counts");
+    }
+
+    /**
+     * Runs every query once on one client, from query {@code client * queries / clients} on so
+     * concurrent clients run different queries at a time, and prints one line per query; a
+     * failed query or a wrong row count is printed and counted instead of ending the pass.
+     *
+     * @param client      Flight SQL client
+     * @param header      result-mode header
+     * @param sqls        query texts
+     * @param names       query names
+     * @param expected    expected row counts, -1 = at least one row
+     * @param pass        pass number, 0 = warm-up
+     * @param index       index of the client
+     * @param clients     number of concurrent clients
+     * @param failures    counter of failed queries
+     * @return the summed query time in nanoseconds
+     */
+    private static long runPass(FlightSqlClient client, CallOption header, List<String> sqls, List<String> names,
+            List<Long> expected, int pass, int index, int clients, AtomicInteger failures) {
+        String tag = clients == 1 ? "" : " c" + index;
+        long total = 0;
+        for (int k = 0; k < sqls.size(); k++) {
+            int i = (k + index * sqls.size() / clients) % sqls.size();
+            String name = names.get(i);
+            long t0 = System.nanoTime();
+            try {
+                long[] answer = read(client, client.execute(sqls.get(i), header), header);
+                long nanos = System.nanoTime() - t0;
+                total += nanos;
+                long want = expected.get(i);
+                if (want >= 0 ? answer[0] != want : answer[0] <= 0) {
+                    failures.incrementAndGet();
+                    System.out.printf(Locale.ROOT, "%s r%d wrong rows %d expected %d%s%n", name, pass, answer[0],
+                            want, tag);
+                }
+                System.out.printf(Locale.ROOT, "%s r%d %9.1f ms rows %d sum %016x%s%n",
+                        name, pass, nanos / 1e6, answer[0], answer[1], tag);
+            } catch (Exception e) {
+                failures.incrementAndGet();
+                String message = String.valueOf(e.getMessage()).lines().findFirst().orElse("");
+                System.out.printf(Locale.ROOT, "%s r%d error %.1f ms %s: %s%s%n", name, pass,
+                        (System.nanoTime() - t0) / 1e6, e.getClass().getSimpleName(), message, tag);
+            }
+        }
+        return total;
     }
 
     /**

@@ -10,7 +10,12 @@
 # s3latency adds a network round trip to that endpoint only (tc netem on the loopback, packets to
 # and from port 9000, half the round trip each way), as a remote MinIO has; input client=adbc runs
 # the queries through the ADBC Flight SQL driver (Go, tools/ci/tpch-adbc.py), the CI screening's
-# client, instead of TpchPerfTest's Java Flight SQL client. Not part of Dev CI.
+# client, instead of TpchPerfTest's Java Flight SQL client. Input clients=N (Java client only) runs
+# every pass on N concurrent clients, each starting at another query, so heavy queries overlap
+# (memory check of the shared DuckDB's node-wide memory_limit, STATUS item 22); the -DduckDbThreads=4
+# configuration and its 10 % check are then skipped, every client's answers must equal the
+# default's, and a pass's total is its wall-clock time. Every configuration also reports the
+# container's peak memory (cgroup v2 memory.peak). Not part of Dev CI.
 name: TPC-H perf
 
 on:
@@ -50,6 +55,10 @@ on:
         type: choice
         options: [java, adbc]
         default: java
+      clients:
+        description: "concurrent query clients per pass (java client only; > 1 skips the -DduckDbThreads=4 configuration)"
+        type: string
+        default: "1"
       extra:
         description: "server options of a further configuration measured on this ref, its answers checked against the default's (e.g. -DduckDbSharedDatabase=true; empty = none)"
         type: string
@@ -69,7 +78,7 @@ env:
 jobs:
   perf:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -234,7 +243,8 @@ jobs:
               ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
                 -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
                 -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
-                -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1
+                -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" \
+                -Dperf.clients="${{ inputs.clients }}" > "$RUNNER_TEMP/mvn.log" 2>&1
               grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn.log" || ok=1
             fi
             grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/mvn.log" | sed "s/^/$label: /" >> "$out"
@@ -243,10 +253,14 @@ jobs:
               docker logs srv 2>&1 | tail -n 30
             fi
             docker stats --no-stream --format '{{.MemUsage}}' srv | sed "s/^/$label: container memory /" >> "$out"
+            local peak; peak=$(docker exec srv cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)
+            [ -n "$peak" ] && echo "$label: container memory peak $((peak / 1048576)) MiB" >> "$out"
             docker rm -f srv > /dev/null
           }
           measure "default" head ""
-          measure "threads4" head "-DduckDbThreads=4"
+          if [ "${{ inputs.clients }}" = 1 ]; then
+            measure "threads4" head "-DduckDbThreads=4"
+          fi
           if [ -n "${{ inputs.baseline }}" ]; then
             measure "baseline" base ""
           fi
@@ -260,7 +274,24 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/results.txt"
           best() { grep "^$1: total r" "$out" | grep -v warm-up | awk '{print $4}' | sort -n | head -n 1; }
-          sums() { grep -E "^$1: q[0-9]+ r1 " "$out" | awk '{print $2, $7, $9}'; }
+          # One line per query and client; all clients must agree, so the unique lines are 22.
+          sums() { grep -E "^$1: q[0-9]+ r1 " "$out" | awk '{print $2, $7, $9}' | sort -u; }
+          if grep -E ': q[0-9]+ r[0-9]+ (error|wrong) ' "$out"; then
+            echo "queries failed or answered wrong row counts (lines above)" | tee "$RUNNER_TEMP/check.txt"
+            exit 1
+          fi
+          if [ "${{ inputs.clients }}" != 1 ]; then
+            d=$(best default)
+            echo "${{ inputs.clients }} clients: default pass ${d:-none} s, extra (${{ inputs.extra || 'none' }}) pass $(best extra) s" | tee "$RUNNER_TEMP/check.txt"
+            [ -n "$d" ] && [ "$(sums default | wc -l)" -eq 22 ] || { echo "default: no result or answers differ between clients" | tee -a "$RUNNER_TEMP/check.txt"; exit 1; }
+            if [ -n "${{ inputs.extra }}" ] && [ "$(sums default)" != "$(sums extra)" ]; then
+              echo "answers differ with ${{ inputs.extra }}:" | tee -a "$RUNNER_TEMP/check.txt"
+              diff <(sums default) <(sums extra) | tee -a "$RUNNER_TEMP/check.txt" || true
+              exit 1
+            fi
+            echo "ok: same answers on every client" | tee -a "$RUNNER_TEMP/check.txt"
+            exit 0
+          fi
           d=$(best default); t=$(best threads4)
           echo "default best total ${d:-none} s, -DduckDbThreads=4 best total ${t:-none} s" | tee "$RUNNER_TEMP/check.txt"
           [ -n "$d" ] && [ -n "$t" ] || { echo "a configuration produced no result" | tee -a "$RUNNER_TEMP/check.txt"; exit 1; }
@@ -287,7 +318,7 @@ jobs:
           {
             echo "### TPC-H SF${{ inputs.sf }} (${{ inputs.store }}, ${{ inputs.client }} client${{ inputs.s3latency && format(', S3 RTT +{0}', inputs.s3latency) || '' }}) on $(nproc) runner cores: $GITHUB_SHA"
             echo
-            echo "Server in a container with ${{ inputs.cpus }} CPUs / ${{ inputs.memory }} (-Xmx3g, direct 2g), complete"
+            echo "Server in a container with ${{ inputs.cpus }} CPUs / ${{ inputs.memory }} (-Xmx3g, direct 2g), ${{ inputs.clients }} client(s), complete"
             echo "mode; one warm-up pass, then ${{ inputs.rounds }} measured. Baseline: ${{ inputs.baseline || 'none' }}."
             echo
             echo '```'
@@ -298,6 +329,7 @@ jobs:
             echo '<details><summary>per query</summary>'
             echo
             echo '```'
+            grep -E ': q[0-9]+ r[0-9]+ (error|wrong) ' "$RUNNER_TEMP/results.txt" 2>/dev/null || true
             grep -E ': q[0-9]+ ' "$RUNNER_TEMP/results.txt" 2>/dev/null || true
             echo '```'
             echo '</details>'
