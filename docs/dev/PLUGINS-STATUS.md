@@ -527,15 +527,20 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     test: `HivePoliciesTest.wholeTableFollowsSecurityZones` (zone `pii` on database `hr`: the zone's column
     deny and mask are found, a default-zone deny on `hr.teams` does not apply inside the zone, as Ranger does;
     checked to fail with zone listing removed).
-    *Next step (3c iii):* end-to-end in a real Flight SQL server: a test in `flight-auth-ranger-hive` (package
-    `pro.surpin.data.arrowflight.server`, like `LdapFlightLoginTest`) starting the server with
-    `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive` and a preloaded `HiveRangerPlugin` - needs a package-private test
-    hook in `RangerHiveAuthorizationProviderFactory` (e.g. a static `Function<Map, HiveRangerPlugin>` override)
-    or building `RangerHiveAuthorization` directly; DuckDB schemas named like Hive databases (no metastore
-    needed): masked/denied table refused in a query, in a join, through a catalog view and in GetTables; an
-    unrestricted table answered. Then the hive plugin variant. After the maintainer's answer on the restriction
-    hook (Open questions, "P6 step 3"): core restriction hook (own commits), (4) row filters via the `HiveViewSql`
-    whitelist, (5) end-to-end.
+    *Step 3 (c iii) done 2026-10-29 (0b94507):* `RangerHiveFlightSqlTest` (integration, module test; server test-jar
+    and `hadoop-client` as test dependencies) runs `RangerHiveAuthorization` with in-memory policies in a real Flight
+    SQL server (`TestFlightServerHelper`, basic login) over DuckDB schemas named like Hive databases: a mask
+    (orders), a row filter (payments) and a column deny (customers) refuse the table for that user in plain
+    queries, count(*), joins and quoted joins, in partial and complete mode, while a user without the restriction
+    is answered; subqueries / CTE / UNION refused; GetTables lists only whole-readable tables; a database without a
+    policy is neither readable nor listed. **It found a core authorization bypass** (any provider): tables read only
+    inside subqueries or joined with quoted names were never checked - fixed in core commit f411c13 (see
+    `STATUS.md` Log, CHANGELOG Security; subqueries now refused under a provider).
+    *Next step:* the hive plugin variant of the end-to-end test (a Hive catalog schema, e.g. as
+    `HiveViewIntegrationTest` builds it with `StoreRegistry.open`, plus `.authorization(...)`; catalog views: view
+    and source tables checked, invoker rights). After the maintainer's answer on the restriction hook (Open
+    questions, "P6 step 3"): core restriction hook (own commits), (4) row filters via the `HiveViewSql` whitelist,
+    (5) end-to-end with masks applied.
 
 ## Open questions
 
@@ -595,6 +600,12 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   Questions: is (b)'s "all columns when unsure" (deny on any column-level deny) acceptable? Should tickets
   re-check the restriction at DoGet (policy changes between GetFlightInfo and DoGet), at the cost of one extra
   Ranger evaluation per endpoint?
+
+- (security fix 2026-10-29, f411c13, please confirm) Under an authorization provider, queries with a subquery are
+  now refused (INVALID_ARGUMENT) because their tables were not checked (a data leak, fixed at once). Users who ran
+  `IN (SELECT ...)` / `EXISTS` over tables they may read lose that. Keep the refusal, or have the core lane check
+  subquery tables properly (DuckDB's `json_serialize_sql`, already run by the complete-mode parse check, names
+  every base table) and allow them again?
 
 - (P6, audit) `ranger-hive` audits every table decision, including the per-table filter of `GetTables` (as the
   core `ranger` provider does): a BI tool listing a large catalog writes one audit record per table and listing.
@@ -831,3 +842,11 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   40828739290 (848f11a) green; package dispatch 40830166120 cancelled by the core lane's push, re-dispatched after
   its run 40830188389 finished: 40831727414 (85a7908) green, pre-release `server-1.0.0-85a790826156`. New Open
   question (P6, audit of GetTables listings). Next: P6 step 3 (c iii) end-to-end, see Next steps.
+- 2026-10-29 (plugins session): P6 step 3 (c iii) - end-to-end test `RangerHiveFlightSqlTest` (0b94507, 4 tests). It
+  exposed a core authorization bypass for every provider (subquery tables and quoted join tables never checked;
+  denied rows returned in complete mode, scalar subqueries in both); fixed in its own core commit f411c13
+  (`FlightAuthorization.requireQuery` + `ParquetQueryParser.checkedTables` / `TableReferences.nestedQuery`,
+  regression test `FlightAuthorizationSubqueryTest`; CHANGELOG Security; `STATUS.md` Log; maintainer notified).
+  Local: module tests 22/22; flight-server authorization tests (incl. `SharedDatabaseAuthorizationIntegrationTest`,
+  `FlightSqlProducerTest`) green; Checkstyle + SpotBugs clean. CI: Dev CI push run 40842467785 (0b94507) running at commit time.
+  New Open question (subquery refusal). Next: hive plugin variant of the end-to-end test.
