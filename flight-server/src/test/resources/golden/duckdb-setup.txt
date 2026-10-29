@@ -36,6 +36,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, allow_unsigned_extensions=true, jdbc_stream_results=true}
 SET threads = 2
@@ -96,6 +97,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, allow_unsigned_extensions=true, jdbc_stream_results=true}
 SET threads = 2
@@ -180,6 +182,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
 SET threads = 2
@@ -254,6 +257,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
 SET threads = 2
@@ -329,6 +333,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
 SET threads = 2
@@ -404,6 +409,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
 SET threads = 2
@@ -475,6 +481,7 @@ SET lock_configuration = true
 QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
 QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
 QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name FROM duckdb_secrets()
 QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 -- connection 2 jdbc:duckdb: {allow_persistent_secrets=false, jdbc_stream_results=true}
 SET threads = 2
