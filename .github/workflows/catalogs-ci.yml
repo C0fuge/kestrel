@@ -463,3 +463,52 @@ jobs:
         run: |
           tail -50 "$RUNNER_TEMP/s3.log"
           docker exec hdfs bash -c 'tail -30 /var/log/hadoop/*.out' || true
+
+  # C4 step 3 (c): insert-only (MM) tables written by a real Hive 4 (tools/ci/hive-mm-writer.sh:
+  # inserts, failed inserts, INSERT OVERWRITE, major / minor compaction, gzip text), then read
+  # through the server with the hive plugin against a metastore on the same database
+  # (HiveRealWriterIntegrationTest: equal to Hive's own answers, complete and partial).
+  hive-writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build
+        run: ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-hive,flight-server -am
+
+      - name: Hive 4 writes the tables
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/hive-mm"
+          tools/ci/hive-mm-writer.sh apache/hive:4.0.1 "$out/wh" "$out/derby" "$out/expected"
+          {
+            echo "HIVE_MM_IT_URIS=thrift://localhost:9083"
+            echo "HIVE_MM_IT_ROOT=$out/wh"
+            echo "HIVE_MM_IT_EXPECTED=$out/expected"
+          } >> "$GITHUB_ENV"
+
+      - name: Server test
+        run: |
+          set -euo pipefail
+          ./mvnw test -pl flight-server -Dtest=HiveRealWriterIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          s = ET.parse("flight-server/target/surefire-reports/"
+                       "TEST-pro.surpin.data.arrowflight.server.catalog.HiveRealWriterIntegrationTest.xml").getroot()
+          tests, skipped = int(s.get("tests")), int(s.get("skipped"))
+          print(f"hive writer: {tests} tests, {skipped} skipped")
+          assert tests == 2 and skipped == 0, "hive writer tests skipped"
+          PY
+
+      - name: Hive logs
+        if: failure()
+        run: |
+          cat "$RUNNER_TEMP/hive-mm/expected/beeline.err" 2>/dev/null | tail -60 || true
+          docker logs hive-mm-hs2 2>&1 | tail -80 || true
+          docker logs hive-mm-hms 2>&1 | tail -80 || true

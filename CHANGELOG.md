@@ -29,7 +29,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   base; aborted and open writes and `_tmp` / hidden directories are never read. Layouts that could give wrong rows
   (`delete_delta_*`, a compacted base newer than the snapshot, multi-write deltas with aborted ids, overlapping
   deltas) fail the query with a message instead of being read in part. Full ACID tables stay skipped. Covered
-  through the server for Parquet, ORC and text (with `hive.textTables=true`, gzip deltas included) tables.
+  through the server for Parquet, ORC and text (with `hive.textTables=true`, gzip deltas included) tables, and
+  against tables written by a real Hive 4.0.1 (inserts, failed inserts, INSERT OVERWRITE, major and minor
+  compaction; Catalogs CI job `hive-writer`).
 - Hive plugin: large Avro data files and uncompressed text files (text, CSV, JSON tables without header lines) of a
   scan are read as byte ranges decoded in parallel (Avro from the next sync marker, text from the next line start, as
   Hadoop splits them; files over 8 MiB, like ORC files since P1), instead of one thread per file. Same rows in the
