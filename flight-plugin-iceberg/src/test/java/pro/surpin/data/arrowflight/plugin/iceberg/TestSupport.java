@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.stream.Stream;
@@ -18,6 +19,7 @@ import java.util.stream.Stream;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogContext;
 import pro.surpin.data.arrowflight.spi.config.PluginConfig;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.spi.storage.DataStore;
 import pro.surpin.data.arrowflight.spi.storage.Located;
@@ -254,6 +256,95 @@ final class TestSupport {
         @Override
         public ThreadFactory threadFactory(String name) {
             return Executors.defaultThreadFactory();
+        }
+    }
+
+    /**
+     * A store over a warehouse whose (server) keys cannot read it: every read fails as S3
+     * would answer 403, and each attempt is recorded.
+     */
+    static final class RefusingStore implements DataStore {
+        final String root;
+        final List<String> opened = new CopyOnWriteArrayList<>();
+
+        RefusingStore(String root) {
+            this.root = root;
+        }
+
+        private IOException refused(String relativePath) {
+            opened.add(relativePath);
+            return new IOException("403 Forbidden: the server's keys cannot read " + relativePath);
+        }
+
+        @Override
+        public String kind() {
+            return "s3";
+        }
+
+        @Override
+        public boolean shared() {
+            return true;
+        }
+
+        @Override
+        public boolean hasLocality() {
+            return false;
+        }
+
+        @Override
+        public String root() {
+            return root;
+        }
+
+        @Override
+        public boolean exists(String relativePath) throws IOException {
+            throw refused(relativePath);
+        }
+
+        @Override
+        public Map<String, String> directories(String relativePath) throws IOException {
+            throw refused(relativePath);
+        }
+
+        @Override
+        public List<DataFile> parquetFiles(String relativeDirectory) throws IOException {
+            throw refused(relativeDirectory);
+        }
+
+        @Override
+        public DataFile file(String relativePath) throws IOException {
+            throw refused(relativePath);
+        }
+
+        @Override
+        public ReadableFile open(String relativePath) throws IOException {
+            throw refused(relativePath);
+        }
+
+        @Override
+        public ReadableFile open(DataFile file) {
+            opened.add(file.relativePath());
+            throw new IllegalStateException("refused");
+        }
+
+        @Override
+        public String duckDbUri(String relativePath) {
+            return root + "/" + relativePath;
+        }
+
+        @Override
+        public List<String> duckDbRoots() {
+            return new ArrayList<>(List.of(root));
+        }
+
+        @Override
+        public Map<String, Long> localInventory(String host) {
+            return Map.of();
+        }
+
+        @Override
+        public void contributeDuckDb(DuckDbSetup setup) {
+            // nothing
         }
     }
 }

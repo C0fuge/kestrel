@@ -141,6 +141,24 @@ final class SnapshotPlanner {
      */
     Planned plan(TableName table, String metadataLocation, TableMetadata metadata, Snapshot snapshot,
             Schema schema) throws IOException {
+        return plan(table, metadataLocation, metadata, snapshot, schema, io);
+    }
+
+    /**
+     * Plans a snapshot, reading its manifests with a given FileIO (for example one with the
+     * table's vended credentials).
+     *
+     * @param table table name
+     * @param metadataLocation location of the metadata file
+     * @param metadata parsed metadata
+     * @param snapshot snapshot, null for a table without one
+     * @param schema schema the columns come from
+     * @param fileIo FileIO the manifests are read with
+     * @return planned snapshot, cached
+     * @throws IOException when a manifest cannot be read
+     */
+    Planned plan(TableName table, String metadataLocation, TableMetadata metadata, Snapshot snapshot,
+            Schema schema, StoresFileIO fileIo) throws IOException {
         String snapshotId = (snapshot == null ? NO_SNAPSHOT : Long.toString(snapshot.snapshotId()))
                 + "." + schema.schemaId();
         String fingerprint = metadataLocation + "#" + snapshotId;
@@ -153,7 +171,7 @@ final class SnapshotPlanner {
         Map<String, TableFile> files = new TreeMap<>();
         if (snapshot != null) {
             try {
-                BaseTable iceberg = new BaseTable(new StaticTableOperations(metadata, io),
+                BaseTable iceberg = new BaseTable(new StaticTableOperations(metadata, fileIo),
                         name + "." + table);
                 TableScan scan = iceberg.newScan().useSnapshot(snapshot.snapshotId()).planWith(planPool);
                 try (CloseableIterable<FileScanTask> tasks = scan.planFiles()) {

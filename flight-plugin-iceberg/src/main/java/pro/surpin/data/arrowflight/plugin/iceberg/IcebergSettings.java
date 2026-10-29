@@ -28,7 +28,8 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param scope OAuth2 scope
  * @param requestTimeoutMillis REST request timeout
  * @param vendedCredentials whether loadTable asks the REST catalog for temporary storage
- *                          credentials, which DuckDB then reads the table's files with
+ *                          credentials, which DuckDB then reads the table's files with and the
+ *                          plugin the table's manifests
  */
 record IcebergSettings(Kind kind, String warehouse, String uri, String prefix, List<String> roots,
         String schemaPrefix, Set<String> namespaces, long namesTtlMillis, long metadataTtlMillis,
@@ -91,7 +92,7 @@ record IcebergSettings(Kind kind, String warehouse, String uri, String prefix, L
             keys.add(ConfigKey.of("requestTimeoutSeconds", "REST request timeout", "30"));
             keys.add(ConfigKey.of("vendedCredentials", "ask the catalog for temporary storage"
                     + " credentials per table (X-Iceberg-Access-Delegation: vended-credentials) and"
-                    + " read the table's files with them", "false"));
+                    + " read the table's files and manifests with them", "false"));
         }
         return List.copyOf(keys);
     }

@@ -17,13 +17,14 @@ import org.apache.iceberg.HasTableOperations;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableMetadataParser;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.NoSuchTableException;
-import org.apache.iceberg.hadoop.HadoopCatalog;
 
 /**
- * A small Iceberg REST catalog over a HadoopCatalog warehouse, answering the read endpoints of
+ * A small Iceberg REST catalog over a HadoopCatalog warehouse (or any namespace-aware catalog), answering the read endpoints of
  * the REST spec the way Gravitino and Polaris do: GET /v1/config (with prefix "wh1"),
  * namespaces, tables (two pages), loadTable (metadata-location + metadata), and an OAuth2
  * client_credentials token endpoint. Requests need "Authorization: Bearer token-1".
@@ -36,7 +37,7 @@ public final class FakeRestCatalog implements AutoCloseable {
     private static final String PREFIX = "wh1";
 
     private final HttpServer server;
-    private final HadoopCatalog catalog;
+    private final Catalog catalog;
     private final List<String> requests = new CopyOnWriteArrayList<>();
     private final AtomicInteger tokens = new AtomicInteger();
     /** Credentials vended so far; each loadTable that asks gets a new one. */
@@ -45,6 +46,8 @@ public final class FakeRestCatalog implements AutoCloseable {
     private volatile long vendMillis;
     /** Prefix of vended credentials; null for the table location. */
     private volatile String vendPrefix;
+    /** Further S3FileIO properties of vended credentials (endpoint, path style), as JSON members. */
+    private volatile String vendExtra = "";
 
     /**
      * Starts the catalog on a free port of the loopback interface.
@@ -53,7 +56,17 @@ public final class FakeRestCatalog implements AutoCloseable {
      * @throws IOException when the port cannot be opened
      */
     public FakeRestCatalog(String warehouse) throws IOException {
-        this.catalog = IcebergFixtures.catalog(warehouse);
+        this((Catalog) IcebergFixtures.catalog(warehouse));
+    }
+
+    /**
+     * Starts the catalog over another catalog on a free port of the loopback interface.
+     *
+     * @param catalog catalog that also supports namespaces
+     * @throws IOException when the port cannot be opened
+     */
+    public FakeRestCatalog(Catalog catalog) throws IOException {
+        this.catalog = catalog;
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", this::handle);
         server.start();
@@ -111,6 +124,17 @@ public final class FakeRestCatalog implements AutoCloseable {
     }
 
     /**
+     * Adds S3FileIO properties to every vended credential's config.
+     *
+     * @param endpoint {@code s3.endpoint}
+     * @param pathStyle {@code s3.path-style-access}
+     */
+    public void vendS3Endpoint(String endpoint, boolean pathStyle) {
+        this.vendExtra = ",\"s3.endpoint\":\"" + endpoint + "\",\"s3.path-style-access\":\""
+                + pathStyle + "\"";
+    }
+
+    /**
      * Counts the credentials vended.
      *
      * @return number of loadTable answers that carried credentials
@@ -122,7 +146,15 @@ public final class FakeRestCatalog implements AutoCloseable {
     @Override
     public void close() throws IOException {
         server.stop(0);
-        catalog.close();
+        if (catalog instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (IOException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new IOException(e);
+            }
+        }
     }
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -158,7 +190,7 @@ public final class FakeRestCatalog implements AutoCloseable {
             String[] parts = path.substring(base.length()).split("/");
             if (parts.length == 1 && parts[0].equals("namespaces")) {
                 StringBuilder json = new StringBuilder("{\"namespaces\":[");
-                List<Namespace> namespaces = catalog.listNamespaces();
+                List<Namespace> namespaces = ((SupportsNamespaces) catalog).listNamespaces();
                 for (int i = 0; i < namespaces.size(); i++) {
                     json.append(i > 0 ? "," : "").append("[\"").append(namespaces.get(i).level(0)).append("\"]");
                 }
@@ -203,7 +235,7 @@ public final class FakeRestCatalog implements AutoCloseable {
                             + "\",\"s3.session-token\":\"token-" + n
                             + "\",\"s3.session-token-expires-at-ms\":\""
                             + (System.currentTimeMillis() + lifetime)
-                            + "\",\"client.region\":\"us-east-1\"}}]";
+                            + "\",\"client.region\":\"us-east-1\"" + vendExtra + "}}]";
                 }
                 send(exchange, 200, "{\"metadata-location\":\"" + metadata.metadataFileLocation()
                         + "\",\"metadata\":" + TableMetadataParser.toJson(metadata) + ",\"config\":{}"

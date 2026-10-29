@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.plugin.iceberg;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -45,6 +46,7 @@ final class IcebergCatalog implements Catalog {
     private final Map<String, Cached<List<String>>> tableLists = new ConcurrentHashMap<>();
     private final Map<TableName, Cached<Optional<TableSource.Loaded>>> loaded = new ConcurrentHashMap<>();
     private final SnapshotPlanner planner;
+    private final StoresFileIO io;
 
     /**
      * A value with its refresh deadline.
@@ -79,6 +81,7 @@ final class IcebergCatalog implements Catalog {
         this.settings = settings;
         this.source = source;
         this.planPool = planPool;
+        this.io = io;
         this.planner = new SnapshotPlanner(name, io, planPool);
     }
 
@@ -113,7 +116,7 @@ final class IcebergCatalog implements Catalog {
         TableMetadata metadata = table0.get().metadata();
         Snapshot snapshot = metadata.currentSnapshot();
         return Optional.of(withCredentials(planner.plan(table, table0.get().metadataLocation(),
-                metadata, snapshot, metadata.schema()).snapshot(), table0.get()));
+                metadata, snapshot, metadata.schema(), io(table0.get())).snapshot(), table0.get()));
     }
 
     @Override
@@ -134,7 +137,8 @@ final class IcebergCatalog implements Catalog {
             Snapshot snapshot = id == null ? null : metadata.snapshot(id);
             if (schema != null && (id == null || snapshot != null)) {
                 return Optional.of(withCredentials(planner.plan(table,
-                        table0.get().metadataLocation(), metadata, snapshot, schema).snapshot(),
+                        table0.get().metadataLocation(), metadata, snapshot, schema,
+                        io(table0.get())).snapshot(),
                         table0.get()));
             }
         }
@@ -156,7 +160,8 @@ final class IcebergCatalog implements Catalog {
             if (snapshot.isPresent()) {
                 return Optional.of(withCredentials(planner.plan(table,
                         table0.get().metadataLocation(), metadata, snapshot.get(),
-                        TimeTravel.schemaOf(metadata, snapshot.get())).snapshot(), table0.get()));
+                        TimeTravel.schemaOf(metadata, snapshot.get()), io(table0.get())).snapshot(),
+                        table0.get()));
             }
             if (fresh) {
                 throw new IllegalArgumentException(TimeTravel.missing(table, metadata, point));
@@ -257,6 +262,18 @@ final class IcebergCatalog implements Catalog {
     static boolean credentialsExpireSoon(Optional<TableSource.Loaded> table, long now) {
         return table.isPresent() && VendedCredentials.earliestExpiryMillis(
                 table.get().credentials()) - CREDENTIALS_MARGIN_MILLIS <= now;
+    }
+
+    /**
+     * Returns the FileIO a loaded table's manifests are read with: with its vended S3
+     * credentials when it has some, else the stores.
+     *
+     * @param table loaded table
+     * @return FileIO
+     */
+    private StoresFileIO io(TableSource.Loaded table) {
+        return table.credentials().isEmpty() ? io : io.withCredentials(table.credentials(),
+                settings.roots(), Duration.ofMillis(settings.requestTimeoutMillis()));
     }
 
     /**

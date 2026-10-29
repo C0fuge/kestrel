@@ -25,8 +25,8 @@ import org.slf4j.LoggerFactory;
  * REST service, Polaris, Nessie, ...), read with the JDK HTTP client: GET /v1/config, the
  * namespace and table lists, and loadTable for a table's metadata location and metadata. Only
  * reads. DuckDB reads the files with the server's own storage setup, or, with
- * {@code vendedCredentials}, with the S3 credentials the catalog vends per table (the manifests
- * are still read through the stores). Authentication: a bearer token, or an OAuth2 client
+ * {@code vendedCredentials}, with the S3 credentials the catalog vends per table (the plugin
+ * then reads the table's manifests with them too, see {@link StoresFileIO#withCredentials}). Authentication: a bearer token, or an OAuth2 client
  * credential exchanged for a token.
  */
 final class RestTableSource implements TableSource {

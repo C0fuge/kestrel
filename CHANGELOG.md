@@ -116,8 +116,15 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   reads the table's files with them. SPI 1.7 `TableSnapshot.credentials` (`StorageCredential`: prefix, type,
   options, expiry); the server installs each as a temporary DuckDB secret scoped to the directory of the snapshot's
   files below the prefix, only below the catalog's roots, refreshed when the catalog returns new ones (the plugin
-  reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Manifests are still read
-  through the server's stores. Catalogs CI entry `lakekeeper-s3-vended`.
+  reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Catalogs CI entry
+  `lakekeeper-s3-vended`.
+- Iceberg REST vended credentials, manifests (lane 4, C1 step 2b (ii)): with `vendedCredentials` the plugin also
+  reads a table's manifest lists and manifests with the vended S3 credentials (its own SigV4-signed HEAD / ranged GET
+  on the JDK HTTP client, no AWS SDK; endpoint, region, path style and session token from the vended config), for
+  files below a credential's prefix and below the catalog's roots; everything else still goes through the server's
+  stores. So a deployment whose server keys cannot read the warehouse can plan the table. No change without the
+  setting. Tests `VendedManifestReadsTest` (signatures checked with the s3 plugin's verifier, server stores refusing
+  every read) and the `lakekeeper-s3-vended` conformance entry (plugin store refuses every read).
 - `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, `arrowflight.duckdb.sharedMaxThreads`, default 8, 0 = no
   cap): with the opt-in `duckDbSharedDatabase` and `duckDbThreads` unset, the node's DuckDB gets min(cores, cap)
   threads instead of all cores (stand p22s at 16 cores: c1/c8 small-query p50 and mixed p99 were worse with 16

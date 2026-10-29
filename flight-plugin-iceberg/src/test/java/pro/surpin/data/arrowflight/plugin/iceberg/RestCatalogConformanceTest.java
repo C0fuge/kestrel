@@ -54,7 +54,8 @@ import pro.surpin.data.arrowflight.spi.storage.StoreUse;
  * {@code ICEBERG_REST_IT_SCOPE}, {@code ICEBERG_REST_IT_OAUTH_URI},
  * {@code ICEBERG_REST_IT_OMIT_COLUMNS} (columns of table {@code types} the catalog refuses, left
  * out of both warehouses), {@code ICEBERG_REST_IT_VENDED=true} (the catalog vends temporary S3
- * credentials: the plugin asks for them and every table must carry them).
+ * credentials: the plugin asks for them, every table must carry them, and the plugin reads the
+ * manifests with them - its store refuses every read).
  */
 @Tag("rest-catalogs")
 class RestCatalogConformanceTest {
@@ -151,9 +152,17 @@ class RestCatalogConformanceTest {
         return Optional.ofNullable(System.getenv(name)).filter(v -> !v.isBlank());
     }
 
+    /** The refusing store of the latest vended S3 catalog, null otherwise. */
+    private static TestSupport.RefusingStore refusing;
+
     private static Catalog rest() throws IOException {
         TestSupport.LocalStores stores = new TestSupport.LocalStores();
-        if (s3) {
+        if (s3 && vended()) {
+            // The server's own keys cannot read the warehouse: manifests must be read with the
+            // catalog's vended credentials.
+            refusing = new TestSupport.RefusingStore(s3Root);
+            stores.opened.add(refusing);
+        } else if (s3) {
             stores.opened.add(new S3DataStoreProvider().open(new TestSupport.S3Context(
                     new TestSupport.MapConfig("s3", s3Config), new SecretRedactor()), s3Root,
                     StoreUse.CATALOG_ROOT));
@@ -210,6 +219,9 @@ class RestCatalogConformanceTest {
                 } else {
                     assertEquals(List.of(), actual.credentials(), table);
                 }
+            }
+            if (refusing != null) {
+                assertEquals(List.of(), refusing.opened, "nothing read with the server's keys");
             }
         }
     }
