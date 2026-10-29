@@ -32,10 +32,13 @@ D5. ~~D2 observed gap: force the after-first-batch cut path~~ *done 2026-10-29 (
 D6. ~~**Q1 answered (maintainer 2026-10-29): yes**~~ *done 2026-10-29 (fd6084f, see Log).* Rethrow as `UNAVAILABLE` ("peer lost during distributed complete
     answer; retry") when a peer stream ended with UNAVAILABLE/transport error after the first batch; other failures
     stay INTERNAL; opt-in path only; test + doc line.
-D7. Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that merge: q01, q06, q12-like aggregates,
-    filtered scans) on vs off, rows/s and wall time; decide the D2 (b) prefetch question from it.
+D7. ~~Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that merge: q01, q06, q12-like aggregates,
+    filtered scans) on vs off, rows/s and wall time; decide the D2 (b) prefetch question from it.~~ *Done 2026-10-29.*
     - ~~Step 1: workflow~~ *done 2026-10-29 (see Log):* `distributed-perf.yml` (manual).
-    - Step 2: run it (SF10, 1 CPU per node; also 2 CPUs) and record the numbers + the prefetch decision.
+    - ~~Step 2: run it~~ *done 2026-10-29 (see Log):* on/off 0.39-0.59 for the aggregates, 0.88 for the filtered
+      scan; peer wait 13-15 % of merged time. Decision on D2 (b): still no parallel prefetch.
+    - Optional: a run with `cpus=2` needs a runner with >= 6 cores (ubuntu-latest has 4: three 2-CPU nodes would
+      share 4 cores, while "off" gets its 2 alone); a netem latency input between the nodes.
 D8. Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
     kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.
 D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
@@ -236,3 +239,22 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
   95158856, 40811713278 on f8929cf; Dev CI 40810360247 green on 54181e9 (contains fd6084f). No pre-release with D6
   yet - next session: confirm a pre-release containing fd6084f, else dispatch package=true on `main` when no other
   run is in progress. Next: D7 (perf on 3 containers in CI).
+- 2026-10-29 (lane 3 session, 13th): lock 04:26Z. D7 done: new manual workflow `distributed-perf.yml` (14d5cb6, fix
+  6ab7764; additive CI tooling, no runtime change, so no pre-release of its own): TPC-H SF10 lineitem (59,986,052 rows)
+  in 24 Parquet files on one directory all nodes mount (`dataDirShared`), three server containers of the ref on the
+  host network (one Hazelcast cluster, 1 CPU / 4 GB each, `endpointsPerServer=2`), `distributedComplete` off vs on,
+  TpchPerfTest against node 1 (warm-up + 2 passes); fails when an answer (rows + checksum, and DuckDB's row count)
+  differs or an "on" answer was not merged. Shapes: q01 without its AVG columns (AVG is not mergeable -> D10), q06,
+  q12 without the orders join, GROUP BY l_partkey (2M groups), a filtered scan (1.87M rows), DISTINCT, ORDER BY LIMIT.
+  Run 40819283390 green (40818498423: same numbers class, its check miscounted the `total` line - fixed in 6ab7764).
+  Best pass off -> on ms (on/off): q01 5216 -> 2128 (0.41), q06 1603 -> 773 (0.48), q12 1517 -> 614 (0.40), wide
+  GROUP BY 25202 -> 14929 (0.59), filtered scan 3166 -> 2797 (0.88), DISTINCT 1627 -> 786 (0.48), ORDER BY LIMIT 1605
+  -> 633 (0.39); 21/21 merged, 0 fallbacks, peers 1.95 GB per 21 answers, peer wait 13 % of merged time (run
+  40818498423: 0.39-0.49 for the aggregates, 0.45 wide GROUP BY, 0.95 scan, wait 15 %). Absolute times vary ~1.6x
+  between runners; the ratios are stable. So 3 nodes give 2-2.6x on scan-bound aggregates (ideal 3x: fan-out +
+  merge), the wide GROUP BY is limited by shipping 2M partial groups through the planning node, and a scan returning
+  many rows gains little (the client's one stream is the bottleneck). D2 (b) decision kept: no parallel prefetch -
+  at most the 13-15 % peer wait to gain, concentrated in the wide shapes. Local check before CI (3 JVMs, 3M-row
+  lineitem-like table): same 6 checksums on vs off, all merged. Package: the pre-release with D6 (fd6084f) is still
+  missing - my package=true dispatch 40818496135 was cancelled by the core lane's push cbdc14b; see the end of this
+  line for the redispatch. Next: D8 (rolling restart under load), D10 (AVG merge) is additive and small.
