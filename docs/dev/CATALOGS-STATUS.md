@@ -215,11 +215,37 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
       (`AlterTableCompactOperation` inits a `MetaStoreCompactorThread`), so a HiveServer2 talking to a separate
       thrift metastore on its own Derby fails with "Version information not found in metastore"; a shared
       PostgreSQL would also do (Docker Hub answered 429 for `postgres` in the session).
-    - **Next for C4:** (d) full ACID ORC (needs ROW__ID-based delete handling: `delete_delta` files hold
-      (originalTransaction, bucket, rowId) keys; large, separate decision -> ask before building) or Paimon/Hudi
-      read-only (check DuckDB extensions / light Java readers for 1.5.6 first, as in C3 step 1). Cheap follow-up
-      for (c) if wanted: an open (uncommitted) Hive write while the server reads (needs a second beeline session
-      held open across the metastore switch - not possible with the single-Derby setup; would need PostgreSQL).
+    - Step 4 (b) probe done (2026-10-29): Catalogs CI job `paimon-hudi`. `tools/ci/paimon-hudi-fixtures.py` writes
+      Paimon 1.2.0 (filesystem catalog: append, partitioned append + INSERT OVERWRITE, primary-key with 2 buckets and
+      upserts / DELETE / UPDATE uncompacted, partitioned PK after `sys.compact`, PK and append tables with deletion
+      vectors, added column) and Hudi 0.15.0 (table version 6) / 1.0.2 (version 8) tables (COW partitioned with
+      upsert / delete / update, COW INSERT OVERWRITE = replacecommit, COW with the last commit left inflight, MOR
+      uncompacted, MOR with inline compaction) with Spark 3.5.3 (bundle jars from Maven Central: Ivy cannot pass the
+      session proxy). `tools/ci/paimon-hudi-probe.py` answers them with a light reader (formats' metadata in
+      Python, data by DuckDB `read_parquet`) and with DuckDB's own extensions; wrong light-reader answers fail the
+      job. Results (runs 40810022672, 40810359864):
+      - **DuckDB has `paimon` and `hudi` extensions for v1.5.6** (download origin - core or community repository -
+        is in the job summary of run 40810359864). `paimon` adds `paimon_scan, paimon_snapshots`; `hudi` adds
+        `hudi_files, hudi_info, read_hudi`. Both answer **every** fixture equal to Spark, incl. uncompacted Hudi MOR
+        (log merge) and Paimon deletion vectors. Not yet checked under the server's lockdown (own I/O outside
+        `allowed_directories`, http(s) / metadata service, added write functions - as found for `delta`).
+      - Light reader equal to Spark on all Paimon tables and on Hudi COW / compacted MOR of both versions; refuses
+        Hudi MOR with log files in the latest slice. Paimon: latest `snapshot-N` (LATEST is only a hint); base +
+        delta manifest lists, live = ADD minus DELETE; **manifests are zstd-compressed Avro, which DuckDB's avro
+        extension cannot read** ("unknown codec") - a Java reader needs Avro + zstd-jni (both already in the hive
+        plugin / server). PK tables (deduplicate engine): files carry `_KEY_<pk>` (partition keys left out),
+        `_SEQUENCE_NUMBER` (per bucket), `_VALUE_KIND`; answer = newest row per (partition cols, key), kinds 0/2.
+        Deletion vectors: index manifest in `manifest/`, files in `index/` (version byte 1; per range BE length,
+        magic 1581511376, portable 32-bit RoaringBitmap, CRC), applied via `file_row_number`; a DELETE on a DV PK
+        table writes only a DV (no -D row). DV-mode PK reads skip level-0 files (none occurred). Added columns:
+        `union_by_name`; renames refused. Hudi: 0.x timeline `.hoodie/<ts>.<action>`, 1.x `.hoodie/timeline/
+        <requested>_<completed>.<action>` with Avro instead of JSON metadata; latest committed base file per file
+        group, minus `partitionToReplaceFileIds` of completed replacecommits; inflight base files skipped; pending
+        compaction / clustering refused; log files named after the base instant (0.x) or the delta commit (1.x).
+    - **Next for C4 (b):** lockdown probe of the `paimon` / `hudi` extensions as for `delta` (C3 step 1): load
+      before the lockdown, then tables outside `allowed_directories`, `s3://` without a scoped secret, http(s) URLs,
+      what `paimon_snapshots` / `hudi_files` / `hudi_info` expose, S3 (moto) and HDFS (expect no `hdfs://` if they
+      use their own I/O); also store both extensions in ci-assets. Then Q7. (d) full ACID ORC still waits on Q6.
 ## Open questions
 
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
@@ -258,6 +284,14 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   plugin or in DuckDB; a sizeable new read path in the plugins lane's hive module), or (b) Paimon / Hudi read-only
   (first a probe of what DuckDB 1.5.6 extensions or a light Java reader can do, as for Delta in C3 step 1)?
   Without an answer lane 4 starts with (b)'s probe (test/CI only), since (a) changes the hive module's scope.
+
+- Q7 (2026-10-29, C4 (b)): Paimon / Hudi read-only - which route? (a) a plugin on DuckDB's `paimon` / `hudi`
+  extensions (correct on every probed table incl. Hudi MOR; security as for `delta`, Q5: refuse their functions in
+  client SQL, pending the lockdown probe), or (b) a light reader in a plugin (no extension: Paimon append / PK /
+  DV tables and Hudi COW; Hudi MOR with logs refused; PK merge-on-read needs a dedup query over the files, which
+  the SPI's file + delete-file model cannot express - would need either a `CatalogView`-like SQL over files (SPI
+  change) or PK tables limited to DV mode). Lane 4 would prefer (a) if the lockdown probe is clean, else (b) for
+  COW / append / DV tables. No plugin is built until answered.
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -365,3 +399,10 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   carries C4 step 2): dispatch 40806577145 (head 7d0826f) running at session end - if another lane's push
   cancels it, dispatch again. Q1, Q4, Q5 still unanswered. Next: C4 (d) needs a decision (full ACID vs
   Paimon/Hudi) - see C4 "Next"; asked as Q6.
+- 2026-10-29: C4 (b) probe (Q6 default) - Catalogs CI job `paimon-hudi` (`tools/ci/paimon-hudi-fixtures.py`,
+  `tools/ci/paimon-hudi-probe.py`): Paimon 1.2.0 and Hudi 0.15.0 / 1.0.2 tables written by Spark 3.5.3. DuckDB
+  v1.5.6 has `paimon` and `hudi` extensions, both equal to Spark on every table; a light reader (metadata +
+  `read_parquet`) is equal on all Paimon tables and Hudi COW / compacted MOR, refuses MOR with logs. Test only.
+  Catalogs CI: runs 40810022672 and 40810359864 (`paimon-hudi` green in both). Dev CI: push runs 40810022826 /
+  later (tools/ci + workflow only). New open question Q7 (route for Paimon / Hudi). Q1, Q4, Q5, Q6 unanswered.
+  Next: lockdown probe of the two extensions.
