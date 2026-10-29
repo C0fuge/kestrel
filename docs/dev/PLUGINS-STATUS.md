@@ -772,3 +772,10 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   nothing registered, so no CHANGELOG line or pre-release). Local (Maven Central): `HivePoliciesTest` 5/5,
   `HiveMaskTest` 6/6, Checkstyle + SpotBugs clean. CI: Dev CI run 40812949194 (f455b87) green (build). Next: P6 step 3
   (core hook design into Open questions, then the provider-groups factory default).
+- 2026-10-29 (plugins session): P6 step 3 (a) - core 093d6a8 (own commit, FYI line in STATUS.md, CHANGELOG line):
+  `FlightAuthorizationProviderFactory.create(env, providerGroups)` default, groups passed to custom providers;
+  test `SecurityProvidersTest.passesProviderGroupsToCustomAuthorization`. Local: `SecurityProvidersTest` 5/5,
+  Checkstyle + SpotBugs clean. CI: Dev CI run 40816724947 (093d6a8) green. Restriction-hook design (masks / row
+  filters by query rewrite, tickets, caches, fail closed) written into Open questions for the maintainer. No
+  pre-release (no runtime change for existing providers). Next: P6 step 3 (b) unwired `ranger-hive` provider
+  (deny on any restriction) while the design question is open.
