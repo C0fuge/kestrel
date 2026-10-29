@@ -187,7 +187,7 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/results.txt"
           n=$(ls "$RUNNER_TEMP"/queries/*.sql | wc -l); passes=$(( ${{ inputs.rounds }} + 1 ))
-          sums() { grep -E "^$1: [a-z0-9_]+ r1 " "$out" | awk '{print $2, $7, $9}'; }
+          sums() { grep -E "^$1: [a-z0-9_]+ r1 " "$out" | grep -v "^$1: total " | awk '{print $2, $7, $9}'; }
           : > "$RUNNER_TEMP/check.txt"
           fail=0
           if [ "$(sums off | wc -l)" -ne "$n" ] || [ "$(sums off)" != "$(sums on)" ]; then
