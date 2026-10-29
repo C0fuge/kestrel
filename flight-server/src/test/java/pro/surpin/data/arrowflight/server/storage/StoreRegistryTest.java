@@ -26,6 +26,47 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("unit")
 class StoreRegistryTest {
 
+    /** Only a catalog that attaches a database may name no readable roots (SPI 1.10). */
+    @Test
+    void catalogsWithoutRootsMustAttachADatabase() {
+        assertTrue(StoreRegistry.attachesDatabase(catalog(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg", "postgres", java.util.Map.of());
+        })));
+        assertFalse(StoreRegistry.attachesDatabase(catalog(setup -> setup.loadExtension("iceberg"))));
+    }
+
+    private static pro.surpin.data.arrowflight.spi.catalog.Catalog catalog(
+            java.util.function.Consumer<pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup> body) {
+        return new pro.surpin.data.arrowflight.spi.catalog.Catalog() {
+            @Override
+            public java.util.List<String> schemas() {
+                return java.util.List.of();
+            }
+
+            @Override
+            public java.util.List<String> tables(String schema) {
+                return java.util.List.of();
+            }
+
+            @Override
+            public java.util.Optional<pro.surpin.data.arrowflight.spi.catalog.TableSnapshot> current(
+                    pro.surpin.data.arrowflight.spi.catalog.TableName table) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public java.util.List<String> readableRoots() {
+                return java.util.List.of();
+            }
+
+            @Override
+            public void contributeDuckDb(pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup setup) {
+                body.accept(setup);
+            }
+        };
+    }
+
     @Test
     void schemes() {
         assertEquals("s3", StoreRegistry.schemeOf("s3://lake/parquet"));

@@ -140,7 +140,9 @@ public interface Catalog extends AutoCloseable {
 
     /**
      * Returns the roots every file and metadata location of this catalog lies under; the server
-     * hides tables with locations elsewhere.
+     * hides tables with locations elsewhere. Empty only for a catalog that attaches a database
+     * ({@link DuckDbSetup#attachDatabase}, SPI 1.10) and so may serve only attached tables;
+     * the server refuses any other catalog without roots.
      *
      * @return readable roots
      */

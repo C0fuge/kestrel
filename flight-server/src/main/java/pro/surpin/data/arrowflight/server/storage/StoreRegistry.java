@@ -483,12 +483,69 @@ public final class StoreRegistry implements Stores, AutoCloseable {
                 shared = false;
             }
         }
-        if (roots.isEmpty()) {
+        if (roots.isEmpty() && !attachesDatabase(wrapped)) {
+            // Only a catalog of attached tables (SPI 1.10) reads no files; it gets no roots, so
+            // any table with files would be hidden.
             closeQuietly(wrapped);
             throw new IllegalArgumentException("Catalog " + name + " names no readable roots");
         }
         wrapped.registerSecrets(tableSecrets, name, roots);
         return new CatalogTables.Entry(wrapped, roots, shared);
+    }
+
+    /**
+     * Tells whether a catalog's DuckDB contribution attaches a remote database; nothing it asks
+     * for is kept (the validator reads the contribution again).
+     *
+     * @param catalog open catalog
+     * @return true when it calls {@code attachDatabase}
+     */
+    static boolean attachesDatabase(Catalog catalog) {
+        boolean[] attaches = {false};
+        catalog.contributeDuckDb(new pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup() {
+            @Override
+            public void loadExtension(String extension) {
+                // not kept
+            }
+
+            @Override
+            public void loadExtensionRefusingFunctions(String extension) {
+                // not kept
+            }
+
+            @Override
+            public void set(String setting, String value) {
+                // not kept
+            }
+
+            @Override
+            public void set(String setting, boolean value) {
+                // not kept
+            }
+
+            @Override
+            public void set(String setting, long value) {
+                // not kept
+            }
+
+            @Override
+            public void createSecret(String secret, String type, String scope,
+                    Map<String, pro.surpin.data.arrowflight.spi.duckdb.SecretValue> options) {
+                // not kept
+            }
+
+            @Override
+            public void attachDatabase(String database, String type,
+                    Map<String, pro.surpin.data.arrowflight.spi.duckdb.SecretValue> options) {
+                attaches[0] = true;
+            }
+
+            @Override
+            public void refuseFunctions(String... names) {
+                // not kept
+            }
+        });
+        return attaches[0];
     }
 
     /**
