@@ -710,3 +710,10 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   test-compile + Checkstyle clean (the test skips without the extension; airport hosts are blocked in the cloud
   session). CI: Dev CI push run 40793321181 (0de9086) cancelled by a later push; Dev CI run 40794638660 (f082b73,
   contains 0de9086) green incl. the airport step. No pre-release (no runtime change). **P5 closed**; next: P6.
+- 2026-10-29 (plugins session): P6 started - plan written under P6 (provider `ranger-hive` on the cluster's Hive
+  Ranger service, fail closed; core hooks for referenced columns / Hive types / table replacement still to design in
+  Open questions before merging). Step 1: new module `flight-auth-ranger-hive` with `HiveMask` (Ranger Hive mask
+  types -> DuckDB expressions equal to Hive 3.1.3's mask UDFs) and `HiveMaskNumbers` (a1aa21f; nothing registered,
+  no runtime change, so no CHANGELOG line or pre-release). Local (GCS mirror of Central): `HiveMaskTest` 6/6,
+  Checkstyle + SpotBugs clean. CI: Dev CI push runs 40801711288, 40802647736, 40804099018 cancelled by other lanes'
+  pushes; Dev CI run 40805065855 (6558c3d, contains a1aa21f) green (build). Next: P6 step 2 (policy evaluator).
