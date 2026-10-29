@@ -42,6 +42,11 @@
 > contains both) was running at session end; next core session: if it published `server-1.0.0-146e6757a01f` and
 > nothing runtime-relevant landed since, write "WRAP-UP DONE" here; otherwise dispatch one more `package=true` from
 > main once the plugins/catalogs lanes have stopped pushing (each push cancels the running Dev CI).
+> *2026-10-29 12:10 (core session):* run 40860291863 published the 146e6757a01f pre-release, but runtime
+> changes landed after it (lane 4: SPI 1.9 / 1.10 core, jdbc plugin, iceberg-rest manifests). Main green again at
+> 1e7b43a4 (run 40868732917) after lane 4's LockdownCheck fix a6a6c868. The catalogs lane still held its lock and had not
+> written "CATALOGS LANE DONE", so no `package=true` yet. **Next core session:** when CATALOGS-STATUS says DONE (or
+> LOCK-CATALOGS is empty / stale) and main CI is green, dispatch one `package=true` from main, then write "WRAP-UP DONE".
 
 > **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than
 > 7562a5bdb7b9.** Same-runner flags in four tracked builds: d22cdac (S3 small p95), 94ad610 (S3 ADBC c1 p95 1.08),
@@ -2327,3 +2332,8 @@
   `CatalogViews.attachedSource` (views + `ExecutionService.catalogDescribeSource`), `CatalogTables.completeReason`
   ("is a table of an attached database"), `TableStatisticsService` (rows unknown). Inactive until a plugin returns
   `AttachedTable`. Maintainer approved in CATALOGS-STATUS Q4.
+- 2026-10-29 (cloud session, core): main Dev CI was red at 3768feba (run 40865845870, `GoldenDuckDbSetupTest`: the
+  new `SELECT name FROM duckdb_secrets()` startup query of 04b60f7b). Regenerated the golden (c75715ab) in parallel
+  with lane 4's code fix a6a6c868 (query only when a secret has no scope, setup statements unchanged); reverted mine
+  (6ddebf26), net change none. Main green at 1e7b43a4 (run 40868732917). Final `package=true` deferred: the
+  catalogs lane was still active (see Next steps).
