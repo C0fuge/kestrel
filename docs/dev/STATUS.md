@@ -143,6 +143,11 @@
 > (done 2026-10-28, 17f4eca, see Log: `duckDbSharedBufferedConnections` connections, default 64, get the buffer
 > before the lockdown and are lent to sessions; screening: the 4/8-stream scans with `-DduckDbSharedDatabase=true
 > -DduckDbStreamingBufferSize=64MiB` vs shared alone); (d) default change only after the screening's numbers and the maintainer's decision.
+> *Memory check 2026-10-29 (cloud session, see Log):* the node-wide 1 GiB `memory_limit` that shared mode gets on 2c/6g
+> holds 4 concurrent TPC-H SF10 clients (run 40819058399: 0 errors, 22/22 equal answers on every client, pass 136.4 s vs
+> 141.6 s, container peak 3367 vs 3135 MiB, +7 %). Scans (local, 2 cores, same 1024MiB limit): JVM heap/direct equal, peak
+> RSS +0-3 % at 4/8 endpoints, +27 % / 0 % at 4/8 complete-mode clients with +29 % / +58 % MB/s - the extra native memory
+> follows throughput, not a leak. Left for (d): the stand round (b) and the maintainer's decision.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
@@ -2150,3 +2155,13 @@
   default method (calls `create(env)`); `SecurityProviders` passes the authentication provider's groups to custom
   authorization providers. Additive, existing providers unchanged. For P6 (`ranger-hive`, see PLUGINS-STATUS.md).
 - 2026-10-29 (maintainer, CI build tracking 881bbf73e946): opt-in duckDbSharedDatabase: scans x8 1.39, x4 vs upstream native 0.98 (gap closed), load peak 1.16 / c128 1.37-1.41, RSS +17-19 % on scans; default path same as 7562a5b; 9044653 S3 SF10 flag gone (0.96); new small flag S3 JDBC c8 p50 1.10 - same S3-small noise class core could not reproduce three times; no action unless it repeats with a clear pattern. Next for item 22: decide whether duckDbSharedDatabase can become the default (isolation/lockdown tests are in; needs a stand round and memory check).
+- 2026-10-29 (cloud session, core lane): item 22 shared DuckDB memory check (maintainer's "needs a stand round and memory
+  check"). `TpchPerfTest -Dperf.clients=N` / `tpch-perf.yml` input `clients` (cbdc14b): N concurrent clients per pass,
+  each starting at another query, failures and wrong row counts reported per query; every configuration reports the
+  container's cgroup `memory.peak`. Run 40819058399 (SF10, 2 CPUs / 6 GB, -Xmx3g, direct 2g, 4 clients, 1 measured
+  pass): default (1024MiB per connection) 141.6 s, peak 3135 MiB; `-DduckDbSharedDatabase=true` (1024MiB for the node,
+  2 threads) 136.4 s, peak 3367 MiB; no errors, 22/22 equal answers on all clients. Local scans (`ParallelScanPerfTest`
+  against a separate server on 2 cores, 6 M rows, `-DduckDbMemoryLimit=1024MiB` both, NMT): peak RSS default/shared
+  604/621 MB at 4 endpoints, 826/825 at 8; complete-mode clients x4 697/883 MB, x8 1244/1242 MB at 416/536 and
+  364/576 MB/s; JVM-side memory equal - the extra peak is native and follows throughput. The screening's +17-19 % is
+  within item 22's +25 % goal. No server change; Dev CI 40819051451 green. Default change still needs (b) + decision.
