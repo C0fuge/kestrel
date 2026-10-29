@@ -11,6 +11,8 @@ on:
       - "flight-spi/**"
       - "flight-plugin-s3/**"
       - "flight-plugin-hive/**"
+      - "flight-plugin-jdbc/**"
+      - "flight-server/src/main/java/pro/surpin/data/arrowflight/server/duckdb/**"
       - "flight-server/src/main/java/pro/surpin/data/arrowflight/server/catalog/**"
       - "flight-server/src/test/java/pro/surpin/data/arrowflight/server/catalog/**"
       - "tools/ci/**"
@@ -272,7 +274,7 @@ jobs:
   # fails only when loading, attaching or the plain read fails. Test-only passwords, generated.
   jdbc-scanners:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -356,6 +358,30 @@ jobs:
           ./mvnw dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
           java -cp "$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar" \
             tools/ci/DuckDbScannerProbe.java "$SCANNER_EXT_DIR"
+
+      # C2 step 3: the jdbc plugin through the server (JdbcFederationIntegrationTest: answers equal
+      # DuckDB's own scan, partial = complete, scanner functions and attachments refused) and its
+      # refused lists against the bundled builds (ScannerFunctionsTest).
+      - name: Federation through the server
+        env:
+          JDBC_IT_EXTENSION_DIR: ${{ env.SCANNER_EXT_DIR }}
+        run: |
+          set -euo pipefail
+          ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-jdbc,flight-server -am
+          ./mvnw test -pl flight-plugin-jdbc -Dtest=ScannerFunctionsTest
+          ./mvnw test -pl flight-server -Dtest=JdbcFederationIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false
+          # A skipped test is a failure here.
+          python3 - <<'EOF'
+          import xml.etree.ElementTree as ET
+          for path, want in (("flight-plugin-jdbc/target/surefire-reports/"
+                              "TEST-pro.surpin.data.arrowflight.plugin.jdbc.ScannerFunctionsTest.xml", 2),
+                             ("flight-server/target/surefire-reports/"
+                              "TEST-pro.surpin.data.arrowflight.server.catalog.JdbcFederationIntegrationTest.xml", 3)):
+              s = ET.parse(path).getroot()
+              tests, skipped = int(s.get("tests")), int(s.get("skipped"))
+              print(f"{path}: {tests} tests, {skipped} skipped")
+              assert tests == want and skipped == 0, "jdbc tests skipped"
+          EOF
 
       - name: Database logs
         if: failure()
