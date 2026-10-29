@@ -9,10 +9,11 @@
  * The extension directory holds paimon.duckdb_extension, hudi.duckdb_extension and httpfs.duckdb_extension
  * (hadoopfs.duckdb_extension too for HDFS). The fixture directory is the output of tools/ci/paimon-hudi-fixtures.py
  * (expected.tsv holds Spark's answers). PROBE_OUTSIDE_DIR holds copies outside the allowed directories:
- * paimon_app (paimon/db.db/app), hudi_cow (hudi-1.0.2/cow) and their metadata-only copies paimon_meta / hudi_meta
- * (no data files). With PROBE_S3_ENDPOINT (host:port), PROBE_S3_KEY, PROBE_S3_SECRET, PROBE_S3_ROOT
- * (s3://bucket/prefix/, the fixture directory uploaded there) and PROBE_S3_OUTSIDE (the same copies as
- * PROBE_OUTSIDE_DIR) the S3 path is probed too; with PROBE_HDFS_ROOT (the fixture directory on HDFS) the HDFS path.
+ * paimon_wh/db.db/app (paimon/db.db/app), hudi_cow (hudi-1.0.2/cow) and their metadata-only copies
+ * paimon_wh/db.db/meta / hudi_meta (no data files). ATTACH checks run last and are detached again: a lazy attach
+ * that cannot be read makes every later catalog lookup on the connection fail. With PROBE_S3_ENDPOINT
+ * (host:port), PROBE_S3_KEY, PROBE_S3_SECRET, PROBE_S3_ROOT (s3://bucket/prefix/, the fixture directory uploaded
+ * there) and PROBE_S3_OUTSIDE (the same copies as PROBE_OUTSIDE_DIR) the S3 path is probed too; with PROBE_HDFS_ROOT (the fixture directory on HDFS) the HDFS path.
  *
  * The connection is set up as the server sets up a query connection (in-memory secrets, LOAD by path, secrets,
  * then allowed_directories + no extension autoload + enable_external_access=false + lock_configuration=true).
@@ -112,6 +113,11 @@ public final class DuckDbPaimonHudiProbe {
                 must("s3", "secret", c, "CREATE TEMPORARY SECRET s3_probe (TYPE s3, KEY_ID "
                         + lit(env("PROBE_S3_KEY")) + ", SECRET " + lit(secretValue) + ", ENDPOINT " + lit(s3Endpoint)
                         + ", URL_STYLE 'path', USE_SSL false, REGION 'us-east-1', SCOPE " + lit(s3Root) + ")");
+                // paimon brings its own secret type (it does not use the s3 secret): what does it take?
+                query("s3", "paimon secret", c, "CREATE TEMPORARY SECRET paimon_probe (TYPE paimon, KEY_ID "
+                        + lit(env("PROBE_S3_KEY")) + ", SECRET " + lit(secretValue) + ", ENDPOINT "
+                        + lit("http://" + s3Endpoint) + ", REGION 'us-east-1', SCOPE " + lit(s3Root) + ")");
+                query("s3", "paimon secret parameters", c, "SELECT * FROM duckdb_secret_types() WHERE type = 'paimon'");
             }
             mustQuery("local", "paimon read before lockdown", c, answer(scan(local, "paimon/app"), ""),
                     lookup(expected, "paimon/app", ""));
@@ -158,14 +164,22 @@ public final class DuckDbPaimonHudiProbe {
                 query(where, "explain hudi filter", c, "EXPLAIN SELECT name FROM " + scan(root, "hudi-1.0.2/cow")
                         + " WHERE p = 'x' AND id > 1");
                 query(where, "paimon_snapshots", c, "SELECT * FROM paimon_snapshots(" + lit(root + PAIMON_T) + ")");
-                query(where, "hudi_info", c, "SELECT * FROM hudi_info(" + lit(root + HUDI_T) + ")");
-                query(where, "hudi_files", c, "SELECT * FROM hudi_files(" + lit(root + HUDI_T) + ")");
-                query(where, "paimon attach after lockdown", c, "ATTACH " + lit(root + "paimon") + " AS attp_"
-                        + where + " (TYPE paimon)");
+                query(where, "hudi_info", c, "SELECT hudi_info(" + lit(root + HUDI_T) + ")");
+                query(where, "hudi_files", c, "SELECT hudi_files(" + lit(root + HUDI_T) + ")");
             }
-            query("local", "paimon attached read", c, "SELECT count(*) FROM att_paimon.db.app");
-            query("local", "hudi attached read", c, "SELECT count(*) FROM att_hudi");
             query("local", "replacement scan inside allowed", c, "SELECT count(*) FROM " + lit(local + PAIMON_T));
+            if (s3) {
+                // read_hudi's hudi_option: storage options from client SQL (endpoint, keys)?
+                for (String format : List.of("aws_endpoint_url=http://%s,aws_access_key_id=%s,"
+                        + "aws_secret_access_key=%s,aws_region=us-east-1,aws_allow_http=true",
+                        "{\"aws_endpoint_url\": \"http://%s\", \"aws_access_key_id\": \"%s\","
+                        + " \"aws_secret_access_key\": \"%s\", \"aws_region\": \"us-east-1\","
+                        + " \"aws_allow_http\": \"true\"}")) {
+                    query("s3", "read_hudi with hudi_option " + (format.startsWith("{") ? "json" : "k=v"), c,
+                            answer("read_hudi(" + lit(s3Root + HUDI_T) + ", hudi_option := " + lit(String.format(
+                                    format, s3Endpoint, env("PROBE_S3_KEY"), secretValue)) + ")", ""));
+                }
+            }
 
             // What the lockdown must refuse: tables outside the allowed directories, through the extensions' own
             // I/O (metadata) and DuckDB's (data files), and other hosts.
@@ -175,13 +189,13 @@ public final class DuckDbPaimonHudiProbe {
                 refuse("local", "read_parquet outside allowed (control)", c, "SELECT count(*) FROM read_parquet("
                         + lit(outside + "/hudi_cow/**/*.parquet") + ")");
                 refuse("local", "paimon file: URI outside allowed", c, "SELECT count(*) FROM paimon_scan("
-                        + lit("file://" + outside + "/paimon_app") + ")");
+                        + lit("file://" + outside + "/paimon_wh/db.db/app") + ")");
                 refuse("local", "hudi file: URI outside allowed", c, "SELECT count(*) FROM read_hudi("
                         + lit("file://" + outside + "/hudi_cow") + ")");
                 refuse("local", "paimon /proc", c, "SELECT count(*) FROM paimon_scan('/proc/self')");
                 refuse("local", "hudi /proc", c, "SELECT count(*) FROM read_hudi('/proc/self')");
                 refuse("local", "replacement scan outside allowed", c, "SELECT count(*) FROM "
-                        + lit(outside + "/paimon_app"));
+                        + lit(outside + "/paimon_wh/db.db/app"));
             }
             for (String scheme : List.of("http://127.0.0.1:9/t", "https://127.0.0.1:9/t", "az://c/t", "gs://b/t")) {
                 refuse("remote", "paimon_scan " + scheme, c, "SELECT count(*) FROM paimon_scan(" + lit(scheme) + ")");
@@ -195,7 +209,7 @@ public final class DuckDbPaimonHudiProbe {
                 // With no secret covering the path: does the extension fall back to the instance metadata
                 // service or environment credentials (DuckDB's own reader just fails)?
                 refuse("s3", "paimon_scan no matching secret", c, "SELECT count(*) FROM paimon_scan("
-                        + lit("s3://other-bucket/t") + ")");
+                        + lit("s3://other-bucket/w/db.db/t") + ")");
                 refuse("s3", "read_hudi no matching secret", c, "SELECT count(*) FROM read_hudi("
                         + lit("s3://other-bucket/t") + ")");
                 must("s3", "unscoped secret after lockdown", c, "CREATE TEMPORARY SECRET s3_any (TYPE s3, KEY_ID "
@@ -204,25 +218,44 @@ public final class DuckDbPaimonHudiProbe {
                 outside(c, "s3 unscoped secret", s3Outside);
             }
             query("setup", "secrets visible", c, "SELECT name, type FROM duckdb_secrets()");
+
+            // Last: attaches (a failing lazy attach breaks later lookups), each read and detached again.
+            query("local", "paimon attached read", c, "SELECT count(*) FROM att_paimon.db.app");
+            query("local", "paimon attached tables", c, "SELECT string_agg(table_name, ',' ORDER BY table_name)"
+                    + " FROM information_schema.tables WHERE table_catalog = 'att_paimon'");
+            query("local", "detach", c, "DETACH att_paimon");
+            for (String root : roots) {
+                String where = root.startsWith("s3://") ? "s3" : root.startsWith("hdfs://") ? "hdfs" : "local";
+                query(where, "paimon attach after lockdown", c, "ATTACH " + lit(root + "paimon") + " AS attp_"
+                        + where + " (TYPE paimon)");
+                query(where, "paimon attached read after lockdown", c, "SELECT count(*) FROM attp_" + where
+                        + ".db.app");
+                query(where, "detach", c, "DETACH attp_" + where);
+            }
+            if (!outside.isEmpty()) {
+                refuse("local", "paimon attach outside allowed", c, "ATTACH " + lit(outside + "/paimon_wh")
+                        + " AS attp_out (TYPE paimon)");
+                refuse("local", "paimon attached read outside allowed", c, "SELECT count(*) FROM attp_out.db.app");
+                query("local", "detach", c, "DETACH attp_out");
+            }
         }
     }
 
     /** The checks that must be refused for the table copies below {@code dir}, which is not allowed. */
     private static void outside(Connection c, String where, String dir) {
-        refuse(where, "paimon_scan outside allowed", c, answer("paimon_scan(" + lit(dir + "paimon_app") + ")", ""));
+        String app = dir + "paimon_wh/db.db/app";
+        refuse(where, "paimon_scan outside allowed", c, answer("paimon_scan(" + lit(app) + ")", ""));
         refuse(where, "paimon schema outside allowed", c, "SELECT string_agg(column_name || ' ' || column_type,"
-                + " ', ') FROM (DESCRIBE SELECT * FROM paimon_scan(" + lit(dir + "paimon_app") + "))");
-        refuse(where, "paimon_snapshots outside allowed", c, "SELECT * FROM paimon_snapshots("
-                + lit(dir + "paimon_app") + ")");
+                + " ', ') FROM (DESCRIBE SELECT * FROM paimon_scan(" + lit(app) + "))");
+        refuse(where, "paimon_snapshots outside allowed", c, "SELECT * FROM paimon_snapshots(" + lit(app) + ")");
         refuse(where, "paimon metadata-only outside allowed", c, "SELECT string_agg(column_name, ',') FROM"
-                + " (DESCRIBE SELECT * FROM paimon_scan(" + lit(dir + "paimon_meta") + "))");
+                + " (DESCRIBE SELECT * FROM paimon_scan(" + lit(dir + "paimon_wh/db.db/meta") + "))");
         refuse(where, "read_hudi outside allowed", c, answer("read_hudi(" + lit(dir + "hudi_cow") + ")", ""));
         refuse(where, "hudi schema outside allowed", c, "SELECT string_agg(column_name || ' ' || column_type,"
                 + " ', ') FROM (DESCRIBE SELECT * FROM read_hudi(" + lit(dir + "hudi_cow") + "))");
-        refuse(where, "hudi_info outside allowed", c, "SELECT * FROM hudi_info(" + lit(dir + "hudi_cow") + ")");
-        refuse(where, "hudi_files outside allowed", c, "SELECT * FROM hudi_files(" + lit(dir + "hudi_cow") + ")");
-        refuse(where, "hudi metadata-only outside allowed", c, "SELECT * FROM hudi_files("
-                + lit(dir + "hudi_meta") + ")");
+        refuse(where, "hudi_info outside allowed", c, "SELECT hudi_info(" + lit(dir + "hudi_cow") + ")");
+        refuse(where, "hudi_files outside allowed", c, "SELECT hudi_files(" + lit(dir + "hudi_cow") + ")");
+        refuse(where, "hudi metadata-only outside allowed", c, "SELECT hudi_info(" + lit(dir + "hudi_meta") + ")");
     }
 
     /** The extension scan of an expected.tsv table label ({@code paimon/<t>} or {@code hudi-<v>/<t>}). */

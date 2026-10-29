@@ -553,9 +553,11 @@ jobs:
         run: |
           set -euo pipefail
           outside="$RUNNER_TEMP/ph-outside"
-          mkdir -p "$outside/paimon_meta" "$outside/hudi_meta"
-          cp -r "$PH_FIXTURES/paimon/db.db/app" "$outside/paimon_app"
-          for d in snapshot schema manifest; do cp -r "$PH_FIXTURES/paimon/db.db/app/$d" "$outside/paimon_meta/"; done
+          mkdir -p "$outside/paimon_wh/db.db/meta" "$outside/hudi_meta"
+          cp -r "$PH_FIXTURES/paimon/db.db/app" "$outside/paimon_wh/db.db/app"
+          for d in snapshot schema manifest; do
+            cp -r "$PH_FIXTURES/paimon/db.db/app/$d" "$outside/paimon_wh/db.db/meta/"
+          done
           cp -r "$PH_FIXTURES/hudi-1.0.2/cow" "$outside/hudi_cow"
           cp -r "$PH_FIXTURES/hudi-1.0.2/cow/.hoodie" "$outside/hudi_meta/"
           echo "PROBE_OUTSIDE_DIR=$outside" >> "$GITHUB_ENV"
