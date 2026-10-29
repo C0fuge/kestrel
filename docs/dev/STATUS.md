@@ -2091,3 +2091,8 @@
   `requireQuery` and `flightInfoForQuery(..., complete)`; complete unless `x-flight-result-mode: partial`. New
   `adapters/PlainFlightCommands`; `HadoopArrowFlightServer` sets it before start. Dev CI also pulls a ClickHouse image
   (`-Dclickhouse.it.image`, failed pull = test skipped). Dev CI run 40789295791 green.
+- 2026-10-29 (lane 4, core touch for the core lane): `QueryPlanner.catalogCompleteReason` now also catches
+  RuntimeException from a catalog's `current()` (returns null; the partial planner reports the error with its
+  status). Before, a table-level catalog error (e.g. the hive plugin's refused insert-only layout, now an
+  IllegalArgumentException) escaped getFlightInfo as a message-less INTERNAL. Commit 63679fe, covered by
+  `HiveInsertOnlyIntegrationTest`. See CATALOGS-STATUS.md Q3 addendum for the related CatalogViews behaviour.

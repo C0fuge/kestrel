@@ -180,9 +180,18 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
       `HiveInsertOnlyTableTest` (4 tests: originals + committed/aborted/open deltas, a later commit becoming
       visible, INSERT OVERWRITE base of an open then committed write, partitions, the delete_delta refusal, the
       setting off).
-    - **Next (step 3):** (a) server-level test: an insert-only table through the server (complete + partial
-      equal, answers = committed rows), e.g. in the server's Hive catalog tests (`HiveTestTables`); (b) ORC / text
-      insert-only tables (same selection; check the ORC reader with files under `delta_*`); (c) a real Hive
+    - Step 3 (a) + (b, ORC) done (2026-10-29): `HiveInsertOnlyIntegrationTest` (flight-server, packaged hive
+      plugin, in-process HMS with txn tables): insert-only Parquet (originals, committed / aborted / open deltas,
+      `_tmp`), partitioned and ORC tables answer the committed rows only in complete and partial mode (ORC equal to
+      a plain ORC table holding exactly those rows); a commit is visible to the next partial query (complete
+      answers read views refreshed at most once a minute: one consistent snapshot or the other); INSERT OVERWRITE
+      base replaces older writes; `delete_delta` refused in both modes. **Bug found and fixed:** the refusal was an
+      IOException, which `CatalogViews` treats as a metastore outage, so every table listed after the refused one
+      (all schemas of the metastore) vanished from the views. Now `HiveCatalog.UnreadableTableException`
+      (IllegalArgumentException): only that table is skipped; complete -> NOT_FOUND, partial -> INVALID_ARGUMENT
+      with the reason. Small core change (own commit 63679fe): `catalogCompleteReason` catches RuntimeException.
+    - **Next (step 3, rest):** (b) text insert-only tables (same selection; quick add to the server test);
+      (c) a real Hive
       writer check if a Hive 3/4 container is practical in `catalogs-ci.yml` (INSERT, INSERT OVERWRITE, a failed
       INSERT, major compaction -> `_metadata_acid` / `_v` names as Hive really writes them); (d) then full ACID
       ORC (needs ROW__ID-based delete handling - large, separate decision) or Paimon/Hudi.
@@ -235,6 +244,14 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   only and skip (log, list as unavailable) a single table whose load fails, so its siblings stay queryable. This
   changes existing behaviour, so it is the core lane's / the maintainer's call. Reproduce: `catalogs-ci.yml` entry
   `unity-catalog` without `ICEBERG_REST_IT_NAMESPACES`.
+  Addendum (2026-10-29): the same pattern hit the hive plugin's refused insert-only layouts (fixed plugin-side in
+  C4 step 3 by throwing a runtime exception, which `catalogTableViews` treats as a table-level skip). Other hive
+  plugin table-level refusals are still IOExceptions and so still hide their siblings: a text / Avro partition
+  with its own serde or format (`checkTextPartition`, `checkAvroPartition`). Lane 4 could switch those to the
+  same `UnreadableTableException` (plugin-only), but that changes existing behaviour of the plugins lane's
+  module -> maintainer / plugins lane to decide. Also: a skipped table answers complete queries with DuckDB's
+  "Table with name X does not exist!" (NOT_FOUND); naming the reason would need CatalogViews to keep per-table
+  reasons (core lane).
 
 ## Log
 
@@ -298,3 +315,13 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   CI green: Dev CI 40787036947 and Catalogs CI 40787036921 (head 9b231bf). Pre-release: dispatch 40788225372
   (package=true) was cancelled by the plugins lane's push 5e9ac98 (same concurrency group); the next package=true
   run on main carries C4 - dispatch one next session if none exists by then. Next: C4 step 3.
+- 2026-10-29: C4 step 3 (a) + ORC part of (b) - `HiveInsertOnlyIntegrationTest` (insert-only Parquet, partitioned
+  and ORC tables through the server, complete = partial = committed rows, commit / INSERT OVERWRITE visibility,
+  `delete_delta` refused). It found a bug in step 2: a refused layout was an IOException, so the server's views
+  refresh treated the metastore as down and left out every later table; fixed in the hive plugin
+  (`UnreadableTableException`, only that table skipped) plus a small core commit (63679fe,
+  `catalogCompleteReason` catches RuntimeException; STATUS.md Log line). Locally: hive plugin 100 tests +
+  checkstyle + spotbugs, server Hive ITs + QueryPlannerTest 90 tests. CI green on head 01884e2: Dev CI 40798070064,
+  Catalogs CI 40798070095. Pre-release: Dev CI dispatch 40799537000 (package=true) running at session end (also
+  carries C4 step 2; if another lane's push cancels it, dispatch again). Q3 addendum (other hive refusals still
+  hide siblings). Q1, Q4, Q5 unanswered. Next: C4 step 3 rest (text insert-only, real Hive writer in CI).
