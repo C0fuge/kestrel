@@ -23,6 +23,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
+import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
@@ -181,6 +182,10 @@ public final class TableStatisticsService {
                 .orElseThrow(() -> new FileNotFoundException(
                         "No table " + schema + "." + table + " in its catalog"));
         TableSnapshot snapshot = resolved.snapshot();
+        if (snapshot.read() instanceof ReadSpec.AttachedTable) {
+            // The rows live in the remote database: no count or size is known here.
+            return new TableStatistics(-1, false, 0, 0, Map.of());
+        }
         long rows = 0;
         long bytes = 0;
         boolean exact = true;

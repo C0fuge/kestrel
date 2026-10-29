@@ -352,6 +352,9 @@ public final class CatalogTables implements AutoCloseable {
      */
     public static String completeReason(Resolved resolved) {
         TableSnapshot snapshot = resolved.snapshot();
+        if (snapshot.read() instanceof ReadSpec.AttachedTable) {
+            return snapshot.name() + " is a table of an attached database";
+        }
         if (snapshot.files().isEmpty()) {
             return "the snapshot of " + snapshot.name() + " has no data files";
         }

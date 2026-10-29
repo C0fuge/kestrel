@@ -90,6 +90,11 @@ public final class LockdownCheck {
                 return;
             }
             Map<String, Set<String>> actualSecrets = new HashMap<>();
+            try (ResultSet rs = s.executeQuery("SELECT name FROM duckdb_secrets()")) {
+                while (rs.next()) {
+                    actualSecrets.put(rs.getString(1), new HashSet<>());
+                }
+            }
             try (ResultSet rs = s.executeQuery(
                     "SELECT name, unnest(scope) FROM duckdb_secrets()")) {
                 while (rs.next()) {
@@ -101,7 +106,7 @@ public final class LockdownCheck {
             for (DuckDbSetupPlan.DeclaredSecret secret : secrets) {
                 declaredNames.add(secret.name());
                 Set<String> scopes = actualSecrets.get(secret.name());
-                if (scopes == null || !scopes.contains(secret.scope())) {
+                if (scopes == null || secret.scope() != null && !scopes.contains(secret.scope())) {
                     throw new IllegalStateException("DuckDB secret " + secret.name()
                             + " is missing or not scoped to " + secret.scope() + " after the setup");
                 }

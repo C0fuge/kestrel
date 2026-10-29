@@ -1738,6 +1738,28 @@ class DuckDbAdapterTest {
         assertFalse(pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.contains("sum"));
     }
 
+    /** Verifies client queries cannot name a database a plugin attached (SPI 1.10). */
+    @Test
+    void attachedDatabasesCannotBeNamedByClients() throws Exception {
+        pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.addAll(
+                java.util.Set.of("att_fixture_db"));
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            for (String sql : new String[] {"SELECT * FROM att_fixture_db.public.t",
+                    "SELECT * FROM att_fixture_db.t", "SELECT * FROM \"ATT_FIXTURE_DB\".public.t",
+                    "SELECT id FROM s.t WHERE id IN (SELECT id FROM att_fixture_db.public.t)"}) {
+                IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                        () -> adapter.describeComplete(allocator, sql, views()), sql);
+                assertTrue(e.getMessage().contains("att_fixture_db"), sql + ": " + e.getMessage());
+            }
+            assertNotNull(adapter.describeComplete(allocator, "SELECT 'att_fixture_db' AS s, id FROM s.t",
+                    views()));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies DuckDB neither reads nor writes persistent secrets. */
     @Test
     void persistentSecretsAreDisabled() throws Exception {

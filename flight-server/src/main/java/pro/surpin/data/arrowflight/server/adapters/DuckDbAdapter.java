@@ -2705,9 +2705,11 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
         java.util.regex.Matcher q = SERIALIZED_QUALIFIER.matcher(serialized);
         while (q.find()) {
-            // Only the qualifiers a shared DuckDB refuses are kept; others are no names to check.
+            // Only the qualifiers a shared DuckDB refuses, and databases a plugin attached, are
+            // kept; others are no names to check.
             String name = q.group(1).toLowerCase(java.util.Locale.ROOT);
-            if (name.startsWith(SESSION_CATALOG_PREFIX) && !names.contains(name)) {
+            if ((name.startsWith(SESSION_CATALOG_PREFIX) || PluginRefusedFunctions.contains(name))
+                    && !names.contains(name)) {
                 names.add(name);
             }
         }

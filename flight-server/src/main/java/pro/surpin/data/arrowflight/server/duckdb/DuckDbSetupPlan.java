@@ -30,7 +30,7 @@ public record DuckDbSetupPlan(List<String> statements, List<String> roots,
      * A secret the setup creates.
      *
      * @param name secret name
-     * @param scope scope prefix
+     * @param scope scope prefix, or null for a secret without a scope (an attached database's)
      */
     public record DeclaredSecret(String name, String scope) {
     }

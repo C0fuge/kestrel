@@ -1053,6 +1053,9 @@ public final class ExecutionService {
         if (snapshot.read() instanceof ReadSpec.ArrowStream) {
             return CatalogViews.declaredColumnsSource(snapshot);
         }
+        if (snapshot.read() instanceof ReadSpec.AttachedTable attached) {
+            return CatalogViews.attachedSource(attached, snapshot);
+        }
         if (CatalogTables.completeReason(resolved) == null) {
             return CatalogSources.filesSource(snapshot, snapshot.files().subList(0, 1));
         }

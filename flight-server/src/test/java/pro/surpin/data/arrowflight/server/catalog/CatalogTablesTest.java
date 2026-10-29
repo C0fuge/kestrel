@@ -159,6 +159,27 @@ class CatalogTablesTest {
         assertFalse(source.contains("s3a://"), source);
     }
 
+    /** A table of an attached database is read through the attachment, complete only (SPI 1.10). */
+    @Test
+    void attachedTablesAreReadThroughTheAttachment() {
+        FakeCatalog catalog = new FakeCatalog();
+        CatalogTables.Entry entry = new CatalogTables.Entry(new SpiCatalog(catalog, null, "fake"),
+                List.of(ROOT), true);
+        pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable attached =
+                new pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable("pg_src", "public", "Orders");
+        TableSnapshot declared = new TableSnapshot(new TableName("jdbc_src", "orders"), "0", "f",
+                List.of(new ColumnSpec("id", "BIGINT", false, null),
+                        new ColumnSpec("note \"x\"", "VARCHAR", true, null)), List.of(), List.of(), attached);
+        assertEquals("(SELECT \"id\", \"note \"\"x\"\"\" FROM \"pg_src\".\"public\".\"Orders\")",
+                pro.surpin.data.arrowflight.server.services.CatalogViews.attachedSource(attached, declared));
+        TableSnapshot undeclared = new TableSnapshot(new TableName("jdbc_src", "orders"), "0", "f",
+                List.of(), List.of(), List.of(), attached);
+        assertEquals("\"pg_src\".\"public\".\"Orders\"",
+                pro.surpin.data.arrowflight.server.services.CatalogViews.attachedSource(attached, undeclared));
+        assertTrue(CatalogTables.completeReason(new CatalogTables.Resolved(entry, declared))
+                .contains("attached database"));
+    }
+
     @Test
     void completeAnswerReasons() {
         FakeCatalog catalog = new FakeCatalog();

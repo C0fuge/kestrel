@@ -423,6 +423,9 @@ public final class CatalogViews {
      *         DuckDB could read them from
      */
     private static String snapshotSource(String schema, String table, TableSnapshot snapshot) {
+        if (snapshot.read() instanceof ReadSpec.AttachedTable attached) {
+            return attachedSource(attached, snapshot);
+        }
         if (snapshot.read() instanceof ReadSpec.IcebergMetadata iceberg) {
             String source = icebergSource(iceberg.metadataLocation(), snapshot);
             if (source.startsWith("(SELECT * FROM iceberg_scan(")) {
@@ -439,6 +442,28 @@ public final class CatalogViews {
         }
         return snapshot.files().isEmpty() ? declaredColumnsSource(snapshot)
                 : CatalogSources.filesSource(snapshot, snapshot.files());
+    }
+
+    /**
+     * Names the FROM source of a table of an attached database: the declared columns of the
+     * remote table, or all of them when the catalog declares none.
+     *
+     * @param attached the attached table
+     * @param snapshot snapshot with its declared columns
+     * @return FROM source
+     */
+    public static String attachedSource(ReadSpec.AttachedTable attached, TableSnapshot snapshot) {
+        String remote = DuckDbAdapter.quoteIdentifier(attached.database()) + "."
+                + DuckDbAdapter.quoteIdentifier(attached.schema()) + "."
+                + DuckDbAdapter.quoteIdentifier(attached.table());
+        if (snapshot.columns().isEmpty()) {
+            return remote;
+        }
+        List<String> columns = new ArrayList<>();
+        for (ColumnSpec column : snapshot.columns()) {
+            columns.add(DuckDbAdapter.quoteIdentifier(column.name()));
+        }
+        return "(SELECT " + String.join(", ", columns) + " FROM " + remote + ")";
     }
 
     /**

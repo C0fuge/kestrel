@@ -48,6 +48,15 @@ public final class DuckDbSetupValidator {
     private static final Map<String, Boolean> AZURE_OPTIONS = Map.of(
             "CONNECTION_STRING", false, "ACCOUNT_NAME", false, "TENANT_ID", false,
             "CLIENT_ID", false, "CLIENT_SECRET", false);
+    /** Types of remote databases a plugin may attach, with the extension that reads them. */
+    private static final Map<String, String> ATTACH_TYPES = Map.of(
+            "postgres", "postgres_scanner", "mysql", "mysql_scanner");
+    /** Connection options of an attached database, per type. */
+    private static final Map<String, Set<String>> ATTACH_OPTIONS = Map.of(
+            "postgres", Set.of("HOST", "PORT", "DATABASE", "USER", "PASSWORD"),
+            "mysql", Set.of("HOST", "PORT", "DATABASE", "USER", "PASSWORD", "SSL_MODE", "SSL_CA"));
+    /** Database names DuckDB or the server use themselves. */
+    private static final Set<String> RESERVED_DATABASES = Set.of("memory", "system", "temp", "main");
     /** Settings that would weaken the lockdown or change the server's own resources. */
     private static final Set<String> REFUSED_SETTINGS = Set.of(
             "enable_external_access", "lock_configuration", "allowed_directories", "allowed_paths",
@@ -450,6 +459,8 @@ public final class DuckDbSetupValidator {
         private final List<String> extensions = new ArrayList<>();
         /** Extensions whose added functions are refused in client queries. */
         private final Set<String> refusingExtensions = new LinkedHashSet<>();
+        /** Attached databases: name, secret statement, ATTACH statement. */
+        private final List<String[]> attachments = new ArrayList<>();
         /** Setting name to its value as written. */
         private final Map<String, String> settings = new LinkedHashMap<>();
         private final List<String[]> secrets = new ArrayList<>();
@@ -533,6 +544,51 @@ public final class DuckDbSetupValidator {
             String sql = secretStatement(contributor, "CREATE TEMPORARY SECRET ", name, type, scope,
                     roots, options, s3Twins, sensitive);
             secrets.add(new String[] {name, scope, sql});
+        }
+
+        @Override
+        public void attachDatabase(String name, String type, Map<String, SecretValue> options) {
+            requireIdentifier(name, "attachment");
+            if (RESERVED_DATABASES.contains(name)) {
+                throw refusal("attachment name " + quote(name) + " is DuckDB's own");
+            }
+            String extension = ATTACH_TYPES.get(type);
+            if (extension == null) {
+                throw refusal("attachment type " + quote(type));
+            }
+            if (!refusingExtensions.contains(extension)) {
+                throw refusal("attachment " + name + ": extension " + extension
+                        + " must be loaded with refused functions first");
+            }
+            Objects.requireNonNull(options, "options");
+            Set<String> allowed = ATTACH_OPTIONS.get(type);
+            StringBuilder sql = new StringBuilder("CREATE TEMPORARY SECRET ").append(name)
+                    .append(" (TYPE ").append(type);
+            for (Map.Entry<String, SecretValue> option : options.entrySet()) {
+                String key = option.getKey();
+                SecretValue value = option.getValue();
+                if (key == null || !OPTION.matcher(key).matches() || !allowed.contains(key)) {
+                    throw refusal("attachment " + name + " option " + quote(key));
+                }
+                if (value == null || value.value() == null) {
+                    throw refusal("attachment " + name + " option " + key + " without a value");
+                }
+                sql.append(", ").append(key).append(' ');
+                if ("PORT".equals(key)) {
+                    if (!value.value().matches("[0-9]{1,5}")) {
+                        throw refusal("attachment " + name + " option PORT = " + quote(value.value()));
+                    }
+                    sql.append(value.value());
+                } else {
+                    sql.append(literal(value.value()));
+                }
+                if (value.sensitive() && !value.value().isEmpty()) {
+                    sensitive.add(value.value());
+                }
+            }
+            sql.append(')');
+            attachments.add(new String[] {name, sql.toString(),
+                "ATTACH '' AS " + name + " (TYPE " + type + ", SECRET " + name + ", READ_ONLY)"});
         }
 
         @Override
@@ -667,6 +723,17 @@ public final class DuckDbSetupValidator {
                 }
                 secrets.add(new DuckDbSetupPlan.DeclaredSecret(secret[0], secret[1]));
                 statements.add(secret[2]);
+            }
+            for (String[] attachment : recorder.attachments) {
+                if (secrets.stream().anyMatch(s -> s.name().equals(attachment[0]))) {
+                    throw new IllegalArgumentException("DuckDB setup of " + recorder.contributor
+                            + " refused: attachment " + attachment[0] + " exists already");
+                }
+                secrets.add(new DuckDbSetupPlan.DeclaredSecret(attachment[0], null));
+                statements.add(attachment[1]);
+                statements.add(attachment[2]);
+                // Client queries may not name the attachment (catalog or schema qualifier).
+                refused.add(attachment[0]);
             }
             recorder.sensitive.forEach(DuckDbSetupValidator.this.redactor::add);
             refused.addAll(recorder.refused);

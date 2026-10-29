@@ -16,6 +16,7 @@ import pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup;
 import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -226,6 +227,67 @@ class DuckDbSetupValidatorTest {
                 contribution("p", Set.of("file"), List.of("/data/parquet", "/tmp/a b/c/"),
                         setup -> {
                         }), List.of(), List.of()).roots());
+    }
+
+    /** An attached database: secret + read-only ATTACH, name refused in client SQL (SPI 1.10). */
+    @Test
+    void attachedDatabasesAreReadOnlyAndNeedTheRefusingExtension() {
+        Map<String, SecretValue> options = new java.util.LinkedHashMap<>();
+        options.put("HOST", SecretValue.plain("db.example"));
+        options.put("PORT", SecretValue.plain("5432"));
+        options.put("DATABASE", SecretValue.plain("sales"));
+        options.put("USER", SecretValue.plain("reader"));
+        options.put("PASSWORD", SecretValue.sensitive("pa'ss"));
+        DuckDbSetupPlan plan = plan(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg_sales", "postgres", options);
+        });
+        assertEquals(List.of("LOAD '/ext/postgres_scanner.duckdb_extension'",
+                "CREATE TEMPORARY SECRET pg_sales (TYPE postgres, HOST 'db.example', PORT 5432,"
+                        + " DATABASE 'sales', USER 'reader', PASSWORD 'pa''ss')",
+                "ATTACH '' AS pg_sales (TYPE postgres, SECRET pg_sales, READ_ONLY)"), plan.statements());
+        assertEquals(Set.of(0), plan.refusingStatements());
+        assertTrue(plan.extraRefusedFunctions().contains("pg_sales"), "the name is refused in client SQL");
+        assertEquals(new DuckDbSetupPlan.DeclaredSecret("pg_sales", null), plan.secrets().get(0));
+        assertEquals("x *** y", plan.redactor().redact("x pa'ss y"));
+        assertFalse(plan.toString().contains("pa'ss"));
+
+        Map<String, SecretValue> host = Map.of("HOST", SecretValue.plain("h"));
+        refused(setup -> {
+            setup.loadExtension("postgres_scanner");
+            setup.attachDatabase("pg", "postgres", host);
+        });
+        refused(setup -> setup.attachDatabase("pg", "postgres", host));
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg", "sqlite", host);
+        });
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("memory", "postgres", host);
+        });
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg; DROP", "postgres", host);
+        });
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg", "postgres", Map.of("SSL_MODE", SecretValue.plain("require")));
+        });
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg", "postgres", Map.of("PORT", SecretValue.plain("5432) x")));
+        });
+        refused(setup -> {
+            setup.loadExtensionRefusingFunctions("postgres_scanner");
+            setup.attachDatabase("pg", "postgres", host);
+            setup.attachDatabase("pg", "postgres", host);
+        });
+        DuckDbSetupPlan mysql = plan(setup -> {
+            setup.loadExtensionRefusingFunctions("mysql_scanner");
+            setup.attachDatabase("my", "mysql", Map.of("SSL_MODE", SecretValue.plain("required")));
+        });
+        assertEquals("ATTACH '' AS my (TYPE mysql, SECRET my, READ_ONLY)", mysql.statements().get(2));
     }
 
     @Test
