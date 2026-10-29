@@ -1701,6 +1701,43 @@ class DuckDbAdapterTest {
         DuckDbAdapter.requireAllowedFunctions("{\"function_name\":\"sum\"}");
     }
 
+    /**
+     * Verifies every function a marked setup statement adds is refused in client queries, while
+     * functions of other setup statements and DuckDB's own stay allowed (Q4 (b) safety net).
+     */
+    @Test
+    void functionsAddedByAMarkedSetupStatementAreRefused() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan plan =
+                new pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan(
+                        List.of("CREATE MACRO net_added_fn(x) AS x + 1",
+                                "CREATE MACRO net_kept_fn(x) AS x + 2",
+                                "CREATE MACRO net_added_table() AS TABLE SELECT 1 AS one"),
+                        List.of(), java.util.Set.of(),
+                        new pro.surpin.data.arrowflight.spi.config.SecretRedactor(), List.of(),
+                        List.of(), java.util.Set.of(0, 2));
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, plan)) {
+            for (String sql : new String[] {"SELECT net_added_fn(1)", "SELECT * FROM net_added_table()",
+                    "SELECT id FROM s.t WHERE id = NET_ADDED_FN(0)"}) {
+                IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                        () -> adapter.describeComplete(allocator, sql, views()), sql);
+                assertTrue(e.getMessage().contains("is not allowed"), sql + ": " + e.getMessage());
+            }
+            assertNotNull(adapter.describeComplete(allocator, "SELECT sum(id) FROM s.t", views()));
+            DuckDbAdapter.requireAllowedFunctions("{\"function_name\":\"net_kept_fn\"}");
+            try (Statement s = adapter.connection().createStatement();
+                    ResultSet rs = s.executeQuery("SELECT net_added_fn(1)")) {
+                assertTrue(rs.next(), "server-written SQL may still use it");
+                assertEquals(2, rs.getInt(1));
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+        assertTrue(pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.contains("net_added_table"));
+        assertFalse(pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions.contains("sum"));
+    }
+
     /** Verifies DuckDB neither reads nor writes persistent secrets. */
     @Test
     void persistentSecretsAreDisabled() throws Exception {

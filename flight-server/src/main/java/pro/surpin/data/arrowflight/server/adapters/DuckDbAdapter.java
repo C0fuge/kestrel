@@ -24,6 +24,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -78,6 +79,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final List<String> readableRoots;
     /** Statements the data store needs in every connection, run before the lockdown. */
     private final List<String> storageSetupStatements;
+    /** Indexes of the setup statements whose added functions are refused in client queries. */
+    private final Set<Integer> refusingSetupStatements;
     /** Removes the secret values of the setup from errors. */
     private final SecretRedactor redactor;
     /** Secrets the setup declares, read back at startup. */
@@ -492,6 +495,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
         this.storageSetupStatements = setup.statements();
+        this.refusingSetupStatements = setup.refusingStatements();
         this.redactor = setup.redactor();
         this.declaredSecrets = setup.secrets();
         PluginRefusedFunctions.addAll(setup.extraRefusedFunctions());
@@ -971,6 +975,10 @@ public final class DuckDbAdapter implements AutoCloseable {
     private void runStorageSetup(Statement s) throws java.sql.SQLException {
         for (int i = 0; i < storageSetupStatements.size(); i++) {
             try {
+                if (refusingSetupStatements.contains(i)) {
+                    refuseAddedFunctions(s, storageSetupStatements.get(i), i + 1);
+                    continue;
+                }
                 s.execute(storageSetupStatements.get(i));
             } catch (java.sql.SQLException e) {
                 throw new java.sql.SQLException("Storage setup statement " + (i + 1) + " of "
@@ -978,6 +986,53 @@ public final class DuckDbAdapter implements AutoCloseable {
                         + sanitizeSetupError(e.getMessage()), e.getSQLState());
             }
         }
+    }
+
+    /**
+     * Runs a setup statement (an extension load) and refuses in client queries every function
+     * name it adds: {@code duckdb_functions()} before and after it. Names that existed before
+     * (also overloads the extension adds to them) stay allowed.
+     *
+     * @param s statement of the connection to set up
+     * @param statement setup statement
+     * @param number statement number, for the log
+     * @throws java.sql.SQLException when the statement or the function list fails
+     */
+    private static void refuseAddedFunctions(Statement s, String statement, int number)
+            throws java.sql.SQLException {
+        Set<String> before = functionNames(s);
+        s.execute(statement);
+        Set<String> added = new java.util.TreeSet<>(functionNames(s));
+        added.removeAll(before);
+        Set<String> fresh = new java.util.TreeSet<>();
+        for (String name : added) {
+            if (!PluginRefusedFunctions.contains(name)) {
+                fresh.add(name);
+            }
+        }
+        PluginRefusedFunctions.addAll(added);
+        if (!fresh.isEmpty()) {
+            LOGGER.info("node={} duckdb=extensionFunctionsRefused statement={} count={} functions={}",
+                    LogUtil.node(), number, fresh.size(), fresh);
+        }
+    }
+
+    /**
+     * Lists the names of the functions, table functions and macros of a connection.
+     *
+     * @param s statement of the connection
+     * @return lower-case names
+     * @throws java.sql.SQLException when the list cannot be read
+     */
+    static Set<String> functionNames(Statement s) throws java.sql.SQLException {
+        Set<String> names = new HashSet<>();
+        try (java.sql.ResultSet rs = s.executeQuery(
+                "SELECT DISTINCT lower(function_name) FROM duckdb_functions()")) {
+            while (rs.next()) {
+                names.add(rs.getString(1));
+            }
+        }
+        return names;
     }
 
     /**

@@ -18,10 +18,13 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  * @param extensions names of the extensions loaded
  * @param secrets declared secrets, checked against {@code duckdb_secrets()} at startup; null
  *                when the statements were not written by the validator and are not checked
+ * @param refusingStatements indexes of the statements (extension loads) whose added functions
+ *                           are refused in client queries: {@code duckdb_functions()} is compared
+ *                           before and after each of them
  */
 public record DuckDbSetupPlan(List<String> statements, List<String> roots,
         Set<String> extraRefusedFunctions, SecretRedactor redactor, List<String> extensions,
-        List<DeclaredSecret> secrets) {
+        List<DeclaredSecret> secrets, Set<Integer> refusingStatements) {
 
     /**
      * A secret the setup creates.
@@ -41,14 +44,37 @@ public record DuckDbSetupPlan(List<String> statements, List<String> roots,
      * @param redactor redactor
      * @param extensions loaded extensions
      * @param secrets declared secrets, or null when unknown
+     * @param refusingStatements statements whose added functions are refused
      */
     public DuckDbSetupPlan {
+        refusingStatements = Set.copyOf(refusingStatements);
+        for (int index : refusingStatements) {
+            if (index < 0 || index >= statements.size()) {
+                throw new IllegalArgumentException("No setup statement " + index);
+            }
+        }
         statements = List.copyOf(statements);
         roots = List.copyOf(roots);
         extraRefusedFunctions = Set.copyOf(extraRefusedFunctions);
         Objects.requireNonNull(redactor, "redactor");
         extensions = List.copyOf(extensions);
         secrets = secrets == null ? null : List.copyOf(secrets);
+    }
+
+    /**
+     * A plan without statements whose added functions are refused.
+     *
+     * @param statements setup statements
+     * @param roots readable roots
+     * @param extraRefusedFunctions extra refused functions
+     * @param redactor redactor
+     * @param extensions loaded extensions
+     * @param secrets declared secrets, or null when unknown
+     */
+    public DuckDbSetupPlan(List<String> statements, List<String> roots,
+            Set<String> extraRefusedFunctions, SecretRedactor redactor, List<String> extensions,
+            List<DeclaredSecret> secrets) {
+        this(statements, roots, extraRefusedFunctions, redactor, extensions, secrets, Set.of());
     }
 
     /**
@@ -68,6 +94,7 @@ public record DuckDbSetupPlan(List<String> statements, List<String> roots,
         // The statements may hold credentials.
         return "DuckDbSetupPlan[statements=" + statements.size() + ", roots=" + roots
                 + ", extensions=" + extensions + ", secrets=" + (secrets == null ? "?" : secrets.size())
-                + ", extraRefusedFunctions=" + extraRefusedFunctions + "]";
+                + ", extraRefusedFunctions=" + extraRefusedFunctions
+                + ", refusingStatements=" + refusingStatements + "]";
     }
 }

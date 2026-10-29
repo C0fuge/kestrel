@@ -208,7 +208,7 @@ public final class DuckDbSetupValidator {
         }
         return new DuckDbSetupPlan(writer.statements, new ArrayList<>(writer.roots),
                 writer.refused, redactor, new ArrayList<>(writer.extensions.keySet()),
-                writer.secrets);
+                writer.secrets, writer.refusingStatements);
     }
 
     /**
@@ -448,6 +448,8 @@ public final class DuckDbSetupValidator {
         private final String contributor;
         private final List<String> roots;
         private final List<String> extensions = new ArrayList<>();
+        /** Extensions whose added functions are refused in client queries. */
+        private final Set<String> refusingExtensions = new LinkedHashSet<>();
         /** Setting name to its value as written. */
         private final Map<String, String> settings = new LinkedHashMap<>();
         private final List<String[]> secrets = new ArrayList<>();
@@ -474,6 +476,12 @@ public final class DuckDbSetupValidator {
             if (!extensions.contains(name)) {
                 extensions.add(name);
             }
+        }
+
+        @Override
+        public void loadExtensionRefusingFunctions(String name) {
+            loadExtension(name);
+            refusingExtensions.add(name);
         }
 
         @Override
@@ -619,6 +627,10 @@ public final class DuckDbSetupValidator {
         private final Map<String, String> settings = new LinkedHashMap<>();
         private final List<DuckDbSetupPlan.DeclaredSecret> secrets = new ArrayList<>();
         private final Set<String> refused = new LinkedHashSet<>();
+        /** Extension name to the index of its LOAD statement. */
+        private final Map<String, Integer> loadStatements = new LinkedHashMap<>();
+        /** Statements whose added functions are refused. */
+        private final Set<Integer> refusingStatements = new LinkedHashSet<>();
 
         /**
          * Writes one contributor's items.
@@ -630,7 +642,12 @@ public final class DuckDbSetupValidator {
                 if (!extensions.containsKey(name)) {
                     String file = extensionResolver.apply(name);
                     extensions.put(name, file);
+                    loadStatements.put(name, statements.size());
                     statements.add("LOAD " + literal(file));
+                }
+                if (recorder.refusingExtensions.contains(name)) {
+                    // Also when another contributor loaded it first: its LOAD adds the functions.
+                    refusingStatements.add(loadStatements.get(name));
                 }
             }
             for (Map.Entry<String, String> setting : recorder.settings.entrySet()) {

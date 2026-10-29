@@ -61,6 +61,35 @@ class DuckDbSetupValidatorTest {
     }
 
     /**
+     * An extension loaded with refused functions marks its one LOAD statement, also when another
+     * contributor loaded the same extension first (Q4 (b) safety net).
+     */
+    @Test
+    void extensionsWithRefusedFunctionsMarkTheirLoad() {
+        DuckDbSetupPlan plan = validator.plan(
+                contribution("data", Set.of("s3"), List.of("s3://z/data/"), setup -> {
+                    setup.loadExtension("httpfs");
+                    setup.set("s3_region", "");
+                }),
+                List.of(),
+                List.of(contribution("jdbc", Set.of("s3"), List.of("s3://wh/"), setup -> {
+                    setup.loadExtensionRefusingFunctions("postgres_scanner");
+                    setup.loadExtensionRefusingFunctions("httpfs");
+                    setup.loadExtension("iceberg");
+                })));
+        assertEquals(List.of(
+                "LOAD '/ext/httpfs.duckdb_extension'",
+                "SET s3_region = ''",
+                "LOAD '/ext/postgres_scanner.duckdb_extension'",
+                "LOAD '/ext/iceberg.duckdb_extension'"), plan.statements());
+        assertEquals(Set.of(0, 2), plan.refusingStatements());
+        assertEquals(Set.of(), validator.plan(contribution("data", Set.of("s3"),
+                List.of("s3://z/data/"), setup -> setup.loadExtension("httpfs")), List.of(),
+                List.of()).refusingStatements());
+        refused(setup -> setup.loadExtensionRefusingFunctions("../x"));
+    }
+
+    /**
      * Spark and Iceberg Java name local files {@code file:/...} in metadata and manifests; DuckDB
      * checks those names literally, so local catalog roots also appear as {@code file:} URIs
      * (Gravitino stand). The data directory's local root does not get a twin.
