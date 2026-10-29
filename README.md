@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `flightLoadReservationSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -390,6 +390,14 @@ setting on, the ticket secret allows impersonating any user from a member's addr
 (Hazelcast) network and the nodes like a keytab.** Over TLS a node trusts its peers with the PEM file
 `distributedCompleteTrustedCertificates` (`FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`), by default its own
 `FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA).
+
+`shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 0) drains a node that is stopped (SIGTERM,
+`docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then refuses
+new calls with `UNAVAILABLE` (clients retry on another node, partial-mode clients read the endpoint's next
+location) and waits up to that many seconds for its running answers before it closes DuckDB and its cluster
+member. With 0 the node stops at once and the answers it is still sending fail with `INTERNAL` (an HTTP/2 stream
+reset), which clients do not retry. Keep it below the stop timeout of the service manager (`docker stop`: 10 s by
+default, `-t`).
 
 `flightZeroCopyWrites` (`FLIGHT_ZERO_COPY_WRITES`, default false) lets gRPC send the buffers of DuckDB
 result batches as they are instead of copying each batch into its own buffers first (DuckDB exports every

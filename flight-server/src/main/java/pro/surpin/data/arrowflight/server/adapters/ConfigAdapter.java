@@ -337,6 +337,35 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns shutdownDrainSeconds from the system configuration.
+     *
+     * @return seconds a stopping server waits for its running calls, 0 = none
+     */
+    public static int shutdownDrainSeconds() {
+        return shutdownDrainSeconds(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code shutdownDrainSeconds} ({@code FLIGHT_SHUTDOWN_DRAIN_SECONDS}): when positive,
+     * a server that is stopped (SIGTERM) first leaves the cluster's pool, then refuses new calls
+     * with {@code UNAVAILABLE} and waits up to this many seconds for its running calls to finish
+     * before it closes DuckDB and the cluster member; default 0, the server stops at once and
+     * running calls fail.
+     *
+     * @param props configuration source
+     * @return seconds, 0 = no drain
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int shutdownDrainSeconds(ConfigSource props) {
+        int seconds = getIntWithEnv("shutdownDrainSeconds", "arrowflight.server.shutdownDrainSeconds",
+                "FLIGHT_SHUTDOWN_DRAIN_SECONDS", 0, props);
+        if (seconds < 0) {
+            throw new IllegalArgumentException("shutdownDrainSeconds must not be negative: " + seconds);
+        }
+        return seconds;
+    }
+
+    /**
      * Returns plainFlightCommands from the system configuration.
      *
      * @return whether plain Flight descriptors are read

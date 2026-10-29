@@ -82,6 +82,7 @@ public final class ClusterService implements AutoCloseable {
     private final AtomicBoolean heartbeatDeferred = new AtomicBoolean();
     private final AtomicLong deferredWrites = new AtomicLong();
     private boolean registered;
+    private boolean deregistered;
     private final EndpointTicketCodec endpointTicketCodec;
     private volatile byte[] currentSecret;
     private final InternalCallIdentity internalCallIdentity =
@@ -1088,8 +1089,23 @@ public final class ClusterService implements AutoCloseable {
         return hazelcast.instance();
     }
 
-    @Override
-    public void close() {
+    /**
+     * Takes this server out of the cluster's pool and stops its heartbeat, so the other nodes
+     * stop planning on it, while its cluster member stays up for the calls still running here
+     * (tickets, load releases); a stopping server's drain. Later calls do nothing.
+     */
+    public synchronized void deregister() {
+        if (deregistered) {
+            return;
+        }
+        deregistered = true;
+        // First the heartbeat: a beat after the removal would put the server back.
+        heartbeatExecutor.shutdownNow();
+        try {
+            heartbeatExecutor.awaitTermination(HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         try {
             if (mustDefer(serverUri)) {
                 // The removal would wait for a member that stopped answering; the other nodes
@@ -1102,7 +1118,11 @@ public final class ClusterService implements AutoCloseable {
         } catch (Exception e) {
             LOGGER.warn("Failed to deregister server from cluster: {}", e.getMessage());
         }
-        heartbeatExecutor.shutdownNow();
+    }
+
+    @Override
+    public void close() {
+        deregister();
         loadClaimExecutor.shutdownNow();
         deferredWriteExecutor.shutdownNow();
         localHandles.clear();

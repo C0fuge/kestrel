@@ -272,7 +272,12 @@ public class HadoopArrowFlightServer {
             LOGGER.info("Prometheus metrics stopped");
         }
         if (server != null) {
-            server.shutdown();
+            int drainSeconds = ConfigAdapter.shutdownDrainSeconds();
+            if (drainSeconds > 0 && component != null) {
+                drain(server, component.clusterService(), drainSeconds);
+            } else {
+                server.shutdown();
+            }
             LOGGER.info("Flight SQL server stopped");
         }
         if (distributedComplete != null) {
@@ -322,6 +327,31 @@ public class HadoopArrowFlightServer {
             }
             flightSecurity = null;
         }
+    }
+
+    /**
+     * Drains a stopping server (shutdownDrainSeconds): takes it out of the cluster's pool, refuses
+     * new calls ({@code UNAVAILABLE}) and waits for the running ones.
+     *
+     * @param server  Flight server
+     * @param cluster cluster service of the server
+     * @param seconds longest wait for the running calls
+     * @return true when every running call ended in time
+     */
+    static boolean drain(FlightServer server, ClusterService cluster, int seconds) {
+        long t0 = System.nanoTime();
+        cluster.deregister();
+        server.shutdown();
+        boolean drained;
+        try {
+            drained = server.awaitTermination(seconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            drained = false;
+        }
+        LOGGER.info("shutdownDrain={} after {} ms (at most {} s)", drained ? "done" : "timeout",
+                (System.nanoTime() - t0) / 1_000_000, seconds);
+        return drained;
     }
 
     /**

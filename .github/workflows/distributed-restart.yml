@@ -4,10 +4,11 @@
 # runner's host network, -DdistributedComplete=<distributed>), and runs RollingRestartLoadTest
 # (<clients> clients, each call on the next node; complete-mode aggregates, scans and a
 # partial-mode scan) while the nodes are restarted one by one: first gracefully (docker stop,
-# SIGTERM), then with kill -9 (docker kill), each down for <down> s and given <settle> s after it
-# is ready again. Fails when an answer differs from the healthy cluster's (or DuckDB's row count)
-# or a query failed with a code that is not retryable (UNAVAILABLE). Reports per node and mode
-# the errors seen and the recovery times. Not part of Dev CI.
+# SIGTERM, nodes run with -DshutdownDrainSeconds=<drain>), then with kill -9 (docker kill), each
+# down for <down> s and given <settle> s after it is ready again. Fails when an answer differs
+# from the healthy cluster's (or DuckDB's row count) or a query failed with a code that is not
+# retryable (UNAVAILABLE). Reports per node and mode the errors seen and the recovery times. Not
+# part of Dev CI.
 name: Distributed restart
 
 on:
@@ -35,6 +36,10 @@ on:
         default: "15"
       settle:
         description: "seconds of load after a node is ready again"
+        type: string
+        default: "20"
+      drain:
+        description: "shutdownDrainSeconds of the nodes (0 = stop at once; docker stop waits 30 s)"
         type: string
         default: "20"
 
@@ -132,7 +137,7 @@ jobs:
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
               -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DresultMode=complete -DendpointsPerServer=2 \
               -DdistributedComplete="${{ inputs.distributed }}" -DdataDirShared=true \
-              -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+              -DshutdownDrainSeconds="${{ inputs.drain }}" -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
               --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$seeds" --metrics-enabled false > /dev/null
           done
@@ -225,7 +230,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Rolling restart under load, TPC-H SF${{ inputs.sf }} lineitem, 3 nodes, distributedComplete=${{ inputs.distributed }}, ${{ inputs.clients }} clients: $GITHUB_SHA"
+            echo "### Rolling restart under load, TPC-H SF${{ inputs.sf }} lineitem, 3 nodes, distributedComplete=${{ inputs.distributed }}, shutdownDrainSeconds=${{ inputs.drain }}, ${{ inputs.clients }} clients: $GITHUB_SHA"
             echo
             echo '```'
             grep -E '^(summary|reference) ' "$RUNNER_TEMP/client.log" 2>/dev/null || echo "(no client result)"

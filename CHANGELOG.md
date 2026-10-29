@@ -22,6 +22,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `arrow-compression` on the class path ~2 GB/s per thread. Decoding now writes frames of independent blocks (the
   server's, commons-compress's) block by block into the output buffer; other frames go through lz4-java's stream as
   before. The server's compressed bytes are unchanged.
+- Optional setting `shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 0 = unchanged): a stopped node
+  leaves the cluster's pool, refuses new calls with `UNAVAILABLE` and lets its running answers finish (up to that many
+  seconds) before it closes; without it a graceful stop cuts running answers with `INTERNAL` (found by D8).
+- Manual workflow `distributed-restart.yml` (lane 3, D8) and `RollingRestartLoadTest`: three server containers
+  restarted one by one (graceful, then kill -9) under a mixed query load; fails on a wrong answer or a failure with a
+  code that is not retryable, reports errors and recovery times per node.
 - Manual workflow `distributed-perf.yml` (lane 3, D7): three server containers of the ref (one cluster, shared
   TPC-H lineitem directory, `--cpus`/`--memory` per node) measured with `distributedComplete` off vs on over seven
   lineitem shapes that merge; fails when the answers differ or an "on" answer was not merged, reports times and rows/s.
