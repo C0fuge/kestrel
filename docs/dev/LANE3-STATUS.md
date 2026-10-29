@@ -34,6 +34,8 @@ D6. ~~**Q1 answered (maintainer 2026-10-29): yes**~~ *done 2026-10-29 (fd6084f, 
     stay INTERNAL; opt-in path only; test + doc line.
 D7. Perf of distributed complete on 3 containers in CI (heavy TPC-H shapes that merge: q01, q06, q12-like aggregates,
     filtered scans) on vs off, rows/s and wall time; decide the D2 (b) prefetch question from it.
+    - ~~Step 1: workflow~~ *done 2026-10-29 (see Log):* `distributed-perf.yml` (manual).
+    - Step 2: run it (SF10, 1 CPU per node; also 2 CPUs) and record the numbers + the prefetch decision.
 D8. Rolling restart under load: 3 nodes, a client loop of mixed queries, restart nodes one by one (graceful and
     kill -9): no wrong answers, failures only as retryable codes, recovery time per node in the Log.
 D9. Node join under load: a 4th node joins mid-run; plans start using it without errors; inventory/heartbeat timings.
