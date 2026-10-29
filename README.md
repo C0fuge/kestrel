@@ -391,13 +391,14 @@ setting on, the ticket secret allows impersonating any user from a member's addr
 `distributedCompleteTrustedCertificates` (`FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`), by default its own
 `FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA).
 
-`shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 0) drains a node that is stopped (SIGTERM,
+`shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 20, was 0 before 2026-10-29) drains a node that is stopped (SIGTERM,
 `docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then refuses
 new calls with `UNAVAILABLE` (clients retry on another node, partial-mode clients read the endpoint's next
 location) and waits up to that many seconds for its running answers before it closes DuckDB and its cluster
-member. With 0 the node stops at once and the answers it is still sending fail with `INTERNAL` (an HTTP/2 stream
-reset), which clients do not retry. Keep it below the stop timeout of the service manager (`docker stop`: 10 s by
-default, `-t`).
+member; a node without running answers stops at once. With 0 the node stops at once and the answers it is still
+sending fail with `INTERNAL` (an HTTP/2 stream reset), which clients do not retry. Keep it below the stop timeout of
+the service manager: Kubernetes' grace period is 30 s; `docker stop` waits only 10 s by default, so use `docker stop
+-t 25` (or more), or `--stop-timeout` on the container.
 
 `flightZeroCopyWrites` (`FLIGHT_ZERO_COPY_WRITES`, default false) lets gRPC send the buffers of DuckDB
 result batches as they are instead of copying each batch into its own buffers first (DuckDB exports every

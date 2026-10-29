@@ -336,6 +336,9 @@ public class ConfigAdapter {
         return Boolean.parseBoolean(value);
     }
 
+    /** Default of {@code shutdownDrainSeconds} (maintainer, 2026-10-29, lane 3 Q2). */
+    public static final int DEFAULT_SHUTDOWN_DRAIN_SECONDS = 20;
+
     /**
      * Returns shutdownDrainSeconds from the system configuration.
      *
@@ -349,8 +352,9 @@ public class ConfigAdapter {
      * Resolves {@code shutdownDrainSeconds} ({@code FLIGHT_SHUTDOWN_DRAIN_SECONDS}): when positive,
      * a server that is stopped (SIGTERM) first leaves the cluster's pool, then refuses new calls
      * with {@code UNAVAILABLE} and waits up to this many seconds for its running calls to finish
-     * before it closes DuckDB and the cluster member; default 0, the server stops at once and
-     * running calls fail.
+     * before it closes DuckDB and the cluster member; default {@value #DEFAULT_SHUTDOWN_DRAIN_SECONDS}
+     * (below Kubernetes' 30 s grace period; {@code docker stop} needs {@code -t 25} or more). With 0
+     * the server stops at once and running calls fail.
      *
      * @param props configuration source
      * @return seconds, 0 = no drain
@@ -358,7 +362,7 @@ public class ConfigAdapter {
      */
     public static int shutdownDrainSeconds(ConfigSource props) {
         int seconds = getIntWithEnv("shutdownDrainSeconds", "arrowflight.server.shutdownDrainSeconds",
-                "FLIGHT_SHUTDOWN_DRAIN_SECONDS", 0, props);
+                "FLIGHT_SHUTDOWN_DRAIN_SECONDS", DEFAULT_SHUTDOWN_DRAIN_SECONDS, props);
         if (seconds < 0) {
             throw new IllegalArgumentException("shutdownDrainSeconds must not be negative: " + seconds);
         }

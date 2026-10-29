@@ -235,10 +235,10 @@ class ConfigAdapterTest {
     }
 
     @Test
-    void shutdownDrainSecondsIsOffByDefaultAndRefusesNegativeValues() throws IOException {
-        assertEquals(0, ConfigAdapter.shutdownDrainSeconds(source(Map.of(), Map.of())));
-        assertEquals(20, ConfigAdapter.shutdownDrainSeconds(
-                source(Map.of("shutdownDrainSeconds", "20"), Map.of())));
+    void shutdownDrainSecondsIsTwentyByDefaultAndRefusesNegativeValues() throws IOException {
+        assertEquals(20, ConfigAdapter.shutdownDrainSeconds(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.shutdownDrainSeconds(
+                source(Map.of("shutdownDrainSeconds", "0"), Map.of())));
         assertEquals(5, ConfigAdapter.shutdownDrainSeconds(
                 source(Map.of("arrowflight.server.shutdownDrainSeconds", "5"), Map.of())));
         assertEquals(30, ConfigAdapter.shutdownDrainSeconds(

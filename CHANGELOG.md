@@ -574,6 +574,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- `shutdownDrainSeconds` defaults to 20 (was 0; maintainer, lane 3 Q2): a node stopped with SIGTERM leaves the pool,
+  refuses new calls with `UNAVAILABLE` and lets running answers finish for up to 20 s instead of cutting them with
+  `INTERNAL`. `docker stop` needs `-t 25` or more (its default is 10 s); `0` restores the immediate stop.
 - `distributedComplete` (opt-in): a query whose merged answer fails after the client's first batch because a peer's
   part stream ended with `UNAVAILABLE` or a transport error now fails with `UNAVAILABLE` ("peer lost during
   distributed complete answer; retry") instead of `INTERNAL`, so clients and drivers that retry on `UNAVAILABLE`
