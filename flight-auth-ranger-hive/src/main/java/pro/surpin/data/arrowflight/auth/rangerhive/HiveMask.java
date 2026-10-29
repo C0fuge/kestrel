@@ -259,6 +259,16 @@ public final class HiveMask {
     }
 
     /**
+     * Tells whether the mask shows the last characters of a value, whose result on a Hive CHAR(n) column
+     * depends on the padding to n.
+     *
+     * @return true for a show-last mask
+     */
+    public boolean showsLast() {
+        return kind == Kind.SHOW_LAST;
+    }
+
+    /**
      * Writes the mask of one column as a DuckDB expression of the column's own type.
      *
      * @param column SQL reference to the column (already quoted)

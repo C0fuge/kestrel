@@ -49,11 +49,12 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Runs the {@code ranger-hive} provider in a real Flight SQL server over DuckDB schemas named like Hive databases:
- * tables with a mask, a row filter or a column denial for the caller are refused in queries, joins, subqueries and
- * listings, in both result modes; unrestricted tables are answered.
+ * masked columns read as their masks; tables with a row filter or a column denial for the caller are refused in
+ * queries, joins and subqueries, in both result modes; unrestricted tables are answered; listings as Hive's SHOW.
  */
 @Tag("integration")
 class RangerHiveFlightSqlTest {
@@ -107,14 +108,14 @@ class RangerHiveFlightSqlTest {
     }
 
     /**
-     * A table with a mask (orders), a row filter (payments) or a column denial (customers) for the caller is
+     * A table with a row filter (payments, not applied yet) or a column denial (customers) for the caller is
      * refused however it is referenced, also inside a subquery, a CTE or a set operation (their tables are named
      * from DuckDB's parse); the same queries pass for a user without the restriction (nested ones in complete mode).
      */
     @Test
     void restrictedTablesAreRefused() throws Exception {
         Map<String, List<String>> refused = Map.of(
-                "sam", List.of("orders", "payments"),
+                "sam", List.of("payments"),
                 "carl", List.of("customers"));
         for (String mode : List.of("partial", "complete")) {
             for (Map.Entry<String, List<String>> entry : refused.entrySet()) {
@@ -153,6 +154,39 @@ class RangerHiveFlightSqlTest {
         }
     }
 
+    /**
+     * A masked column (orders.ssn for sam) reads as the mask in every query of the table, also in joins and
+     * nested queries, in both modes (answered complete, one endpoint), with the column's type; other users read
+     * the values.
+     */
+    @Test
+    void maskedColumnsAreReadMasked() throws Exception {
+        for (String mode : List.of("partial", "complete")) {
+            List<String> all = rows("SELECT id, ssn, email FROM sales.orders", "sam", mode);
+            assertEquals(ROWS, all.size(), mode);
+            for (String row : all) {
+                assertTrue(row.contains("|null|u"), mode + ": " + row);
+            }
+            assertEquals(List.of("0|"), rows("SELECT count(ssn) FROM sales.orders", "sam", mode), mode);
+            assertEquals(List.of(ROWS + "|"), rows("SELECT count(*) FROM sales.orders", "sam", mode), mode);
+            assertEquals(List.of(ROWS + "|"), rows("SELECT count(*) FROM sales.orders WHERE ssn IS NULL",
+                    "sam", mode), mode);
+            assertEquals(List.of("null|"), rows("SELECT max(o.ssn) FROM sales.products p JOIN \"sales\".\"orders\" o"
+                    + " ON p.id = o.id", "sam", mode), mode);
+            assertEquals(List.of("ssn-99|"), rows("SELECT max(ssn) FROM sales.orders WHERE id = 99", "tess", mode),
+                    mode);
+            CallOption[] sam = login("sam", mode);
+            FlightInfo info = helper.sqlClient().execute("SELECT * FROM sales.orders", sam);
+            assertEquals(1, info.getEndpoints().size(), mode);
+            assertEquals(helper.sqlClient().execute("SELECT * FROM sales.orders", login("tess", mode)).getSchema(),
+                    info.getSchema(), mode);
+        }
+        assertEquals(List.of("null|"), rows("SELECT (SELECT max(ssn) FROM sales.orders) AS m FROM sales.products"
+                + " WHERE id = 1", "sam", "complete"));
+        assertEquals(List.of("0|"), rows("WITH x AS (SELECT * FROM sales.orders) SELECT count(ssn) FROM x",
+                "sam", "complete"));
+    }
+
     /** A database without a policy for the caller is neither readable nor visible. */
     @Test
     void databasesWithoutPoliciesAreHidden() throws Exception {
@@ -166,12 +200,12 @@ class RangerHiveFlightSqlTest {
                 "table_name", tess));
     }
 
-    /** Listings show only the tables the caller may read whole. */
+    /** Listings show the tables the caller has any access to, as Hive's SHOW TABLES. */
     @Test
-    void listingsShowOnlyReadableTables() throws Exception {
-        assertEquals(List.of("customers", "products"), tables("sam"));
+    void listingsShowVisibleTables() throws Exception {
+        assertEquals(List.of("customers", "orders", "payments", "products"), tables("sam"));
         assertEquals(List.of("customers", "orders", "payments", "products"), tables("tess"));
-        assertEquals(List.of("orders", "payments", "products"), tables("carl"));
+        assertEquals(List.of("customers", "orders", "payments", "products"), tables("carl"));
         assertEquals(List.of(), tables("mallory"));
     }
 

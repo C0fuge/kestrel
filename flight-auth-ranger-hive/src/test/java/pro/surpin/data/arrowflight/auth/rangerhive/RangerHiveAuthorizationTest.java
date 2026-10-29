@@ -1,6 +1,5 @@
 package pro.surpin.data.arrowflight.auth.rangerhive;
 
-import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.ranger.plugin.model.RangerPolicy;
@@ -17,6 +16,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory;
+import pro.surpin.data.arrowflight.server.TableRestriction;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -68,11 +68,20 @@ class RangerHiveAuthorizationTest {
         masks.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem(select(),
                 new RangerPolicyItemDataMaskInfo("MASK_NULL", null, null), List.of("sam"), List.of(), List.of(),
                 List.of(), false)));
+        RangerPolicy lastDigits = new RangerPolicy();
+        lastDigits.setId(3L);
+        lastDigits.setName("p3");
+        lastDigits.setService("hivedev");
+        lastDigits.setPolicyType(RangerPolicy.POLICY_TYPE_DATAMASK);
+        lastDigits.setResources(resources("sales", "payments", "card"));
+        lastDigits.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem(select(),
+                new RangerPolicyItemDataMaskInfo("MASK_SHOW_LAST_4", null, null), List.of("sam"), List.of(),
+                List.of(), List.of(), false)));
         ServicePolicies servicePolicies = new ServicePolicies();
         servicePolicies.setServiceName("hivedev");
         servicePolicies.setServiceDef(serviceDef);
         servicePolicies.setPolicyVersion(1L);
-        servicePolicies.setPolicies(List.of(access, masks));
+        servicePolicies.setPolicies(List.of(access, masks, lastDigits));
         HiveRangerPlugin plugin = new HiveRangerPlugin("hive", "ranger-hive-test");
         plugin.setPolicies(servicePolicies);
         Map<String, Set<String>> groups = Map.of("sam", Set.of("staff"), "tess", Set.of("staff"));
@@ -95,22 +104,56 @@ class RangerHiveAuthorizationTest {
         assertFalse(unprefixed.canSeeSchema("sam", ""));
     }
 
-    /** A table with a mask for the caller is refused for queries; others' masks do not matter. */
+    /**
+     * Tables are visible with any access; a query's table gets the caller's masks as DuckDB SQL over all its
+     * columns; others' masks do not matter; what cannot be written exactly is denied.
+     */
     @Test
-    void refusesRestrictedTables() {
+    void restrictsTablesWithMasks() {
         RangerHiveAuthorization authorization = new RangerHiveAuthorization(policies, "hive_", () -> { });
+        assertTrue(authorization.restrictsTables());
         assertTrue(authorization.canReadTable("sam", "hive_sales", "customers"));
-        assertFalse(authorization.canReadTable("sam", "hive_sales", "orders"));
-        assertTrue(authorization.canReadTable("tess", "hive_sales", "orders"));
+        assertTrue(authorization.canReadTable("sam", "hive_sales", "orders"));
+        assertFalse(authorization.canReadTable("mallory", "hive_sales", "orders"));
         assertFalse(authorization.canReadTable("sam", "sales", "customers"));
         assertFalse(authorization.canReadTable("sam", "hive_sales", null));
-        authorization.requireQuery("sam", "SELECT count(*) FROM hive_sales.customers");
-        assertThrows(FlightRuntimeException.class,
-                () -> authorization.requireQuery("sam", "SELECT id FROM hive_sales.orders"));
-        assertThrows(FlightRuntimeException.class, () -> authorization.requireQuery("sam",
-                "SELECT * FROM hive_sales.customers c JOIN hive_sales.orders o ON c.id = o.id"));
-        authorization.requireQuery("tess",
-                "SELECT * FROM hive_sales.customers c JOIN hive_sales.orders o ON c.id = o.id");
+        Map<String, String> orders = new LinkedHashMap<>();
+        orders.put("id", "INTEGER");
+        orders.put("SSN", "VARCHAR");
+        assertEquals(new TableRestriction(true, null, Map.of("SSN", "CAST(NULL AS VARCHAR)")),
+                authorization.restrictTable("sam", "hive_sales", "orders", orders));
+        assertEquals(TableRestriction.UNRESTRICTED,
+                authorization.restrictTable("tess", "hive_sales", "orders", orders));
+        assertEquals(TableRestriction.UNRESTRICTED,
+                authorization.restrictTable("sam", "hive_sales", "customers", Map.of("id", "INTEGER")));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("mallory", "hive_sales", "orders", orders));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "sales", "orders", orders));
+        assertEquals(TableRestriction.DENIED, authorization.restrictTable("sam", "hive_sales", "orders", Map.of()));
+        // Show-last on text needs the Hive type (CHAR(n) pads); on numbers it is written.
+        assertEquals(TableRestriction.DENIED,
+                authorization.restrictTable("sam", "hive_sales", "payments", Map.of("card", "VARCHAR")));
+        TableRestriction card = authorization.restrictTable("sam", "hive_sales", "payments",
+                Map.of("card", "BIGINT"));
+        assertTrue(card.restricts());
+        assertTrue(card.masks().get("card").contains("\"card\""), card.masks().toString());
+        // MASK_NULL nulls a list column, as Hive does; other masks refuse nested columns.
+        assertEquals(new TableRestriction(true, null, Map.of("ssn", "CAST(NULL AS VARCHAR[])")),
+                authorization.restrictTable("sam", "hive_sales", "orders", Map.of("ssn", "VARCHAR[]")));
+        assertEquals(TableRestriction.DENIED,
+                authorization.restrictTable("sam", "hive_sales", "payments", Map.of("card", "INTEGER[]")));
+    }
+
+    /** DuckDB types map to the Hive types the masks treat apart. */
+    @Test
+    void namesHiveTypes() {
+        assertEquals("string", RangerHiveAuthorization.hiveType("VARCHAR"));
+        assertEquals("int", RangerHiveAuthorization.hiveType("INTEGER"));
+        assertEquals("tinyint", RangerHiveAuthorization.hiveType("tinyint"));
+        assertEquals("date", RangerHiveAuthorization.hiveType("DATE"));
+        assertEquals("decimal(10,2)", RangerHiveAuthorization.hiveType("DECIMAL(10,2)"));
+        assertTrue(RangerHiveAuthorization.hiveType("INTEGER[]").startsWith("array<"));
+        assertTrue(RangerHiveAuthorization.hiveType("STRUCT(a INTEGER)").startsWith("struct<"));
+        assertTrue(RangerHiveAuthorization.hiveType("MAP(VARCHAR, INTEGER)").startsWith("map<"));
     }
 
     /** The provider is found by name, needs its settings, and releases the plugin on close. */

@@ -102,19 +102,27 @@ mapping plus the `ldap` / `jwt` provider's groups).
 | `RANGER_HIVE_SCHEMA_PREFIX` | The Hive catalog's `schemaPrefix` (default empty): server schema = prefix + Hive database. |
 
 Decisions follow Ranger's Hive authorizer: a schema is visible with any access on the database or inside it (as
-`SHOW DATABASES`). The server cannot yet apply masks or row filters or tell which columns a query reads, so a table
-is readable only when the caller may read **all of it unmasked and unfiltered**: `select` on all its columns (a
-policy on column `*`), no row filter, and neither a mask nor a deny for the caller on any column a policy names.
-Otherwise the query is refused (`UNAUTHORIZED`), never answered unmasked. Also refused, because the server cannot
+`SHOW DATABASES`), a table with any access on it or one of its columns (as `SHOW TABLES`; `GetTables` lists those,
+a view only with its sources). Each table a query reads (also through views, invoker rights) is decided with
+`select` on **every** column of the table - the server does not tell the provider which columns the query uses, so a
+column-level deny on any column refuses the table, as Hive does for `SELECT *`. Column masks for the caller are
+applied: the server reads the table as `(SELECT * REPLACE (<mask> AS col, ...) FROM db.t)`, with Hive 3.1.3's mask
+functions written as DuckDB SQL (`MASK`, `MASK_SHOW_FIRST_4`, `MASK_SHOW_LAST_4`, `MASK_HASH`, `MASK_NULL`,
+`MASK_DATE_SHOW_YEAR`, `MASK_NONE`, and `CUSTOM` values that call those functions); a masked column keeps its type,
+and such queries are answered complete by one node (also when asked in parts: one endpoint). Refused
+(`UNAUTHORIZED`), never answered unmasked: tables with a **row filter** for the caller (not applied yet), a
+`MASK_SHOW_LAST_4`-style mask on a text column (a Hive `CHAR(n)` column pads values; the server does not know the
+Hive type yet), other masks on nested columns, other `CUSTOM` expressions. Also refused, because the server cannot
 evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
 (table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
 pattern or column exclusion in a restrictive policy, and every table while restrictive tag-based policies exist.
 Schemas outside the prefix (other catalogs) are refused. Security zones of the Hive service are honoured (a zone's
-policies decide for the tables in it). Each table decision (queries, views, and the table listing of `GetTables`,
-which filters by the same check) is audited to the plugin's Ranger audit destinations (`ranger-hive-audit.xml` on
-the class path, as for Hive) as one `select` on the table; a table refused because of a column restriction is
-audited as denied with the reason and policy id -1. Schema visibility is not audited (as Hive's SHOW filters).
-Masks and row filters (query rewrite) are planned; see `docs/dev/PLUGINS-STATUS.md` (P6).
+policies decide for the tables in it). Each table decision of a query is audited to the plugin's Ranger audit
+destinations (`ranger-hive-audit.xml` on the class path, as for Hive) as one `select` on the table; a table refused
+because of a column restriction is audited as denied with the reason and policy id -1. Visibility (schemas,
+`GetTables` listings) is not audited (as Hive's SHOW filters). A query's restriction is derived again when an
+endpoint is read, for the user who reads it. `MASK_HASH` on a Hive `CHAR(n)` column hashes the value without its
+padding (Hive hashes the padded value).
 
 ## Add an authentication provider
 
@@ -128,7 +136,7 @@ The descriptor contains the factory's fully qualified class name. Put the JAR on
 
 ## Add an authorization provider
 
-Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; for a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation it names every table from DuckDB's own parse of the text (`json_serialize_sql`; CTE names count where they are in scope) and checks each one. Table functions (`read_parquet(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such a query cannot be checked and are refused with INVALID_ARGUMENT. Register it with:
+Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; for a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation it names every table from DuckDB's own parse of the text (`json_serialize_sql`; CTE names count where they are in scope) and checks each one. Table functions (`read_parquet(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such a query cannot be checked and are refused with INVALID_ARGUMENT. A provider that applies row filters or column masks answers `restrictsTables()` true and returns a `TableRestriction` (allowed, row filter SQL, mask SQL per column) from `restrictTable(principal, schema, table, columns)`, where `columns` are all the table's columns with their DuckDB types; the server then reads each reference to a restricted table as `(SELECT * REPLACE (CAST((<mask>) AS <type>) AS c, ...) FROM s.t WHERE (<filter>))`, answers such queries complete, and refuses (`UNAUTHORIZED`) a query whose reads of the table it cannot all rewrite. `canReadTable` then decides visibility and the first check of each query table; the restriction decides what is read. Register it with:
 
 ```text
 META-INF/services/pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory

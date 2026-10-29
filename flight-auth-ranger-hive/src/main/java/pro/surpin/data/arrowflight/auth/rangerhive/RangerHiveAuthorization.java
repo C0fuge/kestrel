@@ -3,9 +3,15 @@ package pro.surpin.data.arrowflight.auth.rangerhive;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.ranger.authorization.hadoop.config.RangerPluginConfig;
 import org.apache.ranger.plugin.audit.RangerDefaultAuditHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
+import pro.surpin.data.arrowflight.server.TableRestriction;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -13,11 +19,13 @@ import java.util.function.Function;
 
 /**
  * Checks the server's Hive catalog schemas and tables against the policies of the cluster's Hive Ranger service.
- * The server cannot yet apply masks or row filters or name the columns a query reads, so a table is readable only
- * when the caller may read all of it unmasked and unfiltered; schemas outside the Hive catalog are refused.
- * Table reads are audited to Ranger's audit destinations, schema visibility is not (as Hive's SHOW filters).
+ * Databases and tables are visible as Hive's SHOW filters show them (any access); a query's tables are decided
+ * by {@link #restrictTable}: select on every column of the table (the server passes all of them), column masks
+ * written as DuckDB SQL. Row filters still deny the table. Schemas outside the Hive catalog are refused. Table
+ * reads are audited to Ranger's audit destinations, visibility is not (as Hive's SHOW filters).
  */
 public final class RangerHiveAuthorization implements FlightAuthorization {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RangerHiveAuthorization.class);
     private static final String SERVICE_TYPE = "hive";
 
     private final HivePolicies policies;
@@ -91,11 +99,98 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
 
     @Override
     public boolean canReadTable(String principal, String schema, String table) {
+        // Visibility only: every query table is decided by restrictTable.
         String database = database(schema);
-        // The table decision comes first, so that a denial is audited too.
         return database != null && table != null
-                && policies.readWholeTable(principal, new HivePolicies.HiveTable(database, table, null)).allowed()
+                && policies.canSeeTable(principal, new HivePolicies.HiveTable(database, table, null))
                 && policies.canSeeDatabase(principal, database);
+    }
+
+    @Override
+    public boolean restrictsTables() {
+        return true;
+    }
+
+    @Override
+    public TableRestriction restrictTable(String principal, String schema, String table,
+            Map<String, String> columns) {
+        String database = database(schema);
+        if (database == null || table == null || columns == null || columns.isEmpty()) {
+            return TableRestriction.DENIED;
+        }
+        HivePolicies.HiveTable hiveTable = new HivePolicies.HiveTable(database, table, null);
+        // The table decision comes first, so that a denial is audited too.
+        HivePolicies.TableAccess access = policies.readColumns(principal, hiveTable, List.copyOf(columns.keySet()));
+        if (!access.allowed() || !policies.canSeeDatabase(principal, database)) {
+            return TableRestriction.DENIED;
+        }
+        if (access.rowFilter() != null) {
+            LOGGER.info("Ranger Hive row filter on {}.{} not applied yet, table denied", database, table);
+            return TableRestriction.DENIED;
+        }
+        Map<String, String> masks = new LinkedHashMap<>();
+        for (Map.Entry<String, String> column : columns.entrySet()) {
+            HiveMask mask = access.masks().get(column.getKey().toLowerCase(Locale.ROOT));
+            if (mask == null) {
+                continue;
+            }
+            String duckDbType = column.getValue();
+            String hiveType = hiveType(duckDbType);
+            if (mask.showsLast() && "string".equals(hiveType)) {
+                // A Hive CHAR(n) column is VARCHAR here; its padded value would show other characters.
+                LOGGER.info("Ranger Hive show-last mask on {}.{}.{} needs the Hive type, table denied", database,
+                        table, column.getKey());
+                return TableRestriction.DENIED;
+            }
+            try {
+                masks.put(column.getKey(), mask.sql(quote(column.getKey()), hiveType, duckDbType));
+            } catch (IllegalArgumentException e) {
+                LOGGER.info("Ranger Hive mask on {}.{}.{} cannot be applied, table denied: {}", database, table,
+                        column.getKey(), e.getMessage());
+                return TableRestriction.DENIED;
+            }
+        }
+        return masks.isEmpty() ? TableRestriction.UNRESTRICTED : new TableRestriction(true, null, masks);
+    }
+
+    /**
+     * Names the Hive type a column of a DuckDB type has, for the masks: the types Hive's mask functions treat
+     * apart, a complex type for nested columns (refused), and the DuckDB name for every other primitive (masked
+     * to NULL as Hive does).
+     *
+     * @param duckDbType DuckDB type of the column
+     * @return Hive type name
+     */
+    static String hiveType(String duckDbType) {
+        String type = duckDbType.trim().toUpperCase(Locale.ROOT);
+        if (type.endsWith("]")) {
+            return "array<" + type + ">";
+        }
+        if (type.startsWith("STRUCT") || type.startsWith("UNION")) {
+            return "struct<" + type + ">";
+        }
+        if (type.startsWith("MAP")) {
+            return "map<" + type + ">";
+        }
+        return switch (type) {
+            case "VARCHAR" -> "string";
+            case "TINYINT" -> "tinyint";
+            case "SMALLINT" -> "smallint";
+            case "INTEGER" -> "int";
+            case "BIGINT" -> "bigint";
+            case "DATE" -> "date";
+            default -> type.toLowerCase(Locale.ROOT);
+        };
+    }
+
+    /**
+     * Quotes a column name for DuckDB.
+     *
+     * @param column column name
+     * @return quoted identifier
+     */
+    private static String quote(String column) {
+        return "\"" + column.replace("\"", "\"\"") + "\"";
     }
 
     /**

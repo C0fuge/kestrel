@@ -201,6 +201,51 @@ public final class HivePolicies {
     }
 
     /**
+     * Decides what a user may read of a table whose referenced columns the server names: as
+     * {@link #readTable}, after refusing tables with policies that cannot be evaluated exactly without the owner
+     * or a client context (see {@link #readWholeTable}). Needs a {@link HiveRangerPlugin}. The decision is
+     * audited as one select on the table.
+     *
+     * @param principal authenticated identity
+     * @param table the table, its owner unknown
+     * @param columns referenced column names
+     * @return the decision, with the row filter and the masks of the referenced columns
+     */
+    public TableAccess readColumns(String principal, HiveTable table, List<String> columns) {
+        TableAccess decision = exactPolicies(table);
+        if (decision == null) {
+            decision = readTable(principal, table, columns);
+        }
+        audit(principal, table, decision);
+        return decision;
+    }
+
+    /**
+     * Refuses a table whose restrictive policies cannot be evaluated exactly.
+     *
+     * @param table the table
+     * @return the denial, or null when its policies can be evaluated
+     */
+    private TableAccess exactPolicies(HiveTable table) {
+        if (invalid(table)) {
+            return TableAccess.denied("no table");
+        }
+        try {
+            HiveRestrictivePolicies restrictive = plugin instanceof HiveRangerPlugin hive
+                    ? hive.restrictivePolicies() : null;
+            if (restrictive == null) {
+                return TableAccess.denied("Ranger Hive policies not listed");
+            }
+            String denial = restrictive.probe(table.database().toLowerCase(Locale.ROOT),
+                    table.table().toLowerCase(Locale.ROOT)).denial();
+            return denial == null ? null : TableAccess.denied(denial);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Ranger Hive policies failed closed for {}.{}", table.database(), table.table(), e);
+            return TableAccess.denied("policy evaluation failed");
+        }
+    }
+
+    /**
      * Decides whether a user may read a table whole, see {@link #readWholeTable}.
      *
      * @param principal authenticated identity

@@ -52,8 +52,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Runs the {@code ranger-hive} provider in a real Flight SQL server over the packaged hive plugin and a real
  * metastore: an ORC table (Arrow stream reads), a Parquet table, a text table and Hive views over them. A column
- * denial, a mask or a row filter refuses the table and every view that reads it (invoker rights), in both result
- * modes; a view granted without its source table is refused; listings show only what the caller may read.
+ * denial or a row filter refuses the table and every view that reads it (invoker rights), a mask is read in the
+ * table and in its views, in both result modes; a view granted without its source table is refused; listings show
+ * what the caller has any access to.
  */
 @Tag("integration")
 class RangerHiveCatalogTest {
@@ -158,14 +159,14 @@ class RangerHiveCatalogTest {
     }
 
     /**
-     * A column denial on the ORC table (carl), a mask on the Parquet table and a row filter on the text table
-     * (sam) refuse those tables and the views over them, also in joins; the other tables and views still answer.
+     * A column denial on the ORC table (carl) and a row filter on the text table (sam) refuse those tables and the
+     * views over them, also in joins; the other tables and views still answer (sam's masked ones masked).
      */
     @Test
     void restrictionsRefuseTablesAndTheirViews() throws Exception {
         Map<String, List<String>> refused = Map.of(
                 "carl", List.of("o", "v_orc", "v_join"),
-                "sam", List.of("o_pq", "t", "v_pq", "v_join"));
+                "sam", List.of("t", "v_join"));
         for (String mode : List.of("partial", "complete")) {
             for (Map.Entry<String, List<String>> entry : refused.entrySet()) {
                 String user = entry.getKey();
@@ -191,6 +192,20 @@ class RangerHiveCatalogTest {
         assertEquals(ROWS.get("v_orc"), rows("SELECT * FROM " + DB + ".v_orc", "sam", "complete").size());
     }
 
+    /** Sam's mask on o_pq.s applies to the table and to the view over it, in both modes. */
+    @Test
+    void masksApplyToTablesAndViews() throws Exception {
+        for (String mode : List.of("partial", "complete")) {
+            List<String> table = rows("SELECT i, s FROM " + DB + ".o_pq", "sam", mode);
+            assertEquals(ROWS.get("o_pq"), table.size(), mode);
+            assertTrue(table.stream().allMatch(row -> row.endsWith("|null|")), mode + ": " + table.get(0));
+            assertEquals(List.of("0|"), rows("SELECT count(s) FROM " + DB + ".v_pq", "sam", mode), mode);
+            assertEquals(List.of(ROWS.get("v_pq") + "|"), rows("SELECT count(*) FROM " + DB + ".v_pq", "sam", mode),
+                    mode);
+            assertFalse(rows("SELECT count(s) FROM " + DB + ".v_pq", "tess", mode).equals(List.of("0|")), mode);
+        }
+    }
+
     /** A view granted without its source table is refused: the server checks views with invoker rights. */
     @Test
     void aViewWithoutItsSourceIsRefused() {
@@ -201,12 +216,15 @@ class RangerHiveCatalogTest {
         }
     }
 
-    /** Listings show the tables and views a caller may read, and the database to anyone with a policy in it. */
+    /**
+     * Listings show the tables and views a caller has any access to (views with their sources), as Hive's SHOW
+     * TABLES, and the database to anyone with a policy in it.
+     */
     @Test
-    void listingsShowOnlyReadableTables() throws Exception {
+    void listingsShowVisibleTables() throws Exception {
         assertEquals(ALL, tables("tess"));
-        assertEquals(List.of("o_pq", "t", "v_pq"), tables("carl"));
-        assertEquals(List.of("o", "v_orc"), tables("sam"));
+        assertEquals(ALL, tables("carl"));
+        assertEquals(ALL, tables("sam"));
         assertEquals(List.of(), tables("vera"));
         assertEquals(List.of(), tables("mallory"));
         assertTrue(schemas("vera").contains(DB));

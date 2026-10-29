@@ -91,6 +91,11 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+- `ranger-hive` applies Ranger Hive column masks: a masked column is read as Hive 3.1.3's mask written in DuckDB
+  SQL (same type), in the table and in views over it, both result modes (answered complete). Tables and databases
+  are visible with any access (as Hive's SHOW TABLES / SHOW DATABASES; listings no longer audited); a query table
+  needs `select` on all its columns. Still refused: row filters, show-last masks on text columns (Hive CHAR(n)
+  padding unknown), other masks on nested columns. (P6 step 3 C.)
 - Authorization SPI: row filters and column masks. `FlightAuthorization.restrictsTables()` (default false) and
   `restrictTable(principal, schema, table, columns)` -> `TableRestriction` (allowed, row filter SQL, mask SQL per
   column; default = `canReadTable`). For a provider that restricts, each reference to a restricted table (after
