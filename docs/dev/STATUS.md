@@ -2149,3 +2149,4 @@
 - 2026-10-29 (plugins lane, FYI): core 093d6a8 - `FlightAuthorizationProviderFactory.create(env, providerGroups)`
   default method (calls `create(env)`); `SecurityProviders` passes the authentication provider's groups to custom
   authorization providers. Additive, existing providers unchanged. For P6 (`ranger-hive`, see PLUGINS-STATUS.md).
+- 2026-10-29 (maintainer, CI build tracking 881bbf73e946): opt-in duckDbSharedDatabase: scans x8 1.39, x4 vs upstream native 0.98 (gap closed), load peak 1.16 / c128 1.37-1.41, RSS +17-19 % on scans; default path same as 7562a5b; 9044653 S3 SF10 flag gone (0.96); new small flag S3 JDBC c8 p50 1.10 - same S3-small noise class core could not reproduce three times; no action unless it repeats with a clear pattern. Next for item 22: decide whether duckDbSharedDatabase can become the default (isolation/lockdown tests are in; needs a stand round and memory check).
