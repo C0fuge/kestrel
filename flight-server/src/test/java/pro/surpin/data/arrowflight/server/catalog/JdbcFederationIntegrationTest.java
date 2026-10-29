@@ -65,6 +65,11 @@ class JdbcFederationIntegrationTest {
     static Path dir;
     static TestFlightServerHelper helper;
     static Path extensions;
+    /** TPC-H tables. */
+    private static final List<String> TPCH = List.of("customer", "lineitem", "nation", "orders", "part",
+            "partsupp", "region", "supplier");
+    /** DuckDB holding the generated TPC-H data (the reference), or null without TPC-H. */
+    static Connection tpch;
 
     @BeforeAll
     static void start() throws Exception {
@@ -77,6 +82,13 @@ class JdbcFederationIntegrationTest {
         for (String name : List.of("postgres_scanner", "mysql_scanner")) {
             Files.copy(Path.of(source, name + ".duckdb_extension"),
                     extensions.resolve(name + ".duckdb_extension"));
+        }
+        String pgTables = "public.t,public.types";
+        Optional<String> scale = env("JDBC_IT_TPCH_SF");
+        if (scale.isPresent()) {
+            Files.copy(Path.of(source, "tpch.duckdb_extension"), extensions.resolve("tpch.duckdb_extension"));
+            loadTpch(scale.get());
+            pgTables += "," + String.join(",", TPCH.stream().map(t -> "public." + t).toList());
         }
         Path plugins = dir.resolve("plugins");
         Path target = Files.createDirectories(plugins.resolve("jdbc"));
@@ -93,7 +105,7 @@ class JdbcFederationIntegrationTest {
         sys.put("arrowflight.jdbc.pg.port", env("PROBE_PG_PORT").orElse("5432"));
         sys.put("arrowflight.jdbc.pg.database", env("PROBE_PG_DATABASE").orElseThrow());
         sys.put("arrowflight.jdbc.pg.user", env("PROBE_PG_USER").orElseThrow());
-        sys.put("arrowflight.jdbc.pg.tables", "public.t,public.types");
+        sys.put("arrowflight.jdbc.pg.tables", pgTables);
         sys.put("arrowflight.jdbc.my.type", "mysql");
         sys.put("arrowflight.jdbc.my.host", env("PROBE_MYSQL_HOST").orElseThrow());
         sys.put("arrowflight.jdbc.my.port", env("PROBE_MYSQL_PORT").orElse("3306"));
@@ -118,6 +130,37 @@ class JdbcFederationIntegrationTest {
     static void stop() throws Exception {
         if (helper != null) {
             helper.close();
+        }
+        if (tpch != null) {
+            tpch.close();
+        }
+    }
+
+    /**
+     * Generates TPC-H data in an in-memory DuckDB (kept as the reference) and copies every table
+     * into PostgreSQL through a writable attachment of the scanner.
+     *
+     * @param scale scale factor, for example 0.1
+     * @throws Exception on failure
+     */
+    private static void loadTpch(String scale) throws Exception {
+        Properties props = new Properties();
+        props.setProperty("allow_unsigned_extensions", "true");
+        tpch = DriverManager.getConnection("jdbc:duckdb:", props);
+        try (Statement s = tpch.createStatement()) {
+            s.execute("LOAD '" + extensions.resolve("tpch.duckdb_extension") + "'");
+            s.execute("CALL dbgen(sf = " + Double.parseDouble(scale) + ")");
+            s.execute("LOAD '" + extensions.resolve("postgres_scanner.duckdb_extension") + "'");
+            s.execute("CREATE TEMPORARY SECRET w_secret (TYPE postgres, HOST '" + env("PROBE_PG_HOST").orElseThrow()
+                    + "', PORT " + env("PROBE_PG_PORT").orElseThrow() + ", DATABASE '"
+                    + env("PROBE_PG_DATABASE").orElseThrow() + "', USER '" + env("PROBE_PG_USER").orElseThrow()
+                    + "', PASSWORD '" + env("PROBE_PG_PASSWORD").orElseThrow() + "')");
+            s.execute("ATTACH '' AS w (TYPE postgres, SECRET w_secret)");
+            for (String table : TPCH) {
+                s.execute("DROP TABLE IF EXISTS w.public." + table);
+                s.execute("CREATE TABLE w.public." + table + " AS SELECT * FROM memory.main." + table);
+            }
+            s.execute("DETACH w");
         }
     }
 
@@ -158,6 +201,76 @@ class JdbcFederationIntegrationTest {
         assertEquals(List.of("1|a|1|a", "2|b|2|b", "3|c|3|c"), answer(
                 "SELECT p.id, p.name, m.id, m.name FROM pg.t p JOIN my.t m ON p.id = m.id ORDER BY p.id",
                 "complete"));
+    }
+
+    /**
+     * TPC-H through the server (the 22 queries, unqualified table names: only the pg source has
+     * the TPC-H tables) equals DuckDB over the generated data. Numbers compare with a relative
+     * tolerance: averages of doubles depend on the summation order.
+     */
+    @Test
+    void tpchAnswersEqualDuckDbOverTheSameData() throws Exception {
+        Assumptions.assumeTrue(tpch != null, "no TPC-H data (JDBC_IT_TPCH_SF)");
+        Map<Integer, String> queries = new java.util.TreeMap<>();
+        try (Statement s = tpch.createStatement();
+                ResultSet rs = s.executeQuery("SELECT query_nr, query FROM tpch_queries()")) {
+            while (rs.next()) {
+                queries.put(rs.getInt(1), rs.getString(2));
+            }
+        }
+        assertEquals(22, queries.size());
+        for (Map.Entry<Integer, String> query : queries.entrySet()) {
+            List<String> expected = new ArrayList<>();
+            try (Statement s = tpch.createStatement(); ResultSet rs = s.executeQuery(query.getValue())) {
+                int columns = rs.getMetaData().getColumnCount();
+                while (rs.next()) {
+                    List<String> values = new ArrayList<>();
+                    for (int i = 1; i <= columns; i++) {
+                        values.add(normalize(rs.getObject(i)));
+                    }
+                    expected.add(String.join("|", values));
+                }
+            }
+            List<String> actual = new ArrayList<>();
+            for (FlightEndpoint endpoint : info(query.getValue(), "complete").getEndpoints()) {
+                try (FlightStream stream = helper.flightClient().getStream(endpoint.getTicket())) {
+                    while (stream.next()) {
+                        actual.addAll(rows(stream.getRoot()));
+                    }
+                }
+            }
+            assertFalse(expected.isEmpty(), "Q" + query.getKey() + " answers rows");
+            assertClose(expected, actual, "Q" + query.getKey());
+        }
+    }
+
+    /**
+     * Compares rows value by value, numbers with a relative tolerance of 1e-9.
+     *
+     * @param expected expected rows
+     * @param actual actual rows
+     * @param what query, for messages
+     */
+    private static void assertClose(List<String> expected, List<String> actual, String what) {
+        assertEquals(expected.size(), actual.size(), what + " rows: " + actual);
+        for (int r = 0; r < expected.size(); r++) {
+            String[] e = expected.get(r).split("\\|", -1);
+            String[] a = actual.get(r).split("\\|", -1);
+            assertEquals(e.length, a.length, what + " row " + r);
+            for (int c = 0; c < e.length; c++) {
+                if (e[c].equals(a[c])) {
+                    continue;
+                }
+                try {
+                    double x = Double.parseDouble(e[c]);
+                    double y = Double.parseDouble(a[c]);
+                    assertTrue(Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x)),
+                            what + " row " + r + " column " + c + ": " + e[c] + " vs " + a[c]);
+                } catch (NumberFormatException ex) {
+                    assertEquals(e[c], a[c], what + " row " + r + " column " + c);
+                }
+            }
+        }
     }
 
     @Test
@@ -230,6 +343,9 @@ class JdbcFederationIntegrationTest {
         if (value instanceof byte[] bytes) {
             return Arrays.toString(bytes);
         }
+        if (value instanceof java.sql.Date date) {
+            return date.toLocalDate().toString();
+        }
         if (value instanceof java.sql.Blob blob) {
             try {
                 return Arrays.toString(blob.getBytes(1, (int) blob.length()));
@@ -261,7 +377,11 @@ class JdbcFederationIntegrationTest {
         for (int i = 0; i < root.getRowCount(); i++) {
             List<String> values = new ArrayList<>();
             for (FieldVector vector : root.getFieldVectors()) {
-                values.add(normalize(vector.isNull(i) ? null : vector.getObject(i)));
+                Object value = vector.isNull(i) ? null : vector.getObject(i);
+                if (value != null && vector instanceof org.apache.arrow.vector.DateDayVector) {
+                    value = java.time.LocalDate.ofEpochDay((Integer) value);
+                }
+                values.add(normalize(value));
             }
             rows.add(String.join("|", values));
         }

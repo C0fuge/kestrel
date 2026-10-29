@@ -291,7 +291,7 @@ jobs:
           set -euo pipefail
           ext="$RUNNER_TEMP/scanner-ext"
           mkdir -p "$ext"
-          for name in postgres_scanner mysql_scanner; do
+          for name in postgres_scanner mysql_scanner tpch; do
             if ! gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
                 --pattern "${name}-${DUCKDB_VERSION}-linux_amd64.duckdb_extension" --dir "$RUNNER_TEMP"; then
               curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz" \
@@ -360,11 +360,13 @@ jobs:
             tools/ci/DuckDbScannerProbe.java "$SCANNER_EXT_DIR"
 
       # C2 step 3: the jdbc plugin through the server (JdbcFederationIntegrationTest: answers equal
-      # DuckDB's own scan, partial = complete, scanner functions and attachments refused) and its
+      # DuckDB's own scan, partial = complete, scanner functions and attachments refused, TPC-H SF0.1
+      # in PostgreSQL answered equal to DuckDB over the generated data) and its
       # refused lists against the bundled builds (ScannerFunctionsTest).
       - name: Federation through the server
         env:
           JDBC_IT_EXTENSION_DIR: ${{ env.SCANNER_EXT_DIR }}
+          JDBC_IT_TPCH_SF: "0.1"
         run: |
           set -euo pipefail
           ./mvnw install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -pl flight-plugin-jdbc,flight-server -am
@@ -376,7 +378,7 @@ jobs:
           for path, want in (("flight-plugin-jdbc/target/surefire-reports/"
                               "TEST-pro.surpin.data.arrowflight.plugin.jdbc.ScannerFunctionsTest.xml", 2),
                              ("flight-server/target/surefire-reports/"
-                              "TEST-pro.surpin.data.arrowflight.server.catalog.JdbcFederationIntegrationTest.xml", 3)):
+                              "TEST-pro.surpin.data.arrowflight.server.catalog.JdbcFederationIntegrationTest.xml", 4)):
               s = ET.parse(path).getroot()
               tests, skipped = int(s.get("tests")), int(s.get("skipped"))
               print(f"{path}: {tests} tests, {skipped} skipped")
