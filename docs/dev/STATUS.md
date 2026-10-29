@@ -47,6 +47,12 @@
 > cache is the cause, drop the read caches from `speed` (one `offer` loop in `ResourceProfile.speed`, the test
 > `speedSizesTheSharedDuckDbByHost` / `smallHeapLeavesTheReadCachesOff`, CHANGELOG/START-NOTES rows), else try
 > `-DresourceProfile=speed -DduckDbSharedDatabase=false` next; then `package=true` and "ITEM 23 DONE".
+>
+> **ITEM 23 DONE (2026-10-29, d752a735).** Isolation run 40945132304 (s3, speed with the s3 cache off) 286.21 s vs
+> default 284.45 s: the read caches were the cause. `speed` no longer turns the s3/lakeFS read caches on (they stay as
+> configured). Confirmation run 40951528634 (s3, SF10, 4c/8g): default 388.40 s, threads4 397.20 s, speed 388.29 s,
+> 22/22 same answers, speed peak 1696 MiB. Dev CI `package=true` 40951524580 green, pre-release
+> `server-1.0.0-d752a7358a65`. **egret:** measure speed vs balanced vs upstream native on this pre-release.
 
 **WRAP-UP DONE (2026-10-29 13:00, core lane).** Final pre-release `server-1.0.0-1e7b43a4e0c7` (dev-ci `package=true`
 on 1e7b43a4, 7 assets) carries main's last code change; everything after it is `[skip ci]` docs. Plugins and catalogs
@@ -2394,3 +2400,8 @@ S3 slowdown item below stays open for then).
   rows/section. CI: Dev CI 40937759137 (push) and 40941532522 (`package=true`, pre-release
   `server-1.0.0-1a25c7e13802`, 7 assets) green; TPC-H perf 40937773731 (local: speed = default) and 40939989610 (s3:
   speed 1.33x slower, 2x peak memory) - see Next steps item 23; isolation run 40945132304 (s3 cache off) dispatched.
+- 2026-10-29 (cloud session, core lane): item 23 finished. Run 40945132304 showed the s3 read cache as the cause of
+  `speed` being 1.33x slower on S3; d752a735 drops the s3/lakeFS read caches from `ResourceProfile.speed` (tests:
+  caches stay 0 under speed; CHANGELOG/START-NOTES updated). Dev CI `package=true` 40951524580 green, pre-release
+  `server-1.0.0-d752a7358a65`; tpch-perf 40951528634 (s3) default 388.40 s / speed 388.29 s, 22/22 same answers.
+  "ITEM 23 DONE" written; core lane back to WRAP-UP DONE (no further items).
