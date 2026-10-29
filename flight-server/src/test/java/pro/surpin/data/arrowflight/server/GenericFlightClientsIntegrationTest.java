@@ -27,14 +27,16 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * Tests plain Flight descriptors (plainFlightCommands) with non-Java generic Flight clients: pyarrow
  * Flight (needs {@code -Dpython.it.executable}) and ClickHouse's {@code arrowFlight} table function
- * run as {@code clickhouse local} in Docker (needs {@code -Dclickhouse.it.image}); each is skipped
- * without its property.
+ * run as {@code clickhouse local} in Docker (needs {@code -Dclickhouse.it.image}) and DuckDB's
+ * community {@code airport} extension (needs {@code -Dairport.it.python}: a Python with the duckdb
+ * package and the extension installed); each is skipped without its property.
  */
 @Tag("integration")
 class GenericFlightClientsIntegrationTest {
 
     private static final String PYTHON = System.getProperty("python.it.executable", "");
     private static final String CLICKHOUSE = System.getProperty("clickhouse.it.image", "");
+    private static final String AIRPORT = System.getProperty("airport.it.python", "");
     private static final int ROWS = 50_000;
     private static final String KEY_FILTER = "k = 3";
 
@@ -137,6 +139,44 @@ class GenericFlightClientsIntegrationTest {
                 + "', 'gfc.items WHERE " + KEY_FILTER + "')"
                 + " SETTINGS arrow_flight_request_descriptor_type = 'command' FORMAT TSV"));
         assertEquals(expected.get(5) + "\t" + expected.get(6), lastLine(command), command);
+    }
+
+    /**
+     * Pins what DuckDB's airport extension (airport_take_flight) gets from plain descriptors: the
+     * schema of a table path (dotted and as elements), a SQL text and an aggregate, while reading
+     * rows fails clearly because airport asks for endpoints with its own {@code endpoints} action,
+     * which the server does not implement (never partial or wrong rows).
+     *
+     * @throws Exception on script or query failure
+     */
+    @Test
+    void duckdbAirportGetsSchemaButNeedsItsEndpointsAction() throws Exception {
+        assumeTrue(!AIRPORT.isBlank(), "needs -Dairport.it.python with duckdb and the airport extension");
+        Path script = data.resolve("airport_client.py");
+        try (InputStream in = getClass().getResourceAsStream("/python/airport_client.py")) {
+            Files.copy(in, script, StandardCopyOption.REPLACE_EXISTING);
+        }
+        String port = String.valueOf(helper.location.getUri().getPort());
+        String table = "columns=id,k,name,amount,day";
+        assertAirport(table, run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path", "gfc.items")));
+        assertAirport(table, run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "path", "gfc/items")));
+        assertAirport("columns=id", run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
+                "SELECT id FROM gfc.items WHERE " + KEY_FILTER)));
+        assertAirport("columns=n", run(List.of(AIRPORT, "-I", script.toString(), "localhost", port, "command",
+                "SELECT count(*) AS n FROM gfc.items")));
+    }
+
+    /**
+     * Checks one airport client output: the expected columns, then the endpoints action refused.
+     *
+     * @param columns expected columns line
+     * @param output client output
+     */
+    private static void assertAirport(String columns, String output) {
+        List<String> lines = output.lines().filter(l -> !l.isBlank()).map(String::strip).toList();
+        assertTrue(lines.contains(columns), output);
+        assertTrue(lastLine(output).startsWith("error=") && lastLine(output).contains("Unrecognized request: endpoints"),
+                output);
     }
 
     /**

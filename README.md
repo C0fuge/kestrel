@@ -370,7 +370,9 @@ protobuf type and keep their handling. Authentication and Ranger checks are thos
 answer is complete (a generic client does not merge partial answers) unless the client sends
 `x-flight-result-mode: partial`. Example, ClickHouse: `SELECT * FROM arrowFlight('host:port', 'sales.orders',
 'user', 'password')` (path) or with `SET arrow_flight_request_descriptor_type = 'command'` (SQL text); ClickHouse
-reads every endpoint over its own connection.
+reads every endpoint over its own connection. DuckDB's community `airport` extension (`airport_take_flight`) is
+not supported: it gets the schema, but reads rows only through its own `endpoints` action, which the server does
+not implement, so its query fails with `Unrecognized request: endpoints` (use DuckDB's ADBC Flight SQL path instead).
 
 `distributedComplete` (`FLIGHT_DISTRIBUTED_COMPLETE`, default false) lets the node that answers a
 complete-mode query compute it with the cluster: it plans the query in parts as partial mode does, reads

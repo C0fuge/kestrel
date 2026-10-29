@@ -89,6 +89,22 @@ jobs:
           "$RUNNER_TEMP/py/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
           echo "PYTHON_IT=$RUNNER_TEMP/py/bin/python" >> "$GITHUB_ENV"
 
+      # GenericFlightClientsIntegrationTest: DuckDB's community airport extension reads plain Flight
+      # descriptors (P5). Newest DuckDB with an airport build wins; none skips that test.
+      - name: DuckDB airport extension
+        run: |
+          python3 -m venv "$RUNNER_TEMP/airport"
+          py="$RUNNER_TEMP/airport/bin/python"
+          for version in 2.0.0 1.5.6 1.4.5; do
+            if "$RUNNER_TEMP/airport/bin/pip" install --quiet "duckdb==$version" \
+                && "$py" -I -c "import duckdb; c = duckdb.connect(); c.execute('INSTALL airport FROM community'); c.execute('LOAD airport')"; then
+              echo "DuckDB $version with airport"
+              echo "AIRPORT_IT=$py" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "::warning::airport extension not installed; its test is skipped"
+
       # GenericFlightClientsIntegrationTest: ClickHouse's arrowFlight table function reads plain
       # Flight descriptors (P5). A failed pull skips that test instead of failing the build.
       - name: ClickHouse image
@@ -109,6 +125,7 @@ jobs:
           -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"
           -Dpython.it.executable="$PYTHON_IT"
           -Dclickhouse.it.image="$CLICKHOUSE_IT"
+          -Dairport.it.python="$AIRPORT_IT"
 
       - name: Test summary
         if: always()

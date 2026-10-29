@@ -15,7 +15,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `GetFlightInfo` / `GetSchema` with a command descriptor holding UTF-8 SQL text, or a path descriptor naming a table
   (`schema.table`, plain identifiers -> `SELECT * FROM schema.table`), then `DoGet` on the tickets. Flight SQL
   commands keep their handling; same authentication and Ranger checks as Flight SQL queries; the answer is complete
-  unless the client sends `x-flight-result-mode: partial` (P5).
+  unless the client sends `x-flight-result-mode: partial` (P5). Checked in CI with pyarrow, ClickHouse 26.8 and
+  DuckDB's `airport` extension; the latter is not supported (it needs its own `endpoints` action and fails clearly).
 - With `duckDbSharedDatabase`, `duckDbStreamingBufferSize` now applies instead of being ignored: new setting
   `duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64; 0 = ignored as before)
   connections get the buffer before the lockdown and are lent to worker connections, given back without temporary
