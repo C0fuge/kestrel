@@ -4,16 +4,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.zip.GZIPOutputStream;
 
 import org.apache.arrow.flight.FlightCallHeaders;
 import org.apache.arrow.flight.FlightEndpoint;
@@ -40,7 +44,7 @@ import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
 
 /**
  * Runs the server with the packaged hive plugin and hive.insertOnlyTables=true against a real
- * metastore with Hive's transaction tables: insert-only (MM) Parquet and ORC tables, written as
+ * metastore with Hive's transaction tables: insert-only (MM) Parquet, ORC and text tables, written as
  * Hive writes them (original files, {@code delta_*} and {@code base_*} directories, write ids
  * opened, committed and aborted through the metastore), answer the committed rows only, in both
  * result modes and with partitions; a later commit becomes visible to the next partial query; a
@@ -99,6 +103,24 @@ class HiveInsertOnlyIntegrationTest {
         HiveTestTables.writeOrc(ref.resolve("000001_0"), 700, 1000, "ZLIB");
         hms.call("createTable", DB, "mmo_ref", "file:" + ref, columns, "", "orc", null);
 
+        // Text (Hive's defaults, \001 and \N, a gzip file in one delta): originals 0..49,
+        // committed 50..99 (gzip) and 200..249, aborted 100..199, an open write 300..349.
+        Path mmt = table("mmt", "", "text");
+        text(mmt.resolve("000000_0"), 0, 50, false);
+        write(mmt, "mmt", 50, 100, true, "text.gz");
+        write(mmt, "mmt", 100, 200, false, "text");
+        write(mmt, "mmt", 200, 250, true, "text");
+        long textOpen = (Long) hms.call("openTxn");
+        long textWrite = (Long) hms.call("allocateWriteId", textOpen, DB, "mmt");
+        text(mmt.resolve(delta(textWrite)).resolve("000000_0"), 300, 350, false);
+        // A partitioned text table: k=a committed 0..20; k=b aborted 20..40, committed 40..60.
+        table("mmtp", "k string", "text");
+        Path ta = partition("mmtp", "a");
+        Path tb = partition("mmtp", "b");
+        write(ta, "mmtp", 0, 20, true, "text");
+        write(tb, "mmtp", 20, 40, false, "text");
+        write(tb, "mmtp", 40, 60, true, "text");
+
         // Committed 0..9 and an open write 10..29 that a test commits.
         mmc = table("mmc", "", "parquet");
         write(mmc, "mmc", 0, 10, true, "parquet");
@@ -124,6 +146,7 @@ class HiveInsertOnlyIntegrationTest {
         sys.put("arrowflight.hive.roots", lake.toString());
         sys.put("arrowflight.hive.orcTables", "true");
         sys.put("arrowflight.hive.insertOnlyTables", "true");
+        sys.put("arrowflight.hive.textTables", "true");
         sys.put("arrowflight.hive.metadataTtlSeconds", "0");
         sys.put("arrowflight.hive.namesTtlSeconds", "0");
         ConfigSource source = new ConfigSource(sys::get, new Properties(), Map.of(), null);
@@ -175,6 +198,29 @@ class HiveInsertOnlyIntegrationTest {
             }
         }
         assertEquals(List.of("800"), answer("SELECT count(*) FROM hvmm.mmo", "partial").rows());
+    }
+
+    @Test
+    void textInsertOnlyTablesAnswerTheCommittedRowsOnly() throws Exception {
+        String rows = "SELECT range::INTEGER AS i, 's' || range AS s FROM range(0, 100)"
+                + " UNION ALL SELECT range::INTEGER, 's' || range FROM range(200, 250)";
+        List<String> expected = duckDb(rows);
+        for (String mode : List.of("complete", "partial")) {
+            assertEquals(expected, answer("SELECT i, s FROM hvmm.mmt", mode).rows(), mode);
+            assertEquals(List.of("150|0|249|16175"), answer("SELECT count(*), min(i), max(i),"
+                    + " sum(i) FROM hvmm.mmt", mode).rows(), mode);
+            assertEquals(List.of("s75"), answer("SELECT s FROM hvmm.mmt WHERE i = 75", mode)
+                    .rows(), mode);
+            assertEquals(List.of("0"), answer("SELECT count(*) FROM hvmm.mmt WHERE i >= 100"
+                    + " AND i < 200 OR i >= 300", mode).rows(), mode);
+            assertEquals(List.of("a|20|190", "b|20|990"), answer("SELECT k, count(*), sum(i)"
+                    + " FROM hvmm.mmtp GROUP BY k", mode).rows(), mode);
+        }
+        assertEquals(1, info("SELECT * FROM hvmm.mmtp WHERE k = 'b'", "partial").getEndpoints()
+                .size(), "partitions are pruned, the aborted write is not planned");
+        // Joined with the Parquet insert-only table: only rows committed in both (0..99).
+        assertEquals(List.of("100"), answer("SELECT count(*) FROM hvmm.mmt t JOIN hvmm.mm p"
+                + " ON t.i = p.i AND t.s = p.s", "complete").rows());
     }
 
     @Test
@@ -262,6 +308,8 @@ class HiveInsertOnlyIntegrationTest {
         Path file = Files.createDirectories(location.resolve(delta(writeId))).resolve("000000_0");
         if ("orc".equals(format)) {
             HiveTestTables.writeOrc(file, from, to, "ZLIB");
+        } else if (format.startsWith("text")) {
+            text(file, from, to, format.endsWith(".gz"));
         } else {
             parquet(file, from, to);
         }
@@ -280,6 +328,46 @@ class HiveInsertOnlyIntegrationTest {
                     + ", " + to + ")) TO '" + file.toString().replace("'", "''")
                     + "' (FORMAT parquet)");
         }
+    }
+
+    /**
+     * Writes rows [from, to) as Hive's default text format: fields separated by \001, one row
+     * a line; with gzip the file gets the {@code .gz} suffix Hive's codec lookup needs.
+     */
+    private static void text(Path file, int from, int to, boolean gzip) throws Exception {
+        Files.createDirectories(file.getParent());
+        StringBuilder lines = new StringBuilder();
+        for (int i = from; i < to; i++) {
+            lines.append(i).append('\u0001').append('s').append(i).append('\n');
+        }
+        byte[] bytes = lines.toString().getBytes(StandardCharsets.UTF_8);
+        if (gzip) {
+            try (OutputStream out = new GZIPOutputStream(Files.newOutputStream(
+                    file.resolveSibling(file.getFileName() + ".gz")))) {
+                out.write(bytes);
+            }
+        } else {
+            Files.write(file, bytes);
+        }
+    }
+
+    /** Rows of a query run by DuckDB alone, as {@link #read} formats them. */
+    private static List<String> duckDb(String sql) throws Exception {
+        List<String> rows = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement();
+                ResultSet rs = s.executeQuery(sql)) {
+            int columns = rs.getMetaData().getColumnCount();
+            while (rs.next()) {
+                List<String> values = new ArrayList<>();
+                for (int c = 1; c <= columns; c++) {
+                    values.add(String.valueOf(rs.getObject(c)));
+                }
+                rows.add(String.join("|", values));
+            }
+        }
+        rows.sort(null);
+        return rows;
     }
 
     private static Answer answer(String sql, String mode) throws Exception {
