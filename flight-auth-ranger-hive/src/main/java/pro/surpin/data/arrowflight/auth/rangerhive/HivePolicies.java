@@ -169,6 +169,53 @@ public final class HivePolicies {
     }
 
     /**
+     * Decides whether a user may read a table whole without masks or row filters, for a server that cannot name
+     * the columns a query reads: select on the table (a policy on all columns), no row filter, and select without
+     * a mask on every column a restrictive policy names and on columns only {@code *} policies cover. Policies the
+     * server cannot evaluate exactly on the table (owner macros, conditions, column patterns, restrictive tag
+     * policies) deny it. Needs a {@link HiveRangerPlugin}.
+     *
+     * @param principal authenticated identity
+     * @param table the table, its owner unknown
+     * @return the decision, never with a row filter or masks
+     */
+    public TableAccess readWholeTable(String principal, HiveTable table) {
+        TableAccess base = readTable(principal, table, List.of());
+        if (!base.allowed()) {
+            return base;
+        }
+        if (base.rowFilter() != null) {
+            return TableAccess.denied("row filter on the table");
+        }
+        HiveRestrictivePolicies.Probe probe;
+        try {
+            HiveRestrictivePolicies restrictive = plugin instanceof HiveRangerPlugin hive
+                    ? hive.restrictivePolicies() : null;
+            if (restrictive == null) {
+                return TableAccess.denied("Ranger Hive policies not listed");
+            }
+            probe = restrictive.probe(table.database().toLowerCase(Locale.ROOT),
+                    table.table().toLowerCase(Locale.ROOT));
+        } catch (RuntimeException e) {
+            LOGGER.warn("Ranger Hive policies failed closed for {}.{}", table.database(), table.table(), e);
+            return TableAccess.denied("policy evaluation failed");
+        }
+        if (probe.denial() != null) {
+            return TableAccess.denied(probe.denial());
+        }
+        TableAccess columns = readTable(principal, table, List.copyOf(probe.columns()));
+        if (!columns.allowed()) {
+            return columns;
+        }
+        if (!columns.masks().isEmpty()) {
+            String column = columns.masks().keySet().iterator().next();
+            return TableAccess.denied("masked column " + (HiveRestrictivePolicies.ANY_COLUMN.equals(column)
+                    ? "(any)" : column));
+        }
+        return new TableAccess(true, null, Map.of(), null);
+    }
+
+    /**
      * Reads the mask of a data mask result as Hive's authorizer does.
      *
      * @param result enabled data mask result

@@ -6,6 +6,7 @@ import org.apache.ranger.plugin.model.RangerPolicy;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerDataMaskPolicyItem;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItem;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemAccess;
+import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemCondition;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemDataMaskInfo;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemRowFilterInfo;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyResource;
@@ -88,7 +89,7 @@ class HivePoliciesTest {
         servicePolicies.setServiceDef(serviceDef);
         servicePolicies.setPolicyVersion(1L);
         servicePolicies.setPolicies(list);
-        RangerBasePlugin plugin = new RangerBasePlugin("hive", "hive-policies-test");
+        RangerBasePlugin plugin = new HiveRangerPlugin("hive", "hive-policies-test");
         plugin.setPolicies(servicePolicies);
         policies = new HivePolicies(plugin, identity -> GROUPS.getOrDefault(identity, Set.of()));
     }
@@ -191,6 +192,127 @@ class HivePoliciesTest {
                 identity -> Set.of());
         assertFalse(notLoaded.canSeeDatabase("alice", "sales"));
         assertFalse(notLoaded.readTable("alice", ORDERS, List.of("id")).allowed());
+    }
+
+    /**
+     * A table is read whole only with select on all its columns, no row filter, no mask and no column deny for
+     * the user; tables without restrictive policies are unaffected by those of other tables.
+     */
+    @Test
+    void wholeTableNeedsEveryColumnUnrestricted() {
+        assertTrue(policies.readWholeTable("erin", ORDERS).allowed());
+        assertEquals("no select on the table", policies.readWholeTable("alice", ORDERS).reason());
+        assertEquals("masked column ssn", policies.readWholeTable("bob", ORDERS).reason());
+        assertFalse(policies.readWholeTable("carol", ORDERS).allowed());
+        assertFalse(policies.readWholeTable("dave", ORDERS).allowed());
+        assertFalse(policies.readWholeTable("sam", ORDERS).allowed());
+        assertEquals("no select on column ssn", policies.readWholeTable("cora", ORDERS).reason());
+        HivePolicies.HiveTable customers = new HivePolicies.HiveTable("sales", "customers", null);
+        assertTrue(policies.readWholeTable("sam", customers).allowed());
+        assertTrue(policies.readWholeTable("cora", customers).allowed());
+        assertTrue(policies.readWholeTable("cora", new HivePolicies.HiveTable("SALES", "Customers", null))
+                .allowed());
+        assertFalse(policies.readWholeTable("mallory", customers).allowed());
+        assertFalse(policies.readWholeTable("gina", new HivePolicies.HiveTable("owned", "t", null)).allowed());
+
+        HivePolicies plain = new HivePolicies(plugin(List.of(access(1, columns("*", "*", "*"),
+                item(List.of("alice"), List.of())))), identity -> Set.of());
+        assertFalse(plain.readWholeTable("alice", ORDERS).allowed(), "a plain RangerBasePlugin cannot list");
+    }
+
+    /** Row filters, masks on every column and policies the server cannot evaluate exactly deny the table. */
+    @Test
+    void wholeTableFailsClosedOnInexactPolicies() {
+        RangerPolicy filter = policy(2, RangerPolicy.POLICY_TYPE_ROWFILTER, tables("sales", "orders"));
+        filter.setRowFilterPolicyItems(List.of(new RangerRowFilterPolicyItem(
+                new RangerPolicyItemRowFilterInfo("region = 'EU'"), accesses(), List.of("alice"), List.of(),
+                List.of(), List.of(), false)));
+        assertEquals("row filter on the table", whole(filter).reason());
+
+        RangerPolicy allColumns = policy(2, RangerPolicy.POLICY_TYPE_DATAMASK, columns("sales", "*", "*"));
+        allColumns.setDataMaskPolicyItems(List.of(mask("MASK_NULL", null, List.of("alice"), List.of())));
+        assertEquals("masked column (any)", whole(allColumns).reason());
+
+        RangerPolicy otherUser = policy(2, RangerPolicy.POLICY_TYPE_DATAMASK, columns("sales", "*", "ssn"));
+        otherUser.setDataMaskPolicyItems(List.of(mask("MASK_NULL", null, List.of("bob"), List.of())));
+        assertTrue(whole(otherUser).allowed());
+        RangerPolicy otherTable = policy(2, RangerPolicy.POLICY_TYPE_DATAMASK, columns("sales", "items", "ssn"));
+        otherTable.setDataMaskPolicyItems(List.of(mask("MASK_NULL", null, List.of("alice"), List.of())));
+        assertTrue(whole(otherTable).allowed());
+        // Hive's mask resources take no wildcards (service definition): Ranger reads "sal*" literally, so do we.
+        RangerPolicy literalMask = policy(2, RangerPolicy.POLICY_TYPE_DATAMASK, columns("sal*", "ord*", "ssn"));
+        literalMask.setDataMaskPolicyItems(List.of(mask("MASK_NULL", null, List.of("alice"), List.of())));
+        assertTrue(whole(literalMask).allowed());
+        RangerPolicy wildcardTable = access(2, columns("sal*", "ord*", "ssn"));
+        wildcardTable.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        assertEquals("no select on column ssn", whole(wildcardTable).reason());
+
+        RangerPolicy pattern = access(2, columns("sales", "orders", "ss*"));
+        pattern.setDenyPolicyItems(List.of(item(List.of("bob"), List.of())));
+        assertEquals("column pattern in policy 2", whole(pattern).reason());
+        RangerPolicy patternElsewhere = access(2, columns("hr", "*", "ss*"));
+        patternElsewhere.setDenyPolicyItems(List.of(item(List.of("bob"), List.of())));
+        assertTrue(whole(patternElsewhere).allowed());
+
+        Map<String, RangerPolicyResource> excludedColumns = columns("sales", "orders", "id");
+        excludedColumns.get("column").setIsExcludes(true);
+        RangerPolicy excludes = access(2, excludedColumns);
+        excludes.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        assertEquals("column exclusion in policy 2", whole(excludes).reason());
+
+        RangerPolicy owner = access(2, columns("sales", "orders", "ssn"));
+        owner.setDenyPolicyItems(List.of(item(List.of("{OWNER}"), List.of())));
+        assertEquals("owner restriction in policy 2", whole(owner).reason());
+        RangerPolicy ownerException = access(2, columns("sales", "orders", "*"));
+        ownerException.setAllowExceptions(List.of(item(List.of("{OWNER}"), List.of())));
+        assertEquals("owner restriction in policy 2", whole(ownerException).reason());
+
+        RangerPolicy conditional = access(2, columns("sales", "orders", "ssn"));
+        RangerPolicyItem conditionalItem = item(List.of("bob"), List.of());
+        conditionalItem.setConditions(List.of(new RangerPolicyItemCondition("ip-range", List.of("10.*"))));
+        conditional.setDenyPolicyItems(List.of(conditionalItem));
+        assertEquals("conditional restriction in policy 2", whole(conditional).reason());
+
+        RangerPolicy denyOther = access(2, columns("sales", "orders", "ssn"));
+        denyOther.setDenyPolicyItems(List.of(item(List.of("bob"), List.of())));
+        assertTrue(whole(denyOther).allowed());
+        RangerPolicy denyMe = access(2, columns("sales", "orders", "ssn"));
+        denyMe.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        assertEquals("no select on column ssn", whole(denyMe).reason());
+        RangerPolicy additional = access(2, columns("hr", "people", "ssn"));
+        additional.setAdditionalResources(List.of(columns("sales", "orders", "region")));
+        additional.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        assertEquals("no select on column region", whole(additional).reason());
+    }
+
+    /**
+     * Reads table sales.orders whole as alice, who may select all its columns, with one more policy.
+     *
+     * @param extra the extra policy
+     * @return the decision
+     */
+    private static HivePolicies.TableAccess whole(RangerPolicy extra) {
+        RangerBasePlugin plugin = plugin(List.of(access(1, columns("sales", "*", "*"),
+                item(List.of("alice", "bob"), List.of())), extra));
+        return new HivePolicies(plugin, identity -> Set.of()).readWholeTable("alice", ORDERS);
+    }
+
+    /**
+     * Creates a listing plugin holding policies, or a plain one for a single policy.
+     *
+     * @param list policies
+     * @return the plugin
+     */
+    private static RangerBasePlugin plugin(List<RangerPolicy> list) {
+        ServicePolicies servicePolicies = new ServicePolicies();
+        servicePolicies.setServiceName(SERVICE);
+        servicePolicies.setServiceDef(serviceDef);
+        servicePolicies.setPolicyVersion(1L);
+        servicePolicies.setPolicies(list);
+        RangerBasePlugin plugin = list.size() == 1 ? new RangerBasePlugin("hive", "hive-policies-test")
+                : new HiveRangerPlugin("hive", "hive-policies-test");
+        plugin.setPolicies(servicePolicies);
+        return plugin;
     }
 
     /**

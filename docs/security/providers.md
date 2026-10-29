@@ -85,6 +85,33 @@ expires, and policy checks of the identity use them. Two valid tokens of one use
 at the same moment (during a group change at the identity provider) may see each other's groups; a call never runs
 with the groups of another user. A group claim of another shape, or with more than 1000 entries, refuses the token.
 
+## Hive Ranger policies (`ranger-hive`)
+
+Optional module `flight-auth-ranger-hive` (same release asset, directory `auth/ranger-hive/`): put
+`auth/ranger-hive/*` on the server class path and set `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`. The Hive catalog's
+schemas and tables are then checked against the cluster's existing **Hive** Ranger service (service type `hive`,
+resources database / table / column), so the policies HiveServer2 enforces need not be copied into an
+`arrowflight` service. Users and groups are those of the built-in `ranger` provider (short user name; Hadoop group
+mapping plus the `ldap` / `jwt` provider's groups).
+
+| Setting | Meaning |
+| --- | --- |
+| `RANGER_HIVE_SERVICE_NAME` | Required. Name of the Hive service in Ranger admin (e.g. `cl1_hive`). |
+| `RANGER_ADMIN_URL` | Required. Ranger admin URL the policies are downloaded from (every 30 s). |
+| `RANGER_POLICY_REST_USERNAME`, `RANGER_POLICY_REST_PASSWORD`, `RANGER_POLICY_CACHE_DIR` | As for the `ranger` provider. |
+| `RANGER_HIVE_SCHEMA_PREFIX` | The Hive catalog's `schemaPrefix` (default empty): server schema = prefix + Hive database. |
+
+Decisions follow Ranger's Hive authorizer: a schema is visible with any access on the database or inside it (as
+`SHOW DATABASES`). The server cannot yet apply masks or row filters or tell which columns a query reads, so a table
+is readable only when the caller may read **all of it unmasked and unfiltered**: `select` on all its columns (a
+policy on column `*`), no row filter, and neither a mask nor a deny for the caller on any column a policy names.
+Otherwise the query is refused (`UNAUTHORIZED`), never answered unmasked. Also refused, because the server cannot
+evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
+(table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
+pattern or column exclusion in a restrictive policy, and every table while restrictive tag-based policies exist.
+Schemas outside the prefix (other catalogs) are refused. Accesses are not audited to Ranger by this provider yet.
+Masks and row filters (query rewrite) are planned; see `docs/dev/PLUGINS-STATUS.md` (P6).
+
 ## Add an authentication provider
 
 Implement `pro.surpin.data.arrowflight.server.FlightAuthenticationProviderFactory` with a unique `name()`. Its `create(Map<String, String>)` method returns a `FlightAuthenticationProvider`. The provider can initialize credentials before Hadoop services start and must return an Arrow `CallHeaderAuthenticator` that supplies an authenticated peer identity for each request. Package the factory class in a JAR with this service descriptor:

@@ -10,6 +10,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Optional authorization provider `ranger-hive` (module `flight-auth-ranger-hive`, `auth/ranger-hive/` in the
+  `flight-auth-...tar.zst` asset; `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`, `RANGER_HIVE_SERVICE_NAME`,
+  `RANGER_ADMIN_URL`, `RANGER_HIVE_SCHEMA_PREFIX`): the Hive catalog's schemas and tables checked against the
+  cluster's Hive Ranger service (database visibility as `SHOW DATABASES`, select on all columns); a table with a mask,
+  row filter or column deny for the caller, or with policies the server cannot evaluate exactly (`{OWNER}`,
+  conditions, column patterns, restrictive tag policies), is refused - masks and row filters are not applied yet (P6).
 - Manual workflow `distributed-perf.yml` (lane 3, D7): three server containers of the ref (one cluster, shared
   TPC-H lineitem directory, `--cpus`/`--memory` per node) measured with `distributedComplete` off vs on over seven
   lineitem shapes that merge; fails when the answers differ or an "on" answer was not merged, reports times and rows/s.

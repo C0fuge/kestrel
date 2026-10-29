@@ -13,8 +13,9 @@ test suite passed on the same commit. Linux x86-64 / ARM64 only (`-Plinux-only`)
   It replaces any older libs directory: do not mix it with other Hadoop, Netty, Jackson or BouncyCastle jars.
 - `flight-auth-@VERSION@-@SHA@.tar.zst`: `auth/ldap/` - the optional LDAP / Active Directory login provider
   (`FLIGHT_AUTH_PROVIDER=ldap`, its jar + the UnboundID LDAP SDK + a `SHA256SUMS`) and `auth/jwt/` - the optional
-  OIDC / Knox JWT provider (`FLIGHT_AUTH_PROVIDER=jwt`, its jar + nimbus-jose-jwt + a `SHA256SUMS`); each on the
-  class path only when used.
+  OIDC / Knox JWT provider (`FLIGHT_AUTH_PROVIDER=jwt`, its jar + nimbus-jose-jwt + a `SHA256SUMS`) and
+  `auth/ranger-hive/` - the optional policy provider on the cluster's Hive Ranger service
+  (`FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`, its jar only); each on the class path only when used.
 - `SHA256SUMS`: checksums of the files above.
 
 ## Start
@@ -67,6 +68,11 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `preferred_username` / `upn`) and `FLIGHT_JWT_GROUPS_CLAIM` (e.g. `groups`, `realm_access.roles`) for Ranger
   groups. No shared secret or session state between nodes: every call carries the token. Tools that can send only
   a user name and password: `FLIGHT_JWT_BASIC_PASSWORD=true` and the token as password.
+- Hive Ranger policies instead of an `arrowflight` Ranger service (Hive catalog only): add
+  `:/opt/flight/auth/ranger-hive/*` to `-cp`, set `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`,
+  `RANGER_HIVE_SERVICE_NAME` (the Hive service in Ranger admin), `RANGER_ADMIN_URL`, `RANGER_HIVE_SCHEMA_PREFIX` (the
+  hive catalog's `schemaPrefix`), and not `RANGER_SERVICE_NAME`. Tables with a mask, row filter or column deny for
+  the caller are refused until masking is implemented; other catalogs' schemas are refused.
 - Kerberos HDFS without an external `kinit`: set `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN

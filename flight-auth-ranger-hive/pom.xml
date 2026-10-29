@@ -14,8 +14,9 @@
     <name>Arrow Flight Server Ranger Hive policies</name>
     <description>
         Ranger policies of the cluster's Hive service (database / table / column access, column masks, row
-        filters) for the server's Hive catalog tables. Work in progress (plugins lane P6): building blocks only,
-        no provider registered yet. Runs on the server class path (auth/ranger-hive), not in the plugin loader.
+        filters) for the server's Hive catalog tables. Authorization provider ranger-hive: until the server can
+        apply masks and row filters, tables restricted for the caller are refused. Runs on the server class path
+        (auth/ranger-hive), not in the plugin loader.
     </description>
 
     <properties>

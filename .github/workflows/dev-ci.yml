@@ -193,10 +193,13 @@ jobs:
           tar -C "$RUNNER_TEMP/ld" -cf - libs | zstd -19 -T0 > "$out/flight-server-libs-${version}-${sha}.tar.zst"
           tar -C "$RUNNER_TEMP/pd" -cf - plugins | zstd -19 -T0 > "$out/flight-plugins-${version}-${sha}.tar.zst"
           # Optional authentication providers, for the server class path (java -cp '<jar>:libs/*:auth/ldap/*').
-          for provider in ldap jwt; do
+          for provider in ldap jwt ranger-hive; do
             mkdir -p "$RUNNER_TEMP/ad/auth/$provider"
-            cp "flight-auth-$provider/target/arrow-flight-auth-$provider-${version}.jar" \
-              flight-auth-$provider/target/auth-libs/*.jar "$RUNNER_TEMP/ad/auth/$provider/"
+            cp "flight-auth-$provider/target/arrow-flight-auth-$provider-${version}.jar" "$RUNNER_TEMP/ad/auth/$provider/"
+            # ranger-hive has no own libraries (Ranger and Hadoop come with the server).
+            if [ -d "flight-auth-$provider/target/auth-libs" ]; then
+              cp flight-auth-$provider/target/auth-libs/*.jar "$RUNNER_TEMP/ad/auth/$provider/"
+            fi
             (cd "$RUNNER_TEMP/ad/auth/$provider" && sha256sum -- *.jar > SHA256SUMS)
           done
           tar -C "$RUNNER_TEMP/ad" -cf - auth | zstd -19 -T0 > "$out/flight-auth-${version}-${sha}.tar.zst"
