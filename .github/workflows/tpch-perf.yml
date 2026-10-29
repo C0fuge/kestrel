@@ -8,7 +8,9 @@
 # (rclone serve s3 on the runner, outside the server's container limits) read through the real s3
 # plugin and DuckDB's httpfs, for S3-only regressions (STATUS "Bug first" of 2026-10-29); input
 # s3latency adds a network round trip to that endpoint only (tc netem on the loopback, packets to
-# and from port 9000, half the round trip each way), as a remote MinIO has. Not part of Dev CI.
+# and from port 9000, half the round trip each way), as a remote MinIO has; input client=adbc runs
+# the queries through the ADBC Flight SQL driver (Go, tools/ci/tpch-adbc.py), the CI screening's
+# client, instead of TpchPerfTest's Java Flight SQL client. Not part of Dev CI.
 name: TPC-H perf
 
 on:
@@ -43,6 +45,11 @@ on:
         description: "store=s3 only: added round-trip time to the S3 endpoint, e.g. 10ms (empty = none)"
         type: string
         default: ""
+      client:
+        description: "query client: java (TpchPerfTest, Java Flight SQL) or adbc (ADBC Flight SQL driver, Go, via Python)"
+        type: choice
+        options: [java, adbc]
+        default: java
       extra:
         description: "server options of a further configuration measured on this ref, its answers checked against the default's (e.g. -DduckDbSharedDatabase=true; empty = none)"
         type: string
@@ -128,6 +135,13 @@ jobs:
           du -sh "$RUNNER_TEMP/data/tpch"; ls "$RUNNER_TEMP"/queries/*.sql | wc -l
           grep -c 'tpch\.' "$RUNNER_TEMP"/queries/*.sql | head -n 3
 
+      - name: ADBC client
+        if: inputs.client == 'adbc'
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/adbc"
+          "$RUNNER_TEMP/adbc/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+
       # The httpfs extension of the server's DuckDB (ci-assets, else extensions.duckdb.org) and an S3
       # endpoint on 127.0.0.1:9000 over the generated files: bucket "lake", data directory
       # s3://lake/data (test-only keys, generated here).
@@ -212,13 +226,20 @@ jobs:
               return
             fi
             docker logs srv 2>&1 | grep -o 'duckdb=\(sizing\|threads\) .*' | head -n 2 | sed "s/^/$label: /" >> "$out"
-            ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
-              -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
-              -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
-              -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1
+            local ok=0
+            if [ "${{ inputs.client }}" = adbc ]; then
+              "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/tpch-adbc.py 127.0.0.1:32010 "$RUNNER_TEMP/queries" \
+                "${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1 || ok=1
+            else
+              ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+                -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
+                -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
+                -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1
+              grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn.log" || ok=1
+            fi
             grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/mvn.log" | sed "s/^/$label: /" >> "$out"
-            if ! grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn.log"; then
-              echo "$label: client failed" >> "$out"; grep -E 'ERROR|FAIL|Exception' "$RUNNER_TEMP/mvn.log" | head -n 20
+            if [ "$ok" -ne 0 ]; then
+              echo "$label: client failed" >> "$out"; grep -E 'ERROR|FAIL|Exception|Error|expected' "$RUNNER_TEMP/mvn.log" | head -n 20
               docker logs srv 2>&1 | tail -n 30
             fi
             docker stats --no-stream --format '{{.MemUsage}}' srv | sed "s/^/$label: container memory /" >> "$out"
@@ -264,7 +285,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### TPC-H SF${{ inputs.sf }} (${{ inputs.store }}${{ inputs.s3latency && format(', S3 RTT +{0}', inputs.s3latency) || '' }}) on $(nproc) runner cores: $GITHUB_SHA"
+            echo "### TPC-H SF${{ inputs.sf }} (${{ inputs.store }}, ${{ inputs.client }} client${{ inputs.s3latency && format(', S3 RTT +{0}', inputs.s3latency) || '' }}) on $(nproc) runner cores: $GITHUB_SHA"
             echo
             echo "Server in a container with ${{ inputs.cpus }} CPUs / ${{ inputs.memory }} (-Xmx3g, direct 2g), complete"
             echo "mode; one warm-up pass, then ${{ inputs.rounds }} measured. Baseline: ${{ inputs.baseline || 'none' }}."
