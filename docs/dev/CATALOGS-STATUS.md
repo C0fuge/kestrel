@@ -476,3 +476,6 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   options also reach S3 paths outside `allowed_directories` (refuse `read_hudi` in client SQL, as planned). Test
   only. Catalogs CI green: run 40823753558 (all jobs). Dev CI run 40823753684 (head 37fe039) running at session end
   (tools/ci only). Q7 updated. Q1, Q4-Q7 unanswered; no unblocked item left for lane 4.
+- 2026-10-29 (06:5x UTC): no answers to Q1, Q4-Q7 yet, so no unblocked item; stopped early without code changes.
+  Maintainer notified once that lane 4 is idle until they are answered; later sessions: stop early silently until
+  an answer appears (no further notifications).
