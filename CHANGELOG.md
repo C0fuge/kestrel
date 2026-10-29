@@ -63,6 +63,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `arrowflight.hive.insertOnlyTables` | false | show insert-only (MM) transactional tables (Hive 3) |
 | `arrowflight.hive.views` | false | list simple Hive views the plugin can translate |
 | `arrowflight.iceberg-rest.vendedCredentials` | false | ask the REST catalog for temporary per-table storage credentials |
+| `catalog=jdbc` + `arrowflight.jdbc.sources` (new plugin `plugins/jdbc`) | unset | PostgreSQL / MySQL tables read-only through DuckDB's scanners; per source `<s>.type`, `.host`, `.port`, `.database`, `.user`, `.tables` (`schema.table`, only these are shown), `.schema`, `.sslMode`; password only from `FLIGHT_JDBC_<S>_PASSWORD` or `<s>.passwordFile` |
 
 **New auth providers (new modules in the `flight-auth-...tar.zst` asset; nothing changes unless selected)**
 
@@ -118,6 +119,16 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   files below the prefix, only below the catalog's roots, refreshed when the catalog returns new ones (the plugin
   reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Catalogs CI entry
   `lakekeeper-s3-vended`.
+- New plugin `flight-plugin-jdbc` (`plugins/jdbc`, `catalog=jdbc`; lane 4, C2): tables of PostgreSQL and MySQL
+  databases, read-only through DuckDB's `postgres_scanner` / `mysql_scanner` v1.5.6 (projection and filter pushdown
+  by the scanners). `arrowflight.jdbc.sources=<s>,...`; per source `<s>.type` (postgres|mysql), `.host`, `.port`,
+  `.database`, `.user`, `.tables` (`schema.table`, comma separated: only these become server tables, named in lower
+  case, in schema `.schema`, default `<s>`), `.sslMode` (mysql); the password only from `FLIGHT_JDBC_<S>_PASSWORD`
+  or `<s>.passwordFile`, redacted everywhere. Each query of such a table is answered complete by one node (partial
+  requests get one endpoint). Client queries cannot call the scanners' functions (`postgres_query`, `postgres_scan`,
+  `mysql_query`, ...: the plugin's list plus the SPI 1.9 check), name the attachments, ATTACH or DETACH. Tests:
+  `JdbcCatalogTest`, `ScannerFunctionsTest`, `JdbcFederationIntegrationTest` (Catalogs CI job `jdbc-scanners`,
+  PostgreSQL 16.4 and MySQL 8.4 with type matrices: answers equal DuckDB's own scan, partial = complete).
 - SPI 1.10: attached remote databases, for the coming jdbc federation plugin (lane 4, C2). `DuckDbSetup
   .attachDatabase(name, type, options)` - `postgres` / `mysql`, only after the type's scanner extension was loaded
   with `loadExtensionRefusingFunctions`; the server writes a temporary secret (allowlisted options HOST, PORT,

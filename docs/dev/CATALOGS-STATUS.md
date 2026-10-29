@@ -49,28 +49,18 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       them (`duckdb_secrets` / `which_secret` refused) or create / drop secrets (SELECT-only parse check); the
       worst a misbehaving catalog can do is have its credentials used for other tables in the same directory
       tree below its own roots.
-    - **Next (step 2b ii):** manifests and footers are still read through the stores with the server's own
-      credentials, so a deployment whose server keys cannot read the warehouse still fails. Give
-      `StoresFileIO` reads under a table with credentials their own S3 GET (copy the s3 plugin's small SigV4,
-      no SDK) and check Java-side footer / statistics reads in the core (`TableStatisticsService`,
-      `PartitionPruner`) for such tables. CI: a moto entry where the s3 plugin's keys are wrong for the
-      warehouse is not possible (moto accepts any key) - use moto IAM enforcement
-      (`INITIAL_NO_AUTH_ACTION_COUNT`) or check the request log's signing key. Also Polaris without
-      `stsUnavailable` (STS endpoint to moto). Original findings: (1) DuckDB secrets are created per connection before
-      lockdown (`DuckDbAdapter`, `DataStore.contributeDuckDb`), but `CREATE OR REPLACE TEMPORARY SECRET` and
-      `DROP SECRET` still work after `enable_external_access=false` + `lock_configuration=true` (checked with
-      duckdb_jdbc 1.5.6); client SQL cannot do it (only SELECTs pass the parse check), so the server could install
-      a table's scoped temporary credentials on a connection before running a query on it. (2) Manifests are read
-      through `Stores` (server credentials); with vended credentials only, the plugin needs its own S3 GET with
-      SigV4 (copy the s3 plugin's small `S3SigV4`, no SDK) in `StoresFileIO` for locations under such a table.
-      Needed core/SPI piece (lane-4 limit: additive, own commit, SPI bump, STATUS.md Log line): e.g.
-      `TableSnapshot`/`ReadSpec` carrying optional scoped storage credentials (prefix, type, options, expiry) that
-      the server validates like `createSecret` (scope below the catalog's roots) and installs with
-      `CREATE OR REPLACE TEMPORARY SECRET` on the query's connection(s), never logged. Plugin: optional
-      `iceberg-rest.vendedCredentials=false` (default off) sends `X-Iceberg-Access-Delegation: vended-credentials`,
-      reads `config` / `storage-credentials`, refreshes before `s3.session-token-expires-at-ms`. CI: moto STS
-      (AssumeRole) with Lakekeeper `sts-enabled` / Polaris without `stsUnavailable`; check what each returns.
-      See Open questions before building the core part.
+    - Step 2b (ii) done (2026-10-29): manifests with the vended credentials. `VendedS3` (plugin, no SDK): SigV4-signed
+      HEAD / ranged GET on the JDK HTTP client with one vended credential (KEY_ID / SECRET / SESSION_TOKEN signed as
+      `x-amz-security-token` / REGION / ENDPOINT / USE_SSL / URL_STYLE; AWS endpoints `s3[.<region>].amazonaws.com`,
+      vhost unless path style); `StoresFileIO.withCredentials` routes files below a credential's prefix (longest
+      first) and below the catalog's roots to it, everything else to the stores; `IcebergCatalog` plans with that
+      FileIO (`SnapshotPlanner.plan(..., fileIo)`). Core checked: catalog-table files are never read Java-side
+      (`TableStatisticsService` uses the catalog's counts, footer reads touch the data directory only), so no core
+      change. Tests: `VendedManifestReadsTest` (InMemoryCatalog tables copied to FakeS3, REST catalog vending
+      per-table credentials, stores refusing every read; every request's signature verified with the s3 plugin's
+      `S3SigV4`), `RestCatalogConformanceTest` gives the `lakekeeper-s3-vended` entry a refusing store (Catalogs CI
+      run 40862720044 green: Lakekeeper's STS credentials read every manifest). Not done (optional): a Polaris entry
+      without `stsUnavailable` (STS endpoint to moto) - Lakekeeper already covers vended credentials end to end.
     - Step 3a done (2026-10-28): answers through the server, local warehouses. `RestCatalogServerConformanceTest`
       (flight-server, `rest-catalogs`, env-gated like the plugin test) runs the server with iceberg-rest (schemas
       `rest_*`) next to iceberg-hadoop over a reference warehouse with the same fixtures; complete answers equal the
@@ -95,7 +85,7 @@ C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugi
       server (see Q3), so the server test uses `ICEBERG_REST_IT_NAMESPACES=ice`. Plugin test 3/3, server test 4/4
       (HMS reference included) pass locally. No vended credentials checked (UC's `/credentials` endpoint is listed
       in `/v1/config`; belongs to step 2b).
-    - C1 is complete apart from step 2b (ii) (manifests with the vended credentials, Polaris STS), see above.
+    - **C1 done** (2026-10-29). Optional extra: Polaris with STS (see step 2b (ii)).
 C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source through DuckDB's `postgres` / `mysql`
     extensions (bundle for 1.5.6 offline like the others; check availability), read-only, pushdown of filters/projection,
     credentials from the plugin config (never logged), Ranger checks as for other tables. CI with postgres/mysql
@@ -131,13 +121,23 @@ C2. **JDBC federation plugin:** PostgreSQL and MySQL tables as a data source thr
         postgres_execute, postgres_hstore_get, postgres_hstore_to_json, postgres_query, postgres_scan,
         postgres_scan_pushdown, read_postgres_binary`; mysql_scanner `mysql_clear_cache,
         mysql_debug_execution_plan, mysql_execute, mysql_explain_federated, mysql_query`.
-    - **Next (step 2):** see Q4 first. If allowed: SPI (own commit, additive, version bump) lets a plugin name
-      functions to refuse in client SQL (or: the server refuses every function a plugin's `LOAD` adds, from a
-      `duckdb_functions()` diff), the server adds them to the parse check; then module `flight-plugin-jdbc`
-      (config: per source type/host/port/database/user, password from env/file, never logged; `LOAD` + secret +
-      `ATTACH ... READ_ONLY` via `contributeDuckDb`, tables as catalog views `jdbc_<source>.<schema>.<table>`),
-      tests with Testcontainers-free CI containers as in `jdbc-scanners`. Also upload the two extensions to
-      ci-assets (from the artifact) so CI does not depend on extensions.duckdb.org.
+    - Step 2 done (2026-10-29, Q4 answered): **SPI 1.9** `DuckDbSetup.loadExtensionRefusingFunctions` + core diff of
+      `duckdb_functions()` around that LOAD (Q4 (b), opt-in per extension so existing plugins keep their functions);
+      **SPI 1.10** `DuckDbSetup.attachDatabase` (secret + `ATTACH '' AS n (TYPE postgres|mysql, SECRET n,
+      READ_ONLY)`, allowlisted options, only after the scanner was loaded refusing, name refused as qualifier in
+      client SQL) and `ReadSpec.AttachedTable` (views / describe read the attachment, complete only, statistics
+      unknown); a catalog that attaches a database may have no roots. Module **`flight-plugin-jdbc`**
+      (`catalog=jdbc`, see CHANGELOG): only configured `schema.table` entries are shown, refused lists of its own
+      (Q4 (a)) checked against the bundled builds by `ScannerFunctionsTest`. `JdbcFederationIntegrationTest` in
+      Catalogs CI job `jdbc-scanners` (PostgreSQL 16.4, MySQL 8.4, type matrices): answers equal DuckDB's own scan
+      (all values as DuckDB text), partial = complete (one endpoint), cross-database join, scanner functions /
+      attachments / ATTACH / DETACH / `duckdb_secrets()` refused in both modes, password never in errors - 3/3 and
+      2/2 in run 40865845835 (job 123420311726). Plugin added to the release plugin set (`dev-ci.yml`).
+    - **Next for C2:** (1) Q8 (remote table names visible in `information_schema` / `duckdb_tables()`); (2) TPC-H
+      SF0.1 loaded into both databases and answered through the server equal to DuckDB over the same data (the
+      item's acceptance); (3) a Ranger-style restriction on a jdbc table (`TableRestrictionIntegrationTest`
+      pattern) to show per-table checks apply; (4) store `postgres_scanner` / `mysql_scanner` in ci-assets (the
+      session cannot download Actions artifacts: blob storage blocked - do it from a workflow or locally).
 C3. **Delta Lake tables** via DuckDB's `delta` extension (check 1.5.6 build), from HDFS and S3; refuse clearly what it
     cannot read (deletion vectors / column mapping if unsupported). Then: Apache Ozone S3 gateway as an S3 backend test.
     - Step 1 done (2026-10-28): `catalogs-ci.yml` job `delta`: Delta tables written by Spark 3.5.3 + delta-spark
@@ -346,6 +346,15 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   - Q7: route (a) for Paimon and Hudi on local + S3 through the extensions with refused functions (as Q5); HDFS via
     (b) only later if asked. After Q6 (a).
 
+- Q8 (2026-10-29, C2, security): an attached database is a DuckDB catalog, so client queries of
+  `information_schema.tables` / `information_schema.columns` / `duckdb_tables()` / `duckdb_columns()` probably list
+  every table and column of the remote database the plugin's user can see, also the ones not configured in
+  `<s>.tables` (names only - their rows stay unreachable: the attachment's name is refused as a qualifier and the
+  scanners' functions are refused). Not yet checked in CI. Options: (a) accept (document: give the plugin a
+  database user that sees only the configured tables - the usual practice anyway); (b) the core filters attached
+  catalogs out of those system views for client queries (wider change to the parse check). Lane 4 proposes (a)
+  plus a CI assertion of what is visible; tell me if (b) is wanted.
+
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
   DuckDB connections after lockdown (`CREATE OR REPLACE TEMPORARY SECRET`, scope checked below the catalog's
   roots, values redacted), fed by a new optional field on the catalog SPI. It touches the DuckDB lockdown
@@ -532,3 +541,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 - 2026-10-29 (06:5x UTC): no answers to Q1, Q4-Q7 yet, so no unblocked item; stopped early without code changes.
   Maintainer notified once that lane 4 is idle until they are answered; later sessions: stop early silently until
   an answer appears (no further notifications).
+- 2026-10-29 (FINISH MODE session): **C1 step 2b (ii) done** - iceberg-rest reads manifests with the vended S3
+  credentials (`VendedS3` SigV4 reader in the plugin, af1fb7ff); Catalogs CI 40862720044 green (12 jobs, the vended
+  Lakekeeper entry with a store refusing every read). **C2 step 2 done** - SPI 1.9 (14e86e09) + core 22e90670
+  (extension functions refused by diff, Q4 (b)); SPI 1.10 (f4bb3699) + core 04b60f7b, 19acce48 (attached databases,
+  `ReadSpec.AttachedTable`, root-less catalogs that attach); new module `flight-plugin-jdbc` (dbef061e); CI
+  3768feba: Catalogs CI 40865845835 job `jdbc-scanners` green with `JdbcFederationIntegrationTest` 3/3 and
+  `ScannerFunctionsTest` 2/2 against PostgreSQL 16.4 / MySQL 8.4. STATUS.md Log lines for the core lane. Dev CI
+  40865845870 (head 3768feba) running at the time of writing - see the next Log line. New Q8 (remote table names in
+  system views). Pre-release (package=true) pending a green Dev CI.

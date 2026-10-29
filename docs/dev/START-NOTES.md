@@ -8,7 +8,7 @@ test suite passed on the same commit. Linux x86-64 / ARM64 only (`-Plinux-only`)
 - `arrow-flight-server-@VERSION@-@SHA@-linux.jar`: the shaded server jar.
 - `arrow-flight-codec-lz4-@VERSION@.jar`: for Java Flight *clients* only (the server jar already contains it): the
   LZ4 codec that decodes `arrow-compression: lz4` streams fast; needs lz4-java, goes before `arrow-compression`.
-- `flight-plugins-@VERSION@-@SHA@.tar.zst`: `plugins/{s3,lakefs,iceberg,hive}/` (jars + a `SHA256SUMS` per plugin).
+- `flight-plugins-@VERSION@-@SHA@.tar.zst`: `plugins/{s3,lakefs,iceberg,hive,jdbc}/` (jars + a `SHA256SUMS` per plugin).
 - `flight-server-libs-@VERSION@-@SHA@.tar.zst`: `libs/`, the Hadoop client libraries the shaded jar leaves to the
   deployment (Hadoop is `provided`; the server does not start without them), mediated against the jar's own
   libraries so none repeats one of it; `libs/DEPENDENCIES.txt` lists the coordinates, `libs/SHA256SUMS` the jars.
@@ -45,7 +45,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   or `--stop-timeout 25` on the container); systemd's default `TimeoutStopSec` (90 s) and Kubernetes' grace period
   (30 s) are enough. `0` restores the immediate stop (running answers fail with `INTERNAL`).
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
-  checks the extension versions at startup.
+  checks the extension versions at startup. The jdbc plugin (`catalog=jdbc`) also needs `postgres_scanner` and/or
+  `mysql_scanner` v1.5.6 in the extension directory; every function they add is refused in client queries, and each
+  query of a jdbc table is answered complete by one node.
 - DuckDB runs a quarter of the cores (between 4 and 16) threads per connection by default (`duckDbThreads`, was a
   fixed 4; the startup lines `duckdb=threads perConnection=` and `duckdb=sizing` show the value), above 4 at most one
   per GiB of the connection's memory limit. Since 2026-10-28 (laptop stand p19b) the floor is 4 everywhere: builds
@@ -223,6 +225,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `arrowflight.hive.insertOnlyTables` | false | show insert-only (MM) transactional tables (Hive 3) |
 | `arrowflight.hive.views` | false | list simple Hive views the plugin can translate |
 | `arrowflight.iceberg-rest.vendedCredentials` | false | ask the REST catalog for temporary per-table storage credentials |
+| `catalog=jdbc` + `arrowflight.jdbc.sources` (new plugin `plugins/jdbc`) | unset | PostgreSQL / MySQL tables read-only through DuckDB's scanners; per source `<s>.type`, `.host`, `.port`, `.database`, `.user`, `.tables` (`schema.table`, only these are shown), `.schema`, `.sslMode`; password only from `FLIGHT_JDBC_<S>_PASSWORD` or `<s>.passwordFile` |
 
 **New auth providers (new modules in the `flight-auth-...tar.zst` asset; nothing changes unless selected)**
 
