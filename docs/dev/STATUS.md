@@ -2319,3 +2319,11 @@
   `PluginRefusedFunctions`. Inactive until a plugin asks for it (none yet; the jdbc federation plugin will).
   Maintainer approved in CATALOGS-STATUS Q4 (b). Lane 4 also changed the iceberg plugin (af1fb7ff): manifests of
   tables with vended credentials are read with them (plugin only).
+- 2026-10-29 (lane 4, core + SPI, FYI): **SPI 1.10** (f4bb3699, additive): `DuckDbSetup.attachDatabase` and
+  `ReadSpec.AttachedTable` (own minor version: a 1.9 core would read such a snapshot as an empty declared-columns
+  table). **Core** (04b60f7b): `DuckDbSetupValidator` attachments (secret + `ATTACH ... READ_ONLY`, name added to
+  the refused names; the qualifier loop of `DuckDbAdapter.requireAllowedFunctions` now also keeps catalog / schema
+  qualifiers in `PluginRefusedFunctions`), `LockdownCheck` accepts declared secrets without a scope,
+  `CatalogViews.attachedSource` (views + `ExecutionService.catalogDescribeSource`), `CatalogTables.completeReason`
+  ("is a table of an attached database"), `TableStatisticsService` (rows unknown). Inactive until a plugin returns
+  `AttachedTable`. Maintainer approved in CATALOGS-STATUS Q4.

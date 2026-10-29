@@ -118,6 +118,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   files below the prefix, only below the catalog's roots, refreshed when the catalog returns new ones (the plugin
   reloads a table 5 minutes before expiry) and dropped when it stops; values never logged. Catalogs CI entry
   `lakekeeper-s3-vended`.
+- SPI 1.10: attached remote databases, for the coming jdbc federation plugin (lane 4, C2). `DuckDbSetup
+  .attachDatabase(name, type, options)` - `postgres` / `mysql`, only after the type's scanner extension was loaded
+  with `loadExtensionRefusingFunctions`; the server writes a temporary secret (allowlisted options HOST, PORT,
+  DATABASE, USER, PASSWORD, mysql also SSL_MODE / SSL_CA; sensitive values redacted) and `ATTACH '' AS name (...,
+  READ_ONLY)` before the lockdown, and refuses the attachment's name in client SQL (as catalog or schema
+  qualifier). `ReadSpec.AttachedTable(database, schema, table)` - a catalog table read through the attachment
+  (declared columns, or all), no files, answered complete by one node; table statistics report it as unknown.
+  No change for existing plugins.
 - SPI 1.9: `DuckDbSetup.loadExtensionRefusingFunctions(name)` - loads an extension and refuses in client queries
   every function and table function it adds (the server compares `duckdb_functions()` before and after the load, so
   a later build of the extension cannot add an unrefused one; names that existed before stay allowed; startup line
