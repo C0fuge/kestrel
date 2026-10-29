@@ -202,7 +202,7 @@ class TpchPerfTest {
      * @param value cell value, may be null
      * @return text
      */
-    private static String normalized(Object value) {
+    static String normalized(Object value) {
         if (value instanceof Double || value instanceof Float) {
             return String.format(Locale.ROOT, "%.2f", ((Number) value).doubleValue());
         }
@@ -218,7 +218,7 @@ class TpchPerfTest {
      * @param hash row hash
      * @return mixed value
      */
-    private static long mix(int hash) {
+    static long mix(int hash) {
         long z = hash * 0x9E3779B97F4A7C15L;
         z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
         return z ^ (z >>> 31);
