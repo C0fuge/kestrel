@@ -91,6 +91,9 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+- `ranger-hive` applies Ranger Hive row filters whose expression is in a typed subset (`HiveRowFilter`: columns,
+  string/integer literals, comparisons of one kind, IS NULL, IN, BETWEEN, LIKE, AND/OR/NOT, lower/upper,
+  `current_user()`); other filters still refuse the table. (P6 step 3 D.)
 - `ranger-hive` applies Ranger Hive column masks: a masked column is read as Hive 3.1.3's mask written in DuckDB
   SQL (same type), in the table and in views over it, both result modes (answered complete). Tables and databases
   are visible with any access (as Hive's SHOW TABLES / SHOW DATABASES; listings no longer audited); a query table

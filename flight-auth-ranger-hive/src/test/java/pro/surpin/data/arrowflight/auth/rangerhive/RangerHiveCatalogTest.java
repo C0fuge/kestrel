@@ -52,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Runs the {@code ranger-hive} provider in a real Flight SQL server over the packaged hive plugin and a real
  * metastore: an ORC table (Arrow stream reads), a Parquet table, a text table and Hive views over them. A column
- * denial or a row filter refuses the table and every view that reads it (invoker rights), a mask is read in the
+ * denial refuses the table and every view that reads it (invoker rights), a mask and a row filter apply in the
  * table and in its views, in both result modes; a view granted without its source table is refused; listings show
  * what the caller has any access to.
  */
@@ -159,14 +159,13 @@ class RangerHiveCatalogTest {
     }
 
     /**
-     * A column denial on the ORC table (carl) and a row filter on the text table (sam) refuse those tables and the
-     * views over them, also in joins; the other tables and views still answer (sam's masked ones masked).
+     * A column denial on the ORC table (carl) refuses it and the views over it, also in joins; the other tables
+     * and views still answer.
      */
     @Test
     void restrictionsRefuseTablesAndTheirViews() throws Exception {
         Map<String, List<String>> refused = Map.of(
-                "carl", List.of("o", "v_orc", "v_join"),
-                "sam", List.of("t", "v_join"));
+                "carl", List.of("o", "v_orc", "v_join"));
         for (String mode : List.of("partial", "complete")) {
             for (Map.Entry<String, List<String>> entry : refused.entrySet()) {
                 String user = entry.getKey();
@@ -192,10 +191,23 @@ class RangerHiveCatalogTest {
         assertEquals(ROWS.get("v_orc"), rows("SELECT * FROM " + DB + ".v_orc", "sam", "complete").size());
     }
 
-    /** Sam's mask on o_pq.s applies to the table and to the view over it, in both modes. */
+    /**
+     * Sam's masks apply to the tables and to the views over them, in both modes: MASK_NULL on o_pq.s, and Hive's
+     * MASK on the ORC table's o.s ({@code 's' || i || 'ü'} becomes {@code x} for each lower-case letter and
+     * {@code n} for each digit).
+     */
     @Test
     void masksApplyToTablesAndViews() throws Exception {
         for (String mode : List.of("partial", "complete")) {
+            List<String> orc = rows("SELECT i, s FROM " + DB + ".o", "sam", mode);
+            assertEquals(ROWS.get("o"), orc.size(), mode);
+            for (String row : orc) {
+                int i = Integer.parseInt(row.substring(0, row.indexOf('|')));
+                String expected = i % 7 == 3 ? "null" : "x" + "n".repeat(String.valueOf(i).length()) + "x";
+                assertEquals(i + "|" + expected + "|", row, mode);
+            }
+            List<String> view = rows("SELECT i, s FROM " + DB + ".v_orc WHERE i = 12", "sam", mode);
+            assertEquals(List.of("12|xnnx|"), view, mode);
             List<String> table = rows("SELECT i, s FROM " + DB + ".o_pq", "sam", mode);
             assertEquals(ROWS.get("o_pq"), table.size(), mode);
             assertTrue(table.stream().allMatch(row -> row.endsWith("|null|")), mode + ": " + table.get(0));
@@ -203,6 +215,22 @@ class RangerHiveCatalogTest {
             assertEquals(List.of(ROWS.get("v_pq") + "|"), rows("SELECT count(*) FROM " + DB + ".v_pq", "sam", mode),
                     mode);
             assertFalse(rows("SELECT count(s) FROM " + DB + ".v_pq", "tess", mode).equals(List.of("0|")), mode);
+        }
+    }
+
+    /** Sam's row filter on the text table ({@code i >= 900}) applies to it and to the view joining it. */
+    @Test
+    void rowFiltersApplyToTablesAndViews() throws Exception {
+        for (String mode : List.of("partial", "complete")) {
+            assertEquals(List.of("100|900|999|"), rows("SELECT count(*), min(i), max(i) FROM " + DB + ".t", "sam", mode),
+                    mode);
+            List<String> filtered = rows("SELECT * FROM " + DB + ".v_join", "sam", mode);
+            List<String> expected = rows("SELECT * FROM " + DB + ".v_join WHERE i >= 900", "tess", "complete");
+            filtered.sort(null);
+            expected.sort(null);
+            assertFalse(expected.isEmpty(), mode);
+            assertTrue(expected.size() < ROWS.get("v_join"), mode);
+            assertEquals(expected, filtered, mode);
         }
     }
 
@@ -233,7 +261,8 @@ class RangerHiveCatalogTest {
 
     /**
      * Policies of the test Hive service: staff read the database; contractors are denied {@code o.dec}; sam has a
-     * mask on {@code o_pq.s} and a row filter on {@code t}; vera may read view {@code v_pq} only.
+     * mask on {@code o_pq.s} (MASK_NULL) and {@code o.s} (MASK) and a row filter on {@code t}; vera may read view
+     * {@code v_pq} only.
      *
      * @return service policies
      * @throws Exception when Ranger's Hive service definition cannot be read
@@ -255,13 +284,18 @@ class RangerHiveCatalogTest {
         RangerPolicy filter = RangerHiveFlightSqlTest.policy(4, RangerPolicy.POLICY_TYPE_ROWFILTER,
                 RangerHiveFlightSqlTest.resources(DB, "t", null));
         filter.setRowFilterPolicyItems(List.of(new RangerRowFilterPolicyItem(
-                new RangerPolicyItemRowFilterInfo("i < 10"), RangerHiveFlightSqlTest.select(), List.of("sam"),
+                new RangerPolicyItemRowFilterInfo("i >= 900"), RangerHiveFlightSqlTest.select(), List.of("sam"),
                 List.of(), List.of(), List.of(), false)));
         RangerPolicy view = RangerHiveFlightSqlTest.policy(5, RangerPolicy.POLICY_TYPE_ACCESS,
                 RangerHiveFlightSqlTest.resources(DB, "v_pq", "*"));
         view.setPolicyItems(List.of(new RangerPolicyItem(RangerHiveFlightSqlTest.select(), List.of("vera"),
                 List.of(), List.of(), List.of(), false)));
-        return RangerHiveFlightSqlTest.servicePolicies(List.of(access, deny, mask, filter, view));
+        RangerPolicy orcMask = RangerHiveFlightSqlTest.policy(6, RangerPolicy.POLICY_TYPE_DATAMASK,
+                RangerHiveFlightSqlTest.resources(DB, "o", "s"));
+        orcMask.setDataMaskPolicyItems(List.of(new RangerDataMaskPolicyItem(RangerHiveFlightSqlTest.select(),
+                new RangerPolicyItemDataMaskInfo("MASK", null, null), List.of("sam"), List.of(), List.of(),
+                List.of(), false)));
+        return RangerHiveFlightSqlTest.servicePolicies(List.of(access, deny, mask, filter, view, orcMask));
     }
 
     /**

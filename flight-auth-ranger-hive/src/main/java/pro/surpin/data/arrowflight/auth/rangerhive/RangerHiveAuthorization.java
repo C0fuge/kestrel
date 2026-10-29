@@ -21,7 +21,8 @@ import java.util.function.Function;
  * Checks the server's Hive catalog schemas and tables against the policies of the cluster's Hive Ranger service.
  * Databases and tables are visible as Hive's SHOW filters show them (any access); a query's tables are decided
  * by {@link #restrictTable}: select on every column of the table (the server passes all of them), column masks
- * written as DuckDB SQL. Row filters still deny the table. Schemas outside the Hive catalog are refused. Table
+ * written as DuckDB SQL, row filters translated when they can be exactly ({@link HiveRowFilter}), else the table
+ * is denied. Schemas outside the Hive catalog are refused. Table
  * reads are audited to Ranger's audit destinations, visibility is not (as Hive's SHOW filters).
  */
 public final class RangerHiveAuthorization implements FlightAuthorization {
@@ -124,9 +125,16 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
         if (!access.allowed() || !policies.canSeeDatabase(principal, database)) {
             return TableRestriction.DENIED;
         }
+        String rowFilter = null;
         if (access.rowFilter() != null) {
-            LOGGER.info("Ranger Hive row filter on {}.{} not applied yet, table denied", database, table);
-            return TableRestriction.DENIED;
+            try {
+                rowFilter = HiveRowFilter.sql(access.rowFilter(), columns,
+                        UserGroupInformation.createRemoteUser(principal).getShortUserName());
+            } catch (IllegalArgumentException e) {
+                LOGGER.info("Ranger Hive row filter on {}.{} cannot be applied, table denied: {}", database, table,
+                        e.getMessage());
+                return TableRestriction.DENIED;
+            }
         }
         Map<String, String> masks = new LinkedHashMap<>();
         for (Map.Entry<String, String> column : columns.entrySet()) {
@@ -150,7 +158,8 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
                 return TableRestriction.DENIED;
             }
         }
-        return masks.isEmpty() ? TableRestriction.UNRESTRICTED : new TableRestriction(true, null, masks);
+        return masks.isEmpty() && rowFilter == null ? TableRestriction.UNRESTRICTED
+                : new TableRestriction(true, rowFilter, masks);
     }
 
     /**

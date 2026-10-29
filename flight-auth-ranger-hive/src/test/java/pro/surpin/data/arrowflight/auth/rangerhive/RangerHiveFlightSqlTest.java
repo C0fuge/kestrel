@@ -53,7 +53,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Runs the {@code ranger-hive} provider in a real Flight SQL server over DuckDB schemas named like Hive databases:
- * masked columns read as their masks; tables with a row filter or a column denial for the caller are refused in
+ * masked columns read as their masks, row filters keep their rows; tables with a row filter that cannot be
+ * translated or a column denial for the caller are refused in
  * queries, joins and subqueries, in both result modes; unrestricted tables are answered; listings as Hive's SHOW.
  */
 @Tag("integration")
@@ -108,15 +109,14 @@ class RangerHiveFlightSqlTest {
     }
 
     /**
-     * A table with a row filter (payments, not applied yet) or a column denial (customers) for the caller is
-     * refused however it is referenced, also inside a subquery, a CTE or a set operation (their tables are named
+     * A table with a row filter that cannot be translated exactly (orders for carl) or a column denial (customers)
+     * for the caller is refused however it is referenced, also inside a subquery, a CTE or a set operation (their tables are named
      * from DuckDB's parse); the same queries pass for a user without the restriction (nested ones in complete mode).
      */
     @Test
     void restrictedTablesAreRefused() throws Exception {
         Map<String, List<String>> refused = Map.of(
-                "sam", List.of("payments"),
-                "carl", List.of("customers"));
+                "carl", List.of("customers", "orders"));
         for (String mode : List.of("partial", "complete")) {
             for (Map.Entry<String, List<String>> entry : refused.entrySet()) {
                 for (String table : entry.getValue()) {
@@ -187,6 +187,20 @@ class RangerHiveFlightSqlTest {
                 "sam", "complete"));
     }
 
+    /** Sam's row filter on payments ({@code id < 10}) keeps only those rows, however the table is read. */
+    @Test
+    void rowFiltersKeepOnlyTheirRows() throws Exception {
+        for (String mode : List.of("partial", "complete")) {
+            assertEquals(List.of("10|0|9|"), rows("SELECT count(*), min(id), max(id) FROM sales.payments", "sam",
+                    mode), mode);
+            assertEquals(List.of("10|"), rows("SELECT count(*) FROM sales.products p JOIN sales.payments t"
+                    + " ON p.id = t.id", "sam", mode), mode);
+            assertEquals(List.of(ROWS + "|"), rows("SELECT count(*) FROM sales.payments", "tess", mode), mode);
+        }
+        assertEquals(List.of("10|"), rows("SELECT count(*) FROM sales.products WHERE id IN"
+                + " (SELECT id FROM sales.payments)", "sam", "complete"));
+    }
+
     /** A database without a policy for the caller is neither readable nor visible. */
     @Test
     void databasesWithoutPoliciesAreHidden() throws Exception {
@@ -226,7 +240,8 @@ class RangerHiveFlightSqlTest {
 
     /**
      * Policies of the test Hive service: staff read database {@code sales}; sam has a mask on
-     * {@code orders.ssn} and a row filter on {@code payments}; contractors are denied {@code customers.email}.
+     * {@code orders.ssn} and a row filter on {@code payments}; contractors are denied {@code customers.email}; carl
+     * has a row filter with arithmetic (not translated) on {@code orders}.
      *
      * @return service policies
      * @throws Exception when Ranger's Hive service definition cannot be read
@@ -247,7 +262,11 @@ class RangerHiveFlightSqlTest {
         filter.setRowFilterPolicyItems(List.of(new RangerRowFilterPolicyItem(
                 new RangerPolicyItemRowFilterInfo("id < 10"), select(), List.of("sam"), List.of(), List.of(),
                 List.of(), false)));
-        return servicePolicies(List.of(access, deny, mask, filter));
+        RangerPolicy inexact = policy(5, RangerPolicy.POLICY_TYPE_ROWFILTER, resources("sales", "orders", null));
+        inexact.setRowFilterPolicyItems(List.of(new RangerRowFilterPolicyItem(
+                new RangerPolicyItemRowFilterInfo("id + 1 < 10"), select(), List.of("carl"), List.of(), List.of(),
+                List.of(), false)));
+        return servicePolicies(List.of(access, deny, mask, filter, inexact));
     }
 
     /**

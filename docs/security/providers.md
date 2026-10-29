@@ -109,9 +109,15 @@ column-level deny on any column refuses the table, as Hive does for `SELECT *`. 
 applied: the server reads the table as `(SELECT * REPLACE (<mask> AS col, ...) FROM db.t)`, with Hive 3.1.3's mask
 functions written as DuckDB SQL (`MASK`, `MASK_SHOW_FIRST_4`, `MASK_SHOW_LAST_4`, `MASK_HASH`, `MASK_NULL`,
 `MASK_DATE_SHOW_YEAR`, `MASK_NONE`, and `CUSTOM` values that call those functions); a masked column keeps its type,
-and such queries are answered complete by one node (also when asked in parts: one endpoint). Refused
-(`UNAUTHORIZED`), never answered unmasked: tables with a **row filter** for the caller (not applied yet), a
-`MASK_SHOW_LAST_4`-style mask on a text column (a Hive `CHAR(n)` column pads values; the server does not know the
+and such queries are answered complete by one node (also when asked in parts: one endpoint). **Row filters** are
+applied (`WHERE (<filter>)` on every read of the table) when their Hive expression is in the translated subset:
+the table's column names, string and integer literals, `TRUE` / `FALSE` / `NULL`, comparisons of operands of one
+kind (text, number, date, boolean), `IS [NOT] NULL`, `[NOT] IN`, `[NOT] BETWEEN`, `[NOT] LIKE` with a literal
+pattern, `AND` / `OR` / `NOT`, parentheses, `lower` / `upper` (`lcase` / `ucase`) and `current_user()` (the
+caller's short name). Refused (`UNAUTHORIZED`), never answered unfiltered or unmasked: tables whose row filter
+uses anything else (other functions, arithmetic, casts, subqueries, comparisons of different kinds such as a date
+column with a string literal - Hive and DuckDB convert those differently), a `MASK_SHOW_LAST_4`-style mask on a
+text column (a Hive `CHAR(n)` column pads values; the server does not know the
 Hive type yet), other masks on nested columns, other `CUSTOM` expressions. Also refused, because the server cannot
 evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
 (table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
