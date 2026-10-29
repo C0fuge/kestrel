@@ -740,5 +740,5 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
 - 2026-10-29 (plugins session): P6 step 2 - `HivePolicies` (Ranger Hive service evaluator: visibility by `_any`,
   select per column, row filter, masks via `HiveMask`, fail closed; f455b87, module `flight-auth-ranger-hive` only,
   nothing registered, so no CHANGELOG line or pre-release). Local (Maven Central): `HivePoliciesTest` 5/5,
-  `HiveMaskTest` 6/6, Checkstyle + SpotBugs clean. CI: Dev CI run 40812949194 (f455b87) - running. Next: P6 step 3
+  `HiveMaskTest` 6/6, Checkstyle + SpotBugs clean. CI: Dev CI run 40812949194 (f455b87) green (build). Next: P6 step 3
   (core hook design into Open questions, then the provider-groups factory default).
