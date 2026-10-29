@@ -24,8 +24,10 @@ import org.slf4j.LoggerFactory;
  * Tables of an Iceberg REST catalog (the REST catalog API of the Iceberg spec: Gravitino's Iceberg
  * REST service, Polaris, Nessie, ...), read with the JDK HTTP client: GET /v1/config, the
  * namespace and table lists, and loadTable for a table's metadata location and metadata. Only
- * reads; no credentials are vended to DuckDB (it reads the files with the server's own storage
- * setup). Authentication: a bearer token, or an OAuth2 client credential exchanged for a token.
+ * reads. DuckDB reads the files with the server's own storage setup, or, with
+ * {@code vendedCredentials}, with the S3 credentials the catalog vends per table (the manifests
+ * are still read through the stores). Authentication: a bearer token, or an OAuth2 client
+ * credential exchanged for a token.
  */
 final class RestTableSource implements TableSource {
 
@@ -95,7 +97,7 @@ final class RestTableSource implements TableSource {
     @Override
     public Optional<Loaded> load(String namespace, String table) throws IOException {
         Optional<JsonNode> response = get(base + "namespaces/" + encode(namespace) + "/tables/"
-                + encode(table));
+                + encode(table), settings.vendedCredentials());
         if (response.isEmpty()) {
             return Optional.empty();
         }
@@ -103,7 +105,8 @@ final class RestTableSource implements TableSource {
         String location = text(body.path("metadata-location")).orElseThrow(() -> new IOException(
                 "REST catalog sent no metadata-location for " + namespace + "." + table));
         TableMetadata metadata = TableMetadataParser.fromJson(location, body.path("metadata"));
-        return Optional.of(new Loaded(location, metadata));
+        return Optional.of(new Loaded(location, metadata, settings.vendedCredentials()
+                ? VendedCredentials.of(body, metadata.location()) : List.of()));
     }
 
     /**
@@ -133,13 +136,25 @@ final class RestTableSource implements TableSource {
      * @throws IOException on another status or a transport failure
      */
     private Optional<JsonNode> get(String uri) throws IOException {
-        HttpResponse<String> response = send(uri, false);
+        return get(uri, false);
+    }
+
+    /**
+     * Sends a GET request.
+     *
+     * @param uri request URI
+     * @param vended whether to ask for vended storage credentials
+     * @return JSON body, empty on 404
+     * @throws IOException on another status or a transport failure
+     */
+    private Optional<JsonNode> get(String uri, boolean vended) throws IOException {
+        HttpResponse<String> response = send(uri, false, vended);
         if (response.statusCode() == 401 && settings.credential().isPresent()) {
             // The token may have been revoked before it expired: get a new one, once.
             synchronized (this) {
                 accessToken = null;
             }
-            response = send(uri, true);
+            response = send(uri, true, vended);
         }
         int status = response.statusCode();
         if (status == 404) {
@@ -157,13 +172,17 @@ final class RestTableSource implements TableSource {
      *
      * @param uri request URI
      * @param retry whether this is the retry after a 401
+     * @param vended whether to ask for vended storage credentials
      * @return response
      * @throws IOException on transport failure
      */
-    private HttpResponse<String> send(String uri, boolean retry) throws IOException {
+    private HttpResponse<String> send(String uri, boolean retry, boolean vended) throws IOException {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(uri))
                 .timeout(Duration.ofMillis(settings.requestTimeoutMillis()))
                 .header("Accept", "application/json").GET();
+        if (vended) {
+            request.header("X-Iceberg-Access-Delegation", "vended-credentials");
+        }
         authorization().ifPresent(value -> request.header("Authorization", value));
         try {
             return http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

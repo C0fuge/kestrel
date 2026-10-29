@@ -34,6 +34,8 @@ final class IcebergCatalog implements Catalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(IcebergCatalog.class);
 
+    /** Load a table again this long before its vended credentials expire. */
+    static final long CREDENTIALS_MARGIN_MILLIS = 5 * 60_000L;
     private final IcebergSettings settings;
     /** Hidden tables already warned about (table@metadata). */
     private final java.util.Set<String> hiddenWarned = ConcurrentHashMap.newKeySet();
@@ -110,8 +112,8 @@ final class IcebergCatalog implements Catalog {
         }
         TableMetadata metadata = table0.get().metadata();
         Snapshot snapshot = metadata.currentSnapshot();
-        return Optional.of(planner.plan(table, table0.get().metadataLocation(), metadata, snapshot,
-                metadata.schema()).snapshot());
+        return Optional.of(withCredentials(planner.plan(table, table0.get().metadataLocation(),
+                metadata, snapshot, metadata.schema()).snapshot(), table0.get()));
     }
 
     @Override
@@ -131,8 +133,9 @@ final class IcebergCatalog implements Catalog {
             Schema schema = metadata.schemasById().get(schemaId);
             Snapshot snapshot = id == null ? null : metadata.snapshot(id);
             if (schema != null && (id == null || snapshot != null)) {
-                return Optional.of(planner.plan(table, table0.get().metadataLocation(), metadata,
-                        snapshot, schema).snapshot());
+                return Optional.of(withCredentials(planner.plan(table,
+                        table0.get().metadataLocation(), metadata, snapshot, schema).snapshot(),
+                        table0.get()));
             }
         }
         return Optional.empty();
@@ -151,8 +154,9 @@ final class IcebergCatalog implements Catalog {
             TableMetadata metadata = table0.get().metadata();
             Optional<Snapshot> snapshot = TimeTravel.find(metadata, point);
             if (snapshot.isPresent()) {
-                return Optional.of(planner.plan(table, table0.get().metadataLocation(), metadata,
-                        snapshot.get(), TimeTravel.schemaOf(metadata, snapshot.get())).snapshot());
+                return Optional.of(withCredentials(planner.plan(table,
+                        table0.get().metadataLocation(), metadata, snapshot.get(),
+                        TimeTravel.schemaOf(metadata, snapshot.get())).snapshot(), table0.get()));
             }
             if (fresh) {
                 throw new IllegalArgumentException(TimeTravel.missing(table, metadata, point));
@@ -227,7 +231,8 @@ final class IcebergCatalog implements Catalog {
         }
         long now = System.currentTimeMillis();
         Cached<Optional<TableSource.Loaded>> cached = loaded.get(table);
-        if (fresh || cached == null || cached.expiresAtMillis() <= now) {
+        if (fresh || cached == null || cached.expiresAtMillis() <= now
+                || credentialsExpireSoon(cached.value(), now)) {
             try {
                 cached = new Cached<>(insideRoots(table, source.load(namespace, table.table())),
                         now + settings.metadataTtlMillis());
@@ -239,6 +244,36 @@ final class IcebergCatalog implements Catalog {
             loaded.put(table, cached);
         }
         return cached.value();
+    }
+
+    /**
+     * Tells whether a loaded table's vended credentials expire within the refresh margin, so
+     * that it is loaded again (with new credentials) before a query could read with them.
+     *
+     * @param table loaded table, may be empty
+     * @param now current time in epoch milliseconds
+     * @return true when a credential expires within {@link #CREDENTIALS_MARGIN_MILLIS}
+     */
+    static boolean credentialsExpireSoon(Optional<TableSource.Loaded> table, long now) {
+        return table.isPresent() && VendedCredentials.earliestExpiryMillis(
+                table.get().credentials()) - CREDENTIALS_MARGIN_MILLIS <= now;
+    }
+
+    /**
+     * Hands a planned snapshot the credentials of the load it was planned from; the plans are
+     * cached by metadata location, the credentials change with every load.
+     *
+     * @param snapshot planned snapshot
+     * @param table loaded table
+     * @return snapshot with the table's vended credentials
+     */
+    private static TableSnapshot withCredentials(TableSnapshot snapshot, TableSource.Loaded table) {
+        if (table.credentials().isEmpty()) {
+            return snapshot;
+        }
+        return new TableSnapshot(snapshot.name(), snapshot.snapshotId(), snapshot.fingerprint(),
+                snapshot.columns(), snapshot.partitionColumns(), snapshot.files(), snapshot.read(),
+                table.credentials());
     }
 
     /**

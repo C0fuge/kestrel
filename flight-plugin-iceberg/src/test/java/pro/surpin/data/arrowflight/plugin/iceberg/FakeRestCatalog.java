@@ -39,6 +39,12 @@ public final class FakeRestCatalog implements AutoCloseable {
     private final HadoopCatalog catalog;
     private final List<String> requests = new CopyOnWriteArrayList<>();
     private final AtomicInteger tokens = new AtomicInteger();
+    /** Credentials vended so far; each loadTable that asks gets a new one. */
+    private final AtomicInteger vended = new AtomicInteger();
+    /** Lifetime of vended credentials in ms; 0 vends none. */
+    private volatile long vendMillis;
+    /** Prefix of vended credentials; null for the table location. */
+    private volatile String vendPrefix;
 
     /**
      * Starts the catalog on a free port of the loopback interface.
@@ -89,6 +95,28 @@ public final class FakeRestCatalog implements AutoCloseable {
      */
     public int tokens() {
         return tokens.get();
+    }
+
+    /**
+     * Vends S3 credentials (key {@code AKIA<n>}, token {@code token-<n>}, with an expiry) in
+     * {@code storage-credentials} to every loadTable that asks with
+     * {@code X-Iceberg-Access-Delegation: vended-credentials}.
+     *
+     * @param lifetimeMillis how long each credential is valid; 0 stops vending
+     * @param prefix prefix the credentials name, or null for the table location
+     */
+    public void vendCredentials(long lifetimeMillis, String prefix) {
+        this.vendPrefix = prefix;
+        this.vendMillis = lifetimeMillis;
+    }
+
+    /**
+     * Counts the credentials vended.
+     *
+     * @return number of loadTable answers that carried credentials
+     */
+    public int vended() {
+        return vended.get();
     }
 
     @Override
@@ -163,8 +191,23 @@ public final class FakeRestCatalog implements AutoCloseable {
                     return;
                 }
                 TableMetadata metadata = ((HasTableOperations) table).operations().current();
+                String credentials = "";
+                long lifetime = vendMillis;
+                if (lifetime > 0 && "vended-credentials".equals(
+                        exchange.getRequestHeaders().getFirst("X-Iceberg-Access-Delegation"))) {
+                    int n = vended.incrementAndGet();
+                    String prefix = vendPrefix == null ? metadata.location() : vendPrefix;
+                    credentials = ",\"storage-credentials\":[{\"prefix\":\"" + prefix
+                            + "\",\"config\":{\"s3.access-key-id\":\"AKIA" + n
+                            + "\",\"s3.secret-access-key\":\"secret-" + n
+                            + "\",\"s3.session-token\":\"token-" + n
+                            + "\",\"s3.session-token-expires-at-ms\":\""
+                            + (System.currentTimeMillis() + lifetime)
+                            + "\",\"client.region\":\"us-east-1\"}}]";
+                }
                 send(exchange, 200, "{\"metadata-location\":\"" + metadata.metadataFileLocation()
-                        + "\",\"metadata\":" + TableMetadataParser.toJson(metadata) + ",\"config\":{}}");
+                        + "\",\"metadata\":" + TableMetadataParser.toJson(metadata) + ",\"config\":{}"
+                        + credentials + "}");
                 return;
             }
             send(exchange, 404, error(404, "NoSuchResourceException", path));

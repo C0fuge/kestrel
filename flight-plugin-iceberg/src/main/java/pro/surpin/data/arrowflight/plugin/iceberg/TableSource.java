@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.apache.iceberg.TableMetadata;
+import pro.surpin.data.arrowflight.spi.catalog.StorageCredential;
 
 /**
  * Where an Iceberg catalog finds its namespaces, tables and their current metadata.
@@ -16,8 +17,31 @@ interface TableSource extends AutoCloseable {
      *
      * @param metadataLocation location of the metadata file, as written in the catalog
      * @param metadata parsed metadata
+     * @param credentials temporary storage credentials the catalog vended, or empty
      */
-    record Loaded(String metadataLocation, TableMetadata metadata) {
+    record Loaded(String metadataLocation, TableMetadata metadata,
+            List<StorageCredential> credentials) {
+
+        /**
+         * Copies the credentials.
+         *
+         * @param metadataLocation metadata file
+         * @param metadata parsed metadata
+         * @param credentials vended credentials
+         */
+        public Loaded {
+            credentials = credentials == null ? List.of() : List.copyOf(credentials);
+        }
+
+        /**
+         * Creates a loaded table without vended credentials.
+         *
+         * @param metadataLocation metadata file
+         * @param metadata parsed metadata
+         */
+        Loaded(String metadataLocation, TableMetadata metadata) {
+            this(metadataLocation, metadata, List.of());
+        }
     }
 
     /**

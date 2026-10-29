@@ -27,11 +27,13 @@ import pro.surpin.data.arrowflight.spi.config.PluginConfig;
  * @param oauthUri OAuth2 token endpoint, or empty for {@code <uri>/v1/oauth/tokens}
  * @param scope OAuth2 scope
  * @param requestTimeoutMillis REST request timeout
+ * @param vendedCredentials whether loadTable asks the REST catalog for temporary storage
+ *                          credentials, which DuckDB then reads the table's files with
  */
 record IcebergSettings(Kind kind, String warehouse, String uri, String prefix, List<String> roots,
         String schemaPrefix, Set<String> namespaces, long namesTtlMillis, long metadataTtlMillis,
         int planThreads, Optional<String> credential, Optional<String> token, String oauthUri,
-        String scope, long requestTimeoutMillis) {
+        String scope, long requestTimeoutMillis, boolean vendedCredentials) {
 
     /** Kind of Iceberg catalog. */
     enum Kind {
@@ -87,6 +89,9 @@ record IcebergSettings(Kind kind, String warehouse, String uri, String prefix, L
                     null));
             keys.add(ConfigKey.of("scope", "OAuth2 scope", "catalog"));
             keys.add(ConfigKey.of("requestTimeoutSeconds", "REST request timeout", "30"));
+            keys.add(ConfigKey.of("vendedCredentials", "ask the catalog for temporary storage"
+                    + " credentials per table (X-Iceberg-Access-Delegation: vended-credentials) and"
+                    + " read the table's files with them", "false"));
         }
         return List.copyOf(keys);
     }
@@ -134,7 +139,8 @@ record IcebergSettings(Kind kind, String warehouse, String uri, String prefix, L
                 kind == Kind.REST ? config.secret("credential") : Optional.empty(),
                 kind == Kind.REST ? config.secret("token") : Optional.empty(),
                 config.get("oauthUri", ""), config.get("scope", "catalog"),
-                1000L * positive(config, "requestTimeoutSeconds", 30));
+                1000L * positive(config, "requestTimeoutSeconds", 30),
+                kind == Kind.REST && config.getBoolean("vendedCredentials", false));
     }
 
     /**
