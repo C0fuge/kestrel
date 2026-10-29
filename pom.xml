@@ -15,6 +15,7 @@
         <module>flight-plugin-lakefs</module>
         <module>flight-plugin-iceberg</module>
         <module>flight-plugin-hive</module>
+        <module>flight-plugin-jdbc</module>
         <module>flight-server</module>
         <module>flight-auth-ldap</module>
         <module>flight-auth-jwt</module>
