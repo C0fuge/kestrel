@@ -190,12 +190,36 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
       (all schemas of the metastore) vanished from the views. Now `HiveCatalog.UnreadableTableException`
       (IllegalArgumentException): only that table is skipped; complete -> NOT_FOUND, partial -> INVALID_ARGUMENT
       with the reason. Small core change (own commit 63679fe): `catalogCompleteReason` catches RuntimeException.
-    - **Next (step 3, rest):** (b) text insert-only tables (same selection; quick add to the server test);
-      (c) a real Hive
-      writer check if a Hive 3/4 container is practical in `catalogs-ci.yml` (INSERT, INSERT OVERWRITE, a failed
-      INSERT, major compaction -> `_metadata_acid` / `_v` names as Hive really writes them); (d) then full ACID
-      ORC (needs ROW__ID-based delete handling - large, separate decision) or Paimon/Hudi.
-
+    - Step 3 (b, text) done (2026-10-29): `HiveInsertOnlyIntegrationTest` also covers insert-only text tables
+      (Hive's default serde; originals, committed plain and gzip deltas, aborted and open writes, a partitioned
+      table) through the server: committed rows only, both modes, equal to DuckDB's rows; pruning; a join with the
+      Parquet insert-only table. Unchanged plugin code.
+    - Step 3 (c) done (2026-10-29): real Hive writer. `tools/ci/hive-mm-writer.sh` runs HiveServer2 4.0.1 (Docker
+      Hub `apache/hive:4.0.1`, ~3 min) with an embedded Derby metastore on a mounted directory and DbTxnManager,
+      writes insert-only Parquet / text / ORC (one partitioned) tables (inserts, failed inserts via
+      `assert_true(rand() < 0)` - a check over a table scan passed on the runner because its map vertex did not
+      run, INSERT OVERWRITE of a table and of one partition, gzip text output, `COMPACT 'major' AND
+      WAIT`, `COMPACT 'minor' AND WAIT`), records Hive's `SELECT *` answers, stops HiveServer2 and starts a
+      standalone metastore (`SERVICE_NAME=metastore`, `IS_RESUME=true`) on the same Derby on localhost:9083.
+      `HiveRealWriterIntegrationTest` (env-gated `HIVE_MM_IT_*`) reads them through the server: equal to Hive's
+      answers in both modes (2/2 locally; Catalogs CI job `hive-writer`). What Hive 4 really writes: a failed
+      insert leaves no directory (write id aborted); major compaction -> `base_N_vT` **without** `_metadata_acid`
+      (the plugin's `_v` + committed visibility txn rule applies); minor -> `delta_1_3_vT` next to its sources;
+      INSERT OVERWRITE -> plain `base_N`; hidden `.crc` files beside every data file; gzip text as `000000_0.gz`.
+      **Hive 4 quirk:** below a directory whose name starts with `_` (the runner's `/home/runner/work/_temp`)
+      Hive answers no rows for insert-only tables and compactions write nothing (reproduced locally), so the job
+      keeps the warehouse in `/tmp/hive-mm` and the script fails on an empty Hive answer. The plugin does not
+      mirror that quirk (not checked what it answers there; Hive's behaviour looks like a hidden-path filter
+      applied to the whole location, not a rule worth copying).
+      Setup notes: `ALTER TABLE ... COMPACT` in HiveServer2 needs direct access to the metastore database
+      (`AlterTableCompactOperation` inits a `MetaStoreCompactorThread`), so a HiveServer2 talking to a separate
+      thrift metastore on its own Derby fails with "Version information not found in metastore"; a shared
+      PostgreSQL would also do (Docker Hub answered 429 for `postgres` in the session).
+    - **Next for C4:** (d) full ACID ORC (needs ROW__ID-based delete handling: `delete_delta` files hold
+      (originalTransaction, bucket, rowId) keys; large, separate decision -> ask before building) or Paimon/Hudi
+      read-only (check DuckDB extensions / light Java readers for 1.5.6 first, as in C3 step 1). Cheap follow-up
+      for (c) if wanted: an open (uncommitted) Hive write while the server reads (needs a second beeline session
+      held open across the metastore switch - not possible with the single-Derby setup; would need PostgreSQL).
 ## Open questions
 
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
@@ -228,6 +252,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   4 build `flight-plugin-delta` on that basis (opt-in: only active when the plugin is installed), or should the
   parse check refuse extension-added functions generically first (Q4 option b)? Until answered, lane 4 does
   not load `delta` into server connections.
+
+- Q6 (2026-10-29, C4 (d)): after insert-only tables (done, checked against a real Hive 4), which next: (a) full
+  ACID ORC tables (`delete_delta` handling by ROW__ID - (originalTransaction, bucket, rowId) - anti-join in the
+  plugin or in DuckDB; a sizeable new read path in the plugins lane's hive module), or (b) Paimon / Hudi read-only
+  (first a probe of what DuckDB 1.5.6 extensions or a light Java reader can do, as for Delta in C3 step 1)?
+  Without an answer lane 4 starts with (b)'s probe (test/CI only), since (a) changes the hive module's scope.
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -325,3 +355,13 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Catalogs CI 40798070095. Pre-release: Dev CI dispatch 40799537000 (package=true) running at session end (also
   carries C4 step 2; if another lane's push cancels it, dispatch again). Q3 addendum (other hive refusals still
   hide siblings). Q1, Q4, Q5 unanswered. Next: C4 step 3 rest (text insert-only, real Hive writer in CI).
+- 2026-10-29: C4 step 3 (b, text) + (c) - insert-only text tables in `HiveInsertOnlyIntegrationTest` (5/5
+  locally), and tables written by a real Hive 4.0.1 (`tools/ci/hive-mm-writer.sh`: inserts, failed inserts,
+  INSERT OVERWRITE, major / minor compaction, gzip text; metastore started on the same Derby) read through the
+  server by `HiveRealWriterIntegrationTest`: equal to Hive's answers in both modes. Test + CI only, no plugin
+  change needed. Catalogs CI: 40801018004 green (b); 40802647788 and 40804099011 failed in the new job
+  `hive-writer` (Hive 4 answers nothing for MM tables below the runner's `_temp` directory - see C4 notes),
+  40805065862 green (all 10 jobs). Dev CI green: 40805065855 (head 6558c3d). Pre-release (package=true, also
+  carries C4 step 2): dispatch 40806577145 (head 7d0826f) running at session end - if another lane's push
+  cancels it, dispatch again. Q1, Q4, Q5 still unanswered. Next: C4 (d) needs a decision (full ACID vs
+  Paimon/Hudi) - see C4 "Next"; asked as Q6.
