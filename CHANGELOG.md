@@ -91,6 +91,8 @@ Client side (no server setting): the DoGet call header / session option `arrow-c
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
 ### Added
+- SPI 1.8: `ColumnSpec.sourceType` - the column type as the catalog declares it (a Hive type such as `char(10)`),
+  null when unknown; the four-argument constructor stays. Plugins built against 1.8 need a 1.8 server.
 - `ranger-hive` applies Ranger Hive row filters whose expression is in a typed subset (`HiveRowFilter`: columns,
   string/integer literals, comparisons of one kind, IS NULL, IN, BETWEEN, LIKE, AND/OR/NOT, lower/upper,
   `current_user()`); other filters still refuse the table. (P6 step 3 D.)

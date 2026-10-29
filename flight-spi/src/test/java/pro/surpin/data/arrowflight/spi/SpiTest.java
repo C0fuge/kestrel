@@ -37,7 +37,7 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.7", SpiVersion.current());
+        assertEquals("1.8", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
@@ -46,7 +46,8 @@ class SpiTest {
         assertTrue(SpiVersion.supports("1.5"));
         assertTrue(SpiVersion.supports("1.6"));
         assertTrue(SpiVersion.supports("1.7"));
-        assertFalse(SpiVersion.supports("1.8"));
+        assertTrue(SpiVersion.supports("1.8"));
+        assertFalse(SpiVersion.supports("1.9"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
@@ -197,6 +198,13 @@ class SpiTest {
         assertThrows(UnsupportedOperationException.class, () -> catalog.exportArrowScan(snapshot,
                 List.of(), new ArrowScan(List.of("a"), null), 0L, null));
         assertEquals(List.of(), catalog.views("s"));
+    }
+
+    @Test
+    void columnsKeepTheirCatalogType() {
+        assertNull(new ColumnSpec("a", "VARCHAR", true, null).sourceType());
+        assertEquals("char(10)", new ColumnSpec("a", "VARCHAR", true, null, "char(10)").sourceType());
+        assertEquals(new ColumnSpec("a", "VARCHAR", true, 3, null), new ColumnSpec("a", "VARCHAR", true, 3));
     }
 
     @Test
