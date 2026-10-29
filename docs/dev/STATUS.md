@@ -42,6 +42,12 @@
 > what the screening's S3 setup has that this one lacks (ADBC client, MinIO over a network with latency, another memory
 > profile) - see Open question "S3 screening setup". Next: rerun `tpch-perf.yml store=s3` with the screening's exact
 > container profile once known, or add latency (`tc netem` on the S3 port) to the workflow.
+> *2026-10-29 (second cloud session, run 40806686740): with latency still not reproduced.* New input `s3latency`
+> (netem on the S3 port only; connect time measured 10.1 ms). SF10, 2 CPUs / 6 GB, +10 ms RTT, 1 measured round:
+> default 234.6 s, threads4 235.3 s, 7562a5b 236.0 s, head `-DduckDbMemoryLimit=none` 239.4 s; 22/22 same answers.
+> With a round trip all builds are equal (the 1.57x gain of the 0-latency run disappears, no slowdown appears). Still
+> waiting for the screening's S3 details (Open question); without them the next useful run is the screening's own
+> client (ADBC) against `store=s3`, which this workflow does not have yet.
 
 > ~~**Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**~~
 > *Fixed 2026-10-28 (9efe670, see Log):* default threads cores / 4 in 4..16, the per-GiB cap only above 4, per-connection
@@ -2118,3 +2124,8 @@
   `-DduckDbMemoryLimit=none`): default 283.8 s, threads4 282.5 s, 7562a5b 444.7 s, head without memory limit 443.9 s
   (best of 2; 22/22 answers equal). Not reproduced; the 19b per-connection memory limit is a 1.57x gain on S3 here,
   not the cause. No server change; open question "S3 screening setup" asks for the screening's S3 details.
+- 2026-10-29 (cloud session, core lane): "Bug first" S3 heavy queries, latency A/B. `tpch-perf.yml` input
+  `s3latency` (b9f03b0: prio qdisc + netem on lo, only packets to/from the S3 port, half the RTT each way). Run
+  40806686740 (SF10, store=s3, +10 ms RTT, 2 CPUs / 6 GB, 1 round, baseline 7562a5b, extra
+  `-DduckDbMemoryLimit=none`): 234.6 / 235.3 (threads4) / 236.0 (7562a5b) / 239.4 s (no limit), answers equal. Not
+  reproduced with latency either; no server change. Open question "S3 screening setup" stays.
