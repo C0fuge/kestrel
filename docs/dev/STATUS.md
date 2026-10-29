@@ -23,6 +23,11 @@
 
 ## Next steps (one per session)
 
+**WRAP-UP DONE (2026-10-29 13:00, core lane).** Final pre-release `server-1.0.0-1e7b43a4e0c7` (dev-ci `package=true`
+on 1e7b43a4, 7 assets) carries main's last code change; everything after it is `[skip ci]` docs. Plugins and catalogs
+lanes wrote DONE, lane 3 is paused. The core lane takes no further items until the maintainer lifts FINISH MODE (the
+S3 slowdown item below stays open for then).
+
 > **Maintainer, 2026-10-29 13:00 - FINISH MODE.** No new features or investigations; finish what is started. Core lane:
 > (1) item 22: the thread cap for the shared DuckDB on large nodes (small change, speed) + CI test; (2) finish what is
 > half-done and keep CI green; (3) final consolidation: CHANGELOG and START-NOTES describe every setting added since
@@ -2337,3 +2342,7 @@
   with lane 4's code fix a6a6c868 (query only when a secret has no scope, setup statements unchanged); reverted mine
   (6ddebf26), net change none. Main green at 1e7b43a4 (run 40868732917). Final `package=true` deferred: the
   catalogs lane was still active (see Next steps).
+- 2026-10-29 13:00 (cloud session, core): checked the wrap-up condition - CATALOGS LANE DONE and PLUGINS LANE DONE
+  written, LOCK-CATALOGS empty, main green at 1e7b43a4 (run 40868732917), and lane 4's `package=true` already published
+  `server-1.0.0-1e7b43a4e0c7` from that commit (only `[skip ci]` docs since). No new dispatch needed; wrote
+  "WRAP-UP DONE" at the top of Next steps. No code change, no CI run.
