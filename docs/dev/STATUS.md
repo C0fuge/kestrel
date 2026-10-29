@@ -2146,3 +2146,6 @@
   40812542626 (SF1, check of the client: 24.66 / 24.59 / 24.55 s) and 40813188390 (SF10, store=s3, 2 CPUs / 6 GB, 1
   round, baseline 7562a5b): default 282.4 s, threads4 281.4 s, 7562a5b 283.0 s, 22/22 answers equal. Not reproduced;
   no server change. Open question "S3 screening setup" extended (where the screening's MinIO runs).
+- 2026-10-29 (plugins lane, FYI): core 093d6a8 - `FlightAuthorizationProviderFactory.create(env, providerGroups)`
+  default method (calls `create(env)`); `SecurityProviders` passes the authentication provider's groups to custom
+  authorization providers. Additive, existing providers unchanged. For P6 (`ranger-hive`, see PLUGINS-STATUS.md).
