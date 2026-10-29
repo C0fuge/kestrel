@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -50,6 +51,21 @@ class SecurityProvidersTest {
                             () -> policy.requireQuery("test-user",
                                     "SELECT * FROM public.orders o JOIN private.orders p "
                                             + "ON o.id = p.id")).status().code());
+        }
+    }
+
+    /** Passes the authentication provider's groups to a custom authorization provider. */
+    @Test
+    void passesProviderGroupsToCustomAuthorization() {
+        Map<String, String> settings = Map.of("FLIGHT_AUTHORIZATION_PROVIDER", "test-policy");
+        try (FlightAuthorization policy = SecurityProviders.authorization(settings,
+                identity -> "alice".equals(identity) ? Set.of("analysts") : Set.of())) {
+            assertTrue(policy.canReadTable("alice", "public", "orders"));
+            assertFalse(policy.canReadTable("bob", "public", "orders"));
+            assertFalse(policy.canReadTable("alice", "private", "orders"));
+        }
+        try (FlightAuthorization policy = SecurityProviders.authorization(settings)) {
+            assertFalse(policy.canReadTable("alice", "public", "orders"));
         }
     }
 

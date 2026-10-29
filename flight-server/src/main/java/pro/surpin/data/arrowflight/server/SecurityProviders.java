@@ -53,7 +53,7 @@ final class SecurityProviders {
         return switch (name) {
             case "allow-all" -> new AllowAllAuthorization();
             case "ranger" -> RangerAuthorization.fromSettings(environment, providerGroups);
-            default -> customAuthorization(name).create(environment);
+            default -> customAuthorization(name).create(environment, providerGroups);
         };
     }
 

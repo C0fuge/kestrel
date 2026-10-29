@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Custom authorization providers (`FlightAuthorizationProviderFactory`) can override
+  `create(environment, providerGroups)` to get the groups the authentication provider (LDAP, JWT) knows for a caller,
+  as the built-in `ranger` provider does; the default calls `create(environment)`, so existing providers are unchanged.
 - Manual workflow `tpch-perf.yml` takes `store=s3`: the TPC-H Parquet files served by a local S3 endpoint and read
   through the s3 plugin, to compare builds on S3; `s3latency` (e.g. `10ms`) adds a round trip to that endpoint only.
 - `tpch-perf.yml` input `client=adbc` runs the 22 queries through the ADBC Flight SQL driver (Go, via Python;
