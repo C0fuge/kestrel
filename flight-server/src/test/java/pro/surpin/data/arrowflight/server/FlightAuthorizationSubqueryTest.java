@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Regression test: a table read only inside a subquery ({@code WHERE id IN (SELECT ...)}, a scalar
  * subquery in the select list) or named quoted in a join was not checked, and its rows were
- * returned to a caller without access. Such subqueries are now refused and every named table is
- * checked.
+ * returned to a caller without access. Every table of a nested query is now named from DuckDB's
+ * parse and checked; sources that cannot be named are refused.
  */
 @Tag("unit")
 class FlightAuthorizationSubqueryTest {
@@ -33,7 +33,7 @@ class FlightAuthorizationSubqueryTest {
     };
 
     @Test
-    void subqueriesAreRefused() {
+    void tablesInSubqueriesAreChecked() {
         for (String sql : List.of(
                 "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.b)",
                 "SELECT * FROM s.a WHERE EXISTS (SELECT 1 FROM s.b WHERE s.b.id = 5)",
@@ -42,13 +42,63 @@ class FlightAuthorizationSubqueryTest {
                 "SELECT * FROM s.a WHERE id IN (TABLE s.b)",
                 "SELECT * FROM s.a WHERE id IN ( select id FROM \"s\".\"b\")",
                 "SELECT * FROM s.a WHERE id IN (/* x */ SELECT id FROM s.b)",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.b FOR VERSION AS OF 3)",
                 "SELECT x.id FROM s.a x JOIN s.a y ON x.id = y.id WHERE x.id IN (SELECT id FROM s.b)",
-                // A subquery over a readable table is refused too: its tables cannot be named.
-                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.a)")) {
+                "SELECT * FROM s.a, LATERAL (SELECT * FROM s.b WHERE s.b.id = s.a.id) l",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.a WHERE v IN (SELECT v FROM s.b))",
+                "SELECT id FROM s.a UNION ALL SELECT id FROM s.b",
+                "SELECT id FROM s.a EXCEPT SELECT id FROM s.b",
+                "WITH x AS (SELECT * FROM s.b) SELECT count(*) FROM x",
+                "WITH x AS (SELECT * FROM s.a), y AS (SELECT * FROM x JOIN s.b USING (id)) SELECT * FROM y",
+                // A CTE named like a table hides it only where the CTE is in scope.
+                "WITH b AS (SELECT * FROM s.b) SELECT * FROM s.a WHERE id IN (SELECT id FROM b)",
+                "SELECT * FROM s.a WHERE id IN (WITH x AS (SELECT 1 AS id) SELECT id FROM x)"
+                        + " AND id IN (SELECT id FROM x)",
+                // A name without a schema that is no CTE is not checked, so refused.
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM b)",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM 'data/b.parquet')")) {
+            FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                    () -> ONLY_A.requireQuery("u", sql), sql);
+            assertEquals(FlightStatusCode.UNAUTHORIZED, e.status().code(), sql);
+        }
+    }
+
+    @Test
+    void sourcesThatCannotBeNamedAreRefused() {
+        for (String sql : List.of(
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM read_parquet('data/b.parquet'))",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM memory.s.b)",
+                "SELECT * FROM s.a WHERE id IN (SELECT column_name FROM (DESCRIBE s.b))",
+                "SELECT * FROM s.a WHERE id IN (SELECT * FROM range(3))",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.a WHERE"
+                        + " v IN (SELECT v FROM read_csv('/etc/passwd')))")) {
             FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
                     () -> ONLY_A.requireQuery("u", sql), sql);
             assertEquals(FlightStatusCode.INVALID_ARGUMENT, e.status().code(), sql);
         }
+    }
+
+    @Test
+    void subqueriesOverReadableTablesPass() {
+        for (String sql : List.of(
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.a)",
+                "SELECT * FROM s.a WHERE EXISTS (SELECT 1 FROM \"s\".\"a\" y WHERE y.id = 5)",
+                "SELECT (SELECT max(v) FROM s.a) AS m FROM s.a",
+                "SELECT id FROM s.a UNION ALL SELECT id FROM s.a",
+                "WITH x AS (SELECT * FROM s.a) SELECT count(*) FROM x",
+                "WITH X AS (SELECT * FROM s.a), y AS (SELECT * FROM x) SELECT * FROM y",
+                "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3)"
+                        + " SELECT * FROM s.a WHERE id IN (SELECT n FROM r)",
+                "SELECT * FROM s.a WHERE id IN (SELECT id FROM s.a FOR VERSION AS OF 3)")) {
+            assertDoesNotThrow(() -> ONLY_A.requireQuery("u", sql), sql);
+        }
+    }
+
+    @Test
+    void aNestedQueryWithoutTablesIsRefused() {
+        FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                () -> ONLY_A.requireQuery("u", "SELECT (SELECT 1) AS x"));
+        assertEquals(FlightStatusCode.UNAUTHORIZED, e.status().code());
     }
 
     @Test

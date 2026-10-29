@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server;
 
 import org.apache.arrow.flight.CallStatus;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
+import pro.surpin.data.arrowflight.server.services.QueryTables;
 import pro.surpin.data.arrowflight.server.services.TimeTravelClause;
 
 import java.util.HashSet;
@@ -35,17 +36,22 @@ public interface FlightAuthorization extends AutoCloseable {
      * @param principal authenticated caller identity
      * @param query SQL statement
      * @throws org.apache.arrow.flight.FlightRuntimeException UNAUTHORIZED when a table may not be
-     *         read, INVALID_ARGUMENT when the query's tables cannot be named (a subquery)
+     *         read, INVALID_ARGUMENT when the query's tables cannot be named
      */
     default void requireQuery(String principal, String query) {
         // A table read at an earlier snapshot (FOR VERSION AS OF) is checked like the table.
-        ParquetQueryParser parsed;
+        ParquetQueryParser parsed = null;
         List<ParquetQueryParser.JoinTable> named;
         try {
             String text = TimeTravelClause.withoutClauses(query);
-            parsed = ParquetQueryParser.parse(text);
-            // Tables the parse may not name (quoted join tables); subqueries are refused.
-            named = ParquetQueryParser.checkedTables(text);
+            if (ParquetQueryParser.hasNestedQuery(text)) {
+                // Subqueries, CTEs and set operations: every table from DuckDB's own parse.
+                named = QueryTables.of(text);
+            } else {
+                parsed = ParquetQueryParser.parse(text);
+                // Tables the parse may not name (quoted join tables).
+                named = ParquetQueryParser.checkedTables(text);
+            }
         } catch (RuntimeException e) {
             // Refused as without authorization (a query that cannot be checked is not run).
             Throwable reason = e.getCause() instanceof IllegalArgumentException ? e.getCause() : e;
@@ -53,7 +59,11 @@ public interface FlightAuthorization extends AutoCloseable {
                     .withCause(e).toRuntimeException();
         }
         Set<String> checked = new HashSet<>();
-        if (parsed.isJoin) {
+        if (parsed == null) {
+            if (named.isEmpty()) {
+                throw denied();
+            }
+        } else if (parsed.isJoin) {
             if (parsed.joinTables.isEmpty()) {
                 throw denied();
             }

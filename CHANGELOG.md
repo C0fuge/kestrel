@@ -552,6 +552,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
 ### Security
+- Authorization (every policy provider): queries with subqueries, CTEs (`WITH`, `WITH RECURSIVE`) and set
+  operations (`UNION`, `EXCEPT`, `INTERSECT`) run again under a provider. Their tables are named from DuckDB's own
+  parse (`json_serialize_sql`, in a small DuckDB of its own that reads nothing; CTE names count only where they are
+  in scope) and each one is checked; a caller without access gets UNAUTHORIZED. Table functions
+  (`read_parquet(...)`, `range(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such queries are
+  refused with INVALID_ARGUMENT; names without a schema that are no CTE are refused as before. Partial mode still
+  does not run nested queries.
 - Authorization (every policy provider: `ranger`, `ranger-hive`, custom): a table read only inside a subquery
   (`WHERE id IN (SELECT ... FROM s.t)`, `EXISTS (...)`, a scalar subquery in the select list) or named quoted in a
   join (`JOIN "s"."t"`) was not checked, and its rows reached callers without access (complete mode; scalar

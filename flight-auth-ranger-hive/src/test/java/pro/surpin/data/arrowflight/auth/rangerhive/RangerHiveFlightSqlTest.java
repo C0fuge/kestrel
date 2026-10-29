@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -107,9 +108,8 @@ class RangerHiveFlightSqlTest {
 
     /**
      * A table with a mask (orders), a row filter (payments) or a column denial (customers) for the caller is
-     * refused however it is referenced; the same queries pass for a user without the restriction. Queries with a
-     * subquery, a CTE or a set operation are refused for everyone under a policy provider (their tables could not
-     * all be checked), so they never return a restricted table's rows.
+     * refused however it is referenced, also inside a subquery, a CTE or a set operation (their tables are named
+     * from DuckDB's parse); the same queries pass for a user without the restriction (nested ones in complete mode).
      */
     @Test
     void restrictedTablesAreRefused() throws Exception {
@@ -141,8 +141,12 @@ class RangerHiveFlightSqlTest {
                         String label = mode + " " + entry.getKey() + ": " + sql;
                         FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
                                 () -> rows(sql, entry.getKey(), mode), label);
-                        assertEquals(FlightStatusCode.INVALID_ARGUMENT, e.status().code(), label);
+                        assertEquals(FlightStatusCode.UNAUTHORIZED, e.status().code(), label);
                         assertFalse(String.valueOf(e.getMessage()).contains("ssn-"), label);
+                        if ("complete".equals(mode)) {
+                            // Partial mode does not run CTEs at all; complete mode runs them all.
+                            assertDoesNotThrow(() -> rows(sql, "tess", mode), label);
+                        }
                     }
                 }
             }

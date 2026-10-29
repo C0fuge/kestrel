@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -89,22 +90,28 @@ class RangerAuthorizationTest {
                                 "SELECT * FROM orders")).status().code());
     }
 
-    /** A query whose tables cannot be named is refused as INVALID_ARGUMENT with the reason, not INTERNAL. */
+    /**
+     * A query whose tables cannot be named is refused as INVALID_ARGUMENT with the reason, not
+     * INTERNAL; a set operation's tables are named from DuckDB's parse and checked.
+     */
     @Test
     void uncheckableQueryIsInvalidArgument() {
         RangerAuthorization authorization = new RangerAuthorization(plugin((user, groups) -> true),
                 principal -> Set.of());
-        for (String sql : List.of("SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders",
-                "SELEC nonsense")) {
+        for (String sql : List.of("SELEC nonsense",
+                "SELECT * FROM sales.orders UNION ALL SELECT * FROM read_parquet('x.parquet')")) {
             FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
                     () -> authorization.requireQuery("alice@EXAMPLE.COM", sql));
             assertEquals(FlightStatusCode.INVALID_ARGUMENT, e.status().code(), sql);
             assertFalse(e.getMessage().isBlank(), sql);
         }
-        FlightRuntimeException union = assertThrows(FlightRuntimeException.class,
-                () -> authorization.requireQuery("alice@EXAMPLE.COM",
-                        "SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders"));
-        assertTrue(union.getMessage().contains("UNION"), union.getMessage());
+        assertDoesNotThrow(() -> authorization.requireQuery("alice@EXAMPLE.COM",
+                "SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders"));
+        RangerAuthorization none = new RangerAuthorization(plugin((user, groups) -> false),
+                principal -> Set.of());
+        assertEquals(FlightStatusCode.UNAUTHORIZED, assertThrows(FlightRuntimeException.class,
+                () -> none.requireQuery("alice@EXAMPLE.COM",
+                        "SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders")).status().code());
     }
 
     /**

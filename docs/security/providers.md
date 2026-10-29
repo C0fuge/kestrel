@@ -128,7 +128,7 @@ The descriptor contains the factory's fully qualified class name. Put the JAR on
 
 ## Add an authorization provider
 
-Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation is refused with INVALID_ARGUMENT, since its tables could not all be checked. Register it with:
+Implement `pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory`. Its `create(Map<String, String>)` method returns a `FlightAuthorization` implementation that checks schema discovery and table reads. The interface's default query check parses SQL and checks every referenced table, including joins and quoted names; for a query with a subquery (other than the plain `FROM (SELECT columns FROM table [WHERE ...]) alias` wrapper), a CTE or a set operation it names every table from DuckDB's own parse of the text (`json_serialize_sql`; CTE names count where they are in scope) and checks each one. Table functions (`read_parquet(...)`), `DESCRIBE`/`SHOW` sources and catalog-qualified names inside such a query cannot be checked and are refused with INVALID_ARGUMENT. Register it with:
 
 ```text
 META-INF/services/pro.surpin.data.arrowflight.server.FlightAuthorizationProviderFactory

@@ -376,19 +376,29 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Tells whether a query holds a nested query (a subquery, a CTE, a set operation) besides the
+     * plain FROM wrapper this parser flattens.
+     *
+     * @param query SQL text without time travel clauses
+     * @return true when the text holds a nested query
+     */
+    public static boolean hasNestedQuery(String query) {
+        return TableReferences.nestedQuery(flattenSubqueryWrapper(query));
+    }
+
+    /**
      * Names every table a query reads, for access checks: each schema-qualified name right after
      * FROM, JOIN or a comma of a FROM list, quoted names and names after comments included. A
      * nested query (a subquery anywhere but the plain FROM wrapper this parser flattens) is
-     * refused: the parse names only the outer query's tables, so a subquery's table would be
-     * read without a check.
+     * refused: the parse names only the outer query's tables; {@link QueryTables} names those.
      *
      * @param query SQL text without time travel clauses
      * @return the named tables, in text order
      * @throws IllegalArgumentException when the query holds a subquery
      */
     public static List<JoinTable> checkedTables(String query) {
-        if (TableReferences.nestedQuery(flattenSubqueryWrapper(query))) {
-            throw new IllegalArgumentException("Subqueries are not supported when table access is checked");
+        if (hasNestedQuery(query)) {
+            throw new IllegalArgumentException("Subqueries are named by QueryTables, not by this parser");
         }
         List<JoinTable> tables = new ArrayList<>();
         for (TableReferences.Reference reference : TableReferences.find(query, (schema, table) -> true)) {
