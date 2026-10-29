@@ -212,4 +212,22 @@ class DuckDbSizingTest {
                 DuckDbSizing.shared(new HostLimits(0, 0, 0, 0), 0, null));
         assertEquals("threads=8 memoryLimit=duckdbDefault", new DuckDbSizing.Shared(8, null).describe());
     }
+
+    /**
+     * Verifies the shared DuckDB's default threads stop at duckDbSharedMaxThreads (8) on large
+     * nodes (stand p22s: 16 threads lengthened small-query tails), 0 lifts the cap and an explicit
+     * duckDbThreads still wins.
+     */
+    @Test
+    void sharedDatabaseThreadsAreCappedOnLargeNodes() {
+        HostLimits large = new HostLimits(16, 24 * GIB, 3 * GIB, 2 * GIB);
+        assertEquals(8, DuckDbSizing.shared(large, 0, null).threads());
+        assertEquals(8, DuckDbSizing.shared(new HostLimits(64, 512 * GIB, 3 * GIB, 2 * GIB), 0, null).threads());
+        assertEquals(4, DuckDbSizing.shared(new HostLimits(4, 8 * GIB, 0, 0), 0, null, 8).threads());
+        assertEquals(12, DuckDbSizing.shared(large, 0, null, 12).threads());
+        assertEquals(16, DuckDbSizing.shared(large, 0, null, 0).threads());
+        assertEquals(16, DuckDbSizing.shared(large, 16, null, 8).threads());
+        assertEquals(DuckDbSizing.shared(large, 0, null, 0).memoryLimit(),
+                DuckDbSizing.shared(large, 0, null).memoryLimit());
+    }
 }

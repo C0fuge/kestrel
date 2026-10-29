@@ -513,7 +513,12 @@ public class ConfigAdapter {
             throw new IllegalArgumentException("duckDbSharedBufferedConnections must not be negative: "
                     + buffered);
         }
-        return DuckDbSizing.shared(host, threads, memoryLimit).withBufferedConnections(buffered);
+        int maxThreads = getIntWithEnv("duckDbSharedMaxThreads", "arrowflight.duckdb.sharedMaxThreads",
+                "DUCKDB_SHARED_MAX_THREADS", DuckDbSizing.DEFAULT_SHARED_MAX_THREADS, props);
+        if (maxThreads < 0) {
+            throw new IllegalArgumentException("duckDbSharedMaxThreads must not be negative: " + maxThreads);
+        }
+        return DuckDbSizing.shared(host, threads, memoryLimit, maxThreads).withBufferedConnections(buffered);
     }
 
     /**

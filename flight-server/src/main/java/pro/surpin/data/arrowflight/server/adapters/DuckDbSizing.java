@@ -112,6 +112,9 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         return new DuckDbSizing(threads, memoryLimit, coreThreads, connections, budget, host);
     }
 
+    /** Default of {@code duckDbSharedMaxThreads}: most threads of a shared DuckDB unless set. */
+    public static final int DEFAULT_SHARED_MAX_THREADS = 8;
+
     /**
      * Node-wide DuckDB threads and memory limit of {@code duckDbSharedDatabase}, where every
      * worker connection is a connection to one DuckDB of the node.
@@ -157,9 +160,8 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     }
 
     /**
-     * Computes the node-wide sizing of one shared DuckDB: the threads are the cores and the
-     * memory limit is the whole DuckDB budget (at least 1 GiB, at most 80 % of the memory).
-     * Explicit settings win and then apply to the node, not to a connection.
+     * Computes the node-wide sizing of one shared DuckDB with the default thread cap
+     * ({@link #DEFAULT_SHARED_MAX_THREADS}).
      *
      * @param host                host limits
      * @param explicitThreads     configured {@code duckDbThreads}, 0 = unset
@@ -167,7 +169,24 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
      * @return node-wide sizing
      */
     public static Shared shared(HostLimits host, int explicitThreads, String explicitMemoryLimit) {
-        int threads = explicitThreads > 0 ? explicitThreads : Math.max(1, host.cores());
+        return shared(host, explicitThreads, explicitMemoryLimit, DEFAULT_SHARED_MAX_THREADS);
+    }
+
+    /**
+     * Computes the node-wide sizing of one shared DuckDB: the threads are the cores up to a cap
+     * (more threads on a large node lengthened small-query tails on the stand) and the memory
+     * limit is the whole DuckDB budget (at least 1 GiB, at most 80 % of the memory). Explicit
+     * settings win and then apply to the node, not to a connection.
+     *
+     * @param host                host limits
+     * @param explicitThreads     configured {@code duckDbThreads}, 0 = unset
+     * @param explicitMemoryLimit configured {@code duckDbMemoryLimit}, null or blank = unset
+     * @param maxThreads          configured {@code duckDbSharedMaxThreads}, 0 = no cap
+     * @return node-wide sizing
+     */
+    public static Shared shared(HostLimits host, int explicitThreads, String explicitMemoryLimit, int maxThreads) {
+        int cores = Math.max(1, host.cores());
+        int threads = explicitThreads > 0 ? explicitThreads : maxThreads > 0 ? Math.min(cores, maxThreads) : cores;
         String memoryLimit;
         if (explicitMemoryLimit != null && !explicitMemoryLimit.isBlank()) {
             memoryLimit = MEMORY_LIMIT_NONE.equalsIgnoreCase(explicitMemoryLimit.trim()) ? null

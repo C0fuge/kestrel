@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, `arrowflight.duckdb.sharedMaxThreads`, default 8, 0 = no
+  cap): with the opt-in `duckDbSharedDatabase` and `duckDbThreads` unset, the node's DuckDB gets min(cores, cap)
+  threads instead of all cores (stand p22s at 16 cores: c1/c8 small-query p50 and mixed p99 were worse with 16
+  threads). An explicit `duckDbThreads` still wins; the default path (no shared DuckDB) is unchanged.
 - Distributed complete mode (opt-in `distributedComplete`) merges plain `avg` items (lane 3, D10): the parts are
   planned with `sum` and `count` in place of each average and the merge divides as DuckDB's `avg` does (DECIMAL
   and integer averages bit-identical to the single-node answer while the unscaled sum is below 2^53). TPC-H q01

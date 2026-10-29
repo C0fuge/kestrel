@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections` |
+| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -341,7 +341,8 @@ connection on one DuckDB of the node instead of one DuckDB per connection: one t
 the node, so N parallel streams share the cores instead of starting N x `duckDbThreads` threads, and
 one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
 are checked as before); `duckDbThreads` and `duckDbMemoryLimit` then mean the node's threads and
-memory (unset = the cores and the whole DuckDB budget, at least 1 GiB, at most 80 % of the memory);
+memory (unset = the cores, at most `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, default 8,
+0 = no cap), and the whole DuckDB budget, at least 1 GiB, at most 80 % of the memory);
 `duckDbThreadsUnderLoad` and `duckDbThreadsWhenIdle` are ignored with a WARN.
 `duckDbStreamingBufferSize` is a per-connection DuckDB setting that the lockdown freezes, so with it
 `duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64) connections are
