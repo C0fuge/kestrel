@@ -90,9 +90,12 @@ public final class LockdownCheck {
                 return;
             }
             Map<String, Set<String>> actualSecrets = new HashMap<>();
-            try (ResultSet rs = s.executeQuery("SELECT name FROM duckdb_secrets()")) {
-                while (rs.next()) {
-                    actualSecrets.put(rs.getString(1), new HashSet<>());
+            if (secrets.stream().anyMatch(secret -> secret.scope() == null)) {
+                // Secrets without a scope (attached databases) have no row in the scope list.
+                try (ResultSet rs = s.executeQuery("SELECT name FROM duckdb_secrets()")) {
+                    while (rs.next()) {
+                        actualSecrets.put(rs.getString(1), new HashSet<>());
+                    }
                 }
             }
             try (ResultSet rs = s.executeQuery(
