@@ -170,6 +170,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Paimon / Hudi lockdown probe (C4 (b)): `tools/ci/DuckDbPaimonHudiProbe.java` (Catalogs CI job `paimon-hudi`)
+  loads DuckDB's `paimon` and `hudi` v1.5.6 extensions into a connection locked down as the server's query
+  connections and records answers (local, S3 on moto, HDFS) and what gets past the lockdown (tables outside
+  `allowed_directories`, other hosts, metadata services, attach). The extensions are kept as a workflow artifact.
+  Test only.
 - Paimon / Hudi light-reader probe (C4 (b)): `catalogs-ci.yml` job `paimon-hudi` writes Apache Paimon 1.2.0 and
   Apache Hudi 0.15.0 / 1.0.2 tables with Spark 3.5.3 (`tools/ci/paimon-hudi-fixtures.py`: append and primary-key
   tables, upserts, deletes, deletion vectors, full compaction, INSERT OVERWRITE, schema evolution; copy-on-write,

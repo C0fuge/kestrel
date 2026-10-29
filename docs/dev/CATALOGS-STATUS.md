@@ -242,10 +242,41 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
         <requested>_<completed>.<action>` with Avro instead of JSON metadata; latest committed base file per file
         group, minus `partitionToReplaceFileIds` of completed replacecommits; inflight base files skipped; pending
         compaction / clustering refused; log files named after the base instant (0.x) or the delta commit (1.x).
-    - **Next for C4 (b):** lockdown probe of the `paimon` / `hudi` extensions as for `delta` (C3 step 1): load
-      before the lockdown, then tables outside `allowed_directories`, `s3://` without a scoped secret, http(s) URLs,
-      what `paimon_snapshots` / `hudi_files` / `hudi_info` expose, S3 (moto) and HDFS (expect no `hdfs://` if they
-      use their own I/O); also store both extensions in ci-assets. Then Q7. (d) full ACID ORC still waits on Q6.
+    - Step 4 (b) lockdown probe done (2026-10-29): `tools/ci/DuckDbPaimonHudiProbe.java` in the `paimon-hudi` job
+      (duckdb_jdbc 1.5.6 in the Ubuntu 20.04 JDK container as for delta; `paimon` e49d491, `hudi` ea166bd, kept 14
+      days as workflow artifact `duckdb-paimon-hudi-extensions-v1.5.6`, ci-assets checked first; moto S3, HDFS via
+      `tools/ci/hdfs-single.sh`). Run 40821054886. Results:
+      - Both load into duckdb_jdbc 1.5.6 and answer **every local fixture equal to Spark after the lockdown**
+        (Paimon PK / DV / evolved, Hudi COW / MOR / inflight, both Hudi versions). Added: `paimon_scan` (overloads
+        `(table_path, ...)` and `(warehouse, database, table, ...)`, named `snapshot_from_id` /
+        `snapshot_from_timestamp`, `file_format`, `manifest_format`), `paimon_snapshots`, `read_hudi(path,
+        hudi_option, start, end, as_of)`, scalar `hudi_info` / `hudi_files` (they return an error as a string
+        value instead of failing), secret type `paimon`, storage type `ATTACH ... (TYPE paimon)` (a warehouse;
+        works before and after the lockdown, tables as `<att>.<db>.<table>`). Hudi has no storage type. **No write
+        functions** (unlike `delta`). `paimon_scan` needs the `<warehouse>/<db>.db/<table>` layout.
+      - **S3:** paimon ignores the `s3` secret and reads with its own `TYPE paimon` secret (KEY_ID, SECRET, ENDPOINT
+        `http://host:port`, REGION, SCOPE): all Paimon fixtures equal to Spark on S3; outside that secret's scope it
+        fails "no credentials" (no metadata-service fallback seen). hudi ignores DuckDB secrets and goes straight to
+        the instance metadata service (`PUT http://169.254.169.254/latest/api/token`), so no Hudi table on S3 can
+        be read; `hudi_option` takes `k=v` entries (JSON refused) but `aws_*` object-store keys did not change that
+        (option names unknown).
+      - **HDFS:** neither reads `hdfs://` (paimon "invalid scheme hdfs for local file system", hudi "Unable to
+        recognise URL"); hadoopfs itself works next to them.
+      - **Gets past the lockdown:** both do their own local file I/O: `paimon_scan`, `paimon_snapshots`, a
+        metadata-only table (schema), `file://` URIs and `ATTACH ... (TYPE paimon)` of a warehouse outside
+        `allowed_directories` read it after `lock_configuration=true`; same for `read_hudi`, `hudi_info`, `hudi_files`
+        (file names, sizes, commit times). hudi contacts metadata services for `s3://` (AWS IMDS) and `gs://` (GCE
+        metadata) paths. Refused: http(s) URLs (paimon: path format; hudi: "feature for Http not enabled"),
+        `az://` without an account, `/proc/self`; no replacement scan (`FROM '<dir>'` is not a read).
+      - Consequence: a plugin on the extensions must refuse all five functions in client SQL
+        (`DuckDbSetup.refuseFunctions`) and write the table sources itself, as planned for delta. Paimon via the
+        extension covers local + S3 (server installs a scoped `TYPE paimon` secret); Hudi via the extension local
+        only. The light reader (data through DuckDB's own `read_parquet`, so inside the lockdown, S3 secrets and
+        hadoopfs work) covers HDFS and S3 for Paimon and Hudi COW / compacted MOR. Q7 updated.
+    - **Next for C4 (b):** waits on Q7 (route). Also store both extensions in ci-assets (from the artifact; the
+      session cannot download them). (d) full ACID ORC still waits on Q6. With C1 2b, C2, C3 and C4 all waiting on
+      answers (Q1, Q4-Q7), a next session without answers could take a test-only item: e.g. the Hudi `hudi_option`
+      names for S3 (hudi-rs storage options) to see whether Hudi on S3 is reachable at all, or nothing.
 ## Open questions
 
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
@@ -292,6 +323,14 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   the SPI's file + delete-file model cannot express - would need either a `CatalogView`-like SQL over files (SPI
   change) or PK tables limited to DV mode). Lane 4 would prefer (a) if the lockdown probe is clean, else (b) for
   COW / append / DV tables. No plugin is built until answered.
+  Update (2026-10-29, lockdown probe done, C4 notes): neither extension writes files, but both read local files
+  outside `allowed_directories` (all five functions, plus `ATTACH ... (TYPE paimon)`), and hudi calls the cloud
+  metadata services for `s3://` / `gs://`. Paimon via the extension reads local + S3 (own `paimon` secret type),
+  Hudi via the extension local only; neither reads HDFS. Revised proposal: (a) for Paimon (plugin refuses the
+  extension's functions in client SQL, writes `paimon_scan` sources itself, installs a scoped `paimon` secret for
+  S3 roots), (b) light reader for Hudi COW / compacted MOR (works on S3 and HDFS; MOR with logs refused). Same
+  security footing as Q5 (an extension with its own I/O in every query connection, closed only by the refused
+  list).
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -406,3 +445,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Catalogs CI: runs 40810022672 and 40810359864 (`paimon-hudi` green in both). Dev CI: push runs 40810022826 /
   later (tools/ci + workflow only). New open question Q7 (route for Paimon / Hudi). Q1, Q4, Q5, Q6 unanswered.
   Next: lockdown probe of the two extensions.
+- 2026-10-29: C4 (b) lockdown probe - `tools/ci/DuckDbPaimonHudiProbe.java` in the `paimon-hudi` job: paimon / hudi
+  v1.5.6 under the server's lockdown answer every local fixture equal to Spark; paimon reads S3 with its own
+  `paimon` secret, hudi cannot read S3 (goes to the metadata service), neither reads HDFS; both read local files
+  outside `allowed_directories`, no write functions. Test only. Catalogs CI: run 40820331670 (paimon-hudi green,
+  probe flaw: a lazy paimon ATTACH on S3/HDFS broke later lookups, outside copies in the wrong layout), run
+  40821054886 (fixed probe; all jobs green). Dev CI push runs 40820331658 / 40821054924 cancelled by newer pushes; dispatch 40821204741 (head 06833e7, includes this) running at session end (tools/ci + workflow only). Q7
+  updated. No new pre-release needed: the last runtime change of lane 4 (hive plugin) is in pre-release
+  `server-1.0.0-01884e287668`; later C4 work is test-only. Q1, Q4-Q7 unanswered.
