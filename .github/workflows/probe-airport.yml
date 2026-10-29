@@ -1,0 +1,38 @@
+# Temporary probe (plugins lane, P5 step 3): DuckDB airport against plain descriptors. Branch is deleted after.
+name: Probe airport
+on:
+  push:
+    branches: [ "probe/airport-plugins" ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+      - name: DuckDB airport extension
+        run: |
+          python3 -m venv "$RUNNER_TEMP/airport"
+          py="$RUNNER_TEMP/airport/bin/python"
+          for version in 2.0.0 1.5.6 1.4.5; do
+            if "$RUNNER_TEMP/airport/bin/pip" install --quiet "duckdb==$version" \
+                && "$py" -I -c "import duckdb; c = duckdb.connect(); c.execute('INSTALL airport FROM community'); c.execute('LOAD airport')"; then
+              echo "DuckDB $version with airport"
+              echo "AIRPORT_IT=$py" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "::warning::airport extension not installed; its test is skipped"
+
+      - name: Test
+        env:
+          MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+        run: |
+          ./mvnw -pl flight-server -am install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          ./mvnw -pl flight-server test -Dtest=GenericFlightClientsIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false -DexcludedGroups=perf -Dsurefire.useFile=false -Dairport.it.python="$AIRPORT_IT"
