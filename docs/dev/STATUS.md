@@ -2284,3 +2284,10 @@
   9e7bd88) failed only in `RangerHiveFlightSqlTest.restrictedTablesAreRefused:133`, flaky before these commits too
   (local: 1 of 5 runs on 46ef151 and on 9e7bd88); fixed meanwhile by the plugins lane (4d7c3fa).
 
+- 2026-10-29 (plugins lane, FYI for core): authorization restriction hook (P6, maintainer's FINISH MODE go-ahead):
+  core commits 52446bad (`FlightAuthorization.restrictsTables()` / `restrictTable` -> `TableRestriction`,
+  `services/QueryRestrictions` rewrite of restricted table references after view expansion, restricted queries
+  answered complete and re-derived at DoGet, `ExecutionService.tableColumns` / `DuckDbAdapter.describeColumns`,
+  `FlightSqlProducer.checkQuery` in every query path) and 0e6bcb10 (`restrictTable` takes `List<ColumnSpec>`); SPI
+  1.8 5d9e5c12 (`ColumnSpec.sourceType`, additive; hive plugin descriptor now `spi=1.8`). No change for providers
+  that do not restrict (defaults). Tests `QueryRestrictionsTest`, `TableRestrictionIntegrationTest`.

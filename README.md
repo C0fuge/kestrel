@@ -72,7 +72,7 @@ For a deployed server, provide `FLIGHT_TLS_CERT` and `FLIGHT_TLS_KEY` as paths t
 
 For Kerberos authentication and Apache Ranger schema/table policies, see [Kerberos and Ranger setup](docs/security/kerberos-ranger.md).
 
-Authentication and authorization providers can be selected or extended independently; see [Security providers](docs/security/providers.md).
+Authentication and authorization providers can be selected or extended independently; see [Security providers](docs/security/providers.md). The optional `ranger-hive` provider enforces the cluster's Hive Ranger policies, including column masks and row filters.
 
 ---
 

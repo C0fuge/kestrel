@@ -78,8 +78,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 - Hive Ranger policies instead of an `arrowflight` Ranger service (Hive catalog only): add
   `:/opt/flight/auth/ranger-hive/*` to `-cp`, set `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`,
   `RANGER_HIVE_SERVICE_NAME` (the Hive service in Ranger admin), `RANGER_ADMIN_URL`, `RANGER_HIVE_SCHEMA_PREFIX` (the
-  hive catalog's `schemaPrefix`), and not `RANGER_SERVICE_NAME`. Tables with a mask, row filter or column deny for
-  the caller are refused until masking is implemented; other catalogs' schemas are refused.
+  hive catalog's `schemaPrefix`), and not `RANGER_SERVICE_NAME`. Column masks and row filters are applied (queries
+  of restricted tables are answered complete by one node); a column deny on any column, or a row filter outside the
+  translated subset (see `docs/security/providers.md`), refuses the table; other catalogs' schemas are refused. Needs
+  the hive plugin of the same release (SPI 1.8, Hive column types for CHAR(n) masks).
 - Kerberos HDFS without an external `kinit`: set `hdfsKerberosPrincipal` + `hdfsKerberosKeytab`
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN

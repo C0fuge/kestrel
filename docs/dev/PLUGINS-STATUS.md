@@ -450,7 +450,7 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     `GenericFlightClientsIntegrationTest.duckdbAirportGetsSchemaButNeedsItsEndpointsAction` pins that; README and
     CHANGELOG say airport is unsupported (use DuckDB's ADBC Flight SQL path). Not added (Open questions). **P5
     closed.**
-P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
+P6. **(Done 2026-10-29)** Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
     `docs/dev/CATALOGS-STATUS.md`).
     *Plan (2026-10-29):* module `flight-auth-ranger-hive` (server class path `auth/ranger-hive/*`, like the auth
     modules), provider `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive` evaluating the cluster's **Hive** Ranger service
@@ -555,24 +555,45 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     suspected (not `ParquetQueryParser`'s parse cache, its parses are immutable; not `PluginRefusedFunctions`);
     an error, never wrong rows, and one server per JVM in production - but a race at startup is not ruled out.
     The module now runs one JVM per test class (`reuseForks=false`). Noted in `STATUS.md` Log for the core lane.
-    *Next steps (FINISH MODE, maintainer 2026-10-29 13:15 = go-ahead for the restriction-hook proposal in Open
-    questions "P6 step 3"; its two sub-questions are taken with the proposal's conservative answers: all columns
-    when the server cannot tell, no extra Ranger check at DoGet - the HMAC-signed ticket carries the rewritten SQL):*
-    (A) core, own commit, additive: `TableRestriction` record (`allowed`, `rowFilter` DuckDB SQL or null,
-    `masks` column -> DuckDB SQL; `UNRESTRICTED`, `DENIED`) and `FlightAuthorization.restrictTable(principal,
-    schema, table, columns)` default = `canReadTable ? UNRESTRICTED : DENIED`; `columns` = name -> declared type
-    of the referenced columns (all for `*` / unsure). (B) core: `requireQuery` -> per referenced table
-    `restrictTable`; a restricted table's references (the `TableReferences` positions `CatalogViews.arrowStreams`
-    already replaces: FROM / JOIN / comma, after view expansion) become `(SELECT <mask or col> AS col, ... FROM
-    s.t WHERE <filter>) AS <alias or t>`; partial mode: a restricted query is answered complete (one endpoint), so
-    the parts/planner path needs no change; anything not rewritable (unqualified name, table function, a reference
-    the rewrite cannot place) -> UNAUTHORIZED. Tests in flight-server with a fake provider (mask, filter, both,
-    self-join, view source, both modes, ticket replay keeps the rewrite). (C) ranger-hive: `restrictTable` from
-    `HivePolicies.readTable` (masks via `HiveMask.sql`, needs Hive types: from the server's declared column types
-    mapped back, or the catalog's Hive types if the core passes them - decide in (A)); (D) row filters: Hive
-    expression -> DuckDB through the `HiveViewSql` whitelist, else deny; (E) extend `RangerHiveCatalogTest`:
-    masked values = Hive's algorithm, filtered rows, both modes; docs (README, START-NOTES), CHANGELOG, then
-    write "PLUGINS LANE DONE".
+    *Step 3 (A, B) done 2026-10-29 (52446bad, core, own commit, additive):* `TableRestriction(allowed, rowFilter,
+    masks)` (`UNRESTRICTED`, `DENIED`), `FlightAuthorization.restrictsTables()` (default false: nothing changes for
+    existing providers) and `restrictTable(principal, schema, table, columns)` (default from `canReadTable`).
+    `services/QueryRestrictions`: after view expansion every table of the query (DuckDB's parse, `QueryTables`) is
+    asked; each `TableReferences` reference of a restricted table becomes `(SELECT * REPLACE (CAST((<mask>) AS
+    <DuckDB type>) AS c, ...) FROM s.t WHERE (<filter>)) AS <alias or t>`; a check rewrite (sources under a
+    placeholder schema) must leave no read of the restricted table, else UNAUTHORIZED (missed references, `TABLE
+    s.t`, time travel on a restricted table, unknown mask column, provider failure). Producer: `checkQuery` in every
+    path; restricted queries are planned and described complete (one endpoint, also when asked in parts); DoGet
+    derives the restriction again for the redeeming user and refuses a partial ticket that is now restricted;
+    table statistics of a restricted table refused; distributed complete skipped (rewritten text). Columns =
+    DuckDB `DESCRIBE` of the table (`ExecutionService.tableColumns` / `DuckDbAdapter.describeColumns`). Tests
+    `QueryRestrictionsTest` 4, `TableRestrictionIntegrationTest` (fake provider, real server: masks + filter, plain,
+    count, join, quoted self-join, IN-subquery, group by, prepared statement, both modes, unrestricted schema, one
+    endpoint, bob's partial ticket refused for alice).
+    *Step 3 (C) done 2026-10-29 (19703370):* `ranger-hive` `restrictsTables()`; `restrictTable` =
+    `HivePolicies.readColumns` (inexact-policy probe as before + `select` per column of **all** columns + row
+    filter + masks, audited once) -> masks via `HiveMask.sql`; `canReadTable` is now Hive's SHOW TABLES visibility
+    (any access, not audited) - listings show tables the caller has any access to (views with their sources).
+    *Step 3 (D) done 2026-10-29 (8f10de6f):* `HiveRowFilter` - typed recursive-descent translation of the filter's
+    Hive expression: columns, string / integer (<= 9 digits) literals, TRUE/FALSE/NULL, comparisons of one kind
+    (text, number, date, boolean), IS [NOT] NULL, [NOT] IN, [NOT] BETWEEN, [NOT] LIKE literal (ESCAPE '\\'),
+    AND/OR/NOT, lower/upper/lcase/ucase, `current_user()` (UGI short name); anything else (other functions,
+    arithmetic, casts, subqueries, qualified names, `||`, mixed-kind comparisons such as date vs string) denies.
+    Test `HiveRowFilterTest` (15 filters evaluated in DuckDB, 24 refusals).
+    *Hive types (SPI 1.8, 5d9e5c12 SPI own commit; 6479bb38 hive; 0e6bcb10 core; c80d71cf ranger-hive):*
+    `ColumnSpec.sourceType` (catalog's own type, 4-arg constructor kept); the hive plugin declares metastore types
+    (descriptor `spi=1.8`, schema IDs unchanged); `restrictTable` takes `List<ColumnSpec>` (DESCRIBE + catalog
+    type); ranger-hive masks use the Hive type (CHAR(n) padded), and refuses show-last masks on text only when no
+    Hive type is known.
+    *Step 3 (E) done 2026-10-29:* `RangerHiveFlightSqlTest` 6 (masked orders.ssn in plain / join / nested / CTE,
+    both modes, one endpoint, same schema; row filter on payments incl. join and IN-subquery; untranslatable filter
+    refuses), `RangerHiveCatalogTest` 6 (hive plugin + metastore: MASK on the ORC table's string = Hive's
+    `x`/`n` per char, also through view `v_orc`; MASK_NULL on Parquet and its view; MASK_HASH of a char(4) = SHA-256
+    of the padded value; row filter `i >= 900` on the text table and through the join view `v_join`; column deny
+    still refuses table and views; listings). Docs `docs/security/providers.md`, START-NOTES, README, CHANGELOG.
+
+PLUGINS LANE DONE (2026-10-29): P6 finished as the maintainer's FINISH MODE asked (masks and row filters wired
+into queries, tests, docs); no new items are taken. Open questions below stay for the maintainer.
 
 ## Open questions
 
@@ -609,34 +630,16 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   maybe more for catalogs) to read rows; not added per P5 (DuckDB users have the ADBC Flight SQL path). Add an
   opt-in Airport compatibility layer if DuckDB users want `airport_take_flight` / `ATTACH ... (TYPE AIRPORT)`?
 
-- (P6 step 3, security design - please confirm or correct before the restriction hook is merged; nothing of it
-  is wired yet; provider `ranger-hive` is registered but refuses every masked / filtered table) Ranger Hive masks and row filters need the server to
-  rewrite queries. Proposal:
-  (a) *done, additive:* `FlightAuthorizationProviderFactory.create(env, providerGroups)` with a default that calls
-  `create(env)`, so custom providers (like `ranger-hive`) get the LDAP/JWT groups the built-in `ranger` gets.
-  (b) new default method `FlightAuthorization.restrictTable(principal, schema, table, columns)` -> `TableRestriction`
-  (`allowed`, row filter SQL or none, mask SQL per column), default "allowed, unrestricted" = today's behaviour for
-  every existing provider. `columns` = the table's columns the query references with their source (Hive) types;
-  when the server cannot tell which columns a query references (e.g. `SELECT *`, functions over the row, parser
-  gives up) it passes **all** columns, so a column-level deny then denies the query (as Hive does for `SELECT *`).
-  (c) the server replaces each restricted table reference by `(SELECT <mask_1> AS c1, ..., c_n FROM s.t WHERE
-  <filter>) AS t` - the same text substitution as catalog views (`CatalogViews`), after view expansion (so view
-  sources are restricted too, invoker rights as today), before planning, in partial and complete mode; the
-  endpoint tickets carry the rewritten SQL (HMAC-signed, so a ticket cannot drop the restriction; a ticket is
-  redeemed with the restriction of the principal who asked for it, as tickets already are for table access).
-  Caches are keyed by query text, which then differs per restriction - no cross-user reuse of masked results.
-  (d) wire behaviour: unchanged for unrestricted tables; a masked column keeps its type (masks are typed), a
-  filtered table just returns fewer rows; anything the server cannot rewrite exactly (unparseable reference,
-  table function over the table, a mask that fails) is UNAUTHORIZED, never read unmasked. Metadata (GetTables,
-  GetSchema) unchanged; SHOW / `_any` visibility as Hive.
-  Questions: is (b)'s "all columns when unsure" (deny on any column-level deny) acceptable? Should tickets
-  re-check the restriction at DoGet (policy changes between GetFlightInfo and DoGet), at the cost of one extra
-  Ranger evaluation per endpoint?
-
-- (P6, audit) `ranger-hive` audits every table decision, including the per-table filter of `GetTables` (as the
-  core `ranger` provider does): a BI tool listing a large catalog writes one audit record per table and listing.
-  Keep, or skip auditing allowed listing checks (would need the server to tell a listing from a read - a small
-  additive `FlightAuthorization` hook)?
+- (P6, implemented 2026-10-29 with the proposal's conservative answers - tell if any should change) (a) the server
+  passes **all** columns of a table, so a Ranger column-level deny on any column refuses every query of that table
+  (Hive allows queries that avoid the column); passing only the referenced columns would need the server to name
+  them reliably (`ArrowScanRequests` does so for streams) - worth doing? (b) the restriction is derived again at
+  DoGet for the user redeeming the ticket (stricter than proposed: a policy change between GetFlightInfo and DoGet
+  applies; no extra cost beyond the existing per-DoGet check). (c) `ranger-hive` listings now follow Hive's SHOW
+  TABLES (any access) instead of "readable whole", and listings are no longer audited (this answers the former
+  "P6, audit" question); a listed table can still be refused for a query. (d) row filters outside the translated
+  subset refuse the table - most common gap: a date column compared with a string literal (`dt >= '2024-01-01'`),
+  which Hive converts differently from DuckDB; add such conversions if production filters use them.
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
