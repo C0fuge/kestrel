@@ -447,8 +447,39 @@ P5. **Plain Flight / command descriptors (ClickHouse `arrowFlight`, other generi
     `GenericFlightClientsIntegrationTest.duckdbAirportGetsSchemaButNeedsItsEndpointsAction` pins that; README and
     CHANGELOG say airport is unsupported (use DuckDB's ADBC Flight SQL path). Not added (Open questions). **P5
     closed.**
-P6. **(next)** Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
+P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters (catalogs, federation, Delta, ACID moved to lane 4,
     `docs/dev/CATALOGS-STATUS.md`).
+    *Plan (2026-10-29):* module `flight-auth-ranger-hive` (server class path `auth/ranger-hive/*`, like the auth
+    modules), provider `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive` evaluating the cluster's **Hive** Ranger service
+    (service type `hive`, resources database/table/column, ranger-plugins-common 2.8.0 from the server) for the
+    Hive catalog's schemas (server schema = prefix + database). Fail closed everywhere: a table whose mask or row
+    filter cannot be written exactly is denied, never read unmasked. Steps: (1) masks -> DuckDB SQL; (2) policy
+    evaluator (`_any` for database visibility as Hive's `SHOW DATABASES`, `select` **per column**, row filter
+    and mask lookups via `evalRowFilterPolicies` / `evalDataMaskPolicies`), tests with a real `RangerBasePlugin`
+    fed with `ServicePolicies` + Ranger's own `ranger-servicedef-hive.json` (no admin); (3) core hooks (own
+    commits): `FlightAuthorizationProviderFactory.create(env, providerGroups)` default (custom providers get no
+    LDAP/JWT groups today), and a per-table restriction hook - the server must tell the provider the referenced
+    columns (a table-level `select` check would let a column-level deny through: Ranger matches a request without
+    column only against `*` policies) and their Hive types (CHAR(n) masks work on padded values), and must
+    replace each reference by `(SELECT <masks> FROM t WHERE <filter>)` in both modes, views and tickets; (4)
+    row filters: Hive expressions through the `HiveViewSql` whitelist (else deny); (5) end-to-end with the hive
+    plugin. Wire/security design goes to Open questions before step 3 is merged.
+    *Step 1 done 2026-10-29 (a1aa21f):* `HiveMask.parse(maskType, transformer)` + `sql(column, hiveType,
+    duckDbType)`, ported from Hive 3.1.3's `GenericUDFMask` / `MaskShowFirstN` / `MaskShowLastN` / `MaskHash` /
+    `BaseMaskUDF` sources: MASK_NULL -> typed NULL, MASK_NONE -> column; transformers `mask`,
+    `mask_show_first_n`, `mask_show_last_n`, `mask_hash` with `{col}` and literal arguments (Hive's argument
+    rules: int literal = code point, string = first char, '' = default, number 0-9 else 1, day 1-31 / month
+    0-11 corrections, negative count 0); strings per char by Unicode category (`\p{Lu}`/`\p{Ll}`/`\p{Nd}`, a
+    supplementary character = two "other" chars as in Java), show-first/last by position (a value with
+    characters outside the BMP that is masked in part fails the query - Hive counts UTF-16 chars), CHAR(n)
+    masked padded then shown trimmed; integers by digit arithmetic with Java overflow per width (the minimum
+    value computed by `HiveMaskNumbers`, a port of the transformers); dates with fixed/kept parts
+    (`mask_show_*_n` on a date gives 0000-01-01 like Hive); `mask_hash` SHA-256 hex of text, NULL for other
+    types; other primitive types NULL (Hive's unsupported-type adapter); complex columns, CUSTOM, other
+    functions and arguments Hive would refuse -> `IllegalArgumentException` (the provider will deny). Tests
+    `HiveMaskTest` 6/6 (all mask types of Ranger's Hive service definition; DuckDB vs Hive's algorithms over
+    Unicode strings, CHAR(8), tinyint..bigint incl. MIN/MAX and random values, dates incl. impossible days).
+    Not wired: no runtime change. *Next step (2):* the policy evaluator as planned above.
 
 ## Open questions
 
