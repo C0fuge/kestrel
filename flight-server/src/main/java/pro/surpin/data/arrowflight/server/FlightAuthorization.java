@@ -49,12 +49,14 @@ public interface FlightAuthorization extends AutoCloseable {
      * @param principal authenticated caller identity
      * @param schema schema name
      * @param table table name
-     * @param columns every column of the table, name to DuckDB type, in table order
+     * @param columns every column of the table in table order: name and DuckDB type as the server reads it,
+     *        and the catalog's own type ({@code ColumnSpec.sourceType}, e.g. a Hive {@code char(10)}) when the
+     *        table comes from a catalog that declares one
      * @return the restriction; by default {@link TableRestriction#UNRESTRICTED} when
      *         {@link #canReadTable} allows the table, else {@link TableRestriction#DENIED}
      */
     default TableRestriction restrictTable(String principal, String schema, String table,
-            java.util.Map<String, String> columns) {
+            List<pro.surpin.data.arrowflight.spi.catalog.ColumnSpec> columns) {
         return canReadTable(principal, schema, table)
                 ? TableRestriction.UNRESTRICTED : TableRestriction.DENIED;
     }

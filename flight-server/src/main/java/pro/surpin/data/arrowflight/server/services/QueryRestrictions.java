@@ -17,6 +17,7 @@ import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.TableRestriction;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 /**
  * Applies the row filters and column masks of an authorization provider to a query: each
@@ -51,20 +52,20 @@ public final class QueryRestrictions {
      * @param principal caller identity, or null
      * @param sql query with its catalog views already replaced by their queries
      * @param authorization the server's provider
-     * @param columns takes a schema and a table name and returns the table's columns, name to
-     *        DuckDB type in table order; called only when the provider restricts tables
+     * @param columns takes a schema and a table name and returns the table's columns in table
+     *        order; called only when the provider restricts tables
      * @return the SQL to run and whether it is restricted
      * @throws org.apache.arrow.flight.FlightRuntimeException UNAUTHORIZED when a table may not be
      *         read or its restriction cannot be applied, INVALID_ARGUMENT when the query's tables
      *         cannot be named
      */
     public static Result apply(String principal, String sql, FlightAuthorization authorization,
-            BiFunction<String, String, Map<String, String>> columns) {
+            BiFunction<String, String, List<ColumnSpec>> columns) {
         if (!authorization.restrictsTables()) {
             return new Result(sql, false);
         }
         Map<String, TableRestriction> restricted = new LinkedHashMap<>();
-        Map<String, Map<String, String>> types = new LinkedHashMap<>();
+        Map<String, List<ColumnSpec>> types = new LinkedHashMap<>();
         Set<String> seen = new HashSet<>();
         for (ParquetQueryParser.JoinTable table : tables(sql)) {
             if (table.schema() == null || table.table() == null) {
@@ -74,7 +75,7 @@ public final class QueryRestrictions {
             if (!seen.add(key)) {
                 continue;
             }
-            Map<String, String> tableColumns = columns.apply(table.schema(), table.table());
+            List<ColumnSpec> tableColumns = columns.apply(table.schema(), table.table());
             TableRestriction restriction;
             try {
                 restriction = authorization.restrictTable(principal, table.schema(), table.table(),
@@ -133,15 +134,17 @@ public final class QueryRestrictions {
      *
      * @param name quoted schema and table name
      * @param restriction its restriction
-     * @param columns its columns, name to DuckDB type
+     * @param columns its columns
      * @return parenthesised query of the allowed rows and values
      * @throws IllegalArgumentException when a mask names no column of the table
      */
-    static String source(String name, TableRestriction restriction, Map<String, String> columns) {
+    static String source(String name, TableRestriction restriction, List<ColumnSpec> columns) {
         StringBuilder out = new StringBuilder("(SELECT *");
         if (!restriction.masks().isEmpty()) {
             Map<String, String> byName = new LinkedHashMap<>();
-            columns.forEach((column, type) -> byName.put(column.toLowerCase(Locale.ROOT), type));
+            for (ColumnSpec column : columns) {
+                byName.put(column.name().toLowerCase(Locale.ROOT), column.duckDbType());
+            }
             List<String> replaced = new ArrayList<>();
             for (Map.Entry<String, String> mask : restriction.masks().entrySet()) {
                 String type = byName.get(mask.getKey().toLowerCase(Locale.ROOT));

@@ -29,6 +29,7 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 /**
  * Runs a provider that restricts tables in a real Flight SQL server: a user with a row filter and
@@ -48,7 +49,7 @@ class TableRestrictionIntegrationTest {
     private static final TableRestriction ALICE = new TableRestriction(true, "region = 'eu'",
             Map.of("name", "left(name, 1) || '***'", "salary", "NULL"));
     /** Columns the server passed per table, for the check that it passes them all. */
-    private static final Map<String, Map<String, String>> SEEN = new ConcurrentHashMap<>();
+    private static final Map<String, List<ColumnSpec>> SEEN = new ConcurrentHashMap<>();
 
     /** Restricts s.people for alice; bob reads everything. */
     private static final FlightAuthorization PROVIDER = new FlightAuthorization() {
@@ -69,7 +70,7 @@ class TableRestrictionIntegrationTest {
 
         @Override
         public TableRestriction restrictTable(String principal, String schema, String table,
-                Map<String, String> columns) {
+                List<ColumnSpec> columns) {
             SEEN.put(table, columns);
             return "alice".equals(principal) && "people".equals(table) ? ALICE
                     : FlightAuthorization.super.restrictTable(principal, schema, table, columns);
@@ -127,9 +128,10 @@ class TableRestrictionIntegrationTest {
                     prepared.close(alice);
                 }
             }
-            assertEquals(List.of("id", "name", "region", "salary", "dept"),
-                    new ArrayList<>(SEEN.get("people").keySet()), "every column passed");
-            assertEquals("DECIMAL(10,2)", SEEN.get("people").get("salary"));
+            assertEquals(List.of("id INTEGER", "name VARCHAR", "region VARCHAR", "salary DECIMAL(10,2)",
+                    "dept BIGINT"), SEEN.get("people").stream().map(c -> c.name() + " " + c.duckDbType()).toList(),
+                    "every column passed");
+            assertEquals(null, SEEN.get("people").get(0).sourceType(), "no catalog type for a directory table");
 
             // A ticket planned in parts for bob is refused for alice, never read unrestricted.
             FlightInfo bobs = client.execute("SELECT * FROM s.people", login(helper, "bob", "partial"));

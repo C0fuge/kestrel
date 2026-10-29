@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.arrow.flight.FlightRuntimeException;
@@ -16,6 +15,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 import pro.surpin.data.arrowflight.server.TableRestriction;
+import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
 
 /**
  * Checks the query rewrite of table restrictions: every reference of a restricted table gets the
@@ -26,7 +26,8 @@ import pro.surpin.data.arrowflight.server.TableRestriction;
 class QueryRestrictionsTest {
 
     /** Columns of every table. */
-    private static final Map<String, String> COLUMNS = columns();
+    private static final List<ColumnSpec> COLUMNS = List.of(new ColumnSpec("id", "INTEGER", true, null),
+            new ColumnSpec("name", "VARCHAR", true, null));
 
     /** Masks s.a's name and keeps its rows with id below 10; s.b is whole; s.c is denied. */
     private static final FlightAuthorization RESTRICTING = new FlightAuthorization() {
@@ -47,7 +48,7 @@ class QueryRestrictionsTest {
 
         @Override
         public TableRestriction restrictTable(String principal, String schema, String table,
-                Map<String, String> columns) {
+                List<ColumnSpec> columns) {
             if ("a".equalsIgnoreCase(table)) {
                 return new TableRestriction(true, "id < 10", Map.of("name", "'***'"));
             }
@@ -126,7 +127,7 @@ class QueryRestrictionsTest {
 
             @Override
             public TableRestriction restrictTable(String principal, String schema, String table,
-                    Map<String, String> columns) {
+                    List<ColumnSpec> columns) {
                 return new TableRestriction(true, null, Map.of("salary", "0"));
             }
         };
@@ -148,7 +149,7 @@ class QueryRestrictionsTest {
 
             @Override
             public TableRestriction restrictTable(String principal, String schema, String table,
-                    Map<String, String> columns) {
+                    List<ColumnSpec> columns) {
                 throw new IllegalStateException("policy engine down");
             }
         };
@@ -189,19 +190,7 @@ class QueryRestrictionsTest {
      * @param table table name
      * @return {@link #COLUMNS}
      */
-    private Map<String, String> columnsOf(String schema, String table) {
+    private List<ColumnSpec> columnsOf(String schema, String table) {
         return COLUMNS;
-    }
-
-    /**
-     * Builds the test columns.
-     *
-     * @return id and name
-     */
-    private static Map<String, String> columns() {
-        Map<String, String> columns = new LinkedHashMap<>();
-        columns.put("id", "INTEGER");
-        columns.put("name", "VARCHAR");
-        return columns;
     }
 }

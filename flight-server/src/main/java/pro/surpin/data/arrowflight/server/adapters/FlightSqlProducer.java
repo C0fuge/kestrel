@@ -904,11 +904,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      *
      * @param schema schema name
      * @param table table name
-     * @return column name to DuckDB type
+     * @return columns in table order
      * @throws FlightRuntimeException NOT_FOUND for an unknown table, INVALID_ARGUMENT when DuckDB
      *         cannot read it, UNAVAILABLE when its catalog cannot be read
      */
-    private Map<String, String> tableColumns(String schema, String table) {
+    private List<pro.surpin.data.arrowflight.spi.catalog.ColumnSpec> tableColumns(String schema,
+            String table) {
         try {
             return executionService.tableColumns(schema, table);
         } catch (IllegalArgumentException e) {

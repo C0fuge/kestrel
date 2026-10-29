@@ -278,20 +278,41 @@ public final class ExecutionService {
     }
 
     /**
-     * Describes the columns of one table as the complete-answer DuckDB reads it.
+     * Describes the columns of one table as the complete-answer DuckDB reads it, with the type
+     * its catalog declares when it comes from one.
      *
      * @param schema schema name
      * @param table table name
-     * @return column name to DuckDB type, in table order
+     * @return columns in table order
      * @throws IllegalArgumentException when DuckDB cannot read the table
      * @throws java.io.UncheckedIOException when a catalog cannot be read
      */
-    public Map<String, String> tableColumns(String schema, String table) {
+    public List<pro.surpin.data.arrowflight.spi.catalog.ColumnSpec> tableColumns(String schema,
+            String table) {
         String query = "SELECT * FROM " + DuckDbAdapter.quoteIdentifier(schema) + "."
                 + DuckDbAdapter.quoteIdentifier(table);
         try {
             String sql = catalogViews.arrowStreams(catalogViews.timeTravel(query, true), null);
-            return duckDbAdapter.describeColumns(sql, catalogViews.current());
+            Map<String, String> described = duckDbAdapter.describeColumns(sql, catalogViews.current());
+            Map<String, String> declared = new java.util.HashMap<>();
+            CatalogTables catalogs = parquetAdapter.catalogTables();
+            if (catalogs != null && !catalogs.isEmpty()) {
+                Optional<CatalogTables.Resolved> resolved = catalogs.current(schema, table);
+                if (resolved.isPresent()) {
+                    for (pro.surpin.data.arrowflight.spi.catalog.ColumnSpec column
+                            : resolved.get().snapshot().columns()) {
+                        if (column.sourceType() != null) {
+                            declared.put(column.name().toLowerCase(java.util.Locale.ROOT),
+                                    column.sourceType());
+                        }
+                    }
+                }
+            }
+            List<pro.surpin.data.arrowflight.spi.catalog.ColumnSpec> columns = new ArrayList<>();
+            described.forEach((name, type) -> columns.add(
+                    new pro.surpin.data.arrowflight.spi.catalog.ColumnSpec(name, type, true, null,
+                            declared.get(name.toLowerCase(java.util.Locale.ROOT)))));
+            return columns;
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
         } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
