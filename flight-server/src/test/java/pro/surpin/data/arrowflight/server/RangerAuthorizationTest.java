@@ -89,6 +89,24 @@ class RangerAuthorizationTest {
                                 "SELECT * FROM orders")).status().code());
     }
 
+    /** A query whose tables cannot be named is refused as INVALID_ARGUMENT with the reason, not INTERNAL. */
+    @Test
+    void uncheckableQueryIsInvalidArgument() {
+        RangerAuthorization authorization = new RangerAuthorization(plugin((user, groups) -> true),
+                principal -> Set.of());
+        for (String sql : List.of("SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders",
+                "SELEC nonsense")) {
+            FlightRuntimeException e = assertThrows(FlightRuntimeException.class,
+                    () -> authorization.requireQuery("alice@EXAMPLE.COM", sql));
+            assertEquals(FlightStatusCode.INVALID_ARGUMENT, e.status().code(), sql);
+            assertFalse(e.getMessage().isBlank(), sql);
+        }
+        FlightRuntimeException union = assertThrows(FlightRuntimeException.class,
+                () -> authorization.requireQuery("alice@EXAMPLE.COM",
+                        "SELECT * FROM sales.orders UNION ALL SELECT * FROM sales.orders"));
+        assertTrue(union.getMessage().contains("UNION"), union.getMessage());
+    }
+
     /**
      * Builds a plugin that allows exactly the requests a predicate accepts.
      *

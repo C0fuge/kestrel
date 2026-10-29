@@ -676,6 +676,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   owner saves a network round trip per query).
 
 ### Fixed
+- With an authorization provider on (`FLIGHT_AUTHORIZATION_PROVIDER`), a query whose tables the check cannot
+  name (e.g. `UNION`, a statement that does not parse) failed with a message-less `INTERNAL`; it is now refused with
+  `INVALID_ARGUMENT` and the parser's reason, as without authorization. Still refused, only the status changes.
 - Hive plugin, `hive.insertOnlyTables=true`: an insert-only table whose layout is refused (e.g. a `delete_delta_*`
   directory) no longer makes the server treat the whole metastore as unreadable. Before, the refusal was reported like
   a metastore outage, so the catalog views refresh left out every table listed after it (all schemas of that

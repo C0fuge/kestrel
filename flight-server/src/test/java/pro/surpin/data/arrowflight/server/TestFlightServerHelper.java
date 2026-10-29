@@ -16,9 +16,12 @@ import pro.surpin.data.arrowflight.server.services.MetadataService;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.services.QueryPlanner;
 import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
+import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.auth2.BasicCallHeaderAuthenticator;
+import org.apache.arrow.flight.auth2.GeneratedBearerTokenAuthenticator;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.DefaultAllocationManagerOption;
@@ -125,16 +128,29 @@ public class TestFlightServerHelper implements AutoCloseable {
                 metadataService, appConfig,
                 Executors.newCachedThreadPool());
 
-        flightSqlProducer = new FlightSqlProducer(location, allocator,
-                metadataService, queryPlanner, executionService, clusterService,
-                b.resultMode);
+        flightSqlProducer = b.authorization == null
+                ? new FlightSqlProducer(location, allocator, metadataService, queryPlanner,
+                        executionService, clusterService, b.resultMode)
+                : new FlightSqlProducer(location, allocator, metadataService, queryPlanner,
+                        executionService, clusterService, b.authorization, b.resultMode);
 
         // As HadoopArrowFlightServer does: the client's x-flight-result-mode header decides.
-        server = FlightServer.builder(allocator, location, flightSqlProducer)
+        FlightServer.Builder serverBuilder = FlightServer.builder(allocator, location, flightSqlProducer)
                 .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                 .middleware(StreamCompression.KEY, new StreamCompression.Factory(b.compression))
-                .middleware(FlightSessions.KEY, new FlightSessions(3600, 1000).factory())
-                .build();
+                .middleware(FlightSessions.KEY, new FlightSessions(3600, 1000).factory());
+        if (b.password != null) {
+            // Basic login once, then a bearer token whose peer identity is the user name.
+            String password = b.password;
+            serverBuilder.headerAuthenticator(new GeneratedBearerTokenAuthenticator(
+                    new BasicCallHeaderAuthenticator((user, given) -> {
+                        if (!password.equals(given)) {
+                            throw CallStatus.UNAUTHENTICATED.toRuntimeException();
+                        }
+                        return () -> user;
+                    })));
+        }
+        server = serverBuilder.build();
         server.start();
 
         flightClient = FlightClient.builder(allocator, location).build();
@@ -222,6 +238,8 @@ public class TestFlightServerHelper implements AutoCloseable {
         private boolean zeroCopyWrites;
         private pro.surpin.data.arrowflight.server.adapters.DuckDbSizing.Shared sharedDatabase;
         private StreamCompression.Settings compression = StreamCompression.Settings.DEFAULT;
+        private FlightAuthorization authorization;
+        private String password;
         private java.util.function.Function<AppConfig,
                 pro.surpin.data.arrowflight.server.storage.StoreRegistry> registry;
 
@@ -245,6 +263,10 @@ public class TestFlightServerHelper implements AutoCloseable {
         public Builder sharedDatabase(pro.surpin.data.arrowflight.server.adapters.DuckDbSizing.Shared s) {
             this.sharedDatabase = s; return this; }
         public Builder compression(StreamCompression.Settings c) { this.compression = c; return this; }
+        /** Enforces this authorization on every query (principal = the caller's peer identity). */
+        public Builder authorization(FlightAuthorization a) { this.authorization = a; return this; }
+        /** Requires a basic login of any user name with this password (then a bearer token). */
+        public Builder password(String p) { this.password = p; return this; }
 
         public TestFlightServerHelper start() throws Exception {
             return new TestFlightServerHelper(this);
