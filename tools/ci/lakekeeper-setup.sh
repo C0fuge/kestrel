@@ -19,6 +19,11 @@ for _ in $(seq 60); do docker exec lakekeeper-pg pg_isready -U postgres -d lakek
 db="postgresql://postgres:$pg@localhost:5432/lakekeeper"
 env=(-e "LAKEKEEPER__PG_DATABASE_URL_READ=$db" -e "LAKEKEEPER__PG_DATABASE_URL_WRITE=$db"
   -e "LAKEKEEPER__PG_ENCRYPTION_KEY=$(openssl rand -hex 16)" -e LAKEKEEPER__METRICS_PORT=9100)
+if [[ "$sts" == sts ]]; then
+  # moto ignores STS session policies, so Lakekeeper's check that downscoped credentials cannot
+  # write the parent location fails; skip the storage validation (test-only).
+  env+=(-e LAKEKEEPER__SKIP_STORAGE_VALIDATION=true)
+fi
 docker run --rm --network host "${env[@]}" "$image" migrate
 docker run -d --name catalog --network host "${env[@]}" "$image" serve
 for _ in $(seq 60); do curl -fsS http://localhost:8181/health >/dev/null && break; sleep 2; done

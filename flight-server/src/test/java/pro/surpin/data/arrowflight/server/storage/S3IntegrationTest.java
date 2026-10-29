@@ -286,6 +286,17 @@ class S3IntegrationTest {
             assertFalse(rs.next());
         }
 
+        // A query parameter cannot send the table's credentials to another endpoint.
+        int evilPort = Integer.parseInt(evil.endpoint().substring(evil.endpoint().lastIndexOf(':') + 1));
+        try (Statement s = duckDb.connection().createStatement();
+                ResultSet rs = s.executeQuery("SELECT count(*) FROM read_parquet('" + files[1]
+                        + "?s3_endpoint=127.0.0.1:" + evilPort + "&s3_use_ssl=false')")) {
+            rs.next();
+        } catch (SQLException e) {
+            assertFalse(e.getMessage().contains("vended-secret"));
+        }
+        assertEquals(List.of(), evil.requests(), "nothing may reach another endpoint");
+
         secrets.register("rest", roots, vended(files, "tok2"));
         assertEquals("AKIAVENDED", keyOfLastRead(files[2]));
         assertEquals("tok2", lastRequest().headers().get("x-amz-security-token"));

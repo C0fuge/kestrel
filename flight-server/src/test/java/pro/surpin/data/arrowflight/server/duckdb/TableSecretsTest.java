@@ -84,6 +84,7 @@ class TableSecretsTest {
         assertTrue(name.startsWith(TableSecrets.NAME_PREFIX), name);
         assertEquals("CREATE OR REPLACE TEMPORARY SECRET " + name + " (TYPE s3, KEY_ID 'AKIAV',"
                 + " SECRET 'vended-secret', SESSION_TOKEN 'tok1', REGION 'us-east-1',"
+                + " URL_COMPATIBILITY_MODE true,"
                 + " SCOPE ['s3://lake/wh/ns/t/data/', 's3a://lake/wh/ns/t/data/',"
                 + " 's3n://lake/wh/ns/t/data/'])", sql);
 
@@ -145,6 +146,8 @@ class TableSecretsTest {
                 () -> secrets.register("rest", ROOTS, snapshot("t",
                         new StorageCredential("s3://lake/wh/ns/t", "http", options("tok"), null))));
         assertTrue(type.getMessage().contains("secret type"), type.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> secrets.register("rest", ROOTS,
+                snapshot("t", new StorageCredential("s3://lake/wh/ns/t", "azure", Map.of(), null))));
         Map<String, SecretValue> bad = new LinkedHashMap<>(options("tok"));
         bad.put("PROVIDER", SecretValue.plain("credential_chain"));
         assertThrows(IllegalArgumentException.class, () -> secrets.register("rest", ROOTS,
@@ -157,6 +160,14 @@ class TableSecretsTest {
         // A credential for files the snapshot does not have is not installed.
         secrets.register("rest", ROOTS, snapshot("t", credential("s3://lake/wh/ns/x", "tok", null)));
         assertEquals(0, secrets.current().statements().size());
+        // A plugin cannot switch the compatibility mode off.
+        Map<String, SecretValue> off = new LinkedHashMap<>(options("tok"));
+        off.put("URL_COMPATIBILITY_MODE", SecretValue.of(false));
+        secrets.register("rest", ROOTS, snapshot("v", new StorageCredential("s3://lake/wh/ns/v",
+                "S3", off, null)));
+        String sql = secrets.current().statements().values().iterator().next();
+        assertTrue(sql.contains("URL_COMPATIBILITY_MODE true") && !sql.contains("false"), sql);
+        secrets.register("rest", ROOTS, snapshot("v"));
     }
 
     @Test

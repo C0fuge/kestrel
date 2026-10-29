@@ -21,6 +21,7 @@ import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
 import pro.surpin.data.arrowflight.spi.catalog.StorageCredential;
 import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
+import pro.surpin.data.arrowflight.spi.duckdb.SecretValue;
 
 /**
  * Temporary DuckDB secrets of single tables, from the storage credentials a catalog returns with
@@ -28,12 +29,15 @@ import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
  * the snapshot's files below the credential's prefix, so it reaches no other table; the scope
  * must also lie below one of the catalog's readable roots. Connections apply the current secrets
  * before they run a query ({@link #apply}); a refreshed credential replaces its secret. Secret
- * values never appear in errors or logs.
+ * values never appear in errors or logs. Every table secret has URL_COMPATIBILITY_MODE on, as the
+ * stores' secrets: a {@code ?s3_endpoint=} in a path cannot send its credentials elsewhere.
  */
 public final class TableSecrets {
 
     /** Prefix of the names of table secrets. */
     static final String NAME_PREFIX = "table_secret_";
+    /** Secret types of table credentials: object stores with URL_COMPATIBILITY_MODE. */
+    private static final java.util.Set<String> TYPES = java.util.Set.of("s3", "gcs", "r2");
     /** A string literal in a DuckDB error, possibly cut short. */
     private static final Pattern LITERAL = Pattern.compile("'(?:[^']|'')*'?");
 
@@ -106,9 +110,16 @@ public final class TableSecrets {
                 continue;
             }
             String name = NAME_PREFIX + digest(table) + "_" + i;
+            String type = credential.type().toLowerCase(java.util.Locale.ROOT);
+            if (!TYPES.contains(type)) {
+                throw new IllegalArgumentException("Storage credentials of table " + table
+                        + " refused: secret type '" + credential.type() + "', allowed: " + TYPES);
+            }
+            Map<String, SecretValue> options = new LinkedHashMap<>(credential.options());
+            options.put("URL_COMPATIBILITY_MODE", SecretValue.of(true));
             planned.put(name, DuckDbSetupValidator.secretStatement("catalog " + catalog,
-                    "CREATE OR REPLACE TEMPORARY SECRET ", name, credential.type(), scope, roots,
-                    credential.options(), true, new ArrayList<>()));
+                    "CREATE OR REPLACE TEMPORARY SECRET ", name, type, scope, roots, options, true,
+                    new ArrayList<>()));
         }
         synchronized (this) {
             replace(table, planned);
