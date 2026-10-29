@@ -49,9 +49,11 @@ D9. ~~Node join under load: a 4th node joins mid-run; plans start using it witho
     timings.~~ *Done 2026-10-29 (see Log):* `NodeJoinUnderLoadIntegrationTest` + `distributed-join.yml`; found and
     fixed a permanent node-load leak with concurrent identical queries (`LoadReservations`). Follow-up: the leave half
     of the workflow sends calls to the stopped node until the client drops it (load client only, retryable).
-D10. Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only), so TPC-H q01 itself is computed by one
+D10. ~~Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only), so TPC-H q01 itself is computed by one
     node; D7 measures q01 without its AVG columns. Candidate (additive, opt-in path only): endpoints answer sum + count
-    for an AVG, the merge divides (type as DuckDB's avg: DOUBLE, DECIMAL avg -> DOUBLE); test equality vs single node.
+    for an AVG, the merge divides (type as DuckDB's avg: DOUBLE, DECIMAL avg -> DOUBLE); test equality vs single node.~~
+    *Done 2026-10-29 (ab8cc3d, see Log):* `AverageMerge`. Follow-up (optional): a bit-exact merge for unscaled sums
+    >= 2^53 would need DuckDB's long-double division (x86: 80-bit) - not worth it unless a client compares bits.
 
 D11. ~~Q2 answered (maintainer 2026-10-29): `shutdownDrainSeconds` default 20 s, START-NOTES, `docker stop -t 25`.~~
     *Done 2026-10-29 (see Log).*
@@ -334,3 +336,24 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   package=true Dev CI on `main`: 40834079848 on d4a136f built green but its release step got HTTP 403 ("Resource
   not accessible by integration", a package run 25 min earlier had published); redispatched once: 40835849089 on
   7b988c7 green, pre-release `server-1.0.0-7b988c720821`. Lock released 07:46Z. Next: D10 (AVG merge), D12.
+- 2026-10-29 (lane 3 session, 16th): lock 08:25Z (the branch copy of LOCK-LANE3 was stale; main's was released). D10
+  done (ab8cc3d + 4edb98d, rebase-merged into `main`): distributed complete mode merges plain `avg`. `AverageMerge`
+  rewrites the query with jOOQ into a part query (`sum(x) AS __kestrel_avg_sum_i, count(x) AS __kestrel_avg_count_i`
+  per average, no ORDER BY) that `DistributedComplete` plans and reads instead of the client query; the merge sums
+  both and divides as DuckDB's avg finalizes: the exact unscaled sum (integer part and fraction scaled apart, no
+  DECIMAL overflow) as DOUBLE over count * 10^scale (scale from the endpoint answers' Arrow types; floating-point
+  sums over the count; NULL when the count is 0); the complete answer's names, then the client's ORDER BY over them.
+  Measured before coding (DuckDB 1.4.1, 5000 groups): naive `CAST(sum AS DOUBLE)/count` differs from avg in 31 % of
+  DECIMAL(15,2) groups; this formula 0 differences while the unscaled sum is < 2^53 (DuckDB divides INT64/INT128
+  sums in long double, so beyond that ~25 % differ in the last bit) - documented in README like DOUBLE sums.
+  Refused (single-node path): avg DISTINCT / FILTER / OVER, `ORDER BY avg(...)`, HAVING, LIMIT on aggregates, joins.
+  Partial mode and the wire unchanged (the part query is only used between nodes). Tests: `AverageMergeTest`
+  (unit: bit-exact vs DuckDB over 4 endpoint parts for 7 shapes incl. DECIMAL(15,2)/(18,4), BIGINT, DOUBLE, an
+  all-NULL group, ORDER BY alias/ordinal; mutation-checked), `DistributedCompleteIntegrationTest` +3 merged AVG
+  shapes (DECIMAL column added to its files). `distributed-perf.yml` q01 has its AVG columns again. CI: Dev CI
+  40843407670 green on the branch; Distributed perf 40843471013 green on the branch (SF10, 3 x 1 CPU): same
+  checksums off vs on, 21/21 merged, full q01 5814 -> 2388 ms (0.41), others as in D7 (0.40-0.54, scan 0.92).
+  Package=true Dev CI 40845151877 on `main` b3bbcce (contains the plugins lane's b3bbcce, whose push run 40845149128
+  it cancelled, and supersedes the dispatch 40844289066 on cc191fb) was running at session end - next session:
+  confirm it green with a pre-release containing ab8cc3d, else dispatch package=true when no other run is in
+  progress. Next: D12 (mixed-version reservations during a rolling upgrade).
