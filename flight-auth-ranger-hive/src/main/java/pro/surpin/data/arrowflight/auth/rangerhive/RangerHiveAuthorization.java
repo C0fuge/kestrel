@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.auth.rangerhive;
 
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.ranger.authorization.hadoop.config.RangerPluginConfig;
+import org.apache.ranger.plugin.audit.RangerDefaultAuditHandler;
 import pro.surpin.data.arrowflight.server.FlightAuthorization;
 
 import java.util.HashSet;
@@ -14,6 +15,7 @@ import java.util.function.Function;
  * Checks the server's Hive catalog schemas and tables against the policies of the cluster's Hive Ranger service.
  * The server cannot yet apply masks or row filters or name the columns a query reads, so a table is readable only
  * when the caller may read all of it unmasked and unfiltered; schemas outside the Hive catalog are refused.
+ * Table reads are audited to Ranger's audit destinations, schema visibility is not (as Hive's SHOW filters).
  */
 public final class RangerHiveAuthorization implements FlightAuthorization {
     private static final String SERVICE_TYPE = "hive";
@@ -60,7 +62,7 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
         plugin.init();
         Function<String, Set<String>> groups = union(providerGroups, principal -> Set.copyOf(
                 UserGroupInformation.createRemoteUser(principal).getGroups()));
-        return new RangerHiveAuthorization(new HivePolicies(plugin, groups),
+        return new RangerHiveAuthorization(new HivePolicies(plugin, groups, new RangerDefaultAuditHandler()),
                 environment.getOrDefault("RANGER_HIVE_SCHEMA_PREFIX", ""), plugin::cleanup);
     }
 
@@ -90,8 +92,10 @@ public final class RangerHiveAuthorization implements FlightAuthorization {
     @Override
     public boolean canReadTable(String principal, String schema, String table) {
         String database = database(schema);
-        return database != null && table != null && policies.canSeeDatabase(principal, database)
-                && policies.readWholeTable(principal, new HivePolicies.HiveTable(database, table, null)).allowed();
+        // The table decision comes first, so that a denial is audited too.
+        return database != null && table != null
+                && policies.readWholeTable(principal, new HivePolicies.HiveTable(database, table, null)).allowed()
+                && policies.canSeeDatabase(principal, database);
     }
 
     /**

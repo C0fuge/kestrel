@@ -10,6 +10,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- `ranger-hive` authorization provider: table decisions are audited to Ranger (one `select` per table; denials by
+  column restrictions with their reason); security-zone policies covered by tests.
 - Optional authorization provider `ranger-hive` (module `flight-auth-ranger-hive`, `auth/ranger-hive/` in the
   `flight-auth-...tar.zst` asset; `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`, `RANGER_HIVE_SERVICE_NAME`,
   `RANGER_ADMIN_URL`, `RANGER_HIVE_SCHEMA_PREFIX`): the Hive catalog's schemas and tables checked against the

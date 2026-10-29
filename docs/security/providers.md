@@ -109,7 +109,11 @@ Otherwise the query is refused (`UNAUTHORIZED`), never answered unmasked. Also r
 evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
 (table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
 pattern or column exclusion in a restrictive policy, and every table while restrictive tag-based policies exist.
-Schemas outside the prefix (other catalogs) are refused. Accesses are not audited to Ranger by this provider yet.
+Schemas outside the prefix (other catalogs) are refused. Security zones of the Hive service are honoured (a zone's
+policies decide for the tables in it). Each table decision (queries, views, and the table listing of `GetTables`,
+which filters by the same check) is audited to the plugin's Ranger audit destinations (`ranger-hive-audit.xml` on
+the class path, as for Hive) as one `select` on the table; a table refused because of a column restriction is
+audited as denied with the reason and policy id -1. Schema visibility is not audited (as Hive's SHOW filters).
 Masks and row filters (query rewrite) are planned; see `docs/dev/PLUGINS-STATUS.md` (P6).
 
 ## Add an authentication provider

@@ -12,6 +12,8 @@ import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyItemRowFilterInfo
 import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyResource;
 import org.apache.ranger.plugin.model.RangerPolicy.RangerRowFilterPolicyItem;
 import org.apache.ranger.plugin.model.RangerServiceDef;
+import org.apache.ranger.plugin.policyengine.RangerAccessResult;
+import org.apache.ranger.plugin.policyengine.RangerAccessResultProcessor;
 import org.apache.ranger.plugin.service.RangerBasePlugin;
 import org.apache.ranger.plugin.util.JsonUtilsV2;
 import org.apache.ranger.plugin.util.ServicePolicies;
@@ -22,6 +24,8 @@ import org.junit.jupiter.api.Test;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -283,6 +287,98 @@ class HivePoliciesTest {
         additional.setAdditionalResources(List.of(columns("sales", "orders", "region")));
         additional.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
         assertEquals("no select on column region", whole(additional).reason());
+    }
+
+    /**
+     * Policies of a security zone decide for the tables in the zone, also when the server reads them whole: the
+     * zone's column denials and masks are listed, the default zone's policies do not reach into the zone.
+     */
+    @Test
+    void wholeTableFollowsSecurityZones() {
+        RangerPolicy defaultDeny = access(2, columns("hr", "teams", "budget"));
+        defaultDeny.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        List<RangerPolicy> zonePolicies = new ArrayList<>();
+        zonePolicies.add(access(10, columns("hr", "*", "*"), item(List.of("alice"), List.of())));
+        RangerPolicy zoneDeny = access(11, columns("hr", "people", "ssn"));
+        zoneDeny.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        zonePolicies.add(zoneDeny);
+        RangerPolicy zoneMask = policy(12, RangerPolicy.POLICY_TYPE_DATAMASK, columns("hr", "staff", "salary"));
+        zoneMask.setDataMaskPolicyItems(List.of(mask("MASK_NULL", null, List.of("alice"), List.of())));
+        zonePolicies.add(zoneMask);
+        zonePolicies.forEach(policy -> policy.setZoneName("pii"));
+        ServicePolicies.SecurityZoneInfo zone = new ServicePolicies.SecurityZoneInfo();
+        zone.setZoneName("pii");
+        zone.setResources(List.of(new HashMap<>(Map.of("database", List.of("hr")))));
+        zone.setPolicies(zonePolicies);
+        ServicePolicies servicePolicies = new ServicePolicies();
+        servicePolicies.setServiceName(SERVICE);
+        servicePolicies.setServiceDef(serviceDef);
+        servicePolicies.setPolicyVersion(1L);
+        servicePolicies.setPolicies(List.of(access(1, columns("*", "*", "*"), item(List.of("alice"), List.of())),
+                defaultDeny));
+        servicePolicies.setSecurityZones(Map.of("pii", zone));
+        HiveRangerPlugin plugin = new HiveRangerPlugin("hive", "hive-policies-test");
+        plugin.setPolicies(servicePolicies);
+        HivePolicies zoned = new HivePolicies(plugin, identity -> Set.of());
+
+        assertTrue(zoned.readWholeTable("alice", ORDERS).allowed());
+        assertEquals("no select on column ssn",
+                zoned.readWholeTable("alice", new HivePolicies.HiveTable("hr", "people", null)).reason());
+        assertEquals("masked column salary",
+                zoned.readWholeTable("alice", new HivePolicies.HiveTable("hr", "staff", null)).reason());
+        assertTrue(zoned.readWholeTable("alice", new HivePolicies.HiveTable("hr", "teams", null)).allowed());
+        assertFalse(zoned.readWholeTable("bob", new HivePolicies.HiveTable("hr", "teams", null)).allowed());
+    }
+
+    /**
+     * Each whole-table decision is audited once, as a select on the table without the probe columns; a denial
+     * by a column restriction is audited as denied with its reason, visibility checks are not audited.
+     */
+    @Test
+    void wholeTableDecisionsAreAudited() {
+        RangerPolicy deny = access(2, columns("sales", "orders", "ssn"));
+        deny.setDenyPolicyItems(List.of(item(List.of("alice"), List.of())));
+        RangerBasePlugin plugin = plugin(List.of(access(1, columns("sales", "*", "*"),
+                item(List.of("alice"), List.of())), deny));
+        List<RangerAccessResult> audited = new ArrayList<>();
+        HivePolicies audit = new HivePolicies(plugin, identity -> Set.of(), new RangerAccessResultProcessor() {
+            @Override
+            public void processResult(RangerAccessResult result) {
+                audited.add(result);
+            }
+
+            @Override
+            public void processResults(Collection<RangerAccessResult> results) {
+                audited.addAll(results);
+            }
+        });
+
+        assertTrue(audit.canSeeDatabase("alice", "sales"));
+        assertTrue(audit.readWholeTable("alice", new HivePolicies.HiveTable("sales", "customers", null))
+                .allowed());
+        assertFalse(audit.readWholeTable("alice", ORDERS).allowed());
+        assertFalse(audit.readWholeTable("mallory", ORDERS).allowed());
+        assertEquals(3, audited.size());
+
+        RangerAccessResult allowed = audited.get(0);
+        assertTrue(allowed.getIsAllowed());
+        assertEquals(1L, allowed.getPolicyId());
+        assertEquals("alice", allowed.getAccessRequest().getUser());
+        assertEquals("select", allowed.getAccessRequest().getAccessType());
+        assertEquals("customers", allowed.getAccessRequest().getResource().getValue("table"));
+        assertNull(allowed.getAccessRequest().getResource().getValue("column"));
+
+        RangerAccessResult restricted = audited.get(1);
+        assertFalse(restricted.getIsAllowed());
+        assertTrue(restricted.getIsAudited());
+        assertEquals(-1L, restricted.getPolicyId());
+        assertEquals("no select on column ssn", restricted.getReason());
+        assertEquals("orders", restricted.getAccessRequest().getResource().getValue("table"));
+        assertNull(restricted.getAccessRequest().getResource().getValue("column"));
+
+        RangerAccessResult denied = audited.get(2);
+        assertFalse(denied.getIsAllowed());
+        assertEquals("mallory", denied.getAccessRequest().getUser());
     }
 
     /**

@@ -5,6 +5,7 @@ import org.apache.ranger.plugin.model.RangerServiceDef;
 import org.apache.ranger.plugin.policyengine.RangerAccessRequestImpl;
 import org.apache.ranger.plugin.policyengine.RangerAccessResourceImpl;
 import org.apache.ranger.plugin.policyengine.RangerAccessResult;
+import org.apache.ranger.plugin.policyengine.RangerAccessResultProcessor;
 import org.apache.ranger.plugin.policyengine.RangerPolicyEngine;
 import org.apache.ranger.plugin.service.RangerBasePlugin;
 import org.slf4j.Logger;
@@ -31,16 +32,30 @@ public final class HivePolicies {
 
     private final RangerBasePlugin plugin;
     private final Function<String, Set<String>> groups;
+    private final RangerAccessResultProcessor audit;
 
     /**
-     * Creates an evaluator around a Ranger plugin of the Hive service.
+     * Creates an evaluator around a Ranger plugin of the Hive service, without audit.
      *
      * @param plugin Ranger plugin holding the Hive service's policies
      * @param groups groups of an authenticated identity
      */
     public HivePolicies(RangerBasePlugin plugin, Function<String, Set<String>> groups) {
+        this(plugin, groups, null);
+    }
+
+    /**
+     * Creates an evaluator that audits its whole-table decisions.
+     *
+     * @param plugin Ranger plugin holding the Hive service's policies
+     * @param groups groups of an authenticated identity
+     * @param audit receives one result per whole-table decision, null for no audit
+     */
+    public HivePolicies(RangerBasePlugin plugin, Function<String, Set<String>> groups,
+            RangerAccessResultProcessor audit) {
         this.plugin = plugin;
         this.groups = groups;
+        this.audit = audit;
     }
 
     /** One Hive table as the policies see it. */
@@ -173,13 +188,26 @@ public final class HivePolicies {
      * the columns a query reads: select on the table (a policy on all columns), no row filter, and select without
      * a mask on every column a restrictive policy names and on columns only {@code *} policies cover. Policies the
      * server cannot evaluate exactly on the table (owner macros, conditions, column patterns, restrictive tag
-     * policies) deny it. Needs a {@link HiveRangerPlugin}.
+     * policies) deny it. Needs a {@link HiveRangerPlugin}. The decision is audited as one select on the table.
      *
      * @param principal authenticated identity
      * @param table the table, its owner unknown
      * @return the decision, never with a row filter or masks
      */
     public TableAccess readWholeTable(String principal, HiveTable table) {
+        TableAccess decision = decideWholeTable(principal, table);
+        audit(principal, table, decision);
+        return decision;
+    }
+
+    /**
+     * Decides whether a user may read a table whole, see {@link #readWholeTable}.
+     *
+     * @param principal authenticated identity
+     * @param table the table, its owner unknown
+     * @return the decision, never with a row filter or masks
+     */
+    private TableAccess decideWholeTable(String principal, HiveTable table) {
         TableAccess base = readTable(principal, table, List.of());
         if (!base.allowed()) {
             return base;
@@ -213,6 +241,39 @@ public final class HivePolicies {
                     ? "(any)" : column));
         }
         return new TableAccess(true, null, Map.of(), null);
+    }
+
+    /**
+     * Audits a whole-table decision as Ranger's result of a select on the table, not of the probe requests
+     * behind it (their column names are not the query's). A table denied by a restriction the table-level
+     * result does not show (a column denial, a mask, a row filter, an inexact policy) is audited as denied with
+     * that reason and no policy id. An audit failure does not change the decision.
+     *
+     * @param principal authenticated identity
+     * @param table the table
+     * @param decision the decision
+     */
+    private void audit(String principal, HiveTable table, TableAccess decision) {
+        if (audit == null || invalid(table)) {
+            return;
+        }
+        try {
+            RangerAccessResult result = plugin.isAccessAllowed(
+                    request(principal, resource(table.database(), table.table(), null, table.owner()), SELECT),
+                    null);
+            if (result == null) {
+                return;
+            }
+            if (!decision.allowed() && result.getIsAllowed()) {
+                result.setIsAllowed(false);
+                result.setPolicyId(-1);
+                result.setReason(decision.reason());
+                result.setIsAudited(true);
+            }
+            audit.processResult(result);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Ranger Hive audit failed for {}.{}", table.database(), table.table(), e);
+        }
     }
 
     /**
