@@ -17,6 +17,7 @@
         <module>flight-server</module>
         <module>flight-auth-ldap</module>
         <module>flight-auth-jwt</module>
+        <module>flight-auth-ranger-hive</module>
         <module>flight-client-core</module>
         <module>flight-spark</module>
         <module>flight-starrocks</module>
