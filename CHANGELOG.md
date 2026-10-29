@@ -199,6 +199,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and must look to the `iceberg-rest` catalog exactly as the same tables in a Hadoop-layout warehouse (names,
   columns, files, row and delete counts, partial-read problems, DuckDB `iceberg_scan` rows). Test only, no runtime
   change.
+- Distributed complete mode, endpoint answers cut after the client's first batch (lane 3 D5):
+  `DistributedCompleteCutAfterFirstBatchTest` passes the endpoint answers through a throttled TCP relay, uses
+  1024-row batches so that DuckDB sends the first batch before the endpoint answers are read, and resets the relay
+  once the client has it: the client gets an error (INTERNAL, naming the peer's UNAVAILABLE), never a silently
+  partial answer, and the node neither merges nor falls back. `CuttingRelay` gained a rate limit and `cutNow()`.
+  Test only, no runtime change.
 - Distributed complete mode, 3-node test (item 18 step 3, lane 3 D2): `DistributedClusterIntegrationTest` runs
   three complete-mode nodes on one Hazelcast cluster in one JVM over a shared data directory (6 files, two
   endpoints per node): merged answers equal single-node answers for 9 shapes (incl. wide GROUP BY and a wide

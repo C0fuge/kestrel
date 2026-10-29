@@ -12,13 +12,16 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * TCP relay to a Flight server that drops every connection once it has passed a number of bytes
- * from the server, as a peer killed in the middle of a stream (the client sees a reset).
+ * from the server, or when the test calls {@link #cutNow()}, as a peer killed in the middle of a
+ * stream (the client sees a reset). The relay can pass the server's bytes at a limited rate, so
+ * that an answer is still on its way when the test cuts it.
  */
 final class CuttingRelay implements AutoCloseable {
 
     private final ServerSocket listener;
     private final int targetPort;
     private final long cutAfterBytes;
+    private final long bytesPerSecond;
     private final AtomicLong relayed = new AtomicLong();
     private final List<Socket> sockets = new CopyOnWriteArrayList<>();
     private volatile boolean cut;
@@ -31,6 +34,19 @@ final class CuttingRelay implements AutoCloseable {
      * @throws IOException when the port cannot be opened
      */
     CuttingRelay(int targetPort, long cutAfterBytes) throws IOException {
+        this(targetPort, cutAfterBytes, 0);
+    }
+
+    /**
+     * Starts a relay on a free local port that passes the server's bytes at a limited rate.
+     *
+     * @param targetPort port of the server on localhost
+     * @param cutAfterBytes bytes from the server after which every connection is dropped
+     * @param bytesPerSecond rate of the server's bytes, or 0 for no limit
+     * @throws IOException when the port cannot be opened
+     */
+    CuttingRelay(int targetPort, long cutAfterBytes, long bytesPerSecond) throws IOException {
+        this.bytesPerSecond = bytesPerSecond;
         this.listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
         this.targetPort = targetPort;
         this.cutAfterBytes = cutAfterBytes;
@@ -55,6 +71,20 @@ final class CuttingRelay implements AutoCloseable {
      */
     boolean wasCut() {
         return cut;
+    }
+
+    /**
+     * Counts the bytes passed from the server so far.
+     *
+     * @return bytes
+     */
+    long relayed() {
+        return relayed.get();
+    }
+
+    /** Resets every connection now. */
+    void cutNow() {
+        dropAll();
     }
 
     /**
@@ -93,9 +123,14 @@ final class CuttingRelay implements AutoCloseable {
                     if (counted && relayed.addAndGet(n) >= cutAfterBytes) {
                         dropAll();
                     }
+                    if (counted && bytesPerSecond > 0) {
+                        Thread.sleep(n * 1000L / bytesPerSecond);
+                    }
                 }
             } catch (IOException e) {
                 // the other side or the cut closed the socket
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } finally {
                 closeQuietly(from);
                 closeQuietly(to);

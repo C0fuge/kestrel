@@ -192,7 +192,7 @@ class DistributedClusterIntegrationTest {
     /**
      * Verifies a peer stream reset in the middle of a concatenated answer never yields a silently
      * partial answer: the client gets either the single-node answer (the reset came before the
-     * first batch) or an error.
+     * first batch) or an error. {@link DistributedCompleteCutAfterFirstBatchTest} forces the error.
      *
      * @throws Exception on failure
      */
