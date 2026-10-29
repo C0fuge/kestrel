@@ -517,13 +517,25 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     wildcards (service definition), so Ranger reads `sal*` there literally and so do we. No Ranger audit from
     this provider yet. Tests: `HivePoliciesTest` +2 (7), `RangerHiveAuthorizationTest` 3 (schema mapping,
     `requireQuery` incl. joins, factory via ServiceLoader, settings, union, close).
-    *Next step (3c):* still waiting for the maintainer's answer on the restriction hook (Open questions, "P6 step
-    3"). Without it: (i) Ranger audit for `ranger-hive` (`RangerDefaultAuditHandler` on the real `readWholeTable`
-    decision only, not on probe requests - probes would log a fake column); (ii) a zone test (`ServicePolicies`
-    with `securityZones`) for `HiveRangerPlugin`; (iii) end-to-end with the hive plugin + `FLIGHT_AUTHORIZATION_
-    PROVIDER=ranger-hive` in a Flight server test (policies set on the plugin, no admin) - needs a test hook to
-    hand a preloaded plugin to the factory. After the answer: core restriction hook (own commits), then (4) row
-    filters via the `HiveViewSql` whitelist, (5) end-to-end.
+    *Step 3 (c) partly done 2026-10-29 (848f11a):* (i) Ranger audit: `HivePolicies(plugin, groups, audit)` audits
+    each `readWholeTable` decision once as Ranger's result of a table-level `select` (no probe column; a denial
+    by a column restriction / mask / row filter / inexact policy is logged denied with its reason and policy id
+    -1, `isAudited` forced); `ranger-hive` passes a `RangerDefaultAuditHandler` (destinations from
+    `ranger-hive-audit.xml` on the class path); `canReadTable` evaluates the table before `canSeeDatabase` so
+    denials are audited; schema visibility not audited (as Hive's SHOW filters). Note: `GetTables` filters
+    through `canReadTable`, so listings are audited per table - as the core `ranger` provider does. (ii) zone
+    test: `HivePoliciesTest.wholeTableFollowsSecurityZones` (zone `pii` on database `hr`: the zone's column
+    deny and mask are found, a default-zone deny on `hr.teams` does not apply inside the zone, as Ranger does;
+    checked to fail with zone listing removed).
+    *Next step (3c iii):* end-to-end in a real Flight SQL server: a test in `flight-auth-ranger-hive` (package
+    `pro.surpin.data.arrowflight.server`, like `LdapFlightLoginTest`) starting the server with
+    `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive` and a preloaded `HiveRangerPlugin` - needs a package-private test
+    hook in `RangerHiveAuthorizationProviderFactory` (e.g. a static `Function<Map, HiveRangerPlugin>` override)
+    or building `RangerHiveAuthorization` directly; DuckDB schemas named like Hive databases (no metastore
+    needed): masked/denied table refused in a query, in a join, through a catalog view and in GetTables; an
+    unrestricted table answered. Then the hive plugin variant. After the maintainer's answer on the restriction
+    hook (Open questions, "P6 step 3"): core restriction hook (own commits), (4) row filters via the `HiveViewSql`
+    whitelist, (5) end-to-end.
 
 ## Open questions
 
@@ -561,7 +573,7 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   opt-in Airport compatibility layer if DuckDB users want `airport_take_flight` / `ATTACH ... (TYPE AIRPORT)`?
 
 - (P6 step 3, security design - please confirm or correct before the restriction hook is merged; nothing of it
-  is wired yet, provider `ranger-hive` is not registered) Ranger Hive masks and row filters need the server to
+  is wired yet; provider `ranger-hive` is registered but refuses every masked / filtered table) Ranger Hive masks and row filters need the server to
   rewrite queries. Proposal:
   (a) *done, additive:* `FlightAuthorizationProviderFactory.create(env, providerGroups)` with a default that calls
   `create(env)`, so custom providers (like `ranger-hive`) get the LDAP/JWT groups the built-in `ranger` gets.
@@ -583,6 +595,11 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   Questions: is (b)'s "all columns when unsure" (deny on any column-level deny) acceptable? Should tickets
   re-check the restriction at DoGet (policy changes between GetFlightInfo and DoGet), at the cost of one extra
   Ranger evaluation per endpoint?
+
+- (P6, audit) `ranger-hive` audits every table decision, including the per-table filter of `GetTables` (as the
+  core `ranger` provider does): a BI tool listing a large catalog writes one audit record per table and listing.
+  Keep, or skip auditing allowed listing checks (would need the server to tell a listing from a read - a small
+  additive `FlightAuthorization` hook)?
 
 - (maintainer, pending) share of ORC / Parquet / text / ACID tables in production; Spark versions and YARN keytab use;
   Ranger masking/row filters in use; AD/LDAP or Knox for BI logins; BI tools in use; Delta/Hudi/Paimon/Ozone; plan for
@@ -806,3 +823,11 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   package dispatch 40824332344 (560b1ed) cancelled by other lanes' pushes; the core lane's package dispatch
   40824399521 (7867822, contains d1f0c78) green (build + package); pre-release `server-1.0.0-786782219b1a` carries
   `auth/ranger-hive/` (jar + SHA256SUMS, checked). Next: P6 step 3 (c), see Next steps.
+- 2026-10-29 (plugins session): P6 step 3 (c) (i)+(ii) (848f11a): `ranger-hive` audits each table decision to
+  Ranger (one table-level `select` result per decision, denials by column restrictions with reason and policy id
+  -1; `canReadTable` evaluates the table first so denials are audited) and security zones are covered by a test
+  (zone deny/mask found, default-zone policies not applied inside a zone). Docs `docs/security/providers.md`,
+  CHANGELOG. Local: module tests 18/18 (`HivePoliciesTest` 9), Checkstyle + SpotBugs clean. CI: Dev CI push run
+  40828739290 (848f11a) green; package dispatch 40830166120 cancelled by the core lane's push, re-dispatched after
+  its run 40830188389 finished: 40831727414 (85a7908) green, pre-release `server-1.0.0-85a790826156`. New Open
+  question (P6, audit of GetTables listings). Next: P6 step 3 (c iii) end-to-end, see Next steps.
