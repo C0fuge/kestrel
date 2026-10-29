@@ -273,10 +273,24 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
         extension covers local + S3 (server installs a scoped `TYPE paimon` secret); Hudi via the extension local
         only. The light reader (data through DuckDB's own `read_parquet`, so inside the lockdown, S3 secrets and
         hadoopfs work) covers HDFS and S3 for Paimon and Hudi COW / compacted MOR. Q7 updated.
+    - Step 4 (b) Hudi on S3 done (2026-10-29): the lockdown probe's `hudi_option` checks used `,` and JSON, but
+      duckdb-hudi 0.3.1 (alitrack/duckdb-hudi, hudi-rs 0.5.0 kernel) splits `hudi_option` on `;` (`rust/src/
+      kernel.rs`); keys other than `hoodie.*` go to object_store as storage options. With `aws_endpoint_url=http://
+      host:port; aws_access_key_id=..; aws_secret_access_key=..; aws_region=..; aws_allow_http=true` **every Hudi
+      fixture on S3 answers equal to Spark after the lockdown** (both versions, COW, INSERT OVERWRITE, inflight,
+      uncompacted and compacted MOR, partition filter) - run 40823753558. The README's `hoodie.s3.access_key_id` /
+      `hoodie.aws.region` names are not honoured (back to the metadata service). Security: credentials travel in the
+      SQL text (a plugin would write them into server-generated query text, so query logging / EXPLAIN / error
+      messages must never show it), and the same options read `s3://lake/outside/...` outside `allowed_directories`
+      (GETS THROUGH) and contact any endpoint client SQL names - so `read_hudi` must be refused in client SQL as
+      already planned; DuckDB secrets are still ignored. Consequence for Q7: Hudi via the extension covers local +
+      S3 too (MOR with logs included), only HDFS needs the light reader.
     - **Next for C4 (b):** waits on Q7 (route). Also store both extensions in ci-assets (from the artifact; the
       session cannot download them). (d) full ACID ORC still waits on Q6. With C1 2b, C2, C3 and C4 all waiting on
-      answers (Q1, Q4-Q7), a next session without answers could take a test-only item: e.g. the Hudi `hudi_option`
-      names for S3 (hudi-rs storage options) to see whether Hudi on S3 is reachable at all, or nothing.
+      answers (Q1, Q4-Q7), a next session without answers has no unblocked item; the Hudi-on-S3 question is answered
+      (above). Possible test-only extras: `hudi_info` / `hudi_files` with options (their signatures take none),
+      or whether credentials in `hudi_option` show up in DuckDB error text (they did not in run 40823753558's
+      refusals - masked check only). Otherwise stop early.
 ## Open questions
 
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
@@ -331,6 +345,10 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   S3 roots), (b) light reader for Hudi COW / compacted MOR (works on S3 and HDFS; MOR with logs refused). Same
   security footing as Q5 (an extension with its own I/O in every query connection, closed only by the refused
   list).
+  Update (2026-10-29): Hudi on S3 works through the extension with `hudi_option` storage options (`;`-separated;
+  the earlier probe's separator was wrong), all fixtures equal to Spark. So route (a) covers Paimon and Hudi on
+  local + S3 (incl. Hudi MOR with logs); only HDFS needs (b). Hudi's credentials go in the generated SQL text
+  (keep it out of logs), not in a DuckDB secret.
 
 - Q2 (2026-10-28, for lane 3 / maintainer, not lane 4's code): `DistributedClusterIntegrationTest` is flaky on
   `main` since D2 (c) part 2 (c7e436e): `peerStreamCutBeforeTheFirstBatch...:187` and
@@ -453,3 +471,8 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   40821054886 (fixed probe; all jobs green). Dev CI push runs 40820331658 / 40821054924 cancelled by newer pushes; dispatch 40821204741 (head 06833e7, includes this) running at session end (tools/ci + workflow only). Q7
   updated. No new pre-release needed: the last runtime change of lane 4 (hive plugin) is in pre-release
   `server-1.0.0-01884e287668`; later C4 work is test-only. Q1, Q4-Q7 unanswered.
+- 2026-10-29: C4 (b) Hudi on S3 - the lockdown probe's `hudi_option` used the wrong separator; with `;`-separated
+  object_store keys `read_hudi` answers every Hudi fixture on S3 equal to Spark after the lockdown, and the same
+  options also reach S3 paths outside `allowed_directories` (refuse `read_hudi` in client SQL, as planned). Test
+  only. Catalogs CI green: run 40823753558 (all jobs). Dev CI run 40823753684 (head 37fe039) running at session end
+  (tools/ci only). Q7 updated. Q1, Q4-Q7 unanswered; no unblocked item left for lane 4.

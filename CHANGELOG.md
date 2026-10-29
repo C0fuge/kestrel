@@ -176,6 +176,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   as their type NULL; `.gz`, `.deflate`, `.bz2` files. Primitive columns only for now; tables with nested
   columns, footer lines, `timestamp.formats`, another encoding or line delimiter, and other text serdes (CSV,
   JSON, Regex) stay skipped with a log reason; a partition with its own serde properties fails the query.
+- Hudi on S3 probe (C4 (b)): `DuckDbPaimonHudiProbe` reads every Hudi fixture on S3 through `read_hudi`'s
+  `hudi_option` (`;`-separated object_store keys such as `aws_endpoint_url`, `aws_access_key_id`), and records that
+  the same options reach S3 locations outside `allowed_directories`. Test only.
 - Paimon / Hudi lockdown probe (C4 (b)): `tools/ci/DuckDbPaimonHudiProbe.java` (Catalogs CI job `paimon-hudi`)
   loads DuckDB's `paimon` and `hudi` v1.5.6 extensions into a connection locked down as the server's query
   connections and records answers (local, S3 on moto, HDFS) and what gets past the lockdown (tables outside
