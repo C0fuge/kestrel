@@ -198,12 +198,6 @@ class RangerHiveFlightSqlTest {
      * @throws Exception when Ranger's Hive service definition cannot be read
      */
     private static ServicePolicies policies() throws Exception {
-        RangerServiceDef serviceDef;
-        try (InputStream in = RangerHiveFlightSqlTest.class.getResourceAsStream(
-                "/service-defs/ranger-servicedef-hive.json")) {
-            serviceDef = JsonUtilsV2.jsonToObj(new String(Objects.requireNonNull(in).readAllBytes(),
-                    StandardCharsets.UTF_8), RangerServiceDef.class);
-        }
         RangerPolicy access = policy(1, RangerPolicy.POLICY_TYPE_ACCESS, resources("sales", "*", "*"));
         access.setPolicyItems(List.of(new RangerPolicyItem(select(), List.of(), List.of("staff"), List.of(),
                 List.of(), false)));
@@ -219,11 +213,28 @@ class RangerHiveFlightSqlTest {
         filter.setRowFilterPolicyItems(List.of(new RangerRowFilterPolicyItem(
                 new RangerPolicyItemRowFilterInfo("id < 10"), select(), List.of("sam"), List.of(), List.of(),
                 List.of(), false)));
+        return servicePolicies(List.of(access, deny, mask, filter));
+    }
+
+    /**
+     * Wraps policies as the test Hive service's policies, with Ranger's own Hive service definition.
+     *
+     * @param policies policies of service {@code hivedev}
+     * @return service policies
+     * @throws Exception when Ranger's Hive service definition cannot be read
+     */
+    static ServicePolicies servicePolicies(List<RangerPolicy> policies) throws Exception {
+        RangerServiceDef serviceDef;
+        try (InputStream in = RangerHiveFlightSqlTest.class.getResourceAsStream(
+                "/service-defs/ranger-servicedef-hive.json")) {
+            serviceDef = JsonUtilsV2.jsonToObj(new String(Objects.requireNonNull(in).readAllBytes(),
+                    StandardCharsets.UTF_8), RangerServiceDef.class);
+        }
         ServicePolicies servicePolicies = new ServicePolicies();
         servicePolicies.setServiceName("hivedev");
         servicePolicies.setServiceDef(serviceDef);
         servicePolicies.setPolicyVersion(1L);
-        servicePolicies.setPolicies(List.of(access, deny, mask, filter));
+        servicePolicies.setPolicies(policies);
         return servicePolicies;
     }
 
@@ -235,7 +246,7 @@ class RangerHiveFlightSqlTest {
      * @param resources resources
      * @return the policy
      */
-    private static RangerPolicy policy(long id, int type, Map<String, RangerPolicyResource> resources) {
+    static RangerPolicy policy(long id, int type, Map<String, RangerPolicyResource> resources) {
         RangerPolicy policy = new RangerPolicy();
         policy.setId(id);
         policy.setName("p" + id);
@@ -253,7 +264,7 @@ class RangerHiveFlightSqlTest {
      * @param column column value, null for a table resource
      * @return resources
      */
-    private static Map<String, RangerPolicyResource> resources(String database, String table, String column) {
+    static Map<String, RangerPolicyResource> resources(String database, String table, String column) {
         Map<String, RangerPolicyResource> resources = new LinkedHashMap<>();
         resources.put("database", new RangerPolicyResource(database));
         resources.put("table", new RangerPolicyResource(table));
@@ -268,7 +279,7 @@ class RangerHiveFlightSqlTest {
      *
      * @return accesses
      */
-    private static List<RangerPolicyItemAccess> select() {
+    static List<RangerPolicyItemAccess> select() {
         return List.of(new RangerPolicyItemAccess("select", true));
     }
 

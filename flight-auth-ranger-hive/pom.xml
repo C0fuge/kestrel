@@ -102,6 +102,9 @@
                 <version>3.0.0</version>
                 <configuration>
                     <excludedGroups>${excludedGroups}</excludedGroups>
+                    <!-- One JVM per test class: a second Flight SQL server in a JVM fails a partial-mode join
+                         with quoted names ("schema does not exist"), see docs/dev/PLUGINS-STATUS.md (P6). -->
+                    <reuseForks>false</reuseForks>
                     <!-- Arrow's memory needs java.nio open (the Flight round-trip test). -->
                     <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                 </configuration>
