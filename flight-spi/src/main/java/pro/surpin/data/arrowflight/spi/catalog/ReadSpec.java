@@ -61,4 +61,36 @@ public sealed interface ReadSpec {
             Objects.requireNonNull(format, "format");
         }
     }
+
+    /**
+     * A table of a remote database the catalog attached with
+     * {@link pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup#attachDatabase}: DuckDB reads it
+     * through the attachment ({@code "database"."schema"."table"}), with the snapshot's declared
+     * columns when it has some, else all columns of the remote table. Such a snapshot has no
+     * files; every query of it is answered complete by one node. Client queries cannot name the
+     * attachment itself, only the server's table.
+     *
+     * @param database attachment name, as passed to {@code attachDatabase}
+     * @param schema schema of the remote database
+     * @param table table of the remote database
+     * @since SPI 1.10
+     */
+    record AttachedTable(String database, String schema, String table) implements ReadSpec {
+
+        /**
+         * Checks the parts.
+         *
+         * @param database attachment name
+         * @param schema remote schema
+         * @param table remote table
+         */
+        public AttachedTable {
+            Objects.requireNonNull(database, "database");
+            Objects.requireNonNull(schema, "schema");
+            Objects.requireNonNull(table, "table");
+            if (database.isBlank() || schema.isBlank() || table.isBlank()) {
+                throw new IllegalArgumentException("An attached table needs a database, schema and table");
+            }
+        }
+    }
 }

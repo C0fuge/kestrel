@@ -37,7 +37,7 @@ class SpiTest {
 
     @Test
     void versionCompatibility() {
-        assertEquals("1.9", SpiVersion.current());
+        assertEquals("1.10", SpiVersion.current());
         assertTrue(SpiVersion.supports("1.0"));
         assertTrue(SpiVersion.supports("1.1"));
         assertTrue(SpiVersion.supports("1.2"));
@@ -48,12 +48,54 @@ class SpiTest {
         assertTrue(SpiVersion.supports("1.7"));
         assertTrue(SpiVersion.supports("1.8"));
         assertTrue(SpiVersion.supports("1.9"));
-        assertFalse(SpiVersion.supports("1.10"));
+        assertTrue(SpiVersion.supports("1.10"));
+        assertFalse(SpiVersion.supports("1.11"));
         assertFalse(SpiVersion.supports("2.0"));
         assertFalse(SpiVersion.supports("0.9"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1"));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports(null));
         assertThrows(IllegalArgumentException.class, () -> SpiVersion.supports("1.0.0"));
+    }
+
+    @Test
+    void attachedTablesNameAllParts() {
+        pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable table =
+                new pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable("pg", "public", "t");
+        assertEquals("public", table.schema());
+        assertThrows(IllegalArgumentException.class,
+                () -> new pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable("pg", " ", "t"));
+        assertThrows(NullPointerException.class,
+                () -> new pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable(null, "s", "t"));
+        pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup old = new pro.surpin.data.arrowflight.spi.duckdb.DuckDbSetup() {
+            @Override
+            public void loadExtension(String name) {
+            }
+
+            @Override
+            public void set(String setting, String value) {
+            }
+
+            @Override
+            public void set(String setting, boolean value) {
+            }
+
+            @Override
+            public void set(String setting, long value) {
+            }
+
+            @Override
+            public void createSecret(String name, String type, String scope,
+                    java.util.Map<String, pro.surpin.data.arrowflight.spi.duckdb.SecretValue> options) {
+            }
+
+            @Override
+            public void refuseFunctions(String... names) {
+            }
+        };
+        assertThrows(UnsupportedOperationException.class,
+                () -> old.attachDatabase("pg", "postgres", java.util.Map.of()));
+        assertThrows(UnsupportedOperationException.class,
+                () -> old.loadExtensionRefusingFunctions("postgres_scanner"));
     }
 
     @Test

@@ -38,6 +38,30 @@ public interface DuckDbSetup {
     }
 
     /**
+     * Attaches a remote database read-only, through a database scanner extension this
+     * contributor loaded with {@link #loadExtensionRefusingFunctions} first: the server writes a
+     * temporary secret with the options and {@code ATTACH '' AS name (TYPE type, SECRET name,
+     * READ_ONLY)} before the lockdown. Client queries cannot name the attachment; its tables
+     * reach them only as catalog tables read as
+     * {@link pro.surpin.data.arrowflight.spi.catalog.ReadSpec.AttachedTable}. Sensitive values
+     * never appear in errors or logs.
+     *
+     * @param name attachment name, an identifier unique in the server (also the secret's name)
+     * @param type {@code postgres} (extension {@code postgres_scanner}) or {@code mysql}
+     *             (extension {@code mysql_scanner})
+     * @param options connection options in the order they are written: {@code HOST},
+     *                {@code PORT}, {@code DATABASE}, {@code USER}, {@code PASSWORD}; for mysql
+     *                also {@code SSL_MODE}, {@code SSL_CA}
+     * @throws IllegalArgumentException when the type, the name or an option is not allowed, or
+     *         the type's extension was not loaded with refused functions
+     * @throws UnsupportedOperationException on a server that cannot do it (the default)
+     * @since SPI 1.10
+     */
+    default void attachDatabase(String name, String type, Map<String, SecretValue> options) {
+        throw new UnsupportedOperationException("this server cannot attach a " + type + " database");
+    }
+
+    /**
      * Sets a text setting.
      *
      * @param setting setting name
