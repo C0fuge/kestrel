@@ -23,11 +23,10 @@
 
 ## Next steps (one per session)
 
-> **Maintainer, 2026-10-29 13:00 - WRAP-UP MODE (token budget).** No new features, no new investigations. Only:
+> **Maintainer, 2026-10-29 13:00 - FINISH MODE.** No new features or investigations; finish what is started. Core lane:
 > (1) item 22: the thread cap for the shared DuckDB on large nodes (small change, speed) + CI test; (2) finish what is
 > half-done and keep CI green; (3) final consolidation: CHANGELOG and START-NOTES describe every setting added since
-> 7562a5bdb7b9 with its default, one final `package=true` pre-release from main. Other lanes are paused (catalogs,
-> distributed, connectors); the plugins lane only finishes P6's current step. When (1)-(3) are done, write
+> 7562a5bdb7b9 with its default, one final `package=true` pre-release from main. Plugins lane finishes P6, catalogs lane finishes C1 2b + C2, the distributed lane stays paused. When (1)-(3) are done, write
 > "WRAP-UP DONE" at the top of Next steps and stop taking items.
 
 > **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than

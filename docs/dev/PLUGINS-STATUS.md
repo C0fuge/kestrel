@@ -5,8 +5,8 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
-> **Maintainer, 2026-10-29 13:00 - WRAP-UP:** finish the current P6 step (CI green, Log), then write "P6 paused for
-> wrap-up" and stop; take no new items.
+> **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
+> docs), then write "PLUGINS LANE DONE" and stop; no new items.
 
 > **Maintainer, 2026-10-28 15:00 - native first.** Integrations must talk Arrow Flight / Flight SQL natively (Arrow batches
 > end to end, parallel endpoints, pushdown), not through a JDBC/ODBC layer, wherever the consumer allows it - as done for

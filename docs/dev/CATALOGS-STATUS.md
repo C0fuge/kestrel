@@ -4,6 +4,10 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish only what is started: C1 step 2b (vended credentials, per
+> Q1 answer) and C2 (the JDBC federation plugin, per Q4 answer). Delta, Paimon/Hudi and full ACID ORC stay as written
+> backlog (not started now). Then write "CATALOGS LANE DONE" and stop.
+
 C1. **Iceberg REST catalogs beyond Gravitino:** conformance of the iceberg plugin's REST path against Apache Polaris,
     Project Nessie and Lakekeeper (containers in CI), incl. vended credentials (S3 temporary credentials returned by the
     catalog, refreshed before expiry) and OAuth2 client credentials; Unity Catalog OSS if its Iceberg REST endpoint runs in
