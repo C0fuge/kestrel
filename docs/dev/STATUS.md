@@ -48,6 +48,14 @@
 > With a round trip all builds are equal (the 1.57x gain of the 0-latency run disappears, no slowdown appears). Still
 > waiting for the screening's S3 details (Open question); without them the next useful run is the screening's own
 > client (ADBC) against `store=s3`, which this workflow does not have yet.
+> *2026-10-29 (third cloud session, run 40813188390): with the ADBC client still not reproduced.* New input
+> `client=adbc` (`tools/ci/tpch-adbc.py`, ADBC Flight SQL driver 1.13.0, Go, via Python). SF10, store=s3, no added
+> latency, 2 CPUs / 6 GB, 1 measured round: default 282.4 s, threads4 281.4 s, 7562a5b 283.0 s (warm-ups 274.5 /
+> 284.2 / 282.3); 22/22 same answers. With ADBC 7562a5b is as fast as head (with the Java client it was 444.7 s at 0
+> latency), so the 0-latency gap of run 40794647875 is client-dependent, and the screening's 1.10 is not visible with
+> its own client here either. The workflow can now replay the screening's client, latency and container profile;
+> what is left is the screening's S3 server / network (Open question "S3 screening setup"). **No further CI run is
+> useful without that answer**; until then the core lane continues with the other open code items.
 
 > ~~**Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**~~
 > *Fixed 2026-10-28 (9efe670, see Log):* default threads cores / 4 in 4..16, the per-GiB cap only above 4, per-connection
@@ -726,6 +734,10 @@
   1.57x faster, and dropping the per-connection `memory_limit` makes it as slow as 7562a5b. Which S3 server, network
   latency, container profile and server options does the screening use for its S3 runs (and does it pass any
   `duckDb*` override)? With those the workflow can replay it on the same runner.
+  *2026-10-29 addendum:* the ADBC client (`client=adbc`) does not reproduce it either (run 40813188390: head 282.4 s,
+  7562a5b 283.0 s, SF10, 2 CPUs / 6 GB). Is the screening's MinIO on another host or in another container on the same
+  runner, and what are its CPU / memory limits? A MinIO sharing the server's 2 CPUs would make S3 reads compete with
+  DuckDB for CPU, which none of these runs model.
 
 - **Maintainer 2026-10-29, answer to "Item 22: one DuckDB scheduler": yes, build it as the opt-in
   `duckDbSharedDatabase` (default false)** *(step 1 built 2026-10-28, 4075216, see Log; a default change is still
@@ -2129,3 +2141,8 @@
   40806686740 (SF10, store=s3, +10 ms RTT, 2 CPUs / 6 GB, 1 round, baseline 7562a5b, extra
   `-DduckDbMemoryLimit=none`): 234.6 / 235.3 (threads4) / 236.0 (7562a5b) / 239.4 s (no limit), answers equal. Not
   reproduced with latency either; no server change. Open question "S3 screening setup" stays.
+- 2026-10-29 (cloud session, core lane): "Bug first" S3 heavy queries with the screening's client. `tpch-perf.yml`
+  input `client=adbc` (cd038f9, `tools/ci/tpch-adbc.py`, same output lines as TpchPerfTest, row counts checked). Runs
+  40812542626 (SF1, check of the client: 24.66 / 24.59 / 24.55 s) and 40813188390 (SF10, store=s3, 2 CPUs / 6 GB, 1
+  round, baseline 7562a5b): default 282.4 s, threads4 281.4 s, 7562a5b 283.0 s, 22/22 answers equal. Not reproduced;
+  no server change. Open question "S3 screening setup" extended (where the screening's MinIO runs).
