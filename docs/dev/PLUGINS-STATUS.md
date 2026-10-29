@@ -499,13 +499,31 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
     *Step 3 (a) done 2026-10-29 (093d6a8, core, own commit):* `FlightAuthorizationProviderFactory.create(env,
     providerGroups)` default -> `create(env)`; `SecurityProviders` passes the LDAP/JWT groups to custom providers.
     Restriction-hook design written into Open questions ("P6 step 3, security design").
-    *Next step (3b):* the restriction hook is a security change - wait for the maintainer's answer in Open
-    questions before merging the rewrite. Meanwhile (additive, unwired, may be done now): `RangerHiveAuthorization`
-    + factory `ranger-hive` in `flight-auth-ranger-hive` overriding `create(env, providerGroups)` (settings like
-    the core `ranger` provider: service name, Ranger admin URL / policy cache dir; schema prefix -> Hive
-    database), `canSeeSchema` / `canReadTable` via `HivePolicies` with *all* columns (fail closed: any mask, row
-    filter or column deny -> deny until the rewrite exists), services file, tests; then register it in the
-    server distribution with a CHANGELOG line.
+    *Step 3 (b) done 2026-10-29 (d1f0c78, module only):* provider `ranger-hive` registered
+    (`RangerHiveAuthorizationProviderFactory`, services file, `create(env, providerGroups)`; dev-ci `package` adds
+    `auth/ranger-hive/` (jar only) to `flight-auth-...tar.zst`). Settings: `RANGER_HIVE_SERVICE_NAME`,
+    `RANGER_ADMIN_URL` (required), `RANGER_POLICY_REST_USERNAME/_PASSWORD`, `RANGER_POLICY_CACHE_DIR`,
+    `RANGER_HIVE_SCHEMA_PREFIX` (schema = prefix + database; other schemas refused). Not named `RANGER_SERVICE_NAME`,
+    which core reserves for `ranger`. Groups = provider groups union Hadoop mapping. The server passes no column
+    names, so `canReadTable` = `HivePolicies.readWholeTable`: table-level select (column `*`), no row filter, then
+    `HiveRestrictivePolicies` (built per policy engine by `HiveRangerPlugin`, a `RangerBasePlugin` subclass that
+    lists resource policies of the default and every zone seen in `setPolicies`, and tag policies) finds the
+    restrictive policies (deny items, allow exceptions, masks, row filters) whose database/table resources match
+    (Ranger's `RangerDefaultPolicyResourceMatcher`, `SELF_OR_DESCENDANT`, also additional resource sets) and
+    collects their literal column names; those plus a probe column only `*` policies match (`"\u0000any column"`)
+    go through `readTable` - any deny or mask (except MASK_NONE) refuses the table. Refused without evaluation:
+    `{OWNER}` or conditions in restrictive items (owner unknown, request has no client context), column patterns /
+    `{...}` macros / excludes, any restrictive tag policy (all tables). Note: Hive's mask resources take no
+    wildcards (service definition), so Ranger reads `sal*` there literally and so do we. No Ranger audit from
+    this provider yet. Tests: `HivePoliciesTest` +2 (7), `RangerHiveAuthorizationTest` 3 (schema mapping,
+    `requireQuery` incl. joins, factory via ServiceLoader, settings, union, close).
+    *Next step (3c):* still waiting for the maintainer's answer on the restriction hook (Open questions, "P6 step
+    3"). Without it: (i) Ranger audit for `ranger-hive` (`RangerDefaultAuditHandler` on the real `readWholeTable`
+    decision only, not on probe requests - probes would log a fake column); (ii) a zone test (`ServicePolicies`
+    with `securityZones`) for `HiveRangerPlugin`; (iii) end-to-end with the hive plugin + `FLIGHT_AUTHORIZATION_
+    PROVIDER=ranger-hive` in a Flight server test (policies set on the plugin, no admin) - needs a test hook to
+    hand a preloaded plugin to the factory. After the answer: core restriction hook (own commits), then (4) row
+    filters via the `HiveViewSql` whitelist, (5) end-to-end.
 
 ## Open questions
 
@@ -779,3 +797,12 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
   filters by query rewrite, tickets, caches, fail closed) written into Open questions for the maintainer. No
   pre-release (no runtime change for existing providers). Next: P6 step 3 (b) unwired `ranger-hive` provider
   (deny on any restriction) while the design question is open.
+- 2026-10-29 (plugins session): P6 step 3 (b) - provider `ranger-hive` registered (d1f0c78, module
+  `flight-auth-ranger-hive` + dev-ci packaging + docs `docs/security/providers.md`, START-NOTES, CHANGELOG):
+  Hive catalog tables checked against the cluster's Hive Ranger service, any mask / row filter / column deny for the
+  caller (or a policy the server cannot evaluate exactly) refuses the table. Additive (new opt-in provider name).
+  Local (Maven Central): module tests 16/16 (`HiveMaskTest` 6, `HivePoliciesTest` 7, `RangerHiveAuthorizationTest`
+  3), Checkstyle + SpotBugs clean. CI: Dev CI push run 40824308828 (d1f0c78) and my
+  package dispatch 40824332344 (560b1ed) cancelled by other lanes' pushes; the core lane's package dispatch
+  40824399521 (7867822, contains d1f0c78) green (build + package); pre-release `server-1.0.0-786782219b1a` carries
+  `auth/ranger-hive/` (jar + SHA256SUMS, checked). Next: P6 step 3 (c), see Next steps.
