@@ -169,17 +169,27 @@ public final class DuckDbPaimonHudiProbe {
                 query(where, "hudi_files", c, "SELECT hudi_files(" + lit(root + HUDI_T) + ")");
             }
             query("local", "replacement scan inside allowed", c, "SELECT count(*) FROM " + lit(local + PAIMON_T));
+            // read_hudi's hudi_option is a ';'-separated 'k=v; k2=v2' list (duckdb-hudi 0.3.1, rust/src/kernel.rs;
+            // the first probe used ',' and JSON, which never reached the storage layer). Keys other than hoodie.*
+            // go to hudi-rs 0.5.0 as object_store storage options. Do all Hudi fixtures answer on S3 that way?
+            String hudiS3 = s3 ? String.format("aws_endpoint_url=http://%s; aws_access_key_id=%s;"
+                    + " aws_secret_access_key=%s; aws_region=us-east-1; aws_allow_http=true", s3Endpoint,
+                    env("PROBE_S3_KEY"), secretValue) : "";
             if (s3) {
-                // read_hudi's hudi_option: storage options from client SQL (endpoint, keys)?
-                for (String format : List.of("aws_endpoint_url=http://%s,aws_access_key_id=%s,"
-                        + "aws_secret_access_key=%s,aws_region=us-east-1,aws_allow_http=true",
-                        "{\"aws_endpoint_url\": \"http://%s\", \"aws_access_key_id\": \"%s\","
-                        + " \"aws_secret_access_key\": \"%s\", \"aws_region\": \"us-east-1\","
-                        + " \"aws_allow_http\": \"true\"}")) {
-                    query("s3", "read_hudi with hudi_option " + (format.startsWith("{") ? "json" : "k=v"), c,
-                            answer("read_hudi(" + lit(s3Root + HUDI_T) + ", hudi_option := " + lit(String.format(
-                                    format, s3Endpoint, env("PROBE_S3_KEY"), secretValue)) + ")", ""));
+                for (String[] e : expected) {
+                    if (e[0].startsWith("hudi-")) {
+                        check("s3 hudi_option", e[0] + (e[1].isEmpty() ? "" : " where " + e[1]), c,
+                                answer(hudiScan(s3Root, e[0], hudiS3), e[1]), e[2]);
+                    }
                 }
+                query("s3 hudi_option", "explain hudi filter", c, "EXPLAIN SELECT name FROM "
+                        + hudiScan(s3Root, HUDI_T, hudiS3) + " WHERE p = 'x' AND id > 1");
+                // The extension's README names hoodie.aws.region / hoodie.s3.access_key_id /
+                // hoodie.s3.secret_access_key; hudi-rs may not know them.
+                query("s3 hudi_option", "hoodie.s3.* names (README)", c, answer(hudiScan(s3Root, HUDI_T,
+                        String.format("hoodie.aws.region=us-east-1; hoodie.s3.access_key_id=%s;"
+                        + " hoodie.s3.secret_access_key=%s; aws_endpoint_url=http://%s; aws_allow_http=true",
+                        env("PROBE_S3_KEY"), secretValue, s3Endpoint)), ""));
             }
 
             // What the lockdown must refuse: tables outside the allowed directories, through the extensions' own
@@ -211,6 +221,10 @@ public final class DuckDbPaimonHudiProbe {
                 // service or environment credentials (DuckDB's own reader just fails)?
                 refuse("s3", "paimon_scan no matching secret", c, "SELECT count(*) FROM paimon_scan("
                         + lit("s3://other-bucket/w/db.db/t") + ")");
+                refuse("s3", "read_hudi hudi_option outside allowed", c, answer(hudiScan(s3Outside, "x/hudi_cow",
+                        hudiS3), ""));
+                refuse("s3", "read_hudi hudi_option other bucket", c, answer(hudiScan("s3://other-bucket/", "x/t",
+                        hudiS3), ""));
                 refuse("s3", "read_hudi no matching secret", c, "SELECT count(*) FROM read_hudi("
                         + lit("s3://other-bucket/t") + ")");
                 must("s3", "unscoped secret after lockdown", c, "CREATE TEMPORARY SECRET s3_any (TYPE s3, KEY_ID "
@@ -266,6 +280,12 @@ public final class DuckDbPaimonHudiProbe {
         String name = label.substring(slash + 1);
         return fmt.equals("paimon") ? "paimon_scan(" + lit(root + "paimon/db.db/" + name) + ")"
                 : "read_hudi(" + lit(root + fmt + "/" + name) + ")";
+    }
+
+    /** read_hudi of {@code <root><label>} (label {@code hudi-<v>/<t>}) with a hudi_option string. */
+    private static String hudiScan(String root, String label, String option) {
+        String path = label.startsWith("x/") ? root + label.substring(2) : root + label;
+        return "read_hudi(" + lit(path) + ", hudi_option := " + lit(option) + ")";
     }
 
     private static String answer(String source, String where) {
