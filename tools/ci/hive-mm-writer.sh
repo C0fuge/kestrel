@@ -34,10 +34,12 @@ hive() {
   docker exec hive-mm-hs2 beeline --silent=true --showHeader=false --outputformat=tsv2 \
     -u jdbc:hive2://localhost:10000/ -e "$1" 2> "$expected/beeline.err"
 }
-# A statement that must fail (its write id is aborted).
+# A statement that must fail (its write id is aborted); rand() keeps the check from being folded
+# away and needs no table scan.
 fails() {
   if hive "$1" > /dev/null; then
     echo "expected a failure: $1"
+    cat "$expected/beeline.err"
     exit 1
   fi
 }
@@ -48,7 +50,7 @@ hive "CREATE DATABASE mmw"
 hive "CREATE TABLE mmw.tp (i int, s string) STORED AS PARQUET $mm"
 hive "INSERT INTO mmw.tp VALUES (1, 'a'), (2, 'b')"
 hive "INSERT INTO mmw.tp VALUES (3, 'c')"
-fails "INSERT INTO mmw.tp SELECT i + 100, s FROM mmw.tp WHERE assert_true(i < 0) IS NULL"
+fails "INSERT INTO mmw.tp SELECT 100 + CAST(assert_true(rand() < 0) AS int), 'z'"
 hive "INSERT INTO mmw.tp VALUES (4, 'd')"
 hive "ALTER TABLE mmw.tp COMPACT 'major' AND WAIT"
 hive "INSERT INTO mmw.tp VALUES (5, 'e')"
@@ -64,7 +66,7 @@ INSERT INTO mmw.tt VALUES (11, 'y')"
 hive "CREATE TABLE mmw.tor (i int, s string) PARTITIONED BY (k string) STORED AS ORC $mm"
 hive "INSERT INTO mmw.tor PARTITION (k) VALUES (1, 'a', 'p'), (2, 'b', 'q')"
 hive "INSERT INTO mmw.tor PARTITION (k) VALUES (3, 'c', 'p'), (4, 'd', 'q')"
-fails "INSERT INTO mmw.tor PARTITION (k = 'p') SELECT i + 100, s FROM mmw.tor WHERE assert_true(i < 0) IS NULL"
+fails "INSERT INTO mmw.tor PARTITION (k = 'p') SELECT 100 + CAST(assert_true(rand() < 0) AS int), 'z'"
 hive "INSERT OVERWRITE TABLE mmw.tor PARTITION (k = 'q') SELECT 20, 'o'"
 # ORC: minor compaction of three writes.
 hive "CREATE TABLE mmw.tm (i int, s string) STORED AS ORC $mm"
