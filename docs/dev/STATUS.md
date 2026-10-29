@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than
+> 7562a5bdb7b9.** Same-runner flags in four tracked builds: d22cdac (S3 small p95), 94ad610 (S3 ADBC c1 p95 1.08),
+> 2cfa23e (S3 SF1 JDBC 1.14), **9044653 (S3 TPC-H SF10 ADBC 1.10, rounds 1.06/1.10/1.21, 260.5 -> 285.7 s) - this build
+> already has the thread floor (9efe670)**, so threads are not the whole story. Local disk is equal or faster in the same
+> runs. Find the S3-only cause: candidates are the 19b per-connection `memory_limit` (DuckDB's buffer pool / external
+> file cache evicting S3 data earlier), the S3 cache code path when the cache is off (item 17), connection caching /
+> retry wrapper (0g/0e), the opt-in caps leaking into defaults. Bisect on S3 with the CI fake-S3 perf test
+> (`S3ReadPathPerfTest` / `tpch-perf.yml` on S3) between 7562a5b and 9044653, `duckDbMemoryLimit=none` as the first A/B;
+> fix, `package=true` pre-release; the screening re-measures.
+
 > ~~**Bug first (maintainer, 2026-10-28 16:30, laptop stand p19b): item 19b defaults make heavy queries 1.35-1.7x slower.**~~
 > *Fixed 2026-10-28 (9efe670, see Log):* default threads cores / 4 in 4..16, the per-GiB cap only above 4, per-connection
 > `memory_limit` unchanged (1024/2201/3942 MiB on the three profiles, `DuckDbSizingTest`). New manual workflow
