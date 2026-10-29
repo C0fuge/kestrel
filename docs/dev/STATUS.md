@@ -28,6 +28,12 @@
 > half-done and keep CI green; (3) final consolidation: CHANGELOG and START-NOTES describe every setting added since
 > 7562a5bdb7b9 with its default, one final `package=true` pre-release from main. Plugins lane finishes P6, catalogs lane finishes C1 2b + C2, the distributed lane stays paused. When (1)-(3) are done, write
 > "WRAP-UP DONE" at the top of Next steps and stop taking items.
+>
+> *(1) done 2026-10-29 (0e9b9b5d, see Log):* `duckDbSharedMaxThreads` (default 8, 0 = no cap) - shared DuckDB threads
+> min(cores, cap) unless `duckDbThreads` is set; unit tests for 4/16/64-core profiles. **Stand:** 16c/24g shared vs off
+> again (c1/c8 p50, mixed p99, TPC-H) on the pre-release. **Next for the core lane: (3)** consolidation of CHANGELOG +
+> START-NOTES (every setting since 7562a5bdb7b9 with its default) and the final `package=true` pre-release; (2) nothing
+> half-done known in the core lane.
 
 > **Bug first (maintainer, 2026-10-29 03:30, CI build tracking): S3 heavier queries keep coming out slower than
 > 7562a5bdb7b9.** Same-runner flags in four tracked builds: d22cdac (S3 small p95), 94ad610 (S3 ADBC c1 p95 1.08),
@@ -2251,3 +2257,12 @@
   (UNION now checked), `RangerHiveFlightSqlTest` (restricted users UNAUTHORIZED, `tess` gets answers in complete
   mode); `SharedDatabaseAuthorizationIntegrationTest` unchanged and green. Dev CI package run 40845151877 green (build + package; the push run 40845149128 was superseded), pre-release `server-1.0.0-b3bbcce19996`. **Stand:** with `ranger`/`ranger-hive`, a subquery / CTE / UNION query by a user with and without access to the inner table. Next core code step:
   none known (S3 screening answer, shared-DuckDB stand round and decision pending).
+- 2026-10-29 (cloud session, core lane, finish mode (1)): shared DuckDB thread cap (0e9b9b5d). New
+  `duckDbSharedMaxThreads` / `DUCKDB_SHARED_MAX_THREADS` / `arrowflight.duckdb.sharedMaxThreads` (default 8, 0 = no
+  cap, negative refused): with `duckDbSharedDatabase=true` and `duckDbThreads` unset the node DuckDB takes
+  min(cores, cap) threads (16c stand: 8 instead of 16; 2c/4c unchanged). Default path unchanged (shared mode is
+  opt-in). Tests `DuckDbSizingTest.sharedDatabaseThreadsAreCappedOnLargeNodes`, `ConfigAdapterTest`; README +
+  CHANGELOG. CI: local `DuckDbSizingTest`/`ConfigAdapterTest` + Checkstyle/SpotBugs green; my package dispatches 40847576754
+  and 40847783421 and push runs up to 40848268191 were cancelled by other lanes' pushes (concurrency group); push run
+  40848841146 (head 8ed1a8dd, contains 0e9b9b5d) was still running at session end - next session: confirm it green;
+  the pre-release for this change is the finish-mode (3) final `package=true` one.
