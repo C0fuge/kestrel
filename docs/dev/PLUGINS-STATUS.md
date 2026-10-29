@@ -847,3 +847,4 @@ P6. **(in progress)** Ranger Hive-policy reuse with column masking / row filters
 - 2026-10-29 (plugins session, end): the subquery refusal of f411c13 was replaced by the core lane in b3bbcce (tables of
   nested queries named from DuckDB's `json_serialize_sql` and checked; `RangerHiveFlightSqlTest` adjusted there), so
   that Open question is gone; its CI / pre-release is the core lane's run 40845151877. Lock released.
+- 2026-10-29 (maintainer): lane 4 (catalogs) starts full ACID ORC tables in the hive module (CATALOGS-STATUS Q6) - new classes, small commits; plugins lane please rebase often.

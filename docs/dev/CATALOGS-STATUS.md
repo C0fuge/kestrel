@@ -293,6 +293,21 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
       refusals - masked check only). Otherwise stop early.
 ## Open questions
 
+- **Maintainer answers 2026-10-29 (Q1, Q4-Q7):**
+  - Q1: yes, lane 4 adds the per-table temporary S3 secrets for vended credentials (opt-in, off by default, own
+    commits, a short security note in the Log, tests that a secret's scope cannot reach outside its table's root and
+    values never appear in logs); a `STATUS.md` Log line so the core lane knows.
+  - Q4: (a) yes - the jdbc plugin refuses the scanners' functions itself, with the test against the bundled build.
+    Also add (b) as a safety net, active only when a plugin loads an extension (diff of `duckdb_functions()`
+    before/after, refused in client SQL), own commit + `STATUS.md` Log line. Federation plugin may then be built.
+  - Q5: yes, build `flight-plugin-delta` on that basis (opt-in plugin, all added functions refused, the test that the
+    list covers the bundled build, plus the Q4 (b) net).
+  - Q6: **(a) full ACID ORC first** - production Hive 3 managed tables are full ACID ORC by default, so this matters
+    more than Paimon/Hudi. It touches the hive module of the plugins lane: keep it in new classes, small commits,
+    `git pull --rebase` often, and a line in PLUGINS-STATUS Log when you start. Then (b).
+  - Q7: route (a) for Paimon and Hudi on local + S3 through the extensions with refused functions (as Q5); HDFS via
+    (b) only later if asked. After Q6 (a).
+
 - Q1 (2026-10-28, C1 step 2b): vended credentials need the server to install per-table temporary S3 secrets on
   DuckDB connections after lockdown (`CREATE OR REPLACE TEMPORARY SECRET`, scope checked below the catalog's
   roots, values redacted), fed by a new optional field on the catalog SPI. It touches the DuckDB lockdown
