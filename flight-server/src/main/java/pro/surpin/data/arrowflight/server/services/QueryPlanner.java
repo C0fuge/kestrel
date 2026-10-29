@@ -307,8 +307,8 @@ public final class QueryPlanner {
         try {
             return parquetAdapter.catalogTables().current(parsed.schema, parsed.table)
                     .map(CatalogTables::completeReason).orElse(null);
-        } catch (IOException e) {
-            return null;   // planning reports it
+        } catch (IOException | RuntimeException e) {
+            return null;   // planning reports it (also a table the catalog cannot read)
         }
     }
 
