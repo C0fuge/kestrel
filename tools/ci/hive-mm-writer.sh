@@ -80,6 +80,11 @@ for t in tp tt tor tm; do
   hive "SELECT * FROM mmw.$t" | sort > "$expected/$t.tsv"
 done
 hive "SHOW COMPACTIONS" > "$expected/compactions.txt"
+# Hive answers nothing for insert-only tables below a directory whose name starts with "_" (seen
+# with the runner's /home/runner/work/_temp): refuse such paths instead of comparing with nothing.
+for t in tp tt tor tm; do
+  test -s "$expected/$t.tsv" || { echo "Hive answered no rows for mmw.$t (a '_' directory in $wh?)"; exit 1; }
+done
 docker stop -t 30 hive-mm-hs2 > /dev/null
 (cd "$wh" && find . | sort) > "$expected/layout.txt"
 

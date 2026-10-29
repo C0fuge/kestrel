@@ -485,7 +485,9 @@ jobs:
       - name: Hive 4 writes the tables
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/hive-mm"
+          # Not under $RUNNER_TEMP (/home/runner/work/_temp): Hive 4 sees no files of an insert-only
+          # table below a directory whose name starts with "_" (empty answers, no compaction output).
+          out=/tmp/hive-mm
           tools/ci/hive-mm-writer.sh apache/hive:4.0.1 "$out/wh" "$out/derby" "$out/expected"
           {
             echo "HIVE_MM_IT_URIS=thrift://localhost:9083"
@@ -509,6 +511,6 @@ jobs:
       - name: Hive logs
         if: failure()
         run: |
-          cat "$RUNNER_TEMP/hive-mm/expected/beeline.err" 2>/dev/null | tail -60 || true
+          cat /tmp/hive-mm/expected/beeline.err 2>/dev/null | tail -60 || true
           docker logs hive-mm-hs2 2>&1 | tail -80 || true
           docker logs hive-mm-hms 2>&1 | tail -80 || true
