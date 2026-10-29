@@ -2196,3 +2196,13 @@
   `shutdownDrainSeconds` > 0 (default 0 = unchanged), `ClusterService.deregister()` (also used by `close()`). Found by
   the rolling-restart workflow `distributed-restart.yml`: a graceful stop cut running answers with `INTERNAL`. Default
   asked in `LANE3-STATUS.md` Q2. Pre-release `server-1.0.0-2a2b8e08191f`.
+- 2026-10-29 (cloud session, core lane): item 22 shared DuckDB, per-user isolation (87cf330) - the last test on the
+  maintainer's list before a default change. `SharedDatabaseAuthorizationIntegrationTest`: user A reads a granted
+  table in a loop while user B (no grant) probes it by name, join, union, CTE, `read_parquet`/file path, DuckDB
+  metadata functions and every `flight_session_<n>` catalog, on the shared DuckDB and per session, partial and
+  complete: all refused (UNAUTHORIZED / INVALID_ARGUMENT, no rows, no data in error texts), both users' answers
+  correct. `TestFlightServerHelper` gained `authorization(...)` and `password(...)` (basic login -> bearer, peer
+  identity = user). Found and fixed: with any authorization provider, a query the table check cannot parse (`UNION`,
+  unparsable text) escaped `FlightAuthorization.requireQuery` as a message-less INTERNAL with an ERROR stack; now
+  INVALID_ARGUMENT with the parser's reason, as without authorization (still refused; `RangerAuthorizationTest`
+  regression test). Dev CI run 40830188389 green. Left for (d): stand round (b) and the maintainer's decision.
