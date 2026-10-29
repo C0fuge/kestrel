@@ -148,6 +148,11 @@
 > 141.6 s, container peak 3367 vs 3135 MiB, +7 %). Scans (local, 2 cores, same 1024MiB limit): JVM heap/direct equal, peak
 > RSS +0-3 % at 4/8 endpoints, +27 % / 0 % at 4/8 complete-mode clients with +29 % / +58 % MB/s - the extra native memory
 > follows throughput, not a leak. Left for (d): the stand round (b) and the maintainer's decision.
+> *Per-user isolation 2026-10-29 (cloud session, see Log):* `SharedDatabaseAuthorizationIntegrationTest` - one user
+> reads a granted table while another without the grant probes it (name, join, union, CTE, file and metadata
+> functions, other sessions' catalogs) on the shared DuckDB and per session, both modes: refused in both, answers
+> correct; nothing shared-specific (item 8 applies to both modes alike). The maintainer's test list for (d) is complete;
+> left: the stand round (b) and the decision.
 
 > **Maintainer, 2026-10-28: stage 3 - take these in this order before every other open item** (the presentation build is
 > fixed at `server-1.0.0-7562a5bdb7b9`; nothing below may change its package, only new pre-releases). Basis: the
