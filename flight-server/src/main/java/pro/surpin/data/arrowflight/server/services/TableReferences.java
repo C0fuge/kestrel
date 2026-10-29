@@ -133,6 +133,35 @@ final class TableReferences {
         return withRows;
     }
 
+    /** Words that start a query right after an opening parenthesis (a subquery). */
+    private static final Set<String> QUERY_STARTS = Set.of("SELECT", "FROM", "TABLE", "VALUES",
+            "WITH", "PIVOT", "UNPIVOT", "DESCRIBE", "SHOW", "SUMMARIZE");
+
+    /**
+     * Tells whether a SQL text holds a nested query: a second SELECT, or a query started right
+     * after an opening parenthesis ({@code IN (FROM t)}). String literals, quoted identifiers and
+     * comments do not count.
+     *
+     * @param sql SQL text
+     * @return true when the text holds a subquery
+     */
+    static boolean nestedQuery(String sql) {
+        List<Token> tokens = TimeTravelClause.tokens(sql);
+        int selects = 0;
+        for (int i = 0; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.kind() == Kind.WORD && token.text().equalsIgnoreCase("SELECT") && ++selects > 1) {
+                return true;
+            }
+            if (token.kind() == Kind.OTHER && token.text().equals("(") && i + 1 < tokens.size()
+                    && tokens.get(i + 1).kind() == Kind.WORD
+                    && QUERY_STARTS.contains(tokens.get(i + 1).text().toUpperCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Tells whether a SQL text is one plain SELECT: one SELECT and one FROM, no set operation, no
      * WITH clause (so no subquery and no second query block whose filters could be mistaken for

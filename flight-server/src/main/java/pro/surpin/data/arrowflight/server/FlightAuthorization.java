@@ -5,6 +5,7 @@ import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.services.TimeTravelClause;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /** Decides access to Flight schemas, tables, and SQL statements. */
@@ -34,13 +35,17 @@ public interface FlightAuthorization extends AutoCloseable {
      * @param principal authenticated caller identity
      * @param query SQL statement
      * @throws org.apache.arrow.flight.FlightRuntimeException UNAUTHORIZED when a table may not be
-     *         read, INVALID_ARGUMENT when the query's tables cannot be named
+     *         read, INVALID_ARGUMENT when the query's tables cannot be named (a subquery)
      */
     default void requireQuery(String principal, String query) {
         // A table read at an earlier snapshot (FOR VERSION AS OF) is checked like the table.
         ParquetQueryParser parsed;
+        List<ParquetQueryParser.JoinTable> named;
         try {
-            parsed = ParquetQueryParser.parse(TimeTravelClause.withoutClauses(query));
+            String text = TimeTravelClause.withoutClauses(query);
+            parsed = ParquetQueryParser.parse(text);
+            // Tables the parse may not name (quoted join tables); subqueries are refused.
+            named = ParquetQueryParser.checkedTables(text);
         } catch (RuntimeException e) {
             // Refused as without authorization (a query that cannot be checked is not run).
             Throwable reason = e.getCause() instanceof IllegalArgumentException ? e.getCause() : e;
@@ -57,6 +62,9 @@ public interface FlightAuthorization extends AutoCloseable {
             }
         } else {
             requireTable(principal, parsed.schema, parsed.table, checked);
+        }
+        for (ParquetQueryParser.JoinTable table : named) {
+            requireTable(principal, table.schema(), table.table(), checked);
         }
     }
 

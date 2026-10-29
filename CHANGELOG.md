@@ -545,6 +545,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on local disks (a node sees only its own files) and estimates no distinct counts yet.
 
 ### Security
+- Authorization (every policy provider: `ranger`, `ranger-hive`, custom): a table read only inside a subquery
+  (`WHERE id IN (SELECT ... FROM s.t)`, `EXISTS (...)`, a scalar subquery in the select list) or named quoted in a
+  join (`JOIN "s"."t"`) was not checked, and its rows reached callers without access (complete mode; scalar
+  subqueries in both modes). With an authorization provider, queries with a subquery (other than the plain
+  `FROM (SELECT cols FROM t [WHERE ...]) alias` wrapper) are now refused with INVALID_ARGUMENT, and every table named
+  after FROM / JOIN / a comma, quoted or after a comment, is checked. Without a provider nothing changes.
 - Server: Hazelcast 5.6.0 → 5.7.0 (critical/high advisories on the member port) and Netty 4.2.9 → 4.2.19
   (HTTP/2 and handler advisories) under one `netty-bom`. `netty-all` is replaced by the modules the gRPC server
   uses (HTTP/2, proxy, epoll for Linux x86-64/ARM64), which drops about 25 advisories in unused codecs (Redis,

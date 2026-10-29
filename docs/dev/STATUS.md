@@ -2213,3 +2213,14 @@
   as load for good; a key now holds one reservation per planned endpoint (`LoadReservations`). `shutdownDrainSeconds`
   defaults to 20 s (d4a136f, Q2 of LANE3-STATUS). `TestFlightServerHelper` registers a node after its Flight server
   starts (as the server does). Details: `LANE3-STATUS.md` D9/D11.
+- 2026-10-29 (plugins lane, core security fix, FYI): **authorization bypass through subqueries fixed** (own core
+  commit). `FlightAuthorization.requireQuery` checked only the tables `ParquetQueryParser` names (the outer FROM /
+  JOIN; the join regex misses quoted names), so with any policy provider a table read inside `IN (SELECT ...)`,
+  `EXISTS (...)` or a scalar subquery, or joined as `"s"."t"`, was never checked and its rows were returned (found by
+  the new `ranger-hive` end-to-end test: complete mode returned a denied table's rows; a scalar subquery in the select
+  list leaked in partial mode too). Now: under a provider (not `AllowAllAuthorization`) a nested query is refused with
+  INVALID_ARGUMENT (`TableReferences.nestedQuery`: a second SELECT, or a query word right after `(`; the parser's
+  plain FROM wrapper still passes), and every table `TableReferences.find` names is checked as well
+  (`ParquetQueryParser.checkedTables`). Behaviour change only for authorized deployments' subquery queries (they
+  worked in complete mode before); a proper check of subquery tables (e.g. from DuckDB's `json_serialize_sql`, as the
+  parse check already runs) would let them back in - core lane's call. Test `FlightAuthorizationSubqueryTest`.

@@ -366,6 +366,28 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Names every table a query reads, for access checks: each schema-qualified name right after
+     * FROM, JOIN or a comma of a FROM list, quoted names and names after comments included. A
+     * nested query (a subquery anywhere but the plain FROM wrapper this parser flattens) is
+     * refused: the parse names only the outer query's tables, so a subquery's table would be
+     * read without a check.
+     *
+     * @param query SQL text without time travel clauses
+     * @return the named tables, in text order
+     * @throws IllegalArgumentException when the query holds a subquery
+     */
+    public static List<JoinTable> checkedTables(String query) {
+        if (TableReferences.nestedQuery(flattenSubqueryWrapper(query))) {
+            throw new IllegalArgumentException("Subqueries are not supported when table access is checked");
+        }
+        List<JoinTable> tables = new ArrayList<>();
+        for (TableReferences.Reference reference : TableReferences.find(query, (schema, table) -> true)) {
+            tables.add(new JoinTable(reference.schema(), reference.table(), reference.table()));
+        }
+        return tables;
+    }
+
+    /**
      * Tells whether the parse of a query is cached.
      *
      * @param query SQL text as passed to {@link #parse(String)}
