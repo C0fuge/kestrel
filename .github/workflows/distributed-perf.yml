@@ -1,0 +1,235 @@
+# Manual perf check of distributed complete mode (lane 3, D7): generates TPC-H SF<sf> lineitem
+# as <files> Parquet files in one directory every node mounts (-DdataDirShared=true), starts three
+# server containers of this ref (one Hazelcast cluster on the runner's host network, each limited
+# to <cpus> CPUs and <memory>) once with -DdistributedComplete=false and once with true, and runs
+# lineitem-only TPC-H shapes that merge (q01 without its AVG columns - AVG is not mergeable yet -,
+# q06, a q12-like aggregate without the orders join, a wide GROUP BY, a filtered scan, a DISTINCT,
+# an ORDER BY LIMIT) through TpchPerfTest against the first node: one warm-up pass, then <rounds>.
+# Fails when an answer differs between off and on (rows + order-independent checksum, and the row
+# count DuckDB gave at generation time), or when an "on" query was not merged from the endpoints
+# (the planning node's `distributedComplete=merged` log lines). The times are reported, not
+# checked. Not part of Dev CI.
+name: Distributed perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "10"
+      files:
+        description: "lineitem Parquet files"
+        type: string
+        default: "24"
+      rounds:
+        description: "measured passes per configuration"
+        type: string
+        default: "2"
+      cpus:
+        description: "CPUs of each of the three server containers"
+        type: string
+        default: "1"
+      memory:
+        description: "memory of each server container"
+        type: string
+        default: "4g"
+      endpoints:
+        description: "endpointsPerServer"
+        type: string
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distributed-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref (no tests)
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          mkdir -p "$RUNNER_TEMP/jars"
+          cp -r flight-server/target/arrow-flight-server-1.0.0-shaded.jar flight-server/target/libs "$RUNNER_TEMP/jars/"
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: Generate TPC-H SF${{ inputs.sf }} lineitem and the queries
+        run: |
+          set -euo pipefail
+          pip install -q duckdb==1.5.6 || pip install -q duckdb
+          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" "${{ inputs.files }}" <<'EOF'
+          import os, sys, duckdb
+          tmp, sf, files = sys.argv[1], float(sys.argv[2]), int(sys.argv[3])
+          table, queries = os.path.join(tmp, "data", "tpch", "lineitem"), os.path.join(tmp, "queries")
+          os.makedirs(table, exist_ok=True)
+          os.makedirs(queries, exist_ok=True)
+          db = duckdb.connect(os.path.join(tmp, "gen.duckdb"))
+          db.execute("SET memory_limit='10GB'")
+          db.execute("INSTALL tpch; LOAD tpch")
+          db.execute(f"CALL dbgen(sf={sf})")
+          for f in range(files):
+              db.execute(f"COPY (SELECT * FROM lineitem WHERE l_orderkey % {files} = {f}) TO "
+                         f"'{os.path.join(table, f'part-{f:03d}.parquet')}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+          total = db.execute("SELECT count(*) FROM lineitem").fetchone()[0]
+          with open(os.path.join(tmp, "lineitem.rows"), "w") as f:
+              f.write(str(total))
+          shapes = {
+              "q01": "SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, sum(l_extendedprice) AS sum_base_price,"
+                     " sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,"
+                     " sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge, sum(l_discount) AS sum_disc,"
+                     " count(*) AS count_order FROM lineitem WHERE l_shipdate <= CAST('1998-09-02' AS date)"
+                     " GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus",
+              "q06": "SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem"
+                     " WHERE l_shipdate >= CAST('1994-01-01' AS date) AND l_shipdate < CAST('1995-01-01' AS date)"
+                     " AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24",
+              "q12": "SELECT l_shipmode, sum(CASE WHEN l_linenumber <= 2 THEN 1 ELSE 0 END) AS high_line_count,"
+                     " sum(CASE WHEN l_linenumber > 2 THEN 1 ELSE 0 END) AS low_line_count FROM lineitem"
+                     " WHERE l_shipmode IN ('MAIL', 'SHIP') AND l_commitdate < l_receiptdate AND l_shipdate < l_commitdate"
+                     " AND l_receiptdate >= CAST('1994-01-01' AS date) AND l_receiptdate < CAST('1995-01-01' AS date)"
+                     " GROUP BY l_shipmode ORDER BY l_shipmode",
+              "w1_group_partkey": "SELECT l_partkey, count(*) AS n, sum(l_quantity) AS qty, max(l_extendedprice) AS hi"
+                     " FROM lineitem GROUP BY l_partkey ORDER BY l_partkey",
+              "w2_filtered_scan": "SELECT l_orderkey, l_partkey, l_extendedprice, l_shipdate FROM lineitem"
+                     " WHERE l_shipdate >= CAST('1998-01-01' AS date) AND l_discount >= 0.08",
+              "w3_distinct": "SELECT DISTINCT l_suppkey FROM lineitem WHERE l_quantity > 45 ORDER BY l_suppkey",
+              "w4_order_limit": "SELECT l_orderkey, l_extendedprice FROM lineitem WHERE l_shipmode = 'AIR'"
+                     " ORDER BY l_extendedprice DESC, l_orderkey LIMIT 100",
+          }
+          for name, q in shapes.items():
+              rows = len(db.execute(q).fetchall())
+              with open(os.path.join(queries, f"{name}.sql"), "w") as f:
+                  f.write(q.replace(" FROM lineitem", " FROM tpch.lineitem"))
+              with open(os.path.join(queries, f"{name}.rows"), "w") as f:
+                  f.write(str(rows))
+              print(f"{name} duckdb rows {rows}")
+          db.close()
+          os.remove(os.path.join(tmp, "gen.duckdb"))
+          EOF
+          du -sh "$RUNNER_TEMP/data/tpch/lineitem"; ls "$RUNNER_TEMP/data/tpch/lineitem" | wc -l
+          echo "lineitem rows $(cat "$RUNNER_TEMP/lineitem.rows")"
+
+      - name: Measure
+        run: |
+          set +e -u
+          out="$RUNNER_TEMP/results.txt"; : > "$out"
+          seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703
+          measure() { # label, distributedComplete
+            local label=$1 dc=$2 i
+            for i in 0 1 2; do
+              docker run -d --name "srv$i" --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+                -v "$RUNNER_TEMP/jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
+                eclipse-temurin:21-jre \
+                java -Xmx1g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+                --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+                --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+                -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DresultMode=complete \
+                -DendpointsPerServer="${{ inputs.endpoints }}" -DdistributedComplete="$dc" -DdataDirShared=true \
+                -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+                pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+                --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$seeds" --metrics-enabled false > /dev/null
+            done
+            for i in 0 1 2; do
+              for _ in $(seq 120); do docker logs "srv$i" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break; sleep 1; done
+            done
+            # The planner needs all three members and their inventories.
+            sleep 10
+            local ok=0
+            for i in 0 1 2; do
+              docker logs "srv$i" 2>&1 | grep -q 'Server Arrow Flight SQL started' || ok=1
+            done
+            if [ "$ok" -ne 0 ]; then
+              echo "$label: a server did not start" >> "$out"
+              for i in 0 1 2; do docker logs "srv$i" 2>&1 | tail -n 20; done
+            else
+              ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+                -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
+                -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
+                -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn-$label.log" 2>&1
+              grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn-$label.log" || ok=1
+              grep -E '^([a-z0-9_]+) r[0-9]' "$RUNNER_TEMP/mvn-$label.log" | sed "s/^/$label: /" >> "$out"
+              if [ "$ok" -ne 0 ]; then
+                echo "$label: client failed" >> "$out"
+                grep -E 'ERROR|FAIL|Exception|expected' "$RUNNER_TEMP/mvn-$label.log" | head -n 20
+                docker logs srv0 2>&1 | tail -n 30
+              fi
+            fi
+            echo "$label: merged $(docker logs srv0 2>&1 | grep -c 'distributedComplete=merged')" >> "$out"
+            echo "$label: fallback $(docker logs srv0 2>&1 | grep -c 'distributedComplete=fallback')" >> "$out"
+            docker logs srv0 2>&1 | grep 'distributedComplete=merged' \
+              | sed -E 's/.*elapsedMs=([0-9]+) peerBytes=([0-9]+) peerWaitMs=([0-9]+).*/\1 \2 \3/' \
+              | awk -v l="$label" '{ e += $1; b += $2; w += $3 } END { if (NR) printf "%s: peers merged %d, total %d ms, peer wait %d ms (%.0f %%), peer %.1f MB\n", l, NR, e, w, e ? 100 * w / e : 0, b / 1e6 }' >> "$out"
+            docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' srv0 srv1 srv2 | sed "s/^/$label: memory /" >> "$out"
+            docker rm -f srv0 srv1 srv2 > /dev/null
+          }
+          measure off false
+          measure on true
+          cat "$out"
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/results.txt"
+          n=$(ls "$RUNNER_TEMP"/queries/*.sql | wc -l); passes=$(( ${{ inputs.rounds }} + 1 ))
+          sums() { grep -E "^$1: [a-z0-9_]+ r1 " "$out" | awk '{print $2, $7, $9}'; }
+          : > "$RUNNER_TEMP/check.txt"
+          fail=0
+          if [ "$(sums off | wc -l)" -ne "$n" ] || [ "$(sums off)" != "$(sums on)" ]; then
+            echo "answers differ between off and on, or a query is missing:" | tee -a "$RUNNER_TEMP/check.txt"
+            diff <(sums off) <(sums on) | tee -a "$RUNNER_TEMP/check.txt" || true
+            fail=1
+          fi
+          merged=$(grep '^on: merged ' "$out" | awk '{print $3}')
+          if [ "${merged:-0}" -ne $(( n * passes )) ]; then
+            echo "on: ${merged:-0} merged answers, expected $(( n * passes ))" | tee -a "$RUNNER_TEMP/check.txt"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "ok: same answers, every 'on' answer merged" | tee -a "$RUNNER_TEMP/check.txt"
+          # Best measured time per query, off vs on, and lineitem rows/s.
+          rows=$(cat "$RUNNER_TEMP/lineitem.rows")
+          best() { grep -E "^$1: $2 r[1-9]" "$out" | awk '{print $4}' | sort -n | head -n 1; }
+          printf '%-18s %10s %10s %7s %14s %14s\n' query off_ms on_ms on/off off_rows/s on_rows/s > "$RUNNER_TEMP/table.txt"
+          for f in "$RUNNER_TEMP"/queries/*.sql; do
+            q=$(basename "$f" .sql); a=$(best off "$q"); b=$(best on "$q")
+            awk -v q="$q" -v a="${a:-0}" -v b="${b:-0}" -v r="$rows" 'BEGIN { printf "%-18s %10.1f %10.1f %7.2f %14.0f %14.0f\n", q, a, b, a ? b / a : 0, a ? r / a * 1000 : 0, b ? r / b * 1000 : 0 }' >> "$RUNNER_TEMP/table.txt"
+          done
+          cat "$RUNNER_TEMP/table.txt"
+          exit "$fail"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Distributed complete, TPC-H SF${{ inputs.sf }} lineitem (${{ inputs.files }} files), 3 nodes x ${{ inputs.cpus }} CPU / ${{ inputs.memory }} on $(nproc) runner cores: $GITHUB_SHA"
+            echo
+            echo "endpointsPerServer=${{ inputs.endpoints }}; one warm-up pass, then ${{ inputs.rounds }} measured; best measured pass per query."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/check.txt" 2>/dev/null || echo "(no check)"
+            cat "$RUNNER_TEMP/table.txt" 2>/dev/null || true
+            grep -E ': (total|merged|fallback|peers|memory)' "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "(no result)"
+            echo '```'
+            echo
+            echo '<details><summary>per query</summary>'
+            echo
+            echo '```'
+            grep -E ': [a-z0-9_]+ r[0-9]' "$RUNNER_TEMP/results.txt" 2>/dev/null || true
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

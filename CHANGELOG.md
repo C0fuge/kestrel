@@ -10,6 +10,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- Manual workflow `distributed-perf.yml` (lane 3, D7): three server containers of the ref (one cluster, shared
+  TPC-H lineitem directory, `--cpus`/`--memory` per node) measured with `distributedComplete` off vs on over seven
+  lineitem shapes that merge; fails when the answers differ or an "on" answer was not merged, reports times and rows/s.
 - Custom authorization providers (`FlightAuthorizationProviderFactory`) can override
   `create(environment, providerGroups)` to get the groups the authentication provider (LDAP, JWT) knows for a caller,
   as the built-in `ranger` provider does; the default calls `create(environment)`, so existing providers are unchanged.
