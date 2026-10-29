@@ -62,7 +62,8 @@ Q1. (2026-10-29, lane 3, **answered: yes, see D6**) **Status code when a peer is
     wire-visible (status code), hence a question: (a) map to `UNAVAILABLE` as proposed, (b) keep `INTERNAL`.
     No code until answered.
 
-Q2. (2026-10-29, lane 3, D8) **Default of `shutdownDrainSeconds`.** Without a drain (default 0, today's behaviour) a
+Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) default 20 s**, document it in START-NOTES and
+    note that `docker stop` needs `-t 25` or more) **Default of `shutdownDrainSeconds`.** Without a drain (default 0, today's behaviour) a
     node stopped with SIGTERM cuts the answers it is still sending with `INTERNAL` (HTTP/2 RST_STREAM), which clients
     and drivers do not retry - seen once per graceful stop under load. With a drain the node leaves the pool, new calls
     get `UNAVAILABLE` and running answers finish (D8 run: 0 non-retryable failures over 3 graceful + 3 kill -9
