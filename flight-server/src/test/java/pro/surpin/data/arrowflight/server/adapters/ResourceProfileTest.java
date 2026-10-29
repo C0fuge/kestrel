@@ -87,20 +87,19 @@ class ResourceProfileTest {
     /** speed on 4 / 16 / 64 cores: shared DuckDB with all cores and 75 % of memory minus heap and direct. */
     @Test
     void speedSizesTheSharedDuckDbByHost() {
-        assertShared(SMALL, 4, "2048MiB", 307);
-        assertShared(MEDIUM, 16, "12288MiB", 1638);
-        assertShared(LARGE, 64, "147456MiB", 6553);
+        assertShared(SMALL, 4, "2048MiB");
+        assertShared(MEDIUM, 16, "12288MiB");
+        assertShared(LARGE, 64, "147456MiB");
     }
 
     /**
-     * Checks the shared DuckDB, the Flight settings and the read caches of speed on a host.
+     * Checks the shared DuckDB and the Flight settings of speed on a host, and that the read caches stay off.
      *
      * @param host     host limits
      * @param threads  expected node threads
      * @param memory   expected node memory limit
-     * @param cacheMib expected read cache MiB per namespace
      */
-    private static void assertShared(HostLimits host, int threads, String memory, long cacheMib) {
+    private static void assertShared(HostLimits host, int threads, String memory) {
         // The bundled file's defaults lose to the profile.
         ConfigSource source = effective(raw(Map.of("resourceProfile", "speed"), Map.of(),
                 Map.of("duckDbSharedDatabase", "false", "flightBackpressureThresholdBytes", "268435456")), host);
@@ -113,7 +112,7 @@ class ResourceProfileTest {
         assertEquals(16 << 20, config.flightBackpressureThresholdBytes());
         assertEquals(threads, config.duckDbThreads());
         for (String ns : List.of("s3", "lakefs")) {
-            assertEquals(cacheMib, new PropertiesPluginConfig(ns, source, List.of()).getInt("cacheMegabytes", 0),
+            assertEquals(0, new PropertiesPluginConfig(ns, source, List.of()).getInt("cacheMegabytes", 0),
                     ns + " cache " + host);
         }
     }
@@ -129,7 +128,7 @@ class ResourceProfileTest {
         assertFalse(ConfigAdapter.flightZeroCopyWrites(source));
         assertEquals(2, ConfigAdapter.getConfig(source, MEDIUM).endpointsPerServer());
         assertEquals(100, new PropertiesPluginConfig("s3", source, List.of()).getInt("cacheMegabytes", 0));
-        assertEquals(1638, new PropertiesPluginConfig("lakefs", source, List.of()).getInt("cacheMegabytes", 0));
+        assertEquals(0, new PropertiesPluginConfig("lakefs", source, List.of()).getInt("cacheMegabytes", 0));
         String line = ResourceProfile.resolve(raw, () -> MEDIUM).describe();
         assertTrue(line.startsWith("profile=speed duckDbSharedDatabase=true"), line);
         assertTrue(line.contains("duckDbThreads=6(explicit)"), line);
@@ -157,9 +156,9 @@ class ResourceProfileTest {
         assertEquals(16, perConnection.threads());
     }
 
-    /** A heap too small for a useful cache leaves the read caches off. */
+    /** A small host gets the minimum node memory limit and no read caches. */
     @Test
-    void smallHeapLeavesTheReadCachesOff() {
+    void smallHostGetsTheMinimumMemoryLimit() {
         HostLimits tiny = new HostLimits(2, 2 * GIB, 256L << 20, 256L << 20);
         ConfigSource source = effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), tiny);
         assertEquals(0, new PropertiesPluginConfig("s3", source, List.of()).getInt("cacheMegabytes", 0));

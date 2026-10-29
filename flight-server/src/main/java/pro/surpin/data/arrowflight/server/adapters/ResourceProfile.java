@@ -37,15 +37,6 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
     /** Share of the host memory DuckDB, the heap and direct memory may take together under {@code speed}. */
     static final int SPEED_MEMORY_PERCENT = 75;
 
-    /** Heap divisor of each S3 read cache (s3 and lakefs) under {@code speed}: both together stay below half. */
-    static final int SPEED_CACHE_HEAP_DIVISOR = 5;
-
-    /** Smallest S3 read cache {@code speed} turns on. */
-    static final long SPEED_MIN_CACHE_MIB = 64;
-
-    /** Plugin namespaces whose S3 read cache {@code speed} turns on. */
-    private static final List<String> CACHE_NAMESPACES = List.of("s3", "lakefs");
-
     /**
      * Creates a profile with unmodifiable copies of its maps, in insertion order.
      *
@@ -107,13 +98,8 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
                 "arrowflight.cluster.endpointsPerServer", "FLIGHT_ENDPOINTS_PER_SERVER");
         b.offer(Integer.toString(SPEED_BACKPRESSURE_BYTES), "flightBackpressureThresholdBytes",
                 "arrowflight.flight.backpressureThresholdBytes", null);
-        long cacheMib = (host.maxHeapBytes() / SPEED_CACHE_HEAP_DIVISOR) >> 20;
-        if (cacheMib >= SPEED_MIN_CACHE_MIB) {
-            for (String ns : CACHE_NAMESPACES) {
-                b.offer(Long.toString(cacheMib), "arrowflight." + ns + ".cacheMegabytes", ns + ".cacheMegabytes",
-                        "FLIGHT_" + ns.toUpperCase(Locale.ROOT) + "_CACHE_MEGABYTES");
-            }
-        }
+        // No S3 read caches: one pass reads each file once, so a cache only adds the loopback hop and heap
+        // (TPC-H SF10 on S3 1.33x slower with them, as fast as balanced without; runs 40939989610, 40945132304).
         return new ResourceProfile(SPEED, b.defaults, b.explicit);
     }
 

@@ -98,8 +98,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
   (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores), node-wide `duckDbMemoryLimit` of
   75 % of memory minus heap and direct memory, `flightZeroCopyWrites=true`, `endpointsPerServer=4`,
-  `flightBackpressureThresholdBytes`=16 MiB and the s3/lakeFS read caches at `-Xmx`/5 each. `-D` and environment
-  settings win; startup line `resourceProfile profile=... (explicit)`. Unknown profile names stop the server.
+  `flightBackpressureThresholdBytes`=16 MiB; the s3/lakeFS read caches stay as configured (with them on, `speed` was
+  1.33x slower on S3, TPC-H SF10). `-D` and environment settings win; startup line `resourceProfile profile=... (explicit)`. Unknown profile names stop the server.
 - SPI 1.8: `ColumnSpec.sourceType` - the column type as the catalog declares it (a Hive type such as `char(10)`),
   null when unknown; the four-argument constructor stays. Plugins built against 1.8 need a 1.8 server.
 - `ranger-hive` applies Ranger Hive row filters whose expression is in a typed subset (`HiveRowFilter`: columns,

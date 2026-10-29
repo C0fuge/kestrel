@@ -187,7 +187,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
 | `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |
-| `arrowflight.s3.cacheMegabytes`, `arrowflight.lakefs.cacheMegabytes` | `-Xmx` / 5 each, when that is at least 64 MiB | read cache on the JVM heap; both together 40 % of the heap (named stores keep theirs) |
+
+`speed` leaves the s3/lakeFS read caches (`arrowflight.<ns>.cacheMegabytes`) as configured (off by default): with
+them on, TPC-H SF10 on S3 was 1.33x slower (one pass reads each file once, the cache only adds a hop and heap);
+without them `speed` is as fast as `balanced` there. Turn a cache on yourself for workloads that re-read the same files.
 
 ## Settings since 7562a5bdb7b9
 
