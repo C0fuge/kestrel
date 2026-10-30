@@ -27,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Tests of duckDbSharedDatabase: every session is a connection to one DuckDB of the node. */
@@ -449,6 +451,58 @@ class DuckDbSharedDatabaseTest {
     }
 
     /**
+     * Verifies a query that runs out of memory in the shared DuckDB before sending anything runs
+     * again on a private DuckDB of the per-connection size and answers once (item 23b: 32 S3
+     * queries in a 1 GiB shared DuckDB failed where DuckDB-per-connection answered), and that a
+     * query too large for the private DuckDB too fails with DuckDB's error.
+     */
+    @Test
+    void outOfMemoryInTheSharedDatabaseRunsAgainOnAPrivateOne() throws Exception {
+        // list() cannot spill: 4M BIGINTs need about 32 MiB.
+        String sql = "SELECT len(list(x)) FROM range(4000000) t(x)";
+        DuckDbSizing.Shared tight = new DuckDbSizing.Shared(1, "8MiB", 0, 1, "256MiB");
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config(), Executors.newSingleThreadExecutor(),
+                        DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false, tight)) {
+            FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+            assertEquals("4000000", answer(adapter, allocator, sql, views(1L, 10), listener));
+            verify(listener, times(1)).start(any(VectorSchemaRoot.class));
+            assertEquals(1, adapter.outOfMemoryRetries());
+            // The thread keeps its private DuckDB for the next refusal, beside its shared session.
+            assertEquals(2, adapter.openSessions());
+            assertEquals("4000000", answer(adapter, allocator, sql, views(1L, 10)));
+            assertEquals(2, adapter.outOfMemoryRetries());
+            assertEquals(2, adapter.openSessions());
+            assertEquals("30.0", answer(adapter, allocator, "SELECT max(price) FROM t", views(1L, 10)));
+            assertEquals(2, adapter.outOfMemoryRetries());
+
+            java.sql.SQLException e = assertThrows(java.sql.SQLException.class, () -> answer(adapter, allocator,
+                    "SELECT len(list(x)) FROM range(100000000) t(x)", views(1L, 10)));
+            assertTrue(DuckDbAdapter.outOfMemory(e), e.getMessage());
+            assertEquals(3, adapter.outOfMemoryRetries());
+        }
+    }
+
+    /** Without the shared DuckDB a query that runs out of memory fails as before. */
+    @Test
+    void outOfMemoryWithoutTheSharedDatabaseIsNotRunAgain() throws Exception {
+        AppConfig tight = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, "8MiB", false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null,
+                "complete", true, true);
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(tight, Executors.newSingleThreadExecutor(),
+                        DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false, null)) {
+            java.sql.SQLException e = assertThrows(java.sql.SQLException.class, () -> answer(adapter, allocator,
+                    "SELECT len(list(x)) FROM range(4000000) t(x)", views(1L, 10)));
+            assertTrue(DuckDbAdapter.outOfMemory(e), e.getMessage());
+            assertEquals(0, adapter.outOfMemoryRetries());
+        }
+    }
+
+    /**
      * Builds an adapter on a shared DuckDB.
      *
      * @param roots      readable roots; empty disables the lockdown
@@ -523,7 +577,22 @@ class DuckDbSharedDatabaseTest {
      */
     private static String answer(DuckDbAdapter adapter, RootAllocator allocator, String sql,
             CatalogViews.Snapshot views) throws Exception {
-        FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+        return answer(adapter, allocator, sql, views, mock(FlightProducer.ServerStreamListener.class));
+    }
+
+    /**
+     * Runs a complete-answer query on a listener and returns the first value.
+     *
+     * @param adapter   adapter
+     * @param allocator Arrow allocator
+     * @param sql       client SQL
+     * @param views     view definitions
+     * @param listener  mocked Flight listener
+     * @return first value of the answer
+     * @throws Exception on refusal or query failure
+     */
+    private static String answer(DuckDbAdapter adapter, RootAllocator allocator, String sql,
+            CatalogViews.Snapshot views, FlightProducer.ServerStreamListener listener) throws Exception {
         AtomicReference<VectorSchemaRoot> rootRef = new AtomicReference<>();
         AtomicReference<String> value = new AtomicReference<>();
         doAnswer(invocation -> {

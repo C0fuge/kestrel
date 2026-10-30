@@ -97,7 +97,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
   (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores), node-wide `duckDbMemoryLimit` of
-  75 % of memory minus heap and direct memory, `flightZeroCopyWrites=true`, `endpointsPerServer=4`,
+  what `balanced` gives its expected connections together (per-connection limit x connections, at most 80 % of memory;
+  item 23b - it was 75 % of memory minus heap and direct memory), `flightZeroCopyWrites=true`, `endpointsPerServer=4`,
   `flightBackpressureThresholdBytes`=16 MiB; the s3/lakeFS read caches stay as configured (with them on, `speed` was
   1.33x slower on S3, TPC-H SF10). `-D` and environment settings win; startup line `resourceProfile profile=... (explicit)`. Unknown profile names stop the server.
 - SPI 1.8: `ColumnSpec.sourceType` - the column type as the catalog declares it (a Hive type such as `char(10)`),
@@ -857,7 +858,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
-- JWT login (`FLIGHT_AUTH_PROVIDER=jwt`) with `FLIGHT_JWT_AUDIENCE` set failed at start with a NullPointerException:
+-- `duckDbSharedDatabase` / `resourceProfile=speed` (item 23b): a query that runs out of the shared DuckDB's memory
+  (`Out of Memory Error`) before anything was sent now runs once more on a private DuckDB of the thread, sized as one
+  connection of the DuckDB-per-connection mode (log `duckdb=outOfMemoryRetry`); before, 32 concurrent S3 small queries
+  under `speed` (2 CPUs / 6 GB, `-Xmx3g`, direct 2g: 1 GiB node-wide) failed in every round while `balanced` answered.
+  DuckDB result streams now send the schema with the first batch instead of before running the query (same messages).
+ JWT login (`FLIGHT_AUTH_PROVIDER=jwt`) with `FLIGHT_JWT_AUDIENCE` set failed at start with a NullPointerException:
   the accepted audiences were an immutable `Set.copyOf`, and the nimbus claims verifier on the server class path
   (10.0.1, older than the module's 10.10) asks `contains(null)`. The settings now hold null-tolerant copies.
 - Partial mode: a join naming a table with double quotes (`... JOIN "sales"."orders" t ...`) failed with `Catalog

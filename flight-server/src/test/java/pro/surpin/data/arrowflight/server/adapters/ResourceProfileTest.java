@@ -84,12 +84,12 @@ class ResourceProfileTest {
         assertEquals(ResourceProfile.SPEED, ResourceProfile.resolve(upper, () -> MEDIUM).name());
     }
 
-    /** speed on 4 / 16 / 64 cores: shared DuckDB with all cores and 75 % of memory minus heap and direct. */
+    /** speed on 4 / 16 / 64 cores: shared DuckDB with all cores and the memory balanced gives its connections. */
     @Test
     void speedSizesTheSharedDuckDbByHost() {
-        assertShared(SMALL, 4, "2048MiB");
-        assertShared(MEDIUM, 16, "12288MiB");
-        assertShared(LARGE, 64, "147456MiB");
+        assertShared(SMALL, 4, "2662MiB");
+        assertShared(MEDIUM, 16, "15564MiB");
+        assertShared(LARGE, 64, "173668MiB");
     }
 
     /**
@@ -156,12 +156,41 @@ class ResourceProfileTest {
         assertEquals(16, perConnection.threads());
     }
 
+    /**
+     * The egret profile of item 23b (2 cores, 6 GB, -Xmx3g, direct 2g, data on S3): the shared DuckDB gets what DuckDB-per-connection gives its two expected
+     * connections (2 x 1 GiB) instead of 1 GiB for the whole node, and a query that still runs
+     * out of memory runs again on a private DuckDB sized as balanced.
+     */
+    @Test
+    void speedNeverGivesTheSharedDuckDbLessThanBalancedGivesItsConnections() {
+        HostLimits egret = new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB);
+        Map<String, String> s3 = Map.of("dataDir", "s3://bucket/tpch");
+        ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of(), s3);
+        DuckDbSizing balanced = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), s3), egret);
+        assertEquals("1024MiB", balanced.memoryLimit());
+        assertEquals(2, balanced.connections());
+        DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared(effective(raw, egret), egret)
+                .withFallback(ConfigAdapter.duckDbSizing(raw, egret));
+        assertEquals("2048MiB", shared.memoryLimit());
+        assertEquals(2, shared.threads());
+        assertEquals(balanced.threads(), shared.fallbackThreads());
+        assertEquals("1024MiB", shared.fallbackMemoryLimit());
+        for (HostLimits host : List.of(egret, SMALL, MEDIUM, LARGE)) {
+            DuckDbSizing perConnection = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), Map.of()), host);
+            long node = DuckDbSizing.parseBytes(ConfigAdapter.duckDbShared(
+                    effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), host), host).memoryLimit());
+            assertEquals(Math.min(DuckDbSizing.parseBytes(perConnection.memoryLimit()) * perConnection.connections(),
+                    host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT) >> 20, node >> 20, host.toString());
+        }
+    }
+
     /** A small host gets the minimum node memory limit and no read caches. */
     @Test
     void smallHostGetsTheMinimumMemoryLimit() {
         HostLimits tiny = new HostLimits(2, 2 * GIB, 256L << 20, 256L << 20);
         ConfigSource source = effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), tiny);
         assertEquals(0, new PropertiesPluginConfig("s3", source, List.of()).getInt("cacheMegabytes", 0));
-        assertEquals("1024MiB", ConfigAdapter.duckDbShared(source, tiny).memoryLimit());
+        // Balanced gives its two connections 1 GiB each; capped at 80 % of the 2 GiB.
+        assertEquals("1638MiB", ConfigAdapter.duckDbShared(source, tiny).memoryLimit());
     }
 }

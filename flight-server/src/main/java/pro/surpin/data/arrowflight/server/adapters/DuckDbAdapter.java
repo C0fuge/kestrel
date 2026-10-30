@@ -195,6 +195,14 @@ public final class DuckDbAdapter implements AutoCloseable {
      * when the setting is off.
      */
     private final ThreadLocal<Session> idleSession;
+    /**
+     * Private DuckDB per thread with duckDbSharedDatabase, opened when a query of the thread ran
+     * out of memory in the shared DuckDB before sending anything, and kept for the next one;
+     * null when the setting is off.
+     */
+    private final ThreadLocal<Session> privateSession;
+    /** Queries run again on a private DuckDB after running out of memory in the shared one. */
+    private final AtomicLong outOfMemoryRetries = new AtomicLong();
     /** Sessions a query slot chose for this thread's current query; unset = threadSession. */
     private final ThreadLocal<ThreadLocal<Session>> slotSessions = new ThreadLocal<>();
     /** Queries inside a slot on this node now. */
@@ -523,6 +531,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             verifyStorageSetup();
         }
         this.threadSession = ThreadLocal.withInitial(() -> openSession(appConfig.duckDbThreads()));
+        this.privateSession = shared != null ? ThreadLocal.withInitial(this::openPrivateSession) : null;
         this.threadsUnderLoad = shared == null && threadsUnderLoad > 0
                 && threadsUnderLoad < appConfig.duckDbThreads() ? threadsUnderLoad : 0;
         this.cores = Math.max(1, cores);
@@ -607,6 +616,36 @@ public final class DuckDbAdapter implements AutoCloseable {
         } catch (Exception e) {
             throw new RuntimeException("Failed to create thread-local DuckDB connection", e);
         }
+    }
+
+    /**
+     * Opens a DuckDB of the current thread's own beside the shared DuckDB, sized as one
+     * connection of the DuckDB-per-connection mode, for queries that ran out of memory in the
+     * shared DuckDB.
+     *
+     * @return session, registered for closing when the thread ends
+     */
+    private Session openPrivateSession() {
+        try {
+            Session session = new Session(Thread.currentThread(),
+                    openConnection(false, shared.fallbackThreads(), shared.fallbackMemoryLimit(),
+                            tempRoot.resolve("c" + sessionIds.incrementAndGet())),
+                    appConfig.duckDbStatementCacheSize(), null, null, null);
+            allSessions.add(session);
+            return session;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create a private DuckDB connection", e);
+        }
+    }
+
+    /**
+     * Returns the number of queries run again on a private DuckDB after running out of memory
+     * in the shared DuckDB.
+     *
+     * @return query count since start
+     */
+    public long outOfMemoryRetries() {
+        return outOfMemoryRetries.get();
     }
 
     /**
@@ -1500,6 +1539,8 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
+        } catch (OutOfMemoryBeforeSend e) {
+            runOnPrivateSession(e, own -> streamSql(own, allocator, duckSql, listener, startListener));
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
             throw e;
@@ -1527,6 +1568,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                 streamPrepared(allocator, duckSql, ps, listener, startListener);
             }
         } catch (ChangedFileBeforeStart e) {
+            throw e.error;
+        } catch (OutOfMemoryBeforeSend e) {
+            // Its Arrow streams are registered on this connection only: no run elsewhere.
             throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
@@ -1583,6 +1627,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         ListenerReadiness listenerReadiness = new ListenerReadiness(
                 listener, appConfig.flightListenerReadyTimeoutMillis(), ps, sessionReaper);
         boolean started = false;
+        // Whether anything reached the listener: until then a query may run again elsewhere.
+        boolean sent = false;
         try (ProducingStreamGate.Pass pass = enterGate(listener);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
@@ -1590,9 +1636,6 @@ public final class DuckDbAdapter implements AutoCloseable {
             started = true;
             if (zeroCopyWrites) {
                 listener.setUseZeroCopy(true);
-            }
-            if (startListener) {
-                listener.start(duckRoot);
             }
 
             int batchesSent = 0;
@@ -1610,6 +1653,12 @@ public final class DuckDbAdapter implements AutoCloseable {
                     }
                 }
 
+                if (!sent && startListener) {
+                    // The schema goes out with the first batch, so a run that fails before it
+                    // has sent nothing.
+                    listener.start(duckRoot);
+                }
+                sent = true;
                 long bpStart = System.nanoTime();
                 listenerReadiness.await();
                 backpressureNanos += System.nanoTime() - bpStart;
@@ -1624,6 +1673,10 @@ public final class DuckDbAdapter implements AutoCloseable {
                                     / Math.max(1, System.nanoTime() - streamStartNanos));
                 }
             }
+            if (!sent && startListener) {
+                listener.start(duckRoot);
+            }
+            sent = true;
 
             if (t >= 0) {
                 LogUtil.logTiming(t, "duckdb.streamSql",
@@ -1645,7 +1698,9 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (!started && remoteFileChanged(e)) {
                 throw new ChangedFileBeforeStart(e);
             }
-            throw e;
+            throw retryableOutOfMemory(e, sent, listener);
+        } catch (Exception e) {
+            throw retryableOutOfMemory(e, sent, listener);
         } finally {
             listenerReadiness.disarm();
         }
@@ -1683,6 +1738,105 @@ public final class DuckDbAdapter implements AutoCloseable {
             return reader.loadNextBatch();
         } finally {
             pass.leave();
+        }
+    }
+
+    /**
+     * Chooses the error of a failed stream: a shared DuckDB that ran out of memory before
+     * anything was sent lets the query run again on a private DuckDB.
+     *
+     * @param e        the stream's error
+     * @param sent     whether anything reached the listener
+     * @param listener Flight stream listener
+     * @return the error to throw
+     */
+    private Exception retryableOutOfMemory(Exception e, boolean sent,
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener) {
+        if (!sent && shared != null && !listener.isCancelled() && outOfMemory(e)) {
+            return new OutOfMemoryBeforeSend(e);
+        }
+        return e;
+    }
+
+    /**
+     * Tells whether an error, or one of its causes, is DuckDB running out of its memory limit.
+     *
+     * @param error error of a statement
+     * @return true for DuckDB's "Out of Memory Error"
+     */
+    static boolean outOfMemory(Throwable error) {
+        for (Throwable e = error; e != null; e = e.getCause() == e ? null : e.getCause()) {
+            String message = e.getMessage();
+            if (message != null && message.contains("Out of Memory Error")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Runs a query again on this thread's private DuckDB after it ran out of memory in the
+     * shared DuckDB before sending anything; the shared DuckDB under load can run out where a
+     * DuckDB of its own (the DuckDB-per-connection mode) answers.
+     *
+     * @param e   the shared DuckDB's refusal
+     * @param run the query on a session
+     * @throws Exception on query or stream failure of the second run
+     */
+    private void runOnPrivateSession(OutOfMemoryBeforeSend e, SessionRun run) throws Exception {
+        outOfMemoryRetries.incrementAndGet();
+        LOGGER.info("qid={} node={} duckdb=outOfMemoryRetry on=privateDatabase error={}", LogUtil.qid(),
+                LogUtil.node(), firstLine(String.valueOf(e.error.getMessage())));
+        Session own = privateSession.get();
+        try {
+            syncTableSecrets(own);
+            run.run(own);
+        } catch (ChangedFileBeforeStart again) {
+            throw again.error;
+        } catch (OutOfMemoryBeforeSend again) {
+            throw again.error;
+        } catch (Exception again) {
+            if (invalidatesDatabase(again)) {
+                privateSession.remove();
+                if (allSessions.remove(own)) {
+                    own.close();
+                }
+            }
+            throw again;
+        }
+    }
+
+    /**
+     * A query on a session.
+     */
+    @FunctionalInterface
+    private interface SessionRun {
+        /**
+         * Runs the query.
+         *
+         * @param session session to run on
+         * @throws Exception on query or stream failure
+         */
+        void run(Session session) throws Exception;
+    }
+
+    /**
+     * A query failed in the shared DuckDB with DuckDB's "Out of Memory Error" before anything
+     * was sent; it may run again on a private DuckDB.
+     */
+    private static final class OutOfMemoryBeforeSend extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        /** DuckDB's error, thrown when the query does not run again or fails again. */
+        private final transient Exception error;
+
+        /**
+         * Wraps DuckDB's error.
+         *
+         * @param error DuckDB's error
+         */
+        OutOfMemoryBeforeSend(Exception error) {
+            super(error.getMessage(), error, false, false);
+            this.error = error;
         }
     }
 
@@ -2166,6 +2320,9 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
+        } catch (OutOfMemoryBeforeSend e) {
+            runOnPrivateSession(e, own -> streamComplete(own, allocator, sql, parameters, views, listener,
+                    startListener));
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
             throw e;
@@ -2237,6 +2394,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                 streamPrepared(allocator, sql, ps, listener, startListener);
             }
         } catch (ChangedFileBeforeStart e) {
+            throw e.error;
+        } catch (OutOfMemoryBeforeSend e) {
+            // Its Arrow streams are registered on this connection only: no run elsewhere.
             throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);

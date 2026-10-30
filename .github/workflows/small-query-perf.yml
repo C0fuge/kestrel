@@ -2,7 +2,9 @@
 # 2026-10-28): a baseline build and this ref's build, each started alone in a container limited to
 # 2 CPUs - by CPU quota (docker --cpus, as the CI screening runs them) and by pinning (--cpuset-cpus)
 # - with SmallQueryThroughputPerfTest as the client on the other cores (-Dperf.server). Prints q/s,
-# p50/p95/p99/max per client count into the job summary. Not part of Dev CI.
+# p50/p95/p99/max per client count into the job summary. Not part of Dev CI. Input store=s3 serves
+# the table from a local S3 endpoint (rclone, as tpch-perf.yml) read through each build's own s3 plugin and httpfs;
+# the job fails when any query of any configuration fails (item 23b: `speed` at 32 clients on S3).
 name: Small query perf
 
 on:
@@ -24,6 +26,15 @@ on:
         description: "rounds per configuration"
         type: string
         default: "2"
+      store:
+        description: "where the data lives: local (mounted directory) or s3 (local S3 endpoint, s3 plugin)"
+        type: choice
+        options: [local, s3]
+        default: local
+      memory:
+        description: "server container memory (empty = no limit; the item 23b profile is 6g)"
+        type: string
+        default: ""
       headOptions:
         description: "extra -D options of this ref's server for one more configuration (empty = none)"
         type: string
@@ -55,18 +66,20 @@ jobs:
           cache: maven
 
       - name: Build this ref (no tests)
-        run: ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+        run: |
+          ./mvnw install -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
 
       - name: Build the baseline (no tests)
         run: |
           set -euo pipefail
           git worktree add "$RUNNER_TEMP/base" "${{ inputs.baseline }}"
-          (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+          (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
           for b in head base; do
             src=.; [ "$b" = base ] && src="$RUNNER_TEMP/base"
             mkdir -p "$RUNNER_TEMP/jars/$b"
             cp -r "$src/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" "$src/flight-server/target/libs" \
               "$RUNNER_TEMP/jars/$b/"
+            mkdir -p "$RUNNER_TEMP/jars/$b/plugins" && cp -r "$src/flight-plugin-s3/target/plugin/s3" "$RUNNER_TEMP/jars/$b/plugins/"
           done
           docker pull -q eclipse-temurin:21-jre
 
@@ -76,19 +89,64 @@ jobs:
           -DexcludedGroups= -Dtest=SmallQueryThroughputPerfTest -Dsurefire.failIfNoSpecifiedTests=false
           -Dperf.dataDir="$RUNNER_TEMP/data" -Dperf.clients=1 -Dperf.seconds=3
 
+      # Same endpoint as tpch-perf.yml: httpfs of the server's DuckDB (ci-assets, else
+      # extensions.duckdb.org), rclone serving bucket "lake" with the table under s3://lake/data
+      # (test-only keys, generated here).
+      - name: S3 endpoint
+        if: inputs.store == 's3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DUCKDB_VERSION: v1.5.6
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/ext"; mkdir -p "$ext"
+          if gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+              --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"; then
+            tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$ext"
+          fi
+          httpfs=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension" | head -n 1)
+          if [ -z "$httpfs" ]; then
+            httpfs="$ext/httpfs.duckdb_extension"
+            curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension.gz" \
+              | gunzip > "$httpfs"
+          fi
+          cp "$httpfs" "$RUNNER_TEMP/httpfs.duckdb_extension"
+          curl -fsSL --retry 4 -o "$RUNNER_TEMP/rclone.zip" \
+            https://github.com/rclone/rclone/releases/download/v1.69.1/rclone-v1.69.1-linux-amd64.zip
+          unzip -q -j "$RUNNER_TEMP/rclone.zip" '*/rclone' -d "$RUNNER_TEMP/bin"
+          mkdir -p "$RUNNER_TEMP/s3root/lake"
+          cp -r "$RUNNER_TEMP/data" "$RUNNER_TEMP/s3root/lake/data"
+          key=$(openssl rand -hex 8); secret=$(openssl rand -hex 16)
+          echo "::add-mask::$secret"
+          nohup "$RUNNER_TEMP/bin/rclone" serve s3 --addr 127.0.0.1:9000 --auth-key "$key,$secret" \
+            --vfs-cache-mode off "$RUNNER_TEMP/s3root" > "$RUNNER_TEMP/s3.log" 2>&1 &
+          for _ in $(seq 30); do curl -sS -o /dev/null http://127.0.0.1:9000/ && break; sleep 1; done
+          { echo "S3_KEY=$key"; echo "S3_SECRET=$secret"; } >> "$GITHUB_ENV"
+
       - name: Measure
         run: |
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
+          failed=0
+          dataDir=/data; storeArgs=(); memArgs=()
+          if [ "${{ inputs.store }}" = s3 ]; then
+            dataDir=s3://lake/data
+            storeArgs=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro"
+              -e FLIGHT_PLUGINS_DIR=/app/plugins
+              -e DUCKDB_HTTPFS_EXTENSION=/ext/httpfs.duckdb_extension
+              -e FLIGHT_S3_ENDPOINT=http://127.0.0.1:9000 -e FLIGHT_S3_URL_STYLE=path
+              -e FLIGHT_S3_ACCESS_KEY="$S3_KEY" -e FLIGHT_S3_SECRET_KEY="$S3_SECRET")
+          fi
+          [ -n "${{ inputs.memory }}" ] && memArgs=(--memory="${{ inputs.memory }}")
           measure() { # label, jars, docker cpu option, extra server options
             local label=$1 jars=$2 cpu=$3 opts=$4
-            docker run -d --name srv --network host $cpu -v "$RUNNER_TEMP/jars/$jars:/app:ro" \
-              -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true eclipse-temurin:21-jre \
+            docker run -d --name srv --network host $cpu "${memArgs[@]}" -v "$RUNNER_TEMP/jars/$jars:/app:ro" \
+              -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true "${storeArgs[@]}" eclipse-temurin:21-jre \
               java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
               --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
               -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
-              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$dataDir" --localhost 127.0.0.1 \
               --port 32010 --hosts 127.0.0.1 > /dev/null
             for i in $(seq 120); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
             if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
@@ -100,7 +158,16 @@ jobs:
               -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=SmallQueryThroughputPerfTest \
               -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 -Dperf.dataDir="$RUNNER_TEMP/data" \
               -Dperf.client="${{ inputs.client }}" -Dperf.clients="${{ inputs.clients }}" -Dperf.seconds=20 \
-              | grep -E '^c[0-9]' | sed "s/^/$label: /" >> "$out"
+              > "$RUNNER_TEMP/client.log" 2>&1
+            local status=$?
+            grep -E '^c[0-9]' "$RUNNER_TEMP/client.log" | sed "s/^/$label: /" >> "$out"
+            if [ "$status" -ne 0 ]; then
+              # A failed query stops the client: the job fails, with DuckDB's first error.
+              failed=1
+              echo "$label: FAILED $(grep -m 1 -oE '(Out of Memory Error|[A-Za-z]+Exception)[^\r]{0,200}' "$RUNNER_TEMP/client.log")" >> "$out"
+            fi
+            docker logs srv 2>&1 | grep -c 'duckdb=outOfMemoryRetry' | sed "s/^/$label: outOfMemoryRetries /" >> "$out"
+            docker inspect srv --format '{{.State.OOMKilled}}' | grep -q true && { failed=1; echo "$label: OOM killed" >> "$out"; }
             docker rm -f srv > /dev/null
           }
           for r in $(seq "${{ inputs.rounds }}"); do
@@ -114,12 +181,13 @@ jobs:
             done
           done
           cat "$out"
+          exit "$failed"
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### Small query perf on $(nproc) cores: baseline ${{ inputs.baseline }} vs $GITHUB_SHA"
+            echo "### Small query perf (${{ inputs.store }}${{ inputs.memory && format(', {0}', inputs.memory) || '' }}) on $(nproc) cores: baseline ${{ inputs.baseline }} vs $GITHUB_SHA"
             echo
             echo "Server in a container with 2 CPUs (quota = --cpus=2, pinned = --cpuset-cpus=0,1); client"
             echo "\`${{ inputs.client }}\` on cores 2,3; 20 s per step."

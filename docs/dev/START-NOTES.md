@@ -183,10 +183,14 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 | `duckDbSharedDatabase` | true | one DuckDB per node: node-wide thread pool and memory limit |
 | `duckDbSharedMaxThreads` | 0 (no cap) | |
 | `duckDbThreads` | all cores (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
-| `duckDbMemoryLimit` | node-wide 75 % of memory - `-Xmx` - direct memory, at least 1 GiB (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 12 GiB for DuckDB (balanced: 1 GiB per connection) |
+| `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
 | `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |
+
+A query that runs out of the shared DuckDB's memory before anything was sent runs once more on a private DuckDB of
+its thread, sized as one `balanced` connection (log `duckdb=outOfMemoryRetry`); that DuckDB stays open for the thread's
+next refusal, so a node under memory pressure holds at most what `balanced` would.
 
 `speed` leaves the s3/lakeFS read caches (`arrowflight.<ns>.cacheMegabytes`) as configured (off by default): with
 them on, TPC-H SF10 on S3 was 1.33x slower (one pass reads each file once, the cache only adds a hop and heap);

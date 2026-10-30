@@ -117,20 +117,25 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
 
     /**
      * Node-wide DuckDB threads and memory limit of {@code duckDbSharedDatabase}, where every
-     * worker connection is a connection to one DuckDB of the node.
+     * worker connection is a connection to one DuckDB of the node, and the size of the private
+     * DuckDB a query runs on again when the shared one ran out of memory before sending anything.
      *
      * @param threads             DuckDB threads of the node
      * @param memoryLimit         DuckDB {@code memory_limit} of the node, null = DuckDB's default
      * @param bufferedConnections connections opened before the lockdown with
      *                            {@code duckDbStreamingBufferSize} set, used only with that setting
+     * @param fallbackThreads     DuckDB threads of a private DuckDB for a query run again
+     * @param fallbackMemoryLimit DuckDB {@code memory_limit} of that private DuckDB, null = DuckDB's default
      */
-    public record Shared(int threads, String memoryLimit, int bufferedConnections) {
+    public record Shared(int threads, String memoryLimit, int bufferedConnections, int fallbackThreads,
+            String fallbackMemoryLimit) {
 
         /** Default of {@code duckDbSharedBufferedConnections}. */
         public static final int DEFAULT_BUFFERED_CONNECTIONS = 64;
 
         /**
-         * Creates the node-wide sizing with the default number of buffered connections.
+         * Creates the node-wide sizing with the default number of buffered connections and a
+         * private DuckDB of the same size.
          *
          * @param threads     DuckDB threads of the node
          * @param memoryLimit DuckDB {@code memory_limit} of the node, null = DuckDB's default
@@ -140,13 +145,36 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         }
 
         /**
+         * Creates the node-wide sizing with a private DuckDB of the same size.
+         *
+         * @param threads             DuckDB threads of the node
+         * @param memoryLimit         DuckDB {@code memory_limit} of the node, null = DuckDB's default
+         * @param bufferedConnections connections opened before the lockdown, 0 = none
+         */
+        public Shared(int threads, String memoryLimit, int bufferedConnections) {
+            this(threads, memoryLimit, bufferedConnections, threads, memoryLimit);
+        }
+
+        /**
          * Returns this sizing with another number of buffered connections.
          *
          * @param connections connections opened before the lockdown, 0 = none
          * @return sizing with the given number
          */
         public Shared withBufferedConnections(int connections) {
-            return new Shared(threads, memoryLimit, connections);
+            return new Shared(threads, memoryLimit, connections, fallbackThreads, fallbackMemoryLimit);
+        }
+
+        /**
+         * Returns this sizing with the private DuckDB sized as one connection of the
+         * DuckDB-per-connection mode.
+         *
+         * @param perConnection sizing of the DuckDB-per-connection mode
+         * @return sizing with that private DuckDB
+         */
+        public Shared withFallback(DuckDbSizing perConnection) {
+            return new Shared(threads, memoryLimit, bufferedConnections, perConnection.threads(),
+                    perConnection.memoryLimit());
         }
 
         /**
@@ -155,7 +183,9 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
          * @return one line of key=value pairs
          */
         public String describe() {
-            return "threads=" + threads + " memoryLimit=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit);
+            return "threads=" + threads + " memoryLimit=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit)
+                    + " fallbackThreads=" + fallbackThreads + " fallbackMemoryLimit="
+                    + (fallbackMemoryLimit == null ? "duckdbDefault" : fallbackMemoryLimit);
         }
     }
 

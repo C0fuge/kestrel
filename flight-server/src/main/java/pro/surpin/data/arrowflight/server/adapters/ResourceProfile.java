@@ -34,9 +34,6 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
     /** Endpoints per node and partial query of {@code speed}. */
     static final int SPEED_ENDPOINTS_PER_SERVER = 4;
 
-    /** Share of the host memory DuckDB, the heap and direct memory may take together under {@code speed}. */
-    static final int SPEED_MEMORY_PERCENT = 75;
-
     /**
      * Creates a profile with unmodifiable copies of its maps, in insertion order.
      *
@@ -88,9 +85,7 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         }
         if (shared && host.memoryBytes() > 0) {
             // Node-wide only: as a per-connection limit this would let every connection take it.
-            long bytes = host.memoryBytes() * SPEED_MEMORY_PERCENT / 100 - host.maxHeapBytes()
-                    - host.maxDirectBytes();
-            long mib = Math.max(DuckDbSizing.MIN_CONNECTION_BYTES, bytes) >> 20;
+            long mib = speedMemoryBytes(host, ConfigAdapter.duckDbSizing(raw, host)) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
         b.offer("true", "flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites", "FLIGHT_ZERO_COPY_WRITES");
@@ -101,6 +96,24 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         // No S3 read caches: one pass reads each file once, so a cache only adds the loopback hop and heap
         // (TPC-H SF10 on S3 1.33x slower with them, as fast as balanced without; runs 40939989610, 40945132304).
         return new ResourceProfile(SPEED, b.defaults, b.explicit);
+    }
+
+    /**
+     * Sizes the node-wide memory limit of the shared DuckDB under {@code speed}: what the
+     * DuckDB-per-connection mode gives the connections it expects at once, at least 1 GiB and at
+     * most DuckDB's own default share of 80 % of the memory. The earlier rule (75 % of the memory
+     * minus heap and direct) was always smaller and left 1 GiB for the whole node with a large
+     * heap, where 32 concurrent S3 queries ran out of it (item 23b).
+     *
+     * @param host     host limits with known memory
+     * @param balanced sizing of the DuckDB-per-connection mode without a profile
+     * @return memory limit in bytes
+     */
+    static long speedMemoryBytes(HostLimits host, DuckDbSizing balanced) {
+        Long perConnection = balanced.memoryLimit() == null ? null : DuckDbSizing.parseBytes(balanced.memoryLimit());
+        long bytes = perConnection == null ? balanced.budgetBytes() : perConnection * balanced.connections();
+        bytes = Math.min(bytes, host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT);
+        return Math.max(DuckDbSizing.MIN_CONNECTION_BYTES, bytes);
     }
 
     /**

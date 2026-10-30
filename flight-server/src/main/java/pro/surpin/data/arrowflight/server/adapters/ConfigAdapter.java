@@ -469,12 +469,17 @@ public class ConfigAdapter {
     }
 
     /**
-     * Returns the node-wide DuckDB sizing of duckDbSharedDatabase from the system configuration.
+     * Returns the node-wide DuckDB sizing of duckDbSharedDatabase from the system configuration,
+     * with the private DuckDB of a query run again after running out of memory sized as the
+     * DuckDB-per-connection mode without a resource profile.
      *
      * @return node-wide sizing, or null when the setting is off
      */
     public static DuckDbSizing.Shared duckDbShared() {
-        return duckDbShared(ConfigSource.system(), HostLimits.detect());
+        HostLimits host = HostLimits.detect();
+        DuckDbSizing.Shared shared = duckDbShared(ConfigSource.system(), host);
+        // A query that ran out of memory in the shared DuckDB runs again sized as without a profile.
+        return shared == null ? null : shared.withFallback(duckDbSizing(ConfigSource.systemWithoutProfile(), host));
     }
 
     /**

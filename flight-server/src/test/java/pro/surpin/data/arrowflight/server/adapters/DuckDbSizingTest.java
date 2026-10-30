@@ -210,7 +210,12 @@ class DuckDbSizingTest {
                 DuckDbSizing.shared(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB), 0, "none"));
         assertEquals(new DuckDbSizing.Shared(1, null),
                 DuckDbSizing.shared(new HostLimits(0, 0, 0, 0), 0, null));
-        assertEquals("threads=8 memoryLimit=duckdbDefault", new DuckDbSizing.Shared(8, null).describe());
+        assertEquals("threads=8 memoryLimit=duckdbDefault fallbackThreads=8 fallbackMemoryLimit=duckdbDefault",
+                new DuckDbSizing.Shared(8, null).describe());
+        DuckDbSizing.Shared withFallback = new DuckDbSizing.Shared(8, "12GiB", 0)
+                .withFallback(DuckDbSizing.compute(new HostLimits(16, 32 * GIB, 8 * GIB, 4 * GIB), false, 0, null, 0));
+        assertEquals(new DuckDbSizing.Shared(8, "12GiB", 0, 4, "3891MiB"), withFallback);
+        assertEquals(withFallback, withFallback.withBufferedConnections(0));
     }
 
     /**
