@@ -38,6 +38,23 @@
 > Keep the gains measured there (c8/c32 p50 -37-50 %, scan x8 +36-43 %, load +11-22 %); also look at the S3 c8
 > p95/p99 tail (1.38-1.64 vs balanced). Then `package=true` and "ITEM 23b DONE" (one line, at the start of a line).
 
+> *Partly done 2026-10-30 (core session, eb1f15d4 + 5ffcb9bf) - **not** "ITEM 23b DONE": `speed` still fails S3 c32.*
+> (1) `speed`'s node-wide `duckDbMemoryLimit` = what balanced gives its expected connections together (per-connection
+> limit x connections, <= 80 % of memory): 2 GiB instead of 1 GiB on the egret profile (the old 75 % term was always
+> smaller; dropped). (2) A query that runs out of the shared DuckDB's memory **before anything was sent** runs once more
+> on a private per-thread DuckDB sized as one balanced connection (`duckdb=outOfMemoryRetry`); the schema now goes out
+> with the first batch. Unit tests: `DuckDbSharedDatabaseTest.outOfMemory*`, `ResourceProfileTest.speedNeverGives...`.
+> Dev CI 41050634698 green. (3) CI check: `small-query-perf.yml` takes `store=s3`, `memory`, fails on any query error,
+> uploads client/server logs (`small-query-logs`). Runs 41050643434 / 41052300882 (s3, 6g, 2 CPUs, -Xmx3g, direct 2g):
+> balanced (8d8321ed and head) 0 errors, c32 148-226 q/s, p99 474-1223 ms; **speed fails at c32 in both CPU modes**
+> with `Out of Memory Error ... (1.9 GiB/2.0 GiB used)` although 13-108 queries per step were rescued by the retry -
+> the failing ones had already sent a batch (streamed results). speed c1/c8: c8 p50 31-34 ms vs balanced 45-55 ms, but
+> p95 ~120 ms vs 75-96. **Next core session:** find what holds ~2 GiB in the shared DuckDB with 32 S3 small queries
+> (`duckdb_memory()` by tag / server log of run 41052300882's artifact; suspects: httpfs read buffers per thread x
+> threads x queries, the parquet metadata cache), then bound it: e.g. under `speed` cap concurrent producing streams in
+> the shared DuckDB (`duckDbProducingStreams` ~ cores x 2) or per-query threads, or a larger limit; rerun
+> `small-query-perf.yml store=s3 memory=6g clients=1,8,32 headOptions=-DresourceProfile=speed` until 0 errors.
+
 > **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
 > Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
 > scans at 2-3x our memory). Add **`resourceProfile`** (`-DresourceProfile` / env `FLIGHT_RESOURCE_PROFILE`), values
@@ -2420,3 +2437,8 @@ S3 slowdown item below stays open for then).
   caches stay 0 under speed; CHANGELOG/START-NOTES updated). Dev CI `package=true` 40951524580 green, pre-release
   `server-1.0.0-d752a7358a65`; tpch-perf 40951528634 (s3) default 388.40 s / speed 388.29 s, 22/22 same answers.
   "ITEM 23 DONE" written; core lane back to WRAP-UP DONE (no further items).
+- 2026-10-30 (cloud session, core lane): item 23b, partial. eb1f15d4: `speed` shared DuckDB memory = balanced's node
+  total (2 GiB on 2c/6g/-Xmx3g/direct 2g, was 1 GiB); OOM before the first batch reruns on a private balanced-sized
+  DuckDB per thread; schema sent with the first batch. Dev CI 41050634698 green. 5ffcb9bf: `small-query-perf.yml`
+  gains `store=s3` / `memory` / error check / log artifact. Runs 41050643434, 41052300882: balanced 0 errors, `speed`
+  still fails S3 c32 (OOM at 2.0 GiB after a batch was sent; 13-108 rescued per step). Item stays open (Next steps).
