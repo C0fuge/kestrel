@@ -55,6 +55,20 @@
 > the shared DuckDB (`duckDbProducingStreams` ~ cores x 2) or per-query threads, or a larger limit; rerun
 > `small-query-perf.yml store=s3 memory=6g clients=1,8,32 headOptions=-DresourceProfile=speed` until 0 errors.
 
+> **ITEM 23b DONE (2026-10-30, 843e4ad5).** Root cause found with a local repro (in-process server on the shared
+> DuckDB, fake S3, 32 clients, `-Dperf.shared=2:2048MiB`): `duckdb_memory()` showed **ALLOCATOR 2042 MiB** - every
+> session of the shared DuckDB cached up to `duckDbStatementCacheSize` (64) prepared statements, and a bound S3 scan
+> keeps httpfs's 1 MiB read buffer, so ~32 sessions x 64 statements filled the 2 GiB limit (cache size 1: no OOM).
+> Fix: the sessions' caches share one node-wide budget (memory limit / 8 at 1 MiB each = 256 for 2 GiB, startup log
+> `cachedStatementBudget=`); past it a session evicts its own LRU statement. OOM in the shared DuckDB now logs
+> `duckdb=sharedOutOfMemory` with memory by tag. Balanced is unchanged. Dev CI 41076937636 green; small-query-perf
+> 41076949440 (s3, 6g, 2 CPUs, -Xmx3g, direct 2g, 1 round) **speed 0 errors, 0 OOM retries**: c32 263 / 275 q/s
+> (balanced 152 / 170), p99 323 / 289 ms (balanced 926 / 916); c8 p50 32 / 34 ms (balanced 52 / 47). `package=true`
+> run 41079217638 green, pre-release `server-1.0.0-843e4ad5b610` (7 assets). **egret:** re-measure speed vs balanced. **Still open (not a failure, follow-up for the next core session):** speed's low-concurrency tail on
+> S3 - c1 35 q/s vs 43-45, p95 58 vs 36-38 ms; c8 p95 115-117 vs 77-94 ms. Suspect: `duckDbThreads` = all cores per
+> query in the shared DuckDB (each point lookup fans out to every thread) - try `small-query-perf.yml store=s3
+> memory=6g headOptions="-DresourceProfile=speed -DduckDbThreads=1"` and compare c1/c8 p95.
+
 > **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
 > Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
 > scans at 2-3x our memory). Add **`resourceProfile`** (`-DresourceProfile` / env `FLIGHT_RESOURCE_PROFILE`), values
@@ -2442,3 +2456,11 @@ S3 slowdown item below stays open for then).
   DuckDB per thread; schema sent with the first batch. Dev CI 41050634698 green. 5ffcb9bf: `small-query-perf.yml`
   gains `store=s3` / `memory` / error check / log artifact. Runs 41050643434, 41052300882: balanced 0 errors, `speed`
   still fails S3 c32 (OOM at 2.0 GiB after a batch was sent; 13-108 rescued per step). Item stays open (Next steps).
+- 2026-10-30 (cloud session, core lane): **item 23b done** (843e4ad5). Local repro of the speed S3 c32 OOM (perf test
+  gains `-Dperf.shared=threads:limit`; test helper passes the shared sizing to S3 servers): `duckdb_memory()` ALLOCATOR
+  2042 MiB = per-session prepared-statement caches (64 each, ~1 MiB per bound S3 scan). Node-wide statement budget for
+  the shared DuckDB (limit / 8 / 1 MiB), `duckdb=sharedOutOfMemory` diagnostic log; tests
+  `DuckDbAdapterTest.statementCachesKeepWithinANodeWideBudget`, `sharedStatementBudgetFollowsTheMemoryLimit`,
+  `DuckDbSharedDatabaseTest.sessionsKeepTheirStatementsWithinTheNodeBudget`. Dev CI 41076937636 green; small-query-perf
+  41076949440: speed 0 errors at c1/c8/c32 (c32 +60-70 % q/s, p99 -65 %), c1/c8 p95 still higher than balanced (Next
+  steps). `package=true` 41079217638 green, pre-release `server-1.0.0-843e4ad5b610`. Also fixed two CHANGELOG list markers (`--`, missing `-`).
