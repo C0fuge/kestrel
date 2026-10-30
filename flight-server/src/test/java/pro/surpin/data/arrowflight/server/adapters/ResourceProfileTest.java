@@ -172,7 +172,7 @@ class ResourceProfileTest {
         DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared(effective(raw, egret), egret)
                 .withFallback(ConfigAdapter.duckDbSizing(raw, egret));
         assertEquals("2048MiB", shared.memoryLimit());
-        assertEquals(2, shared.threads());
+        assertEquals(4, shared.threads());
         assertEquals(balanced.threads(), shared.fallbackThreads());
         assertEquals("1024MiB", shared.fallbackMemoryLimit());
         for (HostLimits host : List.of(egret, SMALL, MEDIUM, LARGE)) {
@@ -182,6 +182,27 @@ class ResourceProfileTest {
             assertEquals(Math.min(DuckDbSizing.parseBytes(perConnection.memoryLimit()) * perConnection.connections(),
                     host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT) >> 20, node >> 20, host.toString());
         }
+    }
+
+    /**
+     * On fewer than 4 cores speed keeps balanced's floor of 4 threads instead of one per core: with
+     * 2 threads point lookups on S3 had 1.5x balanced's c1 / c8 p95 (item 23b follow-up).
+     */
+    @Test
+    void speedNeverGivesFewerThreadsThanBalanced() {
+        for (int cores : List.of(1, 2, 3, 4, 6, 16, 64)) {
+            HostLimits host = new HostLimits(cores, 6 * GIB, 3 * GIB, 2 * GIB);
+            for (Map<String, String> file : List.of(Map.<String, String>of(), Map.of("dataDir", "s3://bucket/t"))) {
+                ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of(), file);
+                int balanced = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), file), host).threads();
+                int speed = ConfigAdapter.duckDbShared(effective(raw, host), host).threads();
+                assertEquals(Math.max(cores, balanced), speed, cores + " cores " + file);
+                assertTrue(speed >= 4, cores + " cores " + file);
+            }
+        }
+        ConfigSource explicit = effective(raw(Map.of("resourceProfile", "speed", "duckDbThreads", "2"), Map.of(),
+                Map.of()), new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB));
+        assertEquals(2, ConfigAdapter.duckDbShared(explicit, new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB)).threads());
     }
 
     /** A small host gets the minimum node memory limit and no read caches. */

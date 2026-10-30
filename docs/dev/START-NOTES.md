@@ -182,7 +182,7 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 |---|---|---|
 | `duckDbSharedDatabase` | true | one DuckDB per node: node-wide thread pool and memory limit |
 | `duckDbSharedMaxThreads` | 0 (no cap) | |
-| `duckDbThreads` | all cores (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
+| `duckDbThreads` | all cores, at least what `balanced` gives one query (4) (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
 | `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |

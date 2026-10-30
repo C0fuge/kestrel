@@ -96,7 +96,7 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 
 - **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
-  (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores), node-wide `duckDbMemoryLimit` of
+  (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores, at least `balanced`'s 4 per query), node-wide `duckDbMemoryLimit` of
   what `balanced` gives its expected connections together (per-connection limit x connections, at most 80 % of memory;
   item 23b - it was 75 % of memory minus heap and direct memory), `flightZeroCopyWrites=true`, `endpointsPerServer=4`,
   `flightBackpressureThresholdBytes`=16 MiB; the s3/lakeFS read caches stay as configured (with them on, `speed` was
@@ -858,6 +858,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- `resourceProfile=speed` (item 23b follow-up): `duckDbThreads` is all cores but at least what `balanced` gives one
+  query (4), so on 2-3 core nodes the shared DuckDB gets 4 threads instead of one per core. With 2 threads on 2
+  cores S3 point lookups had 1.6x balanced's c1 p95 (53 vs 33 ms, 39 vs 49 q/s) and c8 p95 106 vs 62-85 ms; with 4:
+  c1 = balanced, c8 p95 83 ms, c32 unchanged (~330-345 q/s vs balanced ~205-235). 1 thread was worse (c1 p95 ~100
+  ms). Run 41083790232.
 - `duckDbSharedDatabase` / `resourceProfile=speed` (item 23b, root cause): the sessions of the shared DuckDB now keep
   their cached prepared statements within one node-wide budget, an eighth of its memory limit at 1 MiB each (256 for
   2 GiB; log `cachedStatementBudget=`); past it a session evicts its own least recently used statement (at least one

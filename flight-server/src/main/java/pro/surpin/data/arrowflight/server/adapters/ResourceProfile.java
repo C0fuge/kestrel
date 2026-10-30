@@ -79,13 +79,15 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
                 "arrowflight.duckdb.sharedDatabase", "DUCKDB_SHARED_DATABASE"));
         boolean capSet = b.offer("0", "duckDbSharedMaxThreads", "arrowflight.duckdb.sharedMaxThreads",
                 "DUCKDB_SHARED_MAX_THREADS") != null;
+        DuckDbSizing balanced = ConfigAdapter.duckDbSizing(raw, host);
         if (!capSet) {
             // An explicit thread cap of the shared DuckDB is the operator's thread choice: keep it.
-            b.offer(Integer.toString(Math.max(1, host.cores())), "duckDbThreads", "arrowflight.duckdb.threads", null);
+            b.offer(Integer.toString(speedThreads(host, balanced)), "duckDbThreads", "arrowflight.duckdb.threads",
+                    null);
         }
         if (shared && host.memoryBytes() > 0) {
             // Node-wide only: as a per-connection limit this would let every connection take it.
-            long mib = speedMemoryBytes(host, ConfigAdapter.duckDbSizing(raw, host)) >> 20;
+            long mib = speedMemoryBytes(host, balanced) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
         b.offer("true", "flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites", "FLIGHT_ZERO_COPY_WRITES");
@@ -96,6 +98,20 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         // No S3 read caches: one pass reads each file once, so a cache only adds the loopback hop and heap
         // (TPC-H SF10 on S3 1.33x slower with them, as fast as balanced without; runs 40939989610, 40945132304).
         return new ResourceProfile(SPEED, b.defaults, b.explicit);
+    }
+
+    /**
+     * Sizes the DuckDB threads of {@code speed}: all cores, but never fewer than balanced gives
+     * one query (its floor of 4). With 2 threads on 2 cores a point lookup on S3 waited on more of
+     * its round trips one after another: c1 39 vs 49 q/s, c1 p95 53 vs 33 ms; with 4 threads c1
+     * equals balanced and c8 p95 drops from 106 to 83 ms, c32 unchanged (run 41083790232).
+     *
+     * @param host     host limits
+     * @param balanced sizing of the DuckDB-per-connection mode without a profile
+     * @return threads
+     */
+    static int speedThreads(HostLimits host, DuckDbSizing balanced) {
+        return Math.max(Math.max(1, host.cores()), balanced.threads());
     }
 
     /**
