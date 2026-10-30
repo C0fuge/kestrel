@@ -483,6 +483,41 @@ class DuckDbSharedDatabaseTest {
         }
     }
 
+    /**
+     * Verifies the sessions of a shared DuckDB keep their prepared statements within one node-wide
+     * budget (an eighth of the memory limit at 1 MiB each): 32 sessions of 64 statements each
+     * filled a 2 GiB limit with S3 point lookups (item 23b).
+     */
+    @Test
+    void sessionsKeepTheirStatementsWithinTheNodeBudget() throws Exception {
+        DuckDbSizing.Shared sized = new DuckDbSizing.Shared(1, "16MiB");
+        int sessions = 4;
+        ExecutorService pool = Executors.newFixedThreadPool(sessions);
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config(), Executors.newSingleThreadExecutor(),
+                        DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false, sized)) {
+            List<Future<?>> runs = new ArrayList<>();
+            for (int s = 0; s < sessions; s++) {
+                runs.add(pool.submit(() -> {
+                    for (int k = 0; k < 10; k++) {
+                        assertEquals(Integer.toString(k), answer(adapter, allocator,
+                                "SELECT " + k + " AS v", views(1L, 10)));
+                    }
+                    return null;
+                }));
+            }
+            for (Future<?> run : runs) {
+                run.get();
+            }
+            // Budget 2 (16 MiB / 8 / 1 MiB); each session may keep one beyond it.
+            assertTrue(adapter.sharedStatements() <= 2 + sessions,
+                    "cached statements: " + adapter.sharedStatements());
+            assertTrue(adapter.sharedStatements() >= 1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /** Without the shared DuckDB a query that runs out of memory fails as before. */
     @Test
     void outOfMemoryWithoutTheSharedDatabaseIsNotRunAgain() throws Exception {

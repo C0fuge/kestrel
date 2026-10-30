@@ -82,7 +82,8 @@ public class TestFlightServerHelper implements AutoCloseable {
             parquetAdapter = new ParquetAdapter(appConfig, registry.dataDirectory(), "localhost",
                     registry.catalogTables());
             duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
-                    registry.duckDbSetup());
+                    registry.duckDbSetup(), b.threadsUnderLoad, b.threadsWhenIdle, b.cores,
+                    new ProducingStreamGate(b.producingStreams), b.zeroCopyWrites, b.sharedDatabase);
         } else {
             registry = null;
             // Local filesystem adapter

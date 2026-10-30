@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
+import pro.surpin.data.arrowflight.server.adapters.DuckDbSizing;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
@@ -57,7 +58,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * separately (pinned to its own cores, so the in-process clients do not share its CPUs) on the
  * table under {@code -Dperf.dataDir}, which the test writes when it is missing.
  * {@code -Dperf.threads} and {@code -Dperf.threadsUnderLoad} set duckDbThreads and
- * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults).
+ * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults);
+ * {@code -Dperf.shared=threads:memoryLimit} runs it on one shared DuckDB (duckDbSharedDatabase).
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -97,6 +99,12 @@ class SmallQueryThroughputPerfTest {
         TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
                 .dataDir(dir.toString()).resultMode(mode).threads(threads)
                 .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors());
+        String shared = System.getProperty("perf.shared");
+        if (shared != null) {
+            // threads:memoryLimit of one node-wide DuckDB, as duckDbSharedDatabase=true.
+            String[] parts = shared.split(":", 2);
+            builder.sharedDatabase(new DuckDbSizing.Shared(Integer.parseInt(parts[0]), parts[1]));
+        }
         try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
                 TestFlightServerHelper helper = builder.start()) {
             measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)

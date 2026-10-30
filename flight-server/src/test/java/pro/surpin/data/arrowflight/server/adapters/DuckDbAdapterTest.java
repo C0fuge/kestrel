@@ -62,6 +62,56 @@ class DuckDbAdapterTest {
         verify(third, never()).close();
     }
 
+    /**
+     * Verifies caches sharing a node-wide budget evict their own least recently used statement
+     * once the budget is spent, keep at least one each, and give closed statements back (item 23b).
+     */
+    @Test
+    void statementCachesKeepWithinANodeWideBudget() throws Exception {
+        AtomicInteger node = new AtomicInteger();
+        DuckDbAdapter.StatementCache a = new DuckDbAdapter.StatementCache(64, node, 3);
+        DuckDbAdapter.StatementCache b = new DuckDbAdapter.StatementCache(64, node, 3);
+        java.util.Map<String, PreparedStatement> prepared = new java.util.HashMap<>();
+        DuckDbAdapter.StatementPreparer preparer = sql -> {
+            PreparedStatement ps = mock(PreparedStatement.class);
+            prepared.put(sql, ps);
+            return ps;
+        };
+
+        a.statement("a1", preparer);
+        a.statement("a2", preparer);
+        b.statement("b1", preparer);
+        assertEquals(3, node.get());
+        a.statement("a1", preparer);
+        a.statement("a3", preparer);
+        // Budget spent: a evicts its own least recently used statement (a2), not b's.
+        verify(prepared.get("a2")).close();
+        assertEquals(java.util.Set.of("a1", "a3"), a.keySet());
+        assertEquals(3, node.get());
+        b.statement("b2", preparer);
+        verify(prepared.get("b1")).close();
+        assertEquals(java.util.Set.of("b2"), b.keySet(), "a session keeps at least one statement");
+        assertEquals(3, node.get());
+
+        // A statement DuckDB closed is forgotten and given back to the budget.
+        when(prepared.get("a3").isClosed()).thenReturn(true);
+        a.statement("a3", preparer);
+        assertEquals(3, node.get());
+        a.closeAll();
+        assertEquals(1, node.get());
+        b.closeAll();
+        assertEquals(0, node.get());
+    }
+
+    /** Verifies the shared DuckDB's statement budget is an eighth of its memory limit at 1 MiB each. */
+    @Test
+    void sharedStatementBudgetFollowsTheMemoryLimit() {
+        assertEquals(256, DuckDbAdapter.sharedStatementBudget("2048MiB"));
+        assertEquals(128, DuckDbAdapter.sharedStatementBudget("1GiB"));
+        assertEquals(1, DuckDbAdapter.sharedStatementBudget("1MiB"));
+        assertEquals(0, DuckDbAdapter.sharedStatementBudget(null), "DuckDB's default: no budget");
+    }
+
     /** Verifies a SQL text longer than the cache limit keeps one slot and evicts no short entry. */
     @Test
     void statementCacheKeepsLongTextsOutOfTheLru() throws Exception {

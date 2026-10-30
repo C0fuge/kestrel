@@ -67,6 +67,15 @@ public final class DuckDbAdapter implements AutoCloseable {
     private static final long LISTENER_TIMING_LOG_THRESHOLD_NANOS =
             TimeUnit.MILLISECONDS.toNanos(100);
     private static final long SESSION_REAP_PERIOD_SECONDS = 15;
+    /**
+     * Memory a cached prepared statement may hold in the shared DuckDB, for its node-wide budget:
+     * a statement scanning S3 keeps its bound reader with httpfs's 1 MiB read buffer (item 23b).
+     */
+    static final long SHARED_STATEMENT_BYTES = 1L << 20;
+    /** Share of the shared DuckDB's memory limit that cached prepared statements may hold: 1/8. */
+    static final int SHARED_STATEMENT_SHARE = 8;
+    /** Least time between two logs of the shared DuckDB's memory after it ran out of it. */
+    private static final long MEMORY_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
     private static final String TEMP_ROOT_PREFIX = "duckdb-";
     /**
      * Prefix of the in-memory catalog each session of a shared DuckDB keeps its catalog views
@@ -156,6 +165,10 @@ public final class DuckDbAdapter implements AutoCloseable {
      * DuckDB of its own.
      */
     private final DuckDbSizing.Shared shared;
+    /** Prepared statements all sessions of the shared DuckDB keep cached together. */
+    private final AtomicInteger sharedStatements = new AtomicInteger();
+    /** Node-wide budget of sharedStatements; 0 = only each session's own limit. */
+    private final int sharedStatementLimit;
     /**
      * The node's DuckDB with duckDbSharedDatabase, set up and locked down once; every session is
      * a connection to it. Replaced when DuckDB invalidates it; null when the setting is off.
@@ -203,6 +216,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final ThreadLocal<Session> privateSession;
     /** Queries run again on a private DuckDB after running out of memory in the shared one. */
     private final AtomicLong outOfMemoryRetries = new AtomicLong();
+    /** When the shared DuckDB's memory was last logged after it ran out of it, in nanoseconds. */
+    private final AtomicLong memoryLoggedNanos = new AtomicLong(System.nanoTime() - MEMORY_LOG_INTERVAL_NANOS);
     /** Sessions a query slot chose for this thread's current query; unset = threadSession. */
     private final ThreadLocal<ThreadLocal<Session>> slotSessions = new ThreadLocal<>();
     /** Queries inside a slot on this node now. */
@@ -253,6 +268,9 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     static final class StatementCache extends LinkedHashMap<String, PreparedStatement> {
         private final int limit;
+        /** Statements cached by every session of the node's shared DuckDB; null without a budget. */
+        private final AtomicInteger nodeCount;
+        private final int nodeLimit;
         private String oversizeSql;
         private PreparedStatement oversizeStatement;
 
@@ -262,11 +280,26 @@ public final class DuckDbAdapter implements AutoCloseable {
          * @param limit maximum statements retained
          */
         StatementCache(int limit) {
+            this(limit, null, 0);
+        }
+
+        /**
+         * Creates a cache with a finite entry limit that also keeps within a node-wide budget
+         * shared with the other sessions' caches: past it, a new statement first evicts this
+         * cache's least recently used one, so every session keeps at least one.
+         *
+         * @param limit     maximum statements retained
+         * @param nodeCount statements cached by all caches of the budget, or null for no budget
+         * @param nodeLimit statements all caches of the budget may keep together
+         */
+        StatementCache(int limit, AtomicInteger nodeCount, int nodeLimit) {
             super(16, 0.75f, true);
             if (limit <= 0) {
                 throw new IllegalArgumentException("Statement cache limit must be positive");
             }
             this.limit = limit;
+            this.nodeCount = nodeCount;
+            this.nodeLimit = nodeLimit;
         }
 
         @Override
@@ -276,7 +309,34 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             CacheMetrics.eviction(CacheMetrics.Cache.STATEMENT);
             closeEvicted(eldest.getValue());
+            forget(1);
             return true;
+        }
+
+        /**
+         * Evicts this cache's least recently used statement while the node-wide budget is spent.
+         */
+        private void keepWithinNodeBudget() {
+            if (nodeCount == null || isEmpty() || nodeCount.get() < nodeLimit) {
+                return;
+            }
+            Iterator<Map.Entry<String, PreparedStatement>> eldest = entrySet().iterator();
+            PreparedStatement ps = eldest.next().getValue();
+            eldest.remove();
+            CacheMetrics.eviction(CacheMetrics.Cache.STATEMENT);
+            closeEvicted(ps);
+            forget(1);
+        }
+
+        /**
+         * Takes statements this cache no longer holds off the node-wide count.
+         *
+         * @param statements number of statements
+         */
+        private void forget(int statements) {
+            if (nodeCount != null && statements > 0) {
+                nodeCount.addAndGet(-statements);
+            }
         }
 
         /**
@@ -303,11 +363,16 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (ps != null && ps.isClosed()) {
                 // DuckDB closes a prepared statement whose execution failed or was interrupted.
                 remove(sql);
+                forget(1);
                 ps = null;
             }
             if (ps == null) {
+                keepWithinNodeBudget();
                 ps = preparer.prepare(sql);
                 put(sql, ps);
+                if (nodeCount != null) {
+                    nodeCount.incrementAndGet();
+                }
             }
             return ps;
         }
@@ -317,6 +382,7 @@ public final class DuckDbAdapter implements AutoCloseable {
          */
         void closeAll() {
             values().forEach(StatementCache::closeEvicted);
+            forget(size());
             clear();
             closeOversize();
         }
@@ -499,6 +565,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             int threadsUnderLoad, int threadsWhenIdle, int cores, ProducingStreamGate producingGate,
             boolean zeroCopyWrites, DuckDbSizing.Shared shared) {
         this.shared = shared;
+        this.sharedStatementLimit = shared == null ? 0 : sharedStatementBudget(shared.memoryLimit());
         this.producingGate = producingGate;
         this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
@@ -608,7 +675,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 Connection lent = pool != null && pool.root() == root ? pool.take() : null;
                 session = new Session(Thread.currentThread(),
                         openSharedConnection(root, catalog, lent, pool),
-                        appConfig.duckDbStatementCacheSize(), root, catalog,
+                        sharedStatementCache(appConfig.duckDbStatementCacheSize()), root, catalog,
                         lent != null ? pool : null);
             }
             allSessions.add(session);
@@ -616,6 +683,45 @@ public final class DuckDbAdapter implements AutoCloseable {
         } catch (Exception e) {
             throw new RuntimeException("Failed to create thread-local DuckDB connection", e);
         }
+    }
+
+    /**
+     * Sizes the node-wide budget of prepared statements cached in the shared DuckDB: an eighth of
+     * its memory limit at {@link #SHARED_STATEMENT_BYTES} each. Without it every session kept up to
+     * duckDbStatementCacheSize statements, and 32 sessions of S3 point lookups filled a 2 GiB
+     * limit with them (item 23b).
+     *
+     * @param memoryLimit memory limit of the shared DuckDB, or null for DuckDB's default
+     * @return statements all sessions may keep together; 0 = no budget (limit unknown)
+     */
+    static int sharedStatementBudget(String memoryLimit) {
+        Long bytes = memoryLimit == null ? null : DuckDbSizing.parseBytes(memoryLimit);
+        if (bytes == null) {
+            return 0;
+        }
+        long statements = bytes / SHARED_STATEMENT_SHARE / SHARED_STATEMENT_BYTES;
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, statements));
+    }
+
+    /**
+     * Creates a session's statement cache in the shared DuckDB, within the node-wide budget.
+     *
+     * @param maxStatements prepared statements one session may keep
+     * @return cache
+     */
+    private StatementCache sharedStatementCache(int maxStatements) {
+        int limit = Math.max(1, maxStatements);
+        return sharedStatementLimit > 0 ? new StatementCache(limit, sharedStatements, sharedStatementLimit)
+                : new StatementCache(limit);
+    }
+
+    /**
+     * Returns the prepared statements all sessions of the shared DuckDB keep cached, for tests.
+     *
+     * @return statement count
+     */
+    int sharedStatements() {
+        return sharedStatements.get();
     }
 
     /**
@@ -704,9 +810,10 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (previous != null) {
                 previous.close();
             }
-            LOGGER.info("node={} duckdb=sharedDatabaseOpened {} statements={}"
+            LOGGER.info("node={} duckdb=sharedDatabaseOpened {} statements={} cachedStatementBudget={}"
                     + " bufferedConnections={} streamingBufferSize={}", LogUtil.node(),
-                    shared.describe(), storageSetupStatements.size(), spareCount,
+                    shared.describe(), storageSetupStatements.size(),
+                    sharedStatementLimit > 0 ? sharedStatementLimit : "perSessionOnly", spareCount,
                     spareCount > 0 ? appConfig.duckDbStreamingBufferSize() : "duckdbDefault");
             return conn;
         } catch (Exception e) {
@@ -1752,10 +1859,35 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Exception retryableOutOfMemory(Exception e, boolean sent,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener) {
-        if (!sent && shared != null && !listener.isCancelled() && outOfMemory(e)) {
-            return new OutOfMemoryBeforeSend(e);
+        if (shared == null || listener.isCancelled() || !outOfMemory(e)) {
+            return e;
         }
-        return e;
+        logSharedMemory();
+        return sent ? e : new OutOfMemoryBeforeSend(e);
+    }
+
+    /**
+     * Logs what holds the shared DuckDB's memory, by DuckDB's tag, at most once per interval.
+     */
+    private void logSharedMemory() {
+        long now = System.nanoTime();
+        long last = memoryLoggedNanos.get();
+        if (now - last < MEMORY_LOG_INTERVAL_NANOS || !memoryLoggedNanos.compareAndSet(last, now)) {
+            return;
+        }
+        StringBuilder tags = new StringBuilder();
+        try (Connection c = sharedRoot.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
+                Statement s = c.createStatement();
+                ResultSet rs = s.executeQuery("SELECT tag, memory_usage_bytes >> 20 FROM duckdb_memory()"
+                        + " WHERE memory_usage_bytes >= 1048576 ORDER BY 2 DESC")) {
+            while (rs.next()) {
+                tags.append(' ').append(rs.getString(1)).append("MiB=").append(rs.getLong(2));
+            }
+        } catch (Exception e) {
+            tags.append(" unknown=").append(firstLine(String.valueOf(e.getMessage())));
+        }
+        LOGGER.warn("node={} duckdb=sharedOutOfMemory runningQueries={}{}", LogUtil.node(),
+                runningQueries.get(), tags);
     }
 
     /**
@@ -3023,14 +3155,29 @@ public final class DuckDbAdapter implements AutoCloseable {
          */
         private Session(Thread owner, Connection conn, int maxStatements, Connection root,
                 String catalog, BufferedConnections lender) {
+            this(owner, conn, new StatementCache(Math.max(1, maxStatements)), root, catalog, lender);
+        }
+
+        /**
+         * Binds a connection to the thread that uses it, with a statement cache made for it.
+         *
+         * @param owner      thread the connection belongs to
+         * @param conn       DuckDB connection
+         * @param statements statement cache of the session
+         * @param root       connection of the shared DuckDB, or null
+         * @param catalog    the session's catalog in the shared DuckDB, or null
+         * @param lender     pool that lent the connection, or null
+         */
+        private Session(Thread owner, Connection conn, StatementCache statements, Connection root,
+                String catalog, BufferedConnections lender) {
             this.owner = owner;
             this.lender = lender;
             this.conn = conn;
             this.root = root;
             this.catalog = catalog;
-            this.maxStatements = Math.max(1, maxStatements);
+            this.maxStatements = statements.limit;
             // Upstream's bounded LRU cache; it closes the statements it evicts.
-            this.statements = new StatementCache(this.maxStatements);
+            this.statements = statements;
         }
 
         /**

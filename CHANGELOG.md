@@ -858,12 +858,19 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
--- `duckDbSharedDatabase` / `resourceProfile=speed` (item 23b): a query that runs out of the shared DuckDB's memory
+- `duckDbSharedDatabase` / `resourceProfile=speed` (item 23b, root cause): the sessions of the shared DuckDB now keep
+  their cached prepared statements within one node-wide budget, an eighth of its memory limit at 1 MiB each (256 for
+  2 GiB; log `cachedStatementBudget=`); past it a session evicts its own least recently used statement (at least one
+  kept). Each session kept up to `duckDbStatementCacheSize` (64) statements, and a bound S3 scan holds httpfs's 1 MiB
+  read buffer, so 32 sessions of point lookups filled the 2 GiB limit (`duckdb_memory()` ALLOCATOR 2042 MiB) and every
+  later query failed. A shared DuckDB that runs out of memory now logs `duckdb=sharedOutOfMemory` with its memory by
+  tag (at most every 10 s). DuckDB-per-connection mode (`balanced`) is unchanged.
+- `duckDbSharedDatabase` / `resourceProfile=speed` (item 23b): a query that runs out of the shared DuckDB's memory
   (`Out of Memory Error`) before anything was sent now runs once more on a private DuckDB of the thread, sized as one
   connection of the DuckDB-per-connection mode (log `duckdb=outOfMemoryRetry`); before, 32 concurrent S3 small queries
   under `speed` (2 CPUs / 6 GB, `-Xmx3g`, direct 2g: 1 GiB node-wide) failed in every round while `balanced` answered.
   DuckDB result streams now send the schema with the first batch instead of before running the query (same messages).
- JWT login (`FLIGHT_AUTH_PROVIDER=jwt`) with `FLIGHT_JWT_AUDIENCE` set failed at start with a NullPointerException:
+- JWT login (`FLIGHT_AUTH_PROVIDER=jwt`) with `FLIGHT_JWT_AUDIENCE` set failed at start with a NullPointerException:
   the accepted audiences were an immutable `Set.copyOf`, and the nimbus claims verifier on the server class path
   (10.0.1, older than the module's 10.10) asks `contains(null)`. The settings now hold null-tolerant copies.
 - Partial mode: a join naming a table with double quotes (`... JOIN "sales"."orders" t ...`) failed with `Catalog
