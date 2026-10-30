@@ -23,6 +23,21 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-10-30 14:40 - ITEM 23b, bug first: `resourceProfile=speed` fails S3 small queries at 32 clients.**
+> egret run 41029626461 (`results/ITEM23-d752a7358a65.md`, 2 CPUs / 6 GB, -Xmx3g, direct 2g): under `speed`, S3 small
+> queries at 32 clients fail in every round (ADBC 702-753 / 1280, JDBC 66-91 / 1280; failed classes show as "answers
+> differ"); balanced 0 errors, local c32 clean, no OOM kill. The error text (artifact `ab-i23-small-s3`,
+> `B/r*/small-*-c32.err`) is DuckDB's own: `Out of Memory Error: failed to allocate data of size 1.0 MiB (... /1.0 GiB
+> used) - Reducing the number of threads ...`. So the shared DuckDB under `speed` gets one **node-wide 1 GiB** limit
+> (6 GB - 3 GB heap - 2 GB direct) and 32 concurrent S3 queries with all-core threads exhaust it; balanced has
+> per-connection limits and fewer threads. Fix so that `speed` never fails a query that balanced answers, e.g.:
+> size the shared limit with the speed profile's own heap/direct budget (or give `speed` a smaller heap/direct share),
+> bound concurrent producing statements / threads per query in the shared database under memory pressure, and/or
+> retry a statement that hit DuckDB OOM once on a private connection with balanced sizing. Unit test for the 6 GB /
+> -Xmx3g / direct 2g profile; CI check: `tpch-perf`-style S3 small queries at 32 clients under `speed` with 0 errors.
+> Keep the gains measured there (c8/c32 p50 -37-50 %, scan x8 +36-43 %, load +11-22 %); also look at the S3 c8
+> p95/p99 tail (1.38-1.64 vs balanced). Then `package=true` and "ITEM 23b DONE" (one line, at the start of a line).
+
 > **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
 > Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
 > scans at 2-3x our memory). Add **`resourceProfile`** (`-DresourceProfile` / env `FLIGHT_RESOURCE_PROFILE`), values
