@@ -68,6 +68,19 @@
 > S3 - c1 35 q/s vs 43-45, p95 58 vs 36-38 ms; c8 p95 115-117 vs 77-94 ms. Suspect: `duckDbThreads` = all cores per
 > query in the shared DuckDB (each point lookup fans out to every thread) - try `small-query-perf.yml store=s3
 > memory=6g headOptions="-DresourceProfile=speed -DduckDbThreads=1"` and compare c1/c8 p95.
+>
+> *Follow-up done 2026-10-30 (f06b5834): the c1 tail was too **few** threads, not too many.* `speed` gave the shared
+> DuckDB `duckDbThreads` = cores = 2 while balanced gives every connection 4 (floor `MIN_THREADS`). Run 41083790232
+> (s3, 6g, 2 CPUs, one round, same runner; `small-query-perf.yml` `headOptions` now takes several configs split by
+> `;`): pinned c1 balanced 42-49 q/s p95 33-36 ms; speed 39.5 / 53 ms; speed+threads1 26 / 102 ms (worse);
+> speed+threads4 50 / 32 ms; c8 p95 balanced 62-64, speed 106, threads4 83; c32 345-348 q/s for all speed variants
+> (balanced 212-237). Fix: `speed` threads = max(cores, balanced's threads per query) (`ResourceProfile.speedThreads`,
+> test `speedNeverGivesFewerThreadsThanBalanced`; 4+ cores unchanged). Confirmation run 41086327483 on f06b5834
+> (slower runner): 0 errors; pinned c1 speed 44.0 q/s p95 36.6 = balanced 44.0 / 37.0; c32 271 vs 176 q/s, p99 298
+> vs 812 ms. **Still open (small):** speed's c8 p95 is ~1.2x balanced (pinned 95 vs 77, quota 104 vs 95 ms) while
+> its c8 p50 is lower (36 vs 45) and q/s higher (187 vs 169) - a wider spread in the shared pool, not a slowdown;
+> next idea if wanted: `duckDbThreadsUnderLoad` under speed. `package=true` 41088951155 green, pre-release
+> `server-1.0.0-f06b5834e76e`. **egret:** re-measure speed vs balanced on it.
 
 > **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
 > Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
@@ -2464,3 +2477,10 @@ S3 slowdown item below stays open for then).
   `DuckDbSharedDatabaseTest.sessionsKeepTheirStatementsWithinTheNodeBudget`. Dev CI 41076937636 green; small-query-perf
   41076949440: speed 0 errors at c1/c8/c32 (c32 +60-70 % q/s, p99 -65 %), c1/c8 p95 still higher than balanced (Next
   steps). `package=true` 41079217638 green, pre-release `server-1.0.0-843e4ad5b610`. Also fixed two CHANGELOG list markers (`--`, missing `-`).
+- 2026-10-30 (cloud session, core lane): item 23b follow-up (speed's S3 c1/c8 tail). b464b166: `small-query-perf.yml`
+  `headOptions` takes several configurations separated by `;`. A/B run 41083790232 refuted the "too many threads"
+  suspect (1 thread: c1 p95 ~100 ms) and showed 4 threads fix c1. f06b5834: `resourceProfile=speed` sets
+  `duckDbThreads` = max(cores, balanced's threads per query), i.e. 4 on 2-3 cores; tests in `ResourceProfileTest`;
+  CHANGELOG (Fixed) + START-NOTES row. Dev CI 41086317626 green; small-query-perf 41086327483 (s3, 6g, 2 CPUs) 0
+  errors, speed c1 = balanced, c32 +54 % q/s; c8 p95 still ~1.2x balanced (Next steps). `package=true` run
+  41088951155 green, pre-release `server-1.0.0-f06b5834e76e` (7 assets).
