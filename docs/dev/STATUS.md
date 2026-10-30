@@ -81,6 +81,13 @@
 > its c8 p50 is lower (36 vs 45) and q/s higher (187 vs 169) - a wider spread in the shared pool, not a slowdown;
 > next idea if wanted: `duckDbThreadsUnderLoad` under speed. `package=true` 41088951155 green, pre-release
 > `server-1.0.0-f06b5834e76e`. **egret:** re-measure speed vs balanced on it.
+>
+> *c8 p95 follow-up checked 2026-10-30 (core session, run 41092186152, no code change):* `duckDbThreadsUnderLoad`
+> cannot apply under `speed` (the shared DuckDB's threads are node-wide; the adapter ignores it there), so the lever
+> left is `duckDbProducingStreams`. S3, 6g, 2 CPUs, one round, pinned: speed c8 p50/p95 37/96 ms, 180 q/s, c32 262
+> q/s; +cap 8: 38/96 ms, c32 190 q/s; +cap 4: 55/99 ms, 135 q/s, c32 140 q/s; balanced 45/74 ms, 174 q/s, c32 173
+> q/s (quota mode the same picture). The cap does not narrow the c8 tail and costs c32 throughput, so `speed` stays
+> as it is; the c8 p95 spread is accepted (higher q/s, lower p50). Nothing open in the core lane's Next steps.
 
 > **Maintainer, 2026-10-29 22:10 - NEW ITEM 23 after WRAP-UP (take it first): speed for resources, one switch.**
 > Default results stay as they are (final egret run: default path = 7562, upstream native 20-25 % faster on 4-stream
@@ -2484,3 +2491,7 @@ S3 slowdown item below stays open for then).
   CHANGELOG (Fixed) + START-NOTES row. Dev CI 41086317626 green; small-query-perf 41086327483 (s3, 6g, 2 CPUs) 0
   errors, speed c1 = balanced, c32 +54 % q/s; c8 p95 still ~1.2x balanced (Next steps). `package=true` run
   41088951155 green, pre-release `server-1.0.0-f06b5834e76e` (7 assets).
+- 2026-10-30 (core session): speed's c8 p95 follow-up. small-query-perf 41092186152 (s3, 6g, 2 CPUs, 1 round, head
+  10e7b743 + speed + `duckDbProducingStreams` 4/8): the cap leaves c8 p95 at 96-99 ms (speed alone 96, balanced 74)
+  and cuts c32 from 262 to 190 / 140 q/s; `duckDbThreadsUnderLoad` is ignored in shared mode. No code change; the
+  spread is accepted (see Next steps). 0 errors, 0 OOM retries in every configuration.
