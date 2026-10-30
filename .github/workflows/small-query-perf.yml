@@ -36,7 +36,7 @@ on:
         type: string
         default: ""
       headOptions:
-        description: "extra -D options of this ref's server for one more configuration (empty = none)"
+        description: "extra -D options of this ref's server for more configurations, separated by ';' (empty = none)"
         type: string
         default: "-DduckDbThreads=4"
 
@@ -180,9 +180,11 @@ jobs:
               opt="--cpus=2"; [ "$cpu" = pinned ] && opt="--cpuset-cpus=0,1"
               measure "r$r $cpu base" base "$opt" ""
               measure "r$r $cpu head" head "$opt" ""
-              if [ -n "${{ inputs.headOptions }}" ]; then
-                measure "r$r $cpu head ${{ inputs.headOptions }}" head "$opt" "${{ inputs.headOptions }}"
-              fi
+              IFS=';' read -ra extra <<< "${{ inputs.headOptions }}"
+              for o in "${extra[@]}"; do
+                o=$(echo "$o" | xargs)
+                [ -n "$o" ] && measure "r$r $cpu head $o" head "$opt" "$o"
+              done
             done
           done
           cat "$out"
