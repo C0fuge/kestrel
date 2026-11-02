@@ -60,12 +60,15 @@ case "${1:-}" in
     api GET "/service/public/v2/api/service/$tag/policy" \
       | jq -c '.[] | {id, name, resources, deny: (.denyPolicyItems | length),
           conditions: [.denyPolicyItems[]?.conditions[]?.type]}'
-    # A tag, a resource and their map, as tag-sync would create them (each call prints Ranger's
+    # A tag type, a tag, a resource and their map, as tag-sync would create them (each call prints Ranger's
     # error on failure).
     tagapi() {
       local out
       if ! out=$(api "$@"); then echo "Ranger tag REST $1 $2 failed: $out"; exit 1; fi
     }
+    # A tag needs the definition of its type (as tag-sync imports it from Atlas).
+    tagapi POST /service/tags/tagdefs/ '{"name":"EXPIRES_ON","source":"service-matrix",
+      "attributeDefs":[{"name":"expiry_date","type":"date"}]}'
     tagapi POST /service/tags/tags/ '{"guid":"svc-tag-expired","type":"EXPIRES_ON",
       "attributes":{"expiry_date":"2020/01/01"}}'
     tagapi POST /service/tags/resources/ '{"guid":"svc-res-avro-nation","serviceName":"dev_hive",
