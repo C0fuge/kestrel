@@ -35,8 +35,11 @@ D13. Follow-ups of the service matrix (cluster), optional:
       plus the planning node reading the Parquet footers of every file of the table (6-10 block reads per plan).
       Only merged answers (`distributedComplete`, 2 of 22 TPC-H queries) read locally. A wider merge (joins) is
       the only way to cut it - not planned.
-    - (b) an HA nameservice URI (`hdfs://<ns>/...`) for the cluster cells once the core lane's `service-hdfs.yml` has
-      the HA layout.
+    - ~~(b) an HA nameservice URI (`hdfs://<ns>/...`) for the cluster cells~~ *done 2026-11-02 (1646ed4f, see Log):*
+      store `hdfs-ha`, 12/12 cells green. Follow-up (optional): the hdfs-ha loss cell's NameNode failover (nn2 -> nn1,
+      ~30 s into the load) saw 0 errors, but the cell does not show that a query planned after it reached the
+      NameNode (speed caches file listings) - count NameNode RPCs per NameNode (JMX) after the failover, or fail
+      over under `balanced`.
     - (c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
       a longer load or a kill timed inside a merged answer would exercise `peerLost`.
     - ~~(d) HDFS cells with `-Darrowflight.duckdb.extensionDir` only~~ *done 2026-11-02 (ff4b3310, see Log):* the gate
@@ -447,3 +450,14 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   (4-8 remote); the 22 complete queries 1299 local / 2682 remote (67 %); speed / speed-dc - endpoints mostly read
   no blocks at all (speed's DuckDB caches), the rest local. So the remote share is complete mode on one node, not
   endpoint planning (D13 (a2) note). Lock released 18:10Z. Next: D12, D13 (b)/(c).
+- 2026-11-02 (lane 3 session, 21st): lock 18:26Z. D13 (b) done on `main` (1646ed4f; workflow only, no runtime change,
+  so no pre-release). `service-cluster.yml` has a third store `hdfs-ha`: the same 3-node cluster on an HA nameservice
+  `hdfs://ns1` (nn1 172.30.0.9 standby / nn2 172.30.0.10 active, shared edits in a bind-mounted directory, manual
+  failover, as the core lane's `service-hdfs-cell.sh`); the servers get the nameservice keys in `/conf/hdfs-site.xml`
+  (Java client on the classpath and `LIBHDFS3_CONF`), so both clients try the standby first and fail over. Its loss
+  cell also fails the NameNodes over (`haadmin -failover nn2 nn1`) 15 s after node 3 is killed. Summary now expects
+  12 cells. Run 41500837184 (push) **12/12 pass**: hdfs-ha balanced / speed / speed-dc 22/22 + metadata + prepared;
+  hdfs-ha loss: ok 300, 0 retryable, 0 wrong, 0 errors, merged 14 + 27, states after failover nn1=active
+  nn2=standby; locality as on plain HDFS (balanced 11/11 endpoints local-only); short-circuit still unused (warning).
+  Dev CI 41500837154 on 1646ed4f was running at session end (workflow-only change). Next: D12, D13 (c), the hdfs-ha
+  failover follow-up.
