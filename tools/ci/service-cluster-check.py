@@ -14,13 +14,16 @@ one prepared query with a bound parameter. Prints ``ok``/``FAIL`` lines and a la
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 
 With the environment variable ``SC_DATANODES`` (comma-separated ``host:port`` of the HDFS DataNodes'
-HTTP ports), ``check`` also prints one ``reads`` line per query: the change of every DataNode's JMX
-block-read counters (``ReadsFromLocalClient`` / ``ReadsFromRemoteClient``) over that query, so a
-query's remote reads can be told apart (D13 a2; the queries run one after the other).
+HTTP ports), ``check`` also prints a ``reads total`` line: the change of every DataNode's JMX
+block-read counters (``ReadsFromLocalClient`` / ``ReadsFromRemoteClient``) over the 22 queries
+(D13 a2). The DataNode's JMX values are a cache refreshed once per metrics period (10 s by default),
+so every snapshot first waits ``SC_JMX_SETTLE`` seconds (default 11); per-query deltas were all zero
+but one (run 41495736199).
 
 ``locality`` (diagnostic, exit code 0 unless the probe cannot run) plans ``LOCALITY_QUERIES`` in
 partial mode on the first node with pyarrow.flight, reads every endpoint from its first location and
-prints one ``endpoint`` line each: the location and the DataNode counter changes over its read; then
+prints one ``endpoint`` line each: the location and the DataNode counter changes over its read
+(settled snapshots between the reads, as above); then
 a ``locality`` summary line (endpoints reading only local blocks, mixed, only remote, none). It
 needs ``SC_DATANODES`` in the same order as the nodes (DataNode i shares node i's host).
 
@@ -125,7 +128,9 @@ def datanodes():
 
 
 def block_reads(nodes):
-    """Per DataNode (local, remote) block-read counters from JMX; (None, None) when unreadable."""
+    """Per DataNode (local, remote) block-read counters from JMX, read after the JMX cache settled;
+    (None, None) when unreadable."""
+    time.sleep(float(os.environ.get("SC_JMX_SETTLE", "11")))
     out = []
     for dn in nodes:
         try:
@@ -168,21 +173,15 @@ def check(servers, base):
         print(f"FAIL {what}", flush=True)
 
     dns = datanodes()
-    total_local = total_remote = 0
+    before = block_reads(dns) if dns else None
     for i, (name, sql, want) in enumerate(queries):
         node = i % len(conns)
-        before = block_reads(dns) if dns else None
         t0 = time.perf_counter()
         try:
             got = run(conns[node], sql)
         except Exception as e:  # noqa: BLE001 - every failure is reported
             fail(f"{name} on {servers[node]}: {first_line(e)}")
             continue
-        if dns:
-            text, local, remote = reads_delta(before, block_reads(dns))
-            total_local += local
-            total_remote += remote
-            print(f"reads {name} on {servers[node]}: {text} (local {local}, remote {remote})", flush=True)
         diff = difference(got, want)
         ms = (time.perf_counter() - t0) * 1000
         if diff:
@@ -192,7 +191,8 @@ def check(servers, base):
     if len(queries) != 22:
         fail(f"{len(queries)} queries, expected 22")
     if dns:
-        print(f"reads total of the 22 queries: local {total_local}, remote {total_remote}", flush=True)
+        text, local, remote = reads_delta(before, block_reads(dns))
+        print(f"reads total of the 22 queries: local {local}, remote {remote} ({text})", flush=True)
 
     columns = pq.read_schema(os.path.join(base, "data", "tpch", "lineitem", "part-000.parquet")).names
     for node, conn in enumerate(conns):
@@ -263,18 +263,23 @@ def locality(servers, base):
     options = flight.FlightCallOptions(headers=[(b"x-flight-result-mode", b"partial")])
     endpoints = local_only = mixed = no_reads = 0
     total_local = total_remote = 0
+    before = block_reads(dns)
     for label, sql in LOCALITY_QUERIES.items():
         client = flight.connect(f"grpc://{servers[0]}")
         info = client.get_flight_info(flight.FlightDescriptor.for_command(statement_command(sql)), options)
-        print(f"plan {label}: {len(info.endpoints)} endpoints", flush=True)
+        after = block_reads(dns)
+        text, local, remote = reads_delta(before, after)
+        before = after
+        print(f"plan {label} on node 1: {len(info.endpoints)} endpoints, planning {text}", flush=True)
         for k, ep in enumerate(info.endpoints):
             uri = ep.locations[0].uri.decode() if ep.locations else f"grpc://{servers[0]}"
             host = re.sub(r"^[a-z+]+://", "", uri).split(":")[0]
             node = hosts.index(host) + 1 if host in hosts else "?"
-            before = block_reads(dns)
             reader = flight.connect(uri).do_get(ep.ticket, options)
             rows = reader.read_all().num_rows
-            text, local, remote = reads_delta(before, block_reads(dns))
+            after = block_reads(dns)
+            text, local, remote = reads_delta(before, after)
+            before = after
             endpoints += 1
             total_local += local
             total_remote += remote

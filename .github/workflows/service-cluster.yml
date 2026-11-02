@@ -318,6 +318,11 @@ jobs:
               timeout 300 "$py" -I tools/ci/service-cluster-check.py locality "$nodes" "$in" > "$RUNNER_TEMP/locality.log" 2>&1
               cat "$RUNNER_TEMP/locality.log"
               note "$(grep -m 1 '^locality' "$RUNNER_TEMP/locality.log" || echo "locality probe failed: $(tail -n 1 "$RUNNER_TEMP/locality.log" | cut -c1-200)")"
+              # Which DataNode holds each lineitem / orders file (replication 1), to read the endpoint lines against.
+              for t in lineitem orders; do
+                docker exec nn hdfs fsck "/data/tpch/$t" -files -blocks -locations 2>/dev/null \
+                  | awk '/\.parquet /{f=$1} /DatanodeInfoWithStorage/{match($0, /172\.30\.0\.1[1-3]/); print f, "dn" substr($0, RSTART + RLENGTH - 1, 1)}' | sort -u
+              done
               # Block hosts as the NameNode names them vs what a server resolves (planning matches them to node hosts).
               dnNames=$(docker exec nn hdfs dfsadmin -report 2>/dev/null | grep -E '^Hostname:' | awk '{print $2}' | sort | tr '\n' ' ')
               resolved=$(for h in $dnNames; do docker exec srv1 getent hosts "$h" > /dev/null 2>&1 && echo "$h=yes" || echo "$h=no"; done | tr '\n' ' ')
