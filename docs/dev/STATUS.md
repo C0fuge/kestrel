@@ -41,6 +41,18 @@
 > of a refused query with its stack); (d) `package=true` pre-release. Then write "HDFS FIX DONE" at the start of a line
 > and continue with item 24 (its build will then carry both).
 
+> **Maintainer, 2026-11-02 18:10 - ITEM 25 right after the HDFS fix: SERVICE MATRIX gate for every pre-release.**
+> The HDFS failure reached a real cluster because no CI run talks to real services end to end with the current
+> build. Add a workflow `service-matrix.yml` that runs on every `package=true` (and on dispatch) and blocks the
+> pre-release if any cell fails. For each service a real container, the server in **balanced and speed** (single
+> node, plus a 3-node cluster for HDFS and S3), TPC-H SF1 22/22 with answers checked + metadata + a prepared query:
+> HDFS plain and **HA nameservice + Kerberos (KDC container) + short-circuit** (`docker-compose.ci.yml` already has a
+> NameNode/DataNode layout), S3 (MinIO), lakeFS, Ozone (S3 gateway), Hive Metastore (Parquet/ORC/text/Avro tables),
+> Iceberg REST (Polaris or Lakekeeper) + Hadoop catalog, PostgreSQL/MySQL (jdbc plugin), LDAP (OpenLDAP) and JWT
+> login, Ranger (policies on table + a mask + a row filter, if a Ranger container fits; else the existing in-process
+> Ranger test, but through the real server). Matrix jobs in parallel; a summary table (service x profile -> pass/fail
+> + first error line) in the job summary. Document it in CONTRIBUTING/STATUS. Then "ITEM 25 DONE".
+
 > **Maintainer, 2026-11-02 - ITEM 24 (take it first): `resourceProfile=speed` turns the DuckDB external file cache on.**
 > egret wave `fc-s3-f06b5834e76e` (run 41437523179, `results/fc-s3-f06b5834e76e-41437523179/`, S3, 2 CPUs / 6 GB, 3
 > rounds): speed + `-DduckDbExternalFileCache=true` vs speed: TPC-H SF10 ADBC 262.5 -> 42.7 s (0.16 every round); small
