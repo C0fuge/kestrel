@@ -90,6 +90,23 @@ RANGER TABLE CHECK FIX DONE (2026-11-02, core session, 48090377). `FlightAuthori
 > Ranger test, but through the real server). Matrix jobs in parallel; a summary table (service x profile -> pass/fail
 > + first error line) in the job summary. Document it in CONTRIBUTING/STATUS. Then "ITEM 25 DONE".
 
+ITEM 25 CORE PART DONE (2026-11-02, core session, 759b3f28 / f5579621). (1) `service-hdfs.yml` +
+> `tools/ci/service-hdfs-cell.sh`: one server node on apache/hadoop 3.4.1 (1 DataNode, short-circuit configured, server in
+> the DataNode's network namespace with its domain socket, hadoopfs from `extensionDir` only), topologies `plain`, `ha`
+> (nameservice `ns1`, shared edits directory, manual failover; nn1 standby / nn2 active, so the client fails over) and
+> `ha-krb` (ha + Kerberos: MIT KDC container, nn/dn/HTTP principals from a keytab, block access tokens, DataNode without
+> SASL data-transfer protection via `ignore.secure.ports.for.testing` - the CI stand-in for the stand's privileged-port
+> DataNodes; the server logs in itself with `hdfsKerberosPrincipal`/`hdfsKerberosKeytab`, startup line
+> `hdfs=kerberosTicketCache` checked) x balanced / speed; TPC-H SF1 22/22 + metadata + prepared (lane 3's
+> `service-cluster-check.py`). Runs 41497147537 (push) and 41500352375 (gate): 6/6 pass, 0 refused. As lane 3 found, all
+> block reads go over TCP (`ReadBlockOpNumOps == BlocksRead`): hadoopfs does not read short-circuit (see Open questions).
+> (2) Gate: Dev CI `package=true` has a job `service-gate` (`tools/ci/service-gate.sh`): the latest run of every
+> `service-*.yml` on the commit must be green; missing or cancelled runs are dispatched on the same branch (only while it
+> still points at the commit - dispatch `package=true` from a pinned branch like `ci/core-gate` when other lanes are
+> pushing to main) and waited for (up to 180 min). Verified: Dev CI 41498383883 on `ci/core-gate` (= main 57e05488)
+> dispatched service-cluster 41500347523, -hdfs 41500352375, -security 41500357307, -stores 41500362497 (all green), then
+> published pre-release `server-1.0.0-57e054887f7a`. Documented in CONTRIBUTING (Service matrix) and CHANGELOG.
+
 HDFS FIX DONE (2026-11-02, core session, 385fa083 / 2f307313 / c4cd985f; pre-release server-1.0.0-c4cd985f37e3).
 > **Cause found (reproduced locally on DuckDB 1.5.6 with our `hadoopfs-v1.5.6-afc3`):** 1.5.6 stores each
 > `allowed_directories` entry through `VirtualFileSystem::CanonicalizePath` of the file system that claims the path.
@@ -996,6 +1013,11 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **hadoopfs short-circuit reads (2026-11-02, core lane, FYI).** `service-hdfs.yml` (all 6 cells) confirms lane 3's
+  D13 finding: with `dfs.client.read.shortcircuit=true` + the DataNode's domain socket in `LIBHDFS3_CONF`, every block is
+  read over TCP (no correctness issue, speed only). The fix is in the hadoopfs extension / libhdfs3 build (separate repo,
+  outside this session's scope). Say whether the extension's short-circuit should be looked at, and where.
 
 - **Item 23 `speed` details (2026-10-29, core lane, FYI - all opt-in).** (1) The note says "a larger backpressure
   threshold (16 MiB)", but the effective default is 256 MiB (bundled `arrowflight.properties`); `speed` uses 16 MiB, as
@@ -2659,3 +2681,9 @@ S3 slowdown item below stays open for then).
   41488081427 all cells green (ranger 59/59 both profiles). Dev CI push runs 41488065203 / 41489637613 cancelled by lane 3
   pushes; Dev CI + `package=true` 41491152401 on `ci/core-authz-fix` (= main f8ba588a) green, pre-release
   `server-1.0.0-f8ba588a8295`. Next: item 25 core part (`service-hdfs.yml` + the package gate).
+- 2026-11-02 (core session): item 25 core part done - `service-hdfs.yml` (HDFS plain / HA nameservice / HA + Kerberos
+  with an MIT KDC, short-circuit configured, balanced + speed, TPC-H SF1 checked): runs 41497147537, 41500352375 6/6
+  green; Dev CI `package=true` gate (`service-gate` job, `tools/ci/service-gate.sh`) verified with run 41498383883 on
+  `ci/core-gate` = 57e05488 (dispatched and waited for service-cluster 41500347523, -hdfs 41500352375, -security
+  41500357307, -stores 41500362497, all green), pre-release `server-1.0.0-57e054887f7a`. Note for all lanes: from now on a
+  `package=true` run takes ~30 min longer (the service matrix) and fails if any service cell fails.
