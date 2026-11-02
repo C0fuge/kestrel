@@ -75,13 +75,20 @@ public interface FlightAuthorization extends AutoCloseable {
         List<ParquetQueryParser.JoinTable> named;
         try {
             String text = TimeTravelClause.withoutClauses(query);
-            if (ParquetQueryParser.hasNestedQuery(text)) {
+            if (nestedOrUnparsable(text)) {
                 // Subqueries, CTEs and set operations: every table from DuckDB's own parse.
                 named = QueryTables.of(text);
             } else {
-                parsed = ParquetQueryParser.parse(text);
-                // Tables the parse may not name (quoted join tables).
-                named = ParquetQueryParser.checkedTables(text);
+                try {
+                    parsed = ParquetQueryParser.parse(text);
+                    // Tables the parse may not name (quoted join tables).
+                    named = ParquetQueryParser.checkedTables(text);
+                } catch (RuntimeException refused) {
+                    // What the text parse refuses but DuckDB runs (comma joins, ? parameters):
+                    // every table from DuckDB's own parse, which refuses the rest.
+                    parsed = null;
+                    named = QueryTables.of(text);
+                }
             }
         } catch (RuntimeException e) {
             // Refused as without authorization (a query that cannot be checked is not run).
@@ -106,6 +113,21 @@ public interface FlightAuthorization extends AutoCloseable {
         }
         for (ParquetQueryParser.JoinTable table : named) {
             requireTable(principal, table.schema(), table.table(), checked);
+        }
+    }
+
+    /**
+     * Tells whether a query's tables must be named by DuckDB's parse: it nests a query, or the
+     * text parse cannot flatten its FROM subquery (one with a join, an aggregate or a GROUP BY).
+     *
+     * @param text SQL text without time travel clauses
+     * @return true when {@link QueryTables} names the tables
+     */
+    private static boolean nestedOrUnparsable(String text) {
+        try {
+            return ParquetQueryParser.hasNestedQuery(text);
+        } catch (RuntimeException refused) {
+            return true;
         }
     }
 

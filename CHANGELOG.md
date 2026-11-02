@@ -898,6 +898,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- Table checks under an authorization provider (Ranger, a plugin provider) refused queries DuckDB runs: comma joins
+  (`FROM a, b WHERE ...`), a FROM subquery with a join, an aggregate or GROUP BY, and `?` parameters of prepared
+  statements (`INVALID_ARGUMENT`; TPC-H q3, q5, q7-q10, q12-q14, q19, q22). Their tables are now named by DuckDB's own
+  parse and each one is checked; table functions, catalog-qualified names and several statements stay refused.
+  Without a provider nothing changes.
 - HDFS under the lockdown (refused queries in `balanced`, shared DuckDB not starting in `speed`/dc): DuckDB 1.5.6 stores
   a URI root in `allowed_directories` through the file system that claims its scheme; without the hadoopfs extension
   loaded an `hdfs://ns/...` root became `<working dir>/hdfs:/ns/...`, so every HDFS read was refused. A `balanced` server
