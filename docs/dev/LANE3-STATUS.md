@@ -27,9 +27,14 @@ D13. Follow-ups of the service matrix (cluster), optional:
       ~60 % of them come from remote clients. Answers are right; only speed is lost. Next: (a1) check the layout with
       the Java client inside a DataNode container (`hdfs dfs -cat` of a local block, JMX before/after: no new
       READ_BLOCK = the layout supports short-circuit) - if it does, it is a hadoopfs/libhdfs3 matter for the core lane
-      (noted in `STATUS.md` Log); then make the cell fail when short-circuit is configured but unused. (a2) why 60 %
-      remote reads: endpoints are not planned on the node holding the blocks (replication 1), or Parquet footers of
-      all files are read by every node - measure per query.
+      (noted in `STATUS.md` Log); then make the cell fail when short-circuit is configured but unused. ~~(a2) why 60 %
+      remote reads~~ *measured 2026-11-02 (20th session, see Log): not a planning bug.* Partial endpoints run on
+      the node holding their files' blocks (balanced: 10/10 endpoints read only local blocks); the remote share is
+      complete mode: an unmerged complete answer (every join, most TPC-H queries) is computed by the one node the
+      client called, which reads all files, so ~2/3 of its blocks are remote with 3 DataNodes and replication 1,
+      plus the planning node reading the Parquet footers of every file of the table (6-10 block reads per plan).
+      Only merged answers (`distributedComplete`, 2 of 22 TPC-H queries) read locally. A wider merge (joins) is
+      the only way to cut it - not planned.
     - (b) an HA nameservice URI (`hdfs://<ns>/...`) for the cluster cells once the core lane's `service-hdfs.yml` has
       the HA layout.
     - (c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
@@ -430,3 +435,15 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   reads short-circuit. My push cancelled the core lane's Dev CI on 48090377 (contained in 6218df4c / f8ba588a); Dev
   CI 41490875833 on f8ba588a was running at session end. Next: D13 (a2) (why ~60 % remote reads: planning vs block
   locations, per query), then D12.
+- 2026-11-02 (lane 3 session, 20th): lock 17:56Z. D13 (a2) done on `main` (29903c01, dcb4c942; workflow and CI
+  script only, no runtime change, so no pre-release). `service-cluster-check.py`: `check` prints the DataNodes'
+  block reads (local / remote client, JMX) over the 22 queries; new `locality` mode plans a lineitem and an orders
+  query in partial mode on node 1 (pyarrow.flight), reads every endpoint from its first location and prints the
+  DataNode reads per endpoint; the HDFS cells also list which DataNode holds each file and whether a server
+  resolves the DataNodes' host names (yes). Found on the way: a DataNode's JMX values are a cache refreshed once
+  per metrics period (10 s), so per-query deltas were zero but one (run 41495736199, cancelled by the next push
+  after 7/8 cells passed); snapshots now wait 11 s (`SC_JMX_SETTLE`). Run 41496592054 **8/8 pass**: balanced -
+  10/10 partial endpoints read only local blocks (94 local, 0 remote), planning on node 1 read 6-10 footer blocks
+  (4-8 remote); the 22 complete queries 1299 local / 2682 remote (67 %); speed / speed-dc - endpoints mostly read
+  no blocks at all (speed's DuckDB caches), the rest local. So the remote share is complete mode on one node, not
+  endpoint planning (D13 (a2) note). Lock released 18:40Z. Next: D12, D13 (b)/(c).
