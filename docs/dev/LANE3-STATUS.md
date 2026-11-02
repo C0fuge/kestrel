@@ -446,4 +446,4 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   10/10 partial endpoints read only local blocks (94 local, 0 remote), planning on node 1 read 6-10 footer blocks
   (4-8 remote); the 22 complete queries 1299 local / 2682 remote (67 %); speed / speed-dc - endpoints mostly read
   no blocks at all (speed's DuckDB caches), the rest local. So the remote share is complete mode on one node, not
-  endpoint planning (D13 (a2) note). Lock released 18:40Z. Next: D12, D13 (b)/(c).
+  endpoint planning (D13 (a2) note). Lock released 18:10Z. Next: D12, D13 (b)/(c).
