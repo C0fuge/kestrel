@@ -670,6 +670,51 @@ class ConfigAdapterTest {
         assertEquals(2, cfg.endpointBackupLocations());
     }
 
+    /**
+     * Regression (HDFS on a real cluster, 2026-11-02): with only arrowflight.duckdb.extensionDir
+     * set, an hdfs:// data dir now loads hadoopfs from it (as S3 loads httpfs); a directory
+     * without it stops the start, naming the setting; an explicit file still wins.
+     */
+    @Test
+    void hdfsDataDirFindsHadoopfsInTheExtensionDir(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        String version;
+        String platform;
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement s = conn.createStatement();
+                java.sql.ResultSet rs = s.executeQuery("SELECT library_version,"
+                        + " (SELECT platform FROM pragma_platform()) FROM pragma_version()")) {
+            rs.next();
+            version = rs.getString(1).startsWith("v") ? rs.getString(1) : "v" + rs.getString(1);
+            platform = rs.getString(2);
+        }
+        java.nio.file.Path empty = java.nio.file.Files.createDirectories(dir.resolve("empty"));
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/data/parquet",
+                        "arrowflight.duckdb.extensionDir", empty.toString()), Map.of())));
+        assertTrue(missing.getMessage().contains("hadoopfs")
+                && missing.getMessage().contains("duckDbHdfsExtension"), missing.getMessage());
+
+        java.nio.file.Path file = java.nio.file.Files.createDirectories(
+                dir.resolve("ext").resolve(version).resolve(platform))
+                .resolve("hadoopfs.duckdb_extension");
+        java.nio.file.Files.writeString(file, "x");
+        AppConfig found = ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/data/parquet",
+                "arrowflight.duckdb.extensionDir", dir.resolve("ext").toString()), Map.of()));
+        assertEquals(file.toString(), found.duckDbHdfsExtension());
+
+        AppConfig explicit = ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/data/parquet",
+                "arrowflight.duckdb.extensionDir", empty.toString(), "duckDbHdfsExtension", "/x/h.ext"),
+                Map.of()));
+        assertEquals("/x/h.ext", explicit.duckDbHdfsExtension());
+        AppConfig local = ConfigAdapter.getConfig(source(Map.of("dataDir", "/data/parquet",
+                "arrowflight.duckdb.extensionDir", empty.toString()), Map.of()));
+        assertNull(local.duckDbHdfsExtension());
+        AppConfig noDirectory = ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/d"),
+                Map.of()));
+        assertNull(noDirectory.duckDbHdfsExtension());
+    }
+
     private static ConfigSource source(Map<String, String> system, Map<String, String> env)
             throws IOException {
         Properties bundled = new Properties();

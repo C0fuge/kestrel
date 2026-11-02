@@ -67,6 +67,30 @@
 > Ranger test, but through the real server). Matrix jobs in parallel; a summary table (service x profile -> pass/fail
 > + first error line) in the job summary. Document it in CONTRIBUTING/STATUS. Then "ITEM 25 DONE".
 
+> *Partly done 2026-11-02 (core session, 385fa083 + next commit) - **not** "HDFS FIX DONE": (a) real-HDFS end-to-end CI still open.*
+> **Cause found (reproduced locally on DuckDB 1.5.6 with our `hadoopfs-v1.5.6-afc3`):** 1.5.6 stores each
+> `allowed_directories` entry through `VirtualFileSystem::CanonicalizePath` of the file system that claims the path.
+> With hadoopfs loaded (`LOAD` already runs before the lockdown in `configureConnection`, so the order is right) an
+> `hdfs://ns/d` root reads back as `hdfs:/ns/d/` and the check passes, in balanced and in the shared DuckDB
+> (`DuckDbAdapterTest.hadoopfsUnderTheLockdown*`, now run in Dev CI with the real extension). The `<cwd>/hdfs:/...` form
+> appears **only when no hadoopfs is loaded in that DuckDB**: then the local file system makes the root relative to the
+> working directory, every `hdfs://` read fails with `IO Error: No files found` wrapped by the JDBC driver as `Attempting
+> to execute an unsuccessful or closed pending query result`. Balanced did not notice because it ran the startup check
+> only when `duckDbHdfsExtension` or a setup statement was set; speed always checks. **Stand: check that
+> `-DduckDbHdfsExtension` / `DUCKDB_HDFS_EXTENSION` reaches the server JVM on every node** (startup line
+> `duckdb=hdfsExtensionLoaded` must appear; with this build a missing one stops the start with `DuckDB has no file system
+> for hdfs:// ... set duckDbHdfsExtension`). Done: (b) balanced runs the lockdown check at startup whenever the lockdown
+> has roots; the check names the missing extension (`LockdownCheck.unhandledScheme`); per the maintainer's root cause
+> (only `extensionDir` set): an `hdfs://` data dir resolves `hadoopfs` from `arrowflight.duckdb.extensionDir` when
+> `duckDbHdfsExtension` is unset, and stops the start if the directory lacks it
+> (`ConfigAdapterTest.hdfsDataDirFindsHadoopfsInTheExtensionDir`); (c) refused queries carry DuckDB's
+> own error line (`DuckDbErrors.errorLine`: `IO Error ...`/`Permission Error ...` instead of the wrapper) to the client
+> and the log, and the first refusal on a node is logged with its stack (`query=refused ... first=true`). Tests:
+> `LockdownCheckTest.namesTheExtensionAUriRootNeeds`, `.balancedServerWithoutHadoopfsStopsAtStartup`,
+> `DuckDbErrorsTest`, `DuckDbAdapterTest.hadoopfsUnderTheLockdownOfTheSharedDuckDb`. **Still open, next core session:**
+> (a) a Dev-CI-side HDFS end-to-end test (Hadoop container, `hdfs://<host>:<port>/...`, TPC-H SF1 22/22 under balanced
+> and speed with the hadoopfs extension; the runner needs only the Ubuntu 20.04 libssl1.1 package, see dev-ci.yml).
+
 > **Maintainer, 2026-11-02 - ITEM 24 (take it first): `resourceProfile=speed` turns the DuckDB external file cache on.**
 > egret wave `fc-s3-f06b5834e76e` (run 41437523179, `results/fc-s3-f06b5834e76e-41437523179/`, S3, 2 CPUs / 6 GB, 3
 > rounds): speed + `-DduckDbExternalFileCache=true` vs speed: TPC-H SF10 ADBC 262.5 -> 42.7 s (0.16 every round); small

@@ -872,7 +872,9 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   loaded an `hdfs://ns/...` root became `<working dir>/hdfs:/ns/...`, so every HDFS read was refused. A `balanced` server
   now runs the lockdown check at startup too (it skipped it when no extension or setup statement was configured), and
   the check names the missing extension (`DuckDB has no file system for hdfs:// ... set duckDbHdfsExtension`) instead
-  of failing every query. Refused queries report DuckDB's own error (`IO Error: ...`, `Permission Error: ...`) in place
+  of failing every query. An `hdfs://` data dir now finds `hadoopfs` in `arrowflight.duckdb.extensionDir`
+  (`<dir>/v<version>/<platform>/hadoopfs.duckdb_extension`, as the s3 plugin finds httpfs) when `duckDbHdfsExtension`
+  is not set; a directory without it stops the start with a message naming both settings. Refused queries report DuckDB's own error (`IO Error: ...`, `Permission Error: ...`) in place
   of the JDBC driver's `Attempting to execute an unsuccessful or closed pending query result`, and the first refusal on a
   node is logged with its stack (`query=refused ... first=true`). Dev CI now runs the hadoopfs lockdown tests with
   the real v1.5.6 extension (balanced and the shared DuckDB).

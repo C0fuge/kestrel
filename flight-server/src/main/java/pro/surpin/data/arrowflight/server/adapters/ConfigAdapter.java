@@ -67,6 +67,9 @@ public class ConfigAdapter {
         int duckDbThreads = sizing.threads();
         String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
                 "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
+        if (duckDbHdfsExtension == null && isHdfs(dataDir)) {
+            duckDbHdfsExtension = hadoopfsFromExtensionDir(props).orElse(null);
+        }
         boolean duckDbAllowUnsignedExtensions = getBooleanWithEnv("duckDbAllowUnsignedExtensions",
                 "arrowflight.duckdb.allowUnsignedExtensions", "DUCKDB_ALLOW_UNSIGNED_EXTENSIONS",
                 false, props);
@@ -600,6 +603,40 @@ public class ConfigAdapter {
     static int defaultDuckDbThreads(int availableCores, String dataDir) {
         int threads = defaultDuckDbThreads(availableCores);
         return isObjectStore(dataDir) ? Math.max(REMOTE_MIN_DUCKDB_THREADS, threads) : threads;
+    }
+
+    /**
+     * Tells whether a data directory is an HDFS URI.
+     *
+     * @param dataDir data directory URI or path, may be null
+     * @return true for hdfs:// URIs
+     */
+    static boolean isHdfs(String dataDir) {
+        return dataDir != null && dataDir.regionMatches(true, 0, "hdfs://", 0, "hdfs://".length());
+    }
+
+    /**
+     * Finds the hadoopfs extension in arrowflight.duckdb.extensionDir, as the s3 plugin finds
+     * httpfs there: an hdfs:// data dir is read by DuckDB through it, and without it every query
+     * would be refused.
+     *
+     * @param props configuration source
+     * @return the extension file, empty when no extension directory is configured
+     * @throws IllegalArgumentException when the directory has no readable hadoopfs extension
+     */
+    static Optional<String> hadoopfsFromExtensionDir(ConfigSource props) {
+        pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions extensions =
+                new pro.surpin.data.arrowflight.server.duckdb.DuckDbExtensions(props);
+        if (extensions.extensionDirectory().isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(extensions.apply("hadoopfs"));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("The hdfs:// data dir is read through DuckDB's hadoopfs"
+                    + " extension, which arrowflight.duckdb.extensionDir does not hold: " + e.getMessage()
+                    + ". Put it there or set duckDbHdfsExtension (DUCKDB_HDFS_EXTENSION) to its file.", e);
+        }
     }
 
     /**
