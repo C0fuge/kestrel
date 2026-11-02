@@ -45,6 +45,19 @@ case "${1:-}" in
       exit 1
     fi
     echo "ranger admin up, service dev_hive present"
+    # The image links dev_hive to a tag service whose default policies include a deny (EXPIRES_ON,
+    # condition accessed-after-expiry). ranger-hive refuses every table while restrictive tag policies
+    # exist (documented; PLUGINS-STATUS.md bug item), so the cell unlinks it to check the rest.
+    service=$(api GET /service/public/v2/api/service/name/dev_hive)
+    tag=$(jq -r '.tagService // ""' <<< "$service")
+    if [ -n "$tag" ]; then
+      echo "dev_hive's tag service: $tag; its policies:"
+      api GET "/service/public/v2/api/service/$tag/policy" \
+        | jq -c '.[] | {name, policyType, deny: (.denyPolicyItems | length), conditions: [.denyPolicyItems[]?.conditions[]?.type]}'
+      id=$(jq -r .id <<< "$service")
+      api PUT "/service/public/v2/api/service/$id" "$(jq -c 'del(.tagService)' <<< "$service")" \
+        | jq -c '{name, tagService}'
+    fi
     api POST /service/xusers/groups "{\"name\":\"$group\",\"description\":\"service matrix\"}" > /dev/null
     select_item="{\"groups\":[\"$group\"],\"accesses\":[{\"type\":\"select\",\"isAllowed\":true}]"
     for db in "$@"; do
@@ -63,7 +76,8 @@ case "${1:-}" in
     done
     # What the server's plugin will download (no credentials needed): policy count and types.
     curl -sS --fail "$url/service/plugins/policies/download/dev_hive?lastKnownVersion=-1&pluginId=service-matrix" \
-      | jq -c '{policyVersion, policies: [.policies[] | {name, policyType}]}'
+      | jq -c '{policyVersion, policies: [.policies[] | {name, policyType}],
+          tagPolicies: [.tagPolicies.policies[]? | .name]}'
     ;;
   *)
     echo "usage: $0 start | setup <group> <databases...>" >&2
