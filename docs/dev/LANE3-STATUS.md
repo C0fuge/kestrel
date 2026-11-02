@@ -16,6 +16,18 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 > -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
 > into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
 
+SERVICE MATRIX lane 3 DONE (2026-11-02, see Log): `.github/workflows/service-cluster.yml`, 8 cells green (run 41469353046).
+
+D13. Follow-ups of the service matrix (cluster), optional: (a) verify that short-circuit reads are actually used (the
+    DataNodes run with a domain socket and the servers get it through `LIBHDFS3_CONF`, but nothing asserts the
+    hadoopfs reads went over it - e.g. DataNode metrics `ShortCircuit*` or the socket's connections); (b) an HA
+    nameservice URI (`hdfs://<ns>/...`) for the cluster cells once the core lane's `service-hdfs.yml` has the HA
+    layout; (c) the loss cells saw no retryable error in the first run (kills landed between or before peer reads:
+    fallbacks 1-2, 0 wrong) - a longer load or a kill timed inside a merged answer would exercise `peerLost`;
+    (d) the cells set `DUCKDB_HDFS_EXTENSION` explicitly, so the 2026-11-02 HDFS bug (hadoopfs only via
+    `extensionDir`) passes even on `server-1.0.0-fca6512a8046`; once 2f307313 is in a pre-release, switch the HDFS
+    cells to `-Darrowflight.duckdb.extensionDir` only (as the maintainer's cluster runs) so the gate catches it.
+
 
 D1. ~~**Item 18 step 2 - distributed complete mode.**~~ *Done 2026-10-28 (738d1e7, see Log).* Opt-in `distributedComplete`
     (default false). Open follow-ups, folded into D2: (a) TLS + a real auth provider between two processes (the
@@ -370,3 +382,21 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   it cancelled, and supersedes the dispatch 40844289066 on cc191fb) was running at session end - next session:
   confirm it green with a pre-release containing ab8cc3d, else dispatch package=true when no other run is in
   progress. Next: D12 (mixed-version reservations during a rolling upgrade).
+- 2026-11-02 (lane 3 session, 17th): lock 15:05Z. SERVICE MATRIX, cluster part, on `main` (c84f8065):
+  `.github/workflows/service-cluster.yml` (dispatch with input `server` = a pre-release id, else builds the commit;
+  push to `main` touching its files) + `tools/ci/service-cluster-data.py` (TPC-H SF1 Parquet, lineitem/orders in 6
+  files, DuckDB's 22 queries, reference answers by in-process DuckDB over the same files) +
+  `tools/ci/service-cluster-check.py` (ADBC Flight SQL, complete mode: 22 answers compared column names + rows as a
+  multiset, floats rel 1e-9; GetObjects / GetTableSchema on every node; one prepared query with a bound parameter on
+  every node; `loss` mode: 3 clients for 60 s on nodes 1-2, node 3 `docker kill -s KILL` after 15 s, every answer
+  exact or UNAVAILABLE whose retry is exact). Layout: docker network 172.30.0.0/24; HDFS = apache/hadoop 3.4.1
+  NameNode + 3 DataNodes (replication 1), each server in its DataNode's network namespace with the DataNode's domain
+  socket mounted (short-circuit configured: native libhadoop loads); S3 = MinIO (`pgsty/minio`; the official images
+  are gone from Docker Hub/quay, moto is the fallback and the summary names the service); servers in an Ubuntu 20.04
+  image with the runner's JDK 21 (our hadoopfs links libssl 1.1), `DUCKDB_HDFS_EXTENSION` / httpfs from ci-assets,
+  1 CPU / 3 GB each, `-DendpointsPerServer=2`. Cells: {hdfs, s3} x {balanced, speed, speed-dc, loss(speed-dc)}. Run
+  41469353046 (dispatched on 2f307313 = the core lane's hadoopfs fix; it cancelled my push run 41469126621): **8/8
+  pass**, 22/22 + metadata + prepared everywhere; speed-dc merged answers on 2 of 3 nodes; loss: hdfs 190 ok, s3 274
+  ok, 0 retryable, 0 wrong, 0 errors (fallbacks 2 / 1). Pre-release input path: run 41470187507 on
+  `server-1.0.0-fca6512a8046` (before the hadoopfs fix; the
+  workflow sets `DUCKDB_HDFS_EXTENSION` explicitly, the setting the maintainer found working) - **8/8 pass** too (prepare downloaded the release assets). Next: D12, D13.

@@ -94,6 +94,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 
 ### Added
 
+- CI: service matrix, cluster part (lane 3, STATUS item 25): workflow `service-cluster.yml` (dispatch with input
+  `server` = a pre-release id, else a build of the commit): a 3-node cluster on HDFS (NameNode + 3 DataNodes, each
+  server next to its DataNode with short-circuit reads) and on S3 (MinIO), cells balanced / speed / speed +
+  `distributedComplete=true` / a node killed under load; TPC-H SF1 22/22 checked against in-process DuckDB, Flight SQL
+  metadata and a prepared query; job summary table cell -> pass/fail + first error.
 - **CI: service matrix, security part** (`service-security.yml`, item 25 / plugins lane): the server against real
   security services, in `balanced` and `speed`, with Flight TLS - OpenLDAP login (search mode, service account,
   group search) and Keycloak JWT login (JWKS over HTTPS, audience and groups claims); each cell checks refused
