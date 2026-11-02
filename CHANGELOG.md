@@ -94,6 +94,15 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 
 ### Added
 
+- **CI: service matrix, HDFS part, and the pre-release gate** (core lane, item 25): workflow `service-hdfs.yml`
+  (input `server` = a pre-release id, else a build of the commit): one server node on a real HDFS (apache/hadoop
+  3.4.1, short-circuit configured) in three topologies - `plain` (one NameNode), `ha` (nameservice `ns1`, nn1
+  standby / nn2 active, so the client must fail over) and `ha-krb` (HA + Kerberos with an MIT KDC container; the
+  server logs in itself with `hdfsKerberosPrincipal` / `hdfsKerberosKeytab`, no kinit) - each in `balanced` and
+  `speed`; hadoopfs from `-Darrowflight.duckdb.extensionDir` only; TPC-H SF1 22/22 checked against in-process
+  DuckDB, metadata and a prepared query (`tools/ci/service-hdfs-cell.sh`). Dev CI `package=true` now publishes the
+  pre-release only when the latest run of every `service-*.yml` on the commit is green: job `service-gate`
+  dispatches missing or cancelled runs on the branch and waits for them (`tools/ci/service-gate.sh`).
 - CI: service matrix, cluster part (lane 3, STATUS item 25): workflow `service-cluster.yml` (dispatch with input
   `server` = a pre-release id, else a build of the commit): a 3-node cluster on HDFS (NameNode + 3 DataNodes, each
   server next to its DataNode with short-circuit reads) and on S3 (MinIO), cells balanced / speed / speed +

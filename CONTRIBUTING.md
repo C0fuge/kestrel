@@ -56,6 +56,13 @@ See [docs/user_guides/build-test-and-scripts.md](docs/user_guides/build-test-and
 ./mvnw test -P perf
 ```
 
+Service matrix (GitHub Actions, real services in containers, TPC-H SF1 22/22 checked end to end in the balanced and
+speed profiles): `service-hdfs.yml` (HDFS plain, HA nameservice, HA + Kerberos), `service-cluster.yml` (3 nodes on
+HDFS and S3, node loss), `service-stores.yml` (S3, lakeFS, Ozone, Iceberg, PostgreSQL/MySQL), `service-security.yml`
+(LDAP, JWT, Ranger, Hive tables). Each takes input `server` (a pre-release id) or builds the commit. Dev CI's
+`package=true` publishes a pre-release only when the latest run of every `service-*.yml` on the commit is green: the
+`service-gate` job dispatches missing runs on the branch and waits for them (`tools/ci/service-gate.sh`).
+
 Run linting before submitting:
 
 ```bash
