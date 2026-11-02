@@ -592,9 +592,11 @@ public final class DuckDbAdapter implements AutoCloseable {
                 LOGGER.warn("node={} duckdb=sharedDatabase ignored=duckDbStreamingBufferSize"
                         + " reason=\"duckDbSharedBufferedConnections=0\"", LogUtil.node());
             }
-        } else if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null) {
-            // An extension file of another DuckDB version (hadoopfs v1.4.5 next to DuckDB 1.5.6)
-            // stops the server here instead of failing every query.
+        } else if (!this.storageSetupStatements.isEmpty() || appConfig.duckDbHdfsExtension() != null
+                || appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
+            // An extension file of another DuckDB version (hadoopfs v1.4.5 next to DuckDB 1.5.6),
+            // or an hdfs:// root without the hadoopfs extension (DuckDB then allow-lists it as a
+            // local path), stops the server here instead of failing every query.
             verifyStorageSetup();
         }
         this.threadSession = ThreadLocal.withInitial(() -> openSession(appConfig.duckDbThreads()));

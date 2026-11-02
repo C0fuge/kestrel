@@ -33,6 +33,7 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.TableName;
@@ -70,6 +71,10 @@ import static java.util.UUID.randomUUID;
 public final class FlightSqlProducer extends BasicFlightSqlProducer implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(FlightSqlProducer.class);
+
+    /** Whether this node logged a refused query's failure with its stack already. */
+    private final java.util.concurrent.atomic.AtomicBoolean refusalStackLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
     /** Counts stream executions, for query ids in the log. */
     private static final java.util.concurrent.atomic.AtomicLong EXECUTIONS = new java.util.concurrent.atomic.AtomicLong();
     private static final String SCHEMA_NOT_FOUND_MESSAGE = "Could not find Arrow schema for query";
@@ -1000,8 +1005,16 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             return describe.get();
         } catch (IllegalArgumentException e) {
             String message = String.valueOf(e.getMessage());
-            LOGGER.info("node={} query=refused reason='{}' query='{}'", LogUtil.node(),
-                    message.lines().findFirst().orElse(message), query);
+            String reason = DuckDbErrors.errorLine(message);
+            if (e.getCause() != null && refusalStackLogged.compareAndSet(false, true)) {
+                // The first refusal on a node shows where it came from (a storage error under
+                // DuckDB, a missing extension); later ones log their reason only.
+                LOGGER.warn("node={} query=refused reason='{}' query='{}' first=true", LogUtil.node(),
+                        reason, query, e);
+            } else {
+                LOGGER.info("node={} query=refused reason='{}' query='{}'", LogUtil.node(), reason,
+                        query);
+            }
             CallStatus status = message.startsWith("Catalog Error")
                     ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
             throw status.withDescription(message).withCause(e).toRuntimeException();

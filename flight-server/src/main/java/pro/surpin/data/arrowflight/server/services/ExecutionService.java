@@ -200,7 +200,8 @@ public final class ExecutionService {
                 unavailableCatalog(query, message, e);
                 // DuckDB's own errors (parser, binder, catalog, conversion, not implemented)
                 // describe the client's SQL.
-                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+                throw new IllegalArgumentException(
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
             }
             throw new IllegalStateException("Unable to describe query: " + message, e);
         }
@@ -254,7 +255,8 @@ public final class ExecutionService {
             String message = String.valueOf(e.getMessage());
             if (isQueryError(message)) {
                 unavailableCatalog(query, message, e);
-                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+                throw new IllegalArgumentException(
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
             }
             throw e;
         }
@@ -319,7 +321,8 @@ public final class ExecutionService {
             throw e;
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
-            throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+            throw new IllegalArgumentException(
+                    pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
         }
     }
 
@@ -423,7 +426,8 @@ public final class ExecutionService {
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
             if (message.contains("Error: ")) {
-                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+                throw new IllegalArgumentException(
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
             }
             throw new IllegalStateException("Unable to describe query parameters: " + message, e);
         }
@@ -465,7 +469,8 @@ public final class ExecutionService {
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
             if (isBindError(message)) {
-                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+                throw new IllegalArgumentException(
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
             }
             if (e instanceof IOException io && !(io instanceof java.io.FileNotFoundException)
                     && !message.startsWith("No Parquet files for table") && pq.schema != null
@@ -565,7 +570,8 @@ public final class ExecutionService {
         } catch (Exception e) {
             String message = String.valueOf(e.getMessage());
             if (isBindError(message)) {
-                throw new IllegalArgumentException(message.lines().findFirst().orElse(message), e);
+                throw new IllegalArgumentException(
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(message), e);
             }
             throw new IllegalStateException(message, e);
         }

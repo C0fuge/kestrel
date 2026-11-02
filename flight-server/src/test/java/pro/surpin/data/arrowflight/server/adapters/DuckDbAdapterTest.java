@@ -2134,4 +2134,51 @@ class DuckDbAdapterTest {
             ioPool.shutdownNow();
         }
     }
+
+    /**
+     * Regression (HDFS on a real cluster, 2026-11-02): the shared DuckDB of resourceProfile=speed
+     * with the real hadoopfs extension and an hdfs:// root passes the lockdown check at startup
+     * and keeps HDFS paths outside the root refused; without the extension it stops naming
+     * duckDbHdfsExtension. Runs only with {@code -Dhadoopfs.it.extension=<v1.5.6 file>}.
+     */
+    @Test
+    void hadoopfsUnderTheLockdownOfTheSharedDuckDb(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        String extension = System.getProperty("hadoopfs.it.extension");
+        org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
+                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            for (String hdfsExtension : new String[] {extension, null}) {
+                AppConfig config = new AppConfig(
+                        3, 100, 1, 131072, 0, 1, 1,
+                        hdfsExtension, true, "ns", null,
+                        null, null, null, false, 1048576, 67108864, 60000L,
+                        "hdfs://ns/data/parquet", null, 32010, 5701, 60, 3, 1000, 30000, true, false,
+                        64, dir.resolve("spill").toString(), null, "complete", true, true);
+                pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan plan =
+                        pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(
+                                List.of("hdfs://ns/data/parquet"), List.of());
+                if (hdfsExtension == null) {
+                    IllegalStateException e = assertThrows(IllegalStateException.class,
+                            () -> new DuckDbAdapter(config, ioPool, plan, 0, 0, 2,
+                                    ProducingStreamGate.OFF, false,
+                                    new DuckDbSizing.Shared(2, "256MiB", 0)).close());
+                    assertTrue(e.getMessage().contains("duckDbHdfsExtension"), e.getMessage());
+                    continue;
+                }
+                try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool, plan, 0, 0, 2,
+                        ProducingStreamGate.OFF, false, new DuckDbSizing.Shared(2, "256MiB", 0));
+                        Statement s = adapter.connection().createStatement()) {
+                    java.sql.SQLException e = assertThrows(java.sql.SQLException.class,
+                            () -> s.executeQuery(
+                                    "SELECT count(*) FROM read_parquet('hdfs://ns/other/x.parquet')"));
+                    assertTrue(e.getMessage().contains("Permission Error"), e.getMessage());
+                }
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
 }

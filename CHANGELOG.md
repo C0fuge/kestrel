@@ -867,6 +867,15 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- HDFS under the lockdown (refused queries in `balanced`, shared DuckDB not starting in `speed`/dc): DuckDB 1.5.6 stores
+  a URI root in `allowed_directories` through the file system that claims its scheme; without the hadoopfs extension
+  loaded an `hdfs://ns/...` root became `<working dir>/hdfs:/ns/...`, so every HDFS read was refused. A `balanced` server
+  now runs the lockdown check at startup too (it skipped it when no extension or setup statement was configured), and
+  the check names the missing extension (`DuckDB has no file system for hdfs:// ... set duckDbHdfsExtension`) instead
+  of failing every query. Refused queries report DuckDB's own error (`IO Error: ...`, `Permission Error: ...`) in place
+  of the JDBC driver's `Attempting to execute an unsuccessful or closed pending query result`, and the first refusal on a
+  node is logged with its stack (`query=refused ... first=true`). Dev CI now runs the hadoopfs lockdown tests with
+  the real v1.5.6 extension (balanced and the shared DuckDB).
 - `resourceProfile=speed` (item 23b follow-up): `duckDbThreads` is all cores but at least what `balanced` gives one
   query (4), so on 2-3 core nodes the shared DuckDB gets 4 threads instead of one per core. With 2 threads on 2
   cores S3 point lookups had 1.6x balanced's c1 p95 (53 vs 33 ms, 39 vs 49 q/s) and c8 p95 106 vs 62-85 ms; with 4:

@@ -73,6 +73,23 @@ jobs:
           test -n "$httpfs" || { echo "no ${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension"; exit 1; }
           echo "ICEBERG_EXT_DIR=$(dirname "$(dirname "$(dirname "$iceberg")")")" >> "$GITHUB_ENV"
           echo "DUCKDB_HTTPFS_EXTENSION=$httpfs" >> "$GITHUB_ENV"
+          hadoopfs=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)
+          if [ -n "$hadoopfs" ]; then
+            echo "HADOOPFS_IT=$hadoopfs" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no hadoopfs extension; the hadoopfs lockdown tests are skipped"
+          fi
+
+      # The hadoopfs build links OpenSSL 1.1 (libhdfs3), which the runner does not have: the
+      # Ubuntu 20.04 libssl1.1 package goes on LD_LIBRARY_PATH of the build step only.
+      - name: OpenSSL 1.1 for the hadoopfs extension
+        if: env.HADOOPFS_IT != ''
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/libssl1.1.deb"
+          curl -fsSL --retry 4 -o "$deb" http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/libssl1.1"
+          echo "HADOOPFS_LIBS=$RUNNER_TEMP/libssl1.1/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
 
       # MIT klist / kvno read the HDFS ticket cache the server writes (HdfsTicketCacheTest), as libhdfs3 does.
       - name: MIT Kerberos client tools
@@ -118,6 +135,8 @@ jobs:
           fi
 
       - name: Build, all tests (no perf / real-services), Checkstyle, SpotBugs
+        env:
+          LD_LIBRARY_PATH: ${{ env.HADOOPFS_LIBS }}
         run: >
           ./mvnw clean verify checkstyle:check spotbugs:check
           -DexcludedGroups=perf,real-services
@@ -126,6 +145,7 @@ jobs:
           -Dpython.it.executable="$PYTHON_IT"
           -Dclickhouse.it.image="$CLICKHOUSE_IT"
           -Dairport.it.python="$AIRPORT_IT"
+          -Dhadoopfs.it.extension="$HADOOPFS_IT"
 
       - name: Test summary
         if: always()

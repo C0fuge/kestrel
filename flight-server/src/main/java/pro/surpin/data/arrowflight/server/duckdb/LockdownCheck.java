@@ -60,6 +60,11 @@ public final class LockdownCheck {
                     allowed.add(comparable(rs.getString(1)));
                 }
             }
+            String unhandled = unhandledScheme(roots, allowed);
+            if (unhandled != null) {
+                throw new IllegalStateException(unhandled + " DuckDB allowed_directories after the"
+                        + " lockdown are " + shown + ".");
+            }
             Set<String> expected = new LinkedHashSet<>();
             for (String root : roots) {
                 expected.add(comparable(root));
@@ -120,6 +125,38 @@ public final class LockdownCheck {
                 throw new IllegalStateException("DuckDB has secrets nobody declared: " + extra);
             }
         }
+    }
+
+    /**
+     * Finds a readable root with a URI scheme that DuckDB stored as a local path: no loaded file
+     * system claims the scheme, so DuckDB 1.5 makes {@code hdfs://ns/d} the directory
+     * {@code <working directory>/hdfs:/ns/d/} and refuses every read of the root.
+     *
+     * @param roots readable roots of the plan
+     * @param allowed allowed_directories read back, in comparable form
+     * @return what is missing, or null when every scheme root kept its scheme
+     */
+    static String unhandledScheme(List<String> roots, List<String> allowed) {
+        for (String root : roots) {
+            int colon = root.indexOf("://");
+            if (colon <= 0 || root.regionMatches(true, 0, "file", 0, colon) && colon == 4) {
+                continue;
+            }
+            String scheme = root.substring(0, colon).toLowerCase(java.util.Locale.ROOT);
+            String stored = scheme + ":/";
+            if (allowed.stream().anyMatch(directory -> directory.startsWith(stored))) {
+                continue;
+            }
+            String extension = "hdfs".equals(scheme)
+                    ? "the hadoopfs extension: set duckDbHdfsExtension (DUCKDB_HDFS_EXTENSION) to its"
+                    + " file"
+                    : "the extension that reads " + scheme + ":// (httpfs for S3, through the store's"
+                    + " plugin)";
+            return "DuckDB has no file system for " + scheme + ":// and stored the readable root "
+                    + root + " as a local path, so every read of it would be refused. Load "
+                    + extension + ".";
+        }
+        return null;
     }
 
     /**

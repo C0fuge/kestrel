@@ -67,6 +67,13 @@ class LockdownCheckTest {
             assertTrue(unregistered.getMessage().contains("allowed_directories"),
                     unregistered.getMessage());
         }
+        try (Connection conn = lockedDown("hdfs://ns/data/parquet/", temp + "/")) {
+            IllegalStateException hdfs = assertThrows(IllegalStateException.class,
+                    () -> LockdownCheck.verify(conn, List.of("hdfs://ns/data/parquet"), temp,
+                            List.of()));
+            assertTrue(hdfs.getMessage().contains("no file system for hdfs://")
+                    && hdfs.getMessage().contains("duckDbHdfsExtension"), hdfs.getMessage());
+        }
         assertEquals("s3:/lake/p/", LockdownCheck.comparable("s3://lake/p"));
         assertEquals("s3:/lake/p/", LockdownCheck.comparable("s3:/lake/p/"));
         assertEquals("hdfs:/ns/d/", LockdownCheck.comparable("hdfs://ns/d"));
@@ -123,6 +130,50 @@ class LockdownCheckTest {
                 ResultSet rs = s.executeQuery("SELECT current_setting('parquet_metadata_cache')")) {
             assertTrue(rs.next());
             assertTrue(rs.getBoolean(1));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Regression (HDFS on a real cluster, 2026-11-02): without the hadoopfs extension DuckDB 1.5.6
+     * stores an hdfs:// root as {@code <cwd>/hdfs:/ns/...}; the check names the missing extension
+     * and accepts the forms DuckDB keeps when a file system claims the scheme.
+     */
+    @Test
+    void namesTheExtensionAUriRootNeeds() {
+        String cwd = Path.of("").toAbsolutePath() + "/";
+        String hdfs = LockdownCheck.unhandledScheme(List.of("hdfs://ns/data/parquet"),
+                List.of(cwd + "hdfs:/ns/data/parquet/", "/tmp/spill/"));
+        assertTrue(hdfs != null && hdfs.contains("hadoopfs")
+                && hdfs.contains("hdfs://ns/data/parquet"), hdfs);
+        String s3 = LockdownCheck.unhandledScheme(List.of("s3://lake/p"),
+                List.of(cwd + "s3:/lake/p/"));
+        assertTrue(s3 != null && s3.contains("httpfs"), s3);
+        assertEquals(null, LockdownCheck.unhandledScheme(List.of("hdfs://ns/data/parquet"),
+                List.of("hdfs:/ns/data/parquet/", "/tmp/spill/")));
+        assertEquals(null, LockdownCheck.unhandledScheme(List.of("s3://lake/p"),
+                List.of(LockdownCheck.comparable("s3://lake/p/"))));
+        assertEquals(null, LockdownCheck.unhandledScheme(List.of("/data", "file:///lake"),
+                List.of("/data/", "/lake/")));
+    }
+
+    /**
+     * Regression (HDFS on a real cluster, 2026-11-02): a per-connection (balanced) server with an
+     * hdfs:// root and no hadoopfs extension started and refused every query with DuckDB's
+     * pending-result error; it now stops at startup and names the setting.
+     */
+    @Test
+    void balancedServerWithoutHadoopfsStopsAtStartup(@TempDir Path dir) {
+        AppConfig config = new AppConfig(3, 100, 1, 131072, 0, 1, 1, null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, "hdfs://ns/data/parquet", null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, dir.resolve("spill").toString(),
+                null, "complete", true, true);
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> new DuckDbAdapter(config, ioPool, List.of("hdfs://ns/data/parquet")).close());
+            assertTrue(e.getMessage().contains("duckDbHdfsExtension"), e.getMessage());
         } finally {
             ioPool.shutdownNow();
         }
