@@ -3,7 +3,10 @@
 #
 # Stores: HDFS (apache/hadoop: a NameNode and 3 DataNodes; each server runs in its DataNode's
 # network namespace, as server-node-N of docker-compose.ci.yml, with the DataNode's domain socket
-# mounted for short-circuit reads when the image's native Hadoop library loads) and S3 (a MinIO
+# mounted for short-circuit reads when the image's native Hadoop library loads), HDFS HA (hdfs-ha: the
+# same with an HA nameservice ns1 of two NameNodes, nn1 standby / nn2 active, shared edits, manual
+# failover; data dir hdfs://ns1/data, so the servers' Java client and hadoopfs must fail over to nn2;
+# in the loss cell the NameNodes also fail over nn2 -> nn1 under load) and S3 (a MinIO
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
 # SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
@@ -137,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        store: [hdfs, s3]
+        store: [hdfs, hdfs-ha, s3]
         cell: [balanced, speed, speed-dc, loss]
     name: ${{ matrix.store }} ${{ matrix.cell }}
     steps:
@@ -171,6 +174,7 @@ jobs:
           finish() { # status, detail
             printf '%s|%s|%s|%s\n' "$STORE" "$CELL" "$1" "$(echo "$2" | head -n 1 | tr '|' '/' | cut -c1-300)" > "$res"
             for i in 1 2 3; do docker logs "srv$i" > "$RUNNER_TEMP/srv$i.log" 2>&1; docker logs "dn$i" > "$RUNNER_TEMP/dn$i.log" 2>&1 || rm -f "$RUNNER_TEMP/dn$i.log"; done
+            for c in nn nn1 nn2; do docker logs "$c" > "$RUNNER_TEMP/$c.log" 2>&1 || rm -f "$RUNNER_TEMP/$c.log"; done
             [ "$1" = pass ]; exit $?
           }
           note() { echo "$*" | tee -a "$notes"; }
@@ -179,18 +183,62 @@ jobs:
             -v "$RUNNER_TEMP/conf:/conf:ro" -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true
             -e FLIGHT_PLUGINS_DIR=/app/plugins)
           mkdir -p "$RUNNER_TEMP/conf"
-          printf '<configuration></configuration>\n' > "$RUNNER_TEMP/conf/hdfs-site.xml"
+          xml() { # key value ...: a Hadoop configuration file
+            echo '<?xml version="1.0"?>'; echo '<configuration>'
+            while [ $# -ge 2 ]; do printf '  <property><name>%s</name><value>%s</value></property>\n' "$1" "$2"; shift 2; done
+            echo '</configuration>'
+          }
+          xml > "$RUNNER_TEMP/conf/hdfs-site.xml"
 
-          if [ "$STORE" = hdfs ]; then
-            hcfg=(-e CORE-SITE.XML_fs.defaultFS=hdfs://172.30.0.10:8020 -e HDFS-SITE.XML_dfs.replication=1
+          if [[ $STORE == hdfs* ]]; then
+            hcfg=(-e HDFS-SITE.XML_dfs.replication=1
               -e HDFS-SITE.XML_dfs.permissions.enabled=false -e HDFS-SITE.XML_dfs.namenode.rpc-bind-host=0.0.0.0
-              -e HDFS-SITE.XML_dfs.namenode.name.dir=/tmp/hdfs/nn -e HDFS-SITE.XML_dfs.datanode.data.dir=/tmp/hdfs/dn
+              -e HDFS-SITE.XML_dfs.namenode.http-bind-host=0.0.0.0 -e HDFS-SITE.XML_dfs.datanode.data.dir=/tmp/hdfs/dn
               -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false)
+            # The servers' client configuration (classpath /conf and LIBHDFS3_CONF: one file for both).
+            cconf=()
+            if [ "$STORE" = hdfs-ha ]; then
+              # HA nameservice ns1 as in the core lane's service-hdfs-cell.sh: nn1 (172.30.0.9) standby, nn2
+              # (172.30.0.10) active, so every client tries the standby first and must fail over.
+              cconf=(fs.defaultFS hdfs://ns1 dfs.nameservices ns1 dfs.ha.namenodes.ns1 nn1,nn2
+                dfs.namenode.rpc-address.ns1.nn1 172.30.0.9:8020 dfs.namenode.rpc-address.ns1.nn2 172.30.0.10:8020
+                dfs.client.failover.proxy.provider.ns1 org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider)
+              hcfg+=(-e CORE-SITE.XML_fs.defaultFS=hdfs://ns1 -e HDFS-SITE.XML_dfs.nameservices=ns1
+                -e HDFS-SITE.XML_dfs.ha.namenodes.ns1=nn1,nn2
+                -e HDFS-SITE.XML_dfs.namenode.rpc-address.ns1.nn1=172.30.0.9:8020
+                -e HDFS-SITE.XML_dfs.namenode.rpc-address.ns1.nn2=172.30.0.10:8020
+                -e HDFS-SITE.XML_dfs.namenode.http-address.ns1.nn1=172.30.0.9:9870
+                -e HDFS-SITE.XML_dfs.namenode.http-address.ns1.nn2=172.30.0.10:9870
+                -e HDFS-SITE.XML_dfs.namenode.shared.edits.dir=file:///hd/shared
+                -e HDFS-SITE.XML_dfs.ha.automatic-failover.enabled=false
+                -e "HDFS-SITE.XML_dfs.ha.fencing.methods=shell(/bin/true)"
+                -e HDFS-SITE.XML_dfs.client.failover.proxy.provider.ns1=org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider
+                -e HDFS-SITE.XML_dfs.namenode.name.dir=/hd/name)
+              nnc=nn2; dataDir=hdfs://ns1/data
+            else
+              hcfg+=(-e CORE-SITE.XML_fs.defaultFS=hdfs://172.30.0.10:8020 -e HDFS-SITE.XML_dfs.namenode.name.dir=/tmp/hdfs/nn)
+              nnc=nn; dataDir=hdfs://172.30.0.10:8020/data
+            fi
             sc=off
             if docker run --rm "$HADOOP_IMAGE" hadoop checknative 2>&1 | grep -E '^hadoop: +true'; then sc=on; fi
-            note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit configured: $sc"
-            docker run -d --name nn --network sc --ip 172.30.0.10 --hostname nn "${hcfg[@]}" "$HADOOP_IMAGE" \
-              bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 && exec hdfs namenode' > /dev/null
+            if [ "$STORE" = hdfs-ha ]; then
+              note "HDFS $HADOOP_IMAGE, HA nameservice ns1 (nn1 standby / nn2 active, manual failover) + 3 DataNodes, replication 1, short-circuit configured: $sc"
+              # nn1 formats its name directory and the shared edits, waits until they are copied for nn2, then runs.
+              hd=/srv/sc-hd; sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/shared"
+              docker run -d --name nn1 --network sc --ip 172.30.0.9 --hostname nn1 "${hcfg[@]}" -v "$hd/nn1:/hd/name" \
+                -v "$hd/shared:/hd/shared" "$HADOOP_IMAGE" bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 \
+                  || { cat /tmp/format.log; exit 1; }; touch /hd/name/.formatted; while [ ! -f /hd/name/.go ]; do sleep 1; done; exec hdfs namenode' > /dev/null
+              for _ in $(seq 120); do [ -f "$hd/nn1/.formatted" ] && break; [ "$(docker inspect -f '{{.State.Running}}' nn1)" = true ] || break; sleep 1; done
+              [ -f "$hd/nn1/.formatted" ] || { docker logs nn1 2>&1 | tail -n 30; finish fail "NameNode format failed: $(docker logs nn1 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-200)"; }
+              sudo cp -a "$hd/nn1" "$hd/nn2"
+              docker run -d --name nn2 --network sc --ip 172.30.0.10 --hostname nn2 "${hcfg[@]}" -v "$hd/nn2:/hd/name" \
+                -v "$hd/shared:/hd/shared" "$HADOOP_IMAGE" hdfs namenode > /dev/null
+              sudo touch "$hd/nn1/.go"
+            else
+              note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit configured: $sc"
+              docker run -d --name nn --network sc --ip 172.30.0.10 --hostname nn "${hcfg[@]}" "$HADOOP_IMAGE" \
+                bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 && exec hdfs namenode' > /dev/null
+            fi
             for i in 1 2 3; do
               scfg=()
               if [ "$sc" = on ]; then
@@ -201,22 +249,32 @@ jobs:
               docker run -d --name "dn$i" --network sc --ip "172.30.0.1$i" --hostname "node$i" "${hcfg[@]}" "${scfg[@]}" \
                 "$HADOOP_IMAGE" hdfs datanode > /dev/null
             done
+            haState() { echo "nn1=$(docker exec nn2 hdfs haadmin -getServiceState nn1 2>&1 | tail -n 1) nn2=$(docker exec nn2 hdfs haadmin -getServiceState nn2 2>&1 | tail -n 1)"; }
+            if [ "$STORE" = hdfs-ha ]; then
+              for _ in $(seq 120); do
+                docker exec nn2 hdfs haadmin -getServiceState nn2 > /dev/null 2>&1 \
+                  && docker exec nn2 hdfs haadmin -getServiceState nn1 > /dev/null 2>&1 && break
+                sleep 1
+              done
+              docker exec nn2 hdfs haadmin -transitionToActive nn2 2>&1 | tail -n 3
+              state=$(haState); note "HA states: $state"
+              [[ $state == *"nn1=standby"* && $state == *"nn2=active"* ]] || { docker logs nn2 2>&1 | tail -n 30; finish fail "HA transition failed: $state"; }
+            fi
             for _ in $(seq 120); do
-              report=$(docker exec nn hdfs dfsadmin -report 2>/dev/null)
+              report=$(docker exec "$nnc" hdfs dfsadmin -report 2>/dev/null)
               [[ $report == *'Live datanodes (3)'* && $report != *'Safe mode is ON'* ]] && break
               sleep 1
             done
-            [[ $report == *'Live datanodes (3)'* ]] || { docker logs nn 2>&1 | tail -n 20; docker logs dn1 2>&1 | tail -n 20; finish fail "HDFS did not come up with 3 DataNodes"; }
-            docker cp "$in/data" nn:/tmp/upload > /dev/null
-            docker exec nn bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
-            docker exec nn hdfs fsck /data/tpch/lineitem -files -blocks -locations 2>/dev/null | grep -oE 'DatanodeInfoWithStorage\[172\.30\.0\.1[1-3]' | sort | uniq -c | sed 's/^/lineitem blocks on /'
-            dataDir=hdfs://172.30.0.10:8020/data
+            [[ $report == *'Live datanodes (3)'* ]] || { docker logs "$nnc" 2>&1 | tail -n 20; docker logs dn1 2>&1 | tail -n 20; finish fail "HDFS did not come up with 3 DataNodes"; }
+            docker cp "$in/data" "$nnc:/tmp/upload" > /dev/null
+            docker exec "$nnc" bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
+            docker exec "$nnc" hdfs fsck /data/tpch/lineitem -files -blocks -locations 2>/dev/null | grep -oE 'DatanodeInfoWithStorage\[172\.30\.0\.1[1-3]' | sort | uniq -c | sed 's/^/lineitem blocks on /'
             if [ "$sc" = on ]; then
               # D13 (a1): does this layout support short-circuit at all? The Java client inside dn1 writes a file
               # (first replica local), then reads it back; no new READ_BLOCK on dn1 = it read short-circuit.
               rbo() { curl -fsS --max-time 5 http://172.30.0.11:9864/jmx 2>/dev/null | grep -oE '"ReadBlockOpNumOps" : [0-9]+' | grep -oE '[0-9]+$' | head -n 1; }
               docker exec dn1 bash -c 'head -c 4000000 /dev/urandom > /tmp/sc-probe && hdfs dfs -put -f /tmp/sc-probe /sc-probe' > /dev/null 2>&1
-              probeLoc=$(docker exec nn hdfs fsck /sc-probe -files -blocks -locations 2>/dev/null | grep -oE 'DatanodeInfoWithStorage\[172\.30\.0\.1[1-3]' | sort -u | tr '\n' ' ')
+              probeLoc=$(docker exec "$nnc" hdfs fsck /sc-probe -files -blocks -locations 2>/dev/null | grep -oE 'DatanodeInfoWithStorage\[172\.30\.0\.1[1-3]' | sort -u | tr '\n' ' ')
               before=$(rbo)
               probeBytes=$(docker exec dn1 bash -c 'hdfs dfs -cat /sc-probe 2> /dev/null | wc -c')
               after=$(rbo)
@@ -224,12 +282,10 @@ jobs:
               elif [ -n "$before" ] && [ "$before" = "$after" ]; then probe="short-circuit (no READ_BLOCK)"
               else probe="TCP (READ_BLOCK $before -> $after)"; fi
               note "short-circuit probe (Java client in dn1, block on ${probeLoc:-?}): $probe"
-              docker exec nn hdfs dfs -rm -skipTrash /sc-probe > /dev/null 2>&1
-              printf '%s\n' '<configuration>' \
-                '<property><name>dfs.client.read.shortcircuit</name><value>true</value></property>' \
-                '<property><name>dfs.domain.socket.path</name><value>/var/run/hdfs-sockets/dn</value></property>' \
-                '</configuration>' > "$RUNNER_TEMP/conf/hdfs-site.xml"
+              docker exec "$nnc" hdfs dfs -rm -skipTrash /sc-probe > /dev/null 2>&1
+              cconf+=(dfs.client.read.shortcircuit true dfs.domain.socket.path /var/run/hdfs-sockets/dn)
             fi
+            xml "${cconf[@]}" > "$RUNNER_TEMP/conf/hdfs-site.xml"
             netOf() { echo "--network container:dn$1"; }
             sockOf() { [ "$sc" = on ] && echo "-v /srv/sc-sock/dn$1:/var/run/hdfs-sockets"; }
             storeEnv=(-e LIBHDFS3_CONF=/conf/hdfs-site.xml)
@@ -303,16 +359,23 @@ jobs:
             sleep 15
             note "node 3 killed (docker kill -s KILL) at $(date -u +%T) under load of 3 clients on nodes 1-2"
             docker kill -s KILL srv3 > /dev/null
+            if [ "$STORE" = hdfs-ha ]; then
+              # NameNode failover under the same load: the active nn2 hands over to nn1 (manual, fenced by
+              # shell(/bin/true)); the servers' clients must fail over back to nn1.
+              sleep 15
+              docker exec nn2 hdfs haadmin -failover nn2 nn1 2>&1 | tail -n 1
+              note "NameNode failover nn2 -> nn1 at $(date -u +%T): $(haState)"
+            fi
             wait "$client"; rc=$?
             grep -E '^(summary|result)' "$RUNNER_TEMP/client.log"
             grep -E '^event .* (unavailable|wrong|error|retry)' "$RUNNER_TEMP/client.log" | head -n 20
             note "$(grep '^summary' "$RUNNER_TEMP/client.log")"
           else
             # D13 (a2): on HDFS the check prints each query's DataNode block reads (local / remote client).
-            [ "$STORE" = hdfs ] && export SC_DATANODES=172.30.0.11:9864,172.30.0.12:9864,172.30.0.13:9864
+            [[ $STORE == hdfs* ]] && export SC_DATANODES=172.30.0.11:9864,172.30.0.12:9864,172.30.0.13:9864
             "$py" -I tools/ci/service-cluster-check.py check "$nodes" "$in" > "$RUNNER_TEMP/client.log" 2>&1; rc=$?
             cat "$RUNNER_TEMP/client.log"
-            if [ "$STORE" = hdfs ]; then
+            if [[ $STORE == hdfs* ]]; then
               note "$(grep -m 1 '^reads total' "$RUNNER_TEMP/client.log" || echo 'reads total: (none)')"
               # Partial mode: does each endpoint run on the node holding its files' blocks? Diagnostic only.
               timeout 300 "$py" -I tools/ci/service-cluster-check.py locality "$nodes" "$in" > "$RUNNER_TEMP/locality.log" 2>&1
@@ -320,11 +383,11 @@ jobs:
               note "$(grep -m 1 '^locality' "$RUNNER_TEMP/locality.log" || echo "locality probe failed: $(tail -n 1 "$RUNNER_TEMP/locality.log" | cut -c1-200)")"
               # Which DataNode holds each lineitem / orders file (replication 1), to read the endpoint lines against.
               for t in lineitem orders; do
-                docker exec nn hdfs fsck "/data/tpch/$t" -files -blocks -locations 2>/dev/null \
+                docker exec "$nnc" hdfs fsck "/data/tpch/$t" -files -blocks -locations 2>/dev/null \
                   | awk '/\.parquet /{f=$1} /DatanodeInfoWithStorage/{match($0, /172\.30\.0\.1[1-3]/); print f, "dn" substr($0, RSTART + RLENGTH - 1, 1)}' | sort -u
               done
               # Block hosts as the NameNode names them vs what a server resolves (planning matches them to node hosts).
-              dnNames=$(docker exec nn hdfs dfsadmin -report 2>/dev/null | grep -E '^Hostname:' | awk '{print $2}' | sort | tr '\n' ' ')
+              dnNames=$(docker exec "$nnc" hdfs dfsadmin -report 2>/dev/null | grep -E '^Hostname:' | awk '{print $2}' | sort | tr '\n' ' ')
               resolved=$(for h in $dnNames; do docker exec srv1 getent hosts "$h" > /dev/null 2>&1 && echo "$h=yes" || echo "$h=no"; done | tr '\n' ' ')
               note "DataNode host names (NameNode report): ${dnNames:-?}; resolvable from srv1: ${resolved:-?}"
             fi
@@ -332,7 +395,7 @@ jobs:
           for i in 1 2 3; do
             note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
           done
-          if [ "$STORE" = hdfs ]; then
+          if [[ $STORE == hdfs* ]]; then
             # Short-circuit reads: a client reading a local block over the domain socket opens the block file
             # itself, so the DataNode counts no READ_BLOCK op for it; every block read over TCP is one
             # ReadBlockOpNumOps (split into ReadsFromLocalClient / ReadsFromRemoteClient). ReadBlockOpNumOps ==
@@ -376,6 +439,7 @@ jobs:
             ${{ runner.temp }}/locality.log
             ${{ runner.temp }}/srv*.log
             ${{ runner.temp }}/dn*.log
+            ${{ runner.temp }}/nn*.log
           retention-days: 7
 
   summary:
@@ -410,5 +474,5 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
-          [ "$n" -eq 8 ] || { echo "only $n of 8 cells reported"; exit 1; }
+          [ "$n" -eq 12 ] || { echo "only $n of 12 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
