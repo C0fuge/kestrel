@@ -9,7 +9,8 @@
 #        service-ranger.sh setup <group> <databases...>
 #          waits for the admin and service dev_hive, creates <group> and, per database, a select
 #          policy on every table and column, a MASK_SHOW_LAST_4 mask on customer.c_phone and a row
-#          filter o_orderstatus = 'F' on orders - all for <group>.
+#          filter o_orderstatus = 'F' on orders - all for <group> - and tags tpch_avro.nation with
+#          EXPIRES_ON (expired) for the default tag policy of the Hive service's tag service.
 # The admin listens on 127.0.0.1:6080 only. Its password is the image default (a throwaway
 # container that never leaves the runner); it is masked in the job log.
 set -euo pipefail
@@ -46,20 +47,33 @@ case "${1:-}" in
     fi
     echo "ranger admin up, service dev_hive present"
     # The image links dev_hive to tag service dev_tag, whose default policy EXPIRES_ON is a deny
-    # (condition accessed-after-expiry) - Ranger creates it in every tag service. ranger-hive refuses
-    # every table while restrictive tag policies exist (PLUGINS-STATUS.md bug item), so the cell
-    # deletes that policy to check the rest; remove this once the plugin evaluates tags.
+    # (condition accessed-after-expiry) - Ranger creates it in every tag service. ranger-hive denies
+    # only tables whose database, table or columns carry a tag of a restrictive tag policy, so the
+    # policy stays; tag EXPIRES_ON with a past expiry_date goes on tpch_avro.nation (refused) and
+    # tpch_avro.region stays untagged (read).
     tag=$(api GET /service/public/v2/api/service/name/dev_hive | jq -r '.tagService // ""')
-    if [ -n "$tag" ]; then
-      echo "dev_hive's tag service: $tag; its policies (restrictive ones are deleted):"
-      api GET "/service/public/v2/api/service/$tag/policy" > "${TMPDIR:-/tmp}/tag-policies.json"
-      jq -c '.[] | {id, name, deny: (.denyPolicyItems | length), conditions: [.denyPolicyItems[]?.conditions[]?.type]}' \
-        "${TMPDIR:-/tmp}/tag-policies.json"
-      for id in $(jq -r '.[] | select((.denyPolicyItems | length) > 0 or (.allowExceptions | length) > 0
-          or (.policyType // 0) != 0) | .id' "${TMPDIR:-/tmp}/tag-policies.json"); do
-        api DELETE "/service/public/v2/api/policy/$id" > /dev/null
-        echo "deleted tag policy $id"
-      done
+    if [ -z "$tag" ]; then
+      echo "dev_hive has no tag service; the tag checks need one"
+      exit 1
+    fi
+    echo "dev_hive's tag service: $tag; its policies:"
+    api GET "/service/public/v2/api/service/$tag/policy" \
+      | jq -c '.[] | {id, name, resources, deny: (.denyPolicyItems | length),
+          conditions: [.denyPolicyItems[]?.conditions[]?.type]}'
+    api PUT /service/tags/importservicetags '{"op":"add_or_update","serviceName":"dev_hive",
+      "tags":{"1":{"id":1,"guid":"svc-tag-expired","type":"EXPIRES_ON","attributes":{"expiry_date":"2020/01/01"}}},
+      "serviceResources":[{"id":1,"guid":"svc-res-avro-nation","serviceName":"dev_hive",
+        "resourceElements":{"database":{"values":["tpch_avro"]},"table":{"values":["nation"]}}}],
+      "resourceToTagIds":{"1":[1]}}' > /dev/null
+    api GET "/service/tags/download/dev_hive?lastKnownVersion=-1&pluginId=service-matrix" \
+      > "${TMPDIR:-/tmp}/service-tags.json"
+    jq -c '{tagVersion, tags: [.tags[]? | {type, attributes}],
+        resources: [.serviceResources[]? | .resourceElements | map_values(.values)]}' \
+      "${TMPDIR:-/tmp}/service-tags.json"
+    if ! jq -e '[.tags[]? | select(.type == "EXPIRES_ON")] | length > 0' "${TMPDIR:-/tmp}/service-tags.json" \
+        > /dev/null; then
+      echo "tag EXPIRES_ON not imported into dev_hive"
+      exit 1
     fi
     api POST /service/xusers/groups "{\"name\":\"$group\",\"description\":\"service matrix\"}" > /dev/null
     select_item="{\"groups\":[\"$group\"],\"accesses\":[{\"type\":\"select\",\"isAllowed\":true}]"

@@ -1,12 +1,20 @@
 package pro.surpin.data.arrowflight.auth.rangerhive;
 
 import org.apache.ranger.authorization.hadoop.config.RangerPluginConfig;
+import org.apache.ranger.plugin.contextenricher.RangerTagEnricher;
+import org.apache.ranger.plugin.contextenricher.RangerTagForEval;
 import org.apache.ranger.plugin.model.RangerPolicy;
+import org.apache.ranger.plugin.policyengine.RangerAccessRequest;
+import org.apache.ranger.plugin.policyengine.RangerAccessRequestImpl;
+import org.apache.ranger.plugin.policyengine.RangerAccessResourceImpl;
 import org.apache.ranger.plugin.policyengine.RangerPolicyEngine;
 import org.apache.ranger.plugin.service.RangerBasePlugin;
+import org.apache.ranger.plugin.util.RangerAccessRequestUtil;
 import org.apache.ranger.plugin.util.ServicePolicies;
 
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,6 +80,37 @@ public final class HiveRangerPlugin extends RangerBasePlugin {
             snapshot = current;
         }
         return current.policies();
+    }
+
+    /**
+     * Reads the names of the tags on a database, a table or one of the table's columns, as the service's tag
+     * enricher (the tags downloaded from Ranger admin) matches them for an access to the table and its columns.
+     *
+     * @param database lower-case database name
+     * @param table lower-case table name
+     * @return tag names, null when the service has no tag enricher or its tags are not loaded yet
+     */
+    Set<String> tags(String database, String table) {
+        RangerTagEnricher enricher = getTagEnricher();
+        RangerPolicyEngine engine = getPolicyEngine();
+        if (enricher == null || enricher.getEnrichedServiceTags() == null || engine == null) {
+            return null;
+        }
+        RangerAccessResourceImpl resource = new RangerAccessResourceImpl();
+        resource.setServiceDef(engine.getServiceDef());
+        resource.setValue("database", database);
+        resource.setValue("table", table);
+        RangerAccessRequestImpl request = new RangerAccessRequestImpl(resource, RangerPolicyEngine.ANY_ACCESS,
+                null, null, null);
+        request.setAccessTime(new Date());
+        request.setResourceMatchingScope(RangerAccessRequest.ResourceMatchingScope.SELF_OR_DESCENDANTS);
+        enricher.enrich(request);
+        Set<String> names = new LinkedHashSet<>();
+        Set<RangerTagForEval> found = RangerAccessRequestUtil.getRequestTagsFromContext(request.getContext());
+        if (found != null) {
+            found.forEach(tag -> names.add(tag.getType()));
+        }
+        return names;
     }
 
     /**

@@ -898,6 +898,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   owner saves a network round trip per query).
 
 ### Fixed
+- `ranger-hive` refused every table when the Hive service has a tag service with a restrictive tag-based policy - which
+  is always the case, since Ranger creates the deny policy `EXPIRES_ON` in every tag service. It now reads the tags
+  (Ranger's tag enricher, downloaded from Ranger admin) and refuses only tables whose database, table or a column
+  carries a tag of a restrictive tag policy (conditions such as the expiry date are not evaluated: tagged = refused);
+  with tags not loaded yet it still refuses every table. Service matrix cell `ranger` keeps the default policy and
+  checks an expired `EXPIRES_ON` tag on one table (refused) next to an untagged one (read).
 - Table checks under an authorization provider (Ranger, a plugin provider) refused queries DuckDB runs: comma joins
   (`FROM a, b WHERE ...`), a FROM subquery with a join, an aggregate or GROUP BY, and `?` parameters of prepared
   statements (`INVALID_ARGUMENT`; TPC-H q3, q5, q7-q10, q12-q14, q19, q22). Their tables are now named by DuckDB's own

@@ -122,7 +122,11 @@ masked padded, as Hive does); for a table whose catalog gives no Hive type a `MA
 text column is refused. Also refused, because the server cannot
 evaluate them exactly: tables with a restrictive policy (deny, allow exception, mask, row filter) for `{OWNER}`
 (table owners are not known to the server; `{OWNER}` grants do not apply either) or with conditions, a column
-pattern or column exclusion in a restrictive policy, and every table while restrictive tag-based policies exist.
+pattern or column exclusion in a restrictive policy, and tables whose database, table or one of whose columns
+carries a tag of a restrictive tag-based policy (the tags come from the Hive service's tag service, downloaded with the
+policies; the policy's conditions, such as `EXPIRES_ON`'s expiry date, are not evaluated: a tagged table is refused
+whether or not the tag has expired). Untagged tables are not affected by tag-based policies' restrictions; while the
+tags are not loaded and a restrictive tag-based policy exists, every table is refused.
 Schemas outside the prefix (other catalogs) are refused. Security zones of the Hive service are honoured (a zone's
 policies decide for the tables in it). Each table decision of a query is audited to the plugin's Ranger audit
 destinations (`ranger-hive-audit.xml` on the class path, as for Hive) as one `select` on the table; a table refused

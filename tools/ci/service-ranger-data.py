@@ -10,8 +10,9 @@ of the server, what those policies leave visible:
 * ``<out>/qNN.sql``, ``tables.json`` - copied; ``<out>/qNN.json`` - the 22 answers over the
   masked and filtered tables; ``<out>/prepared.json`` - the prepared query's answer over them;
 * ``<out>/extra.json`` - checks for service-check.py ``--extra``: the masked phone numbers of three
-  customers, the order count per status (only F remains), and a query of a database without a
-  policy that must be refused.
+  customers, the order count per status (only F remains), a query of a database without a
+  policy that must be refused, and the tag checks: tpch_avro.nation carries tag EXPIRES_ON with a
+  past expiry (Ranger's default tag policy denies it), tpch_avro.region no tag (read).
 
 Hive 3.1.3's ``mask_show_last_n(c_phone, 4, 'x', 'x', 'x', -1, '1')`` (Ranger's transformer of
 MASK_SHOW_LAST_4) keeps the last 4 characters and replaces every letter and digit before them by
@@ -81,6 +82,8 @@ def main():
         {"name": "mask", "sql": phones, "answer": answer(db, phones)},
         {"name": "row-filter", "sql": statuses, "answer": answer(db, statuses)},
         {"name": "denied", "sql": "SELECT count(*) FROM tpch_text.nation", "denied": True},
+        {"name": "tag-expired", "sql": "SELECT count(*) FROM tpch_avro.nation", "denied": True},
+        {"name": "tag-untagged", "sql": "SELECT count(*) FROM tpch_avro.region", "answer": [[5]]},
     ]
     if any(not r[1].startswith("xx-") for r in extra[0]["answer"]) or [r[0] for r in extra[1]["answer"]] != ["F"]:
         raise ValueError(f"unexpected restricted answers: {extra[:2]}")

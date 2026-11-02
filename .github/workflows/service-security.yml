@@ -17,10 +17,11 @@
 #          metadata checks and the prepared query run against each format's schema.
 #   ranger - Ranger admin 2.7.0 on PostgreSQL (tools/ci/service-ranger.sh) + the hive cell's Hive
 #          tables + the ldap cell's OpenLDAP; the server with FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive
-#          against Ranger's Hive service dev_hive: group analysts may select in tpch_parquet and
-#          tpch_orc (not tpch_text: refused), customer.c_phone is masked (MASK_SHOW_LAST_4), orders
-#          is filtered (o_orderstatus = 'F'); answers computed by DuckDB under the same mask and
-#          filter (tools/ci/service-ranger-data.py).
+#          against Ranger's Hive service dev_hive: group analysts may select in tpch_parquet,
+#          tpch_orc and tpch_avro (not tpch_text: refused), customer.c_phone is masked
+#          (MASK_SHOW_LAST_4), orders is filtered (o_orderstatus = 'F'), tpch_avro.nation carries an
+#          expired EXPIRES_ON tag (refused by the tag service's default policy, which stays);
+#          answers computed by DuckDB under the same mask and filter (tools/ci/service-ranger-data.py).
 # The job summary is a table service x profile -> pass/fail + first failed check. Test
 # credentials and the TLS CA are generated in the job. Only the plugins lane edits this file.
 name: Service matrix (security)
@@ -42,6 +43,7 @@ on:
       - tools/ci/service-hive.sh
       - tools/ci/service-ranger.sh
       - tools/ci/service-ranger-data.py
+      - flight-auth-ranger-hive/src/main/**
 
 permissions:
   contents: read
@@ -276,7 +278,7 @@ jobs:
         if: matrix.service == 'ranger'
         run: |
           set -euo pipefail
-          tools/ci/service-ranger.sh setup analysts tpch_parquet tpch_orc
+          tools/ci/service-ranger.sh setup analysts tpch_parquet tpch_orc tpch_avro
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-ranger-data.py "$RUNNER_TEMP/tpch" "$RUNNER_TEMP/ranger-queries"
           mkdir -p "$RUNNER_TEMP/ranger-cache"
           {

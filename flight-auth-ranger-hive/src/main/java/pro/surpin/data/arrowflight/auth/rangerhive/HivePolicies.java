@@ -188,7 +188,7 @@ public final class HivePolicies {
      * the columns a query reads: select on the table (a policy on all columns), no row filter, and select without
      * a mask on every column a restrictive policy names and on columns only {@code *} policies cover. Policies the
      * server cannot evaluate exactly on the table (owner macros, conditions, column patterns, restrictive tag
-     * policies) deny it. Needs a {@link HiveRangerPlugin}. The decision is audited as one select on the table.
+     * policies on a tag of the database, the table or a column, or with unknown tags) deny it. Needs a {@link HiveRangerPlugin}. The decision is audited as one select on the table.
      *
      * @param principal authenticated identity
      * @param table the table, its owner unknown
@@ -231,18 +231,32 @@ public final class HivePolicies {
             return TableAccess.denied("no table");
         }
         try {
-            HiveRestrictivePolicies restrictive = plugin instanceof HiveRangerPlugin hive
-                    ? hive.restrictivePolicies() : null;
+            HiveRangerPlugin hive = plugin instanceof HiveRangerPlugin listing ? listing : null;
+            HiveRestrictivePolicies restrictive = hive != null ? hive.restrictivePolicies() : null;
             if (restrictive == null) {
                 return TableAccess.denied("Ranger Hive policies not listed");
             }
-            String denial = restrictive.probe(table.database().toLowerCase(Locale.ROOT),
-                    table.table().toLowerCase(Locale.ROOT)).denial();
+            String denial = probe(hive, restrictive, table).denial();
             return denial == null ? null : TableAccess.denied(denial);
         } catch (RuntimeException e) {
             LOGGER.warn("Ranger Hive policies failed closed for {}.{}", table.database(), table.table(), e);
             return TableAccess.denied("policy evaluation failed");
         }
+    }
+
+    /**
+     * Probes a table's restrictive policies, with the tags of the table and its columns.
+     *
+     * @param hive the listing plugin
+     * @param restrictive its restrictive policies
+     * @param table the table
+     * @return the probing decision
+     */
+    private static HiveRestrictivePolicies.Probe probe(HiveRangerPlugin hive, HiveRestrictivePolicies restrictive,
+            HiveTable table) {
+        String database = table.database().toLowerCase(Locale.ROOT);
+        String name = table.table().toLowerCase(Locale.ROOT);
+        return restrictive.probe(database, name, () -> hive.tags(database, name));
     }
 
     /**
@@ -262,13 +276,12 @@ public final class HivePolicies {
         }
         HiveRestrictivePolicies.Probe probe;
         try {
-            HiveRestrictivePolicies restrictive = plugin instanceof HiveRangerPlugin hive
-                    ? hive.restrictivePolicies() : null;
+            HiveRangerPlugin hive = plugin instanceof HiveRangerPlugin listing ? listing : null;
+            HiveRestrictivePolicies restrictive = hive != null ? hive.restrictivePolicies() : null;
             if (restrictive == null) {
                 return TableAccess.denied("Ranger Hive policies not listed");
             }
-            probe = restrictive.probe(table.database().toLowerCase(Locale.ROOT),
-                    table.table().toLowerCase(Locale.ROOT));
+            probe = probe(hive, restrictive, table);
         } catch (RuntimeException e) {
             LOGGER.warn("Ranger Hive policies failed closed for {}.{}", table.database(), table.table(), e);
             return TableAccess.denied("policy evaluation failed");

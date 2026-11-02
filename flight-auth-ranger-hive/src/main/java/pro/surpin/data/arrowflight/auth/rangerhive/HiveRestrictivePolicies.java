@@ -14,11 +14,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * The Hive service's policies that can restrict single columns of a table (column denials, masks) or that the
- * server cannot evaluate exactly (owner macros, item conditions, column patterns, tag policies). They decide which
- * columns must be checked before a table is read whole while the server cannot name its columns.
+ * server cannot evaluate exactly (owner macros, item conditions, column patterns, restrictive tag policies on the
+ * tags of the table). They decide which columns must be checked before a table is read whole while the server cannot
+ * name its columns, and which tables cannot be read at all.
  */
 final class HiveRestrictivePolicies {
     /** A column name no policy names: Ranger matches it only by the {@code *} column value. */
@@ -27,7 +29,7 @@ final class HiveRestrictivePolicies {
     private static final String OWNER = "{OWNER}";
 
     private final List<Entry> entries;
-    private final String globalBlock;
+    private final List<TagEntry> tagEntries;
 
     /**
      * One resource set of a restrictive policy.
@@ -43,6 +45,15 @@ final class HiveRestrictivePolicies {
     }
 
     /**
+     * One restrictive tag policy.
+     *
+     * @param policyId policy id, for messages
+     * @param tags lower-case tag names it applies to, null when it may apply to any tag (exclusions, patterns)
+     */
+    private record TagEntry(Long policyId, Set<String> tags) {
+    }
+
+    /**
      * Probing decision for one table.
      *
      * @param columns columns to check (always including {@link #ANY_COLUMN})
@@ -55,11 +66,11 @@ final class HiveRestrictivePolicies {
      * Creates the decision data.
      *
      * @param entries restrictive resource sets
-     * @param globalBlock why every table is denied, null when not
+     * @param tagEntries restrictive tag policies
      */
-    private HiveRestrictivePolicies(List<Entry> entries, String globalBlock) {
+    private HiveRestrictivePolicies(List<Entry> entries, List<TagEntry> tagEntries) {
         this.entries = entries;
-        this.globalBlock = globalBlock;
+        this.tagEntries = tagEntries;
     }
 
     /**
@@ -72,12 +83,10 @@ final class HiveRestrictivePolicies {
      */
     static HiveRestrictivePolicies of(RangerServiceDef serviceDef, List<RangerPolicy> resourcePolicies,
             List<RangerPolicy> tagPolicies) {
-        String globalBlock = null;
+        List<TagEntry> tagEntries = new ArrayList<>();
         for (RangerPolicy policy : tagPolicies) {
             if (restrictive(policy)) {
-                // Tags of unnamed columns are unknown here.
-                globalBlock = "restrictive tag policy " + policy.getId();
-                break;
+                tagEntries.add(new TagEntry(policy.getId(), tagNames(policy)));
             }
         }
         List<Entry> entries = new ArrayList<>();
@@ -106,21 +115,28 @@ final class HiveRestrictivePolicies {
                 entries.add(new Entry(policy.getId(), matcher, columns, excludes, block));
             }
         }
-        return new HiveRestrictivePolicies(List.copyOf(entries), globalBlock);
+        return new HiveRestrictivePolicies(List.copyOf(entries), List.copyOf(tagEntries));
     }
 
     /**
      * Finds the columns of a table to check before it is read whole.
      *
+     * A restrictive tag policy denies the table when its tag is on the database, the table or one of its columns
+     * (its conditions, such as the expiry of Ranger's default {@code EXPIRES_ON} policy, and the columns a tag
+     * restricts are not evaluated), or when the tags cannot be read.
+     *
      * @param database lower-case database name
      * @param table lower-case table name
+     * @param tags reads the tag names of the database, the table and its columns, null when unknown; called
+     *     only when a restrictive tag policy exists
      * @return the columns, or why the table cannot be read whole
      */
-    Probe probe(String database, String table) {
+    Probe probe(String database, String table, Supplier<Set<String>> tags) {
         Set<String> columns = new LinkedHashSet<>();
         columns.add(ANY_COLUMN);
-        if (globalBlock != null) {
-            return new Probe(columns, globalBlock);
+        String tagDenial = tagDenial(tags);
+        if (tagDenial != null) {
+            return new Probe(columns, tagDenial);
         }
         RangerAccessResourceImpl resource = new RangerAccessResourceImpl();
         resource.setValue("database", database);
@@ -147,6 +163,67 @@ final class HiveRestrictivePolicies {
             }
         }
         return new Probe(columns, null);
+    }
+
+    /**
+     * Finds a restrictive tag policy on one of the tags of a table.
+     *
+     * @param tags reads the tag names of the database, the table and its columns, null when unknown
+     * @return why the table is denied, null when no restrictive tag policy applies
+     */
+    private String tagDenial(Supplier<Set<String>> tags) {
+        if (tagEntries.isEmpty()) {
+            return null;
+        }
+        Set<String> found = tags.get();
+        if (found == null) {
+            return "restrictive tag policy " + tagEntries.get(0).policyId() + " and the tags are unknown";
+        }
+        if (found.isEmpty()) {
+            return null;
+        }
+        Set<String> names = new LinkedHashSet<>();
+        found.forEach(tag -> names.add(tag.toLowerCase(Locale.ROOT)));
+        for (TagEntry entry : tagEntries) {
+            if (entry.tags() == null) {
+                return "restrictive tag policy " + entry.policyId() + " on any tag";
+            }
+            for (String tag : entry.tags()) {
+                if (names.contains(tag)) {
+                    return "restrictive tag policy " + entry.policyId() + " on tag " + tag;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads the tag names a tag policy applies to.
+     *
+     * @param policy tag policy
+     * @return lower-case tag names, null when it may apply to any tag (no values, an exclusion or a pattern)
+     */
+    private static Set<String> tagNames(RangerPolicy policy) {
+        List<Map<String, RangerPolicyResource>> resourceSets = new ArrayList<>();
+        resourceSets.add(policy.getResources());
+        if (policy.getAdditionalResources() != null) {
+            resourceSets.addAll(policy.getAdditionalResources());
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (Map<String, RangerPolicyResource> resources : resourceSets) {
+            RangerPolicyResource tag = resources == null ? null : resources.get("tag");
+            if (tag == null || empty(tag.getValues()) || Boolean.TRUE.equals(tag.getIsExcludes())) {
+                return null;
+            }
+            for (String value : tag.getValues()) {
+                if (value == null || value.indexOf('*') >= 0 || value.indexOf('?') >= 0
+                        || value.indexOf('{') >= 0) {
+                    return null;
+                }
+                names.add(value.toLowerCase(Locale.ROOT));
+            }
+        }
+        return names;
     }
 
     /**
