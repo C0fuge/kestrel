@@ -111,7 +111,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   external tables in Parquet and text (files by DuckDB) and ORC and Avro (files written by Hive's own INSERT
   OVERWRITE), plus a view joining all four formats; the server reads them through the packaged hive plugin and the
   same checks run against each format's schema, plus the view's answer (`tools/ci/service-hive-data.py`,
-  `service-hive.sh`). A Ranger cell follows.
+  `service-hive.sh`). Cell `ranger`: Apache Ranger admin 2.7.0 (PostgreSQL) with policies in its Hive service for
+  the OpenLDAP group `analysts` - select on two of the Hive cell's databases (a third is refused), a
+  `MASK_SHOW_LAST_4` mask on `customer.c_phone`, a row filter on `orders`; the server with `ranger-hive` answers the
+  22 queries, the prepared query and direct mask / filter / refusal probes as DuckDB computes them under the same
+  mask and filter (`tools/ci/service-ranger.sh`, `service-ranger-data.py`, `service-check.py --extra`).
 - CI: service matrix, stores part (lane 4, STATUS item 25): workflow `service-stores.yml` (dispatch with input `server` =
   a pre-release tag, default = build of the commit; on push to its files). Each cell starts the real service as
   containers (MinIO with two s3 stores, an Iceberg Hadoop catalog on MinIO, Lakekeeper (Iceberg REST) on MinIO with

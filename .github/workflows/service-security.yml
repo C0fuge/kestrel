@@ -15,7 +15,12 @@
 #          four formats; a standalone metastore on the same Derby database serves the server's
 #          hive plugin (tools/ci/service-hive-data.py, service-hive.sh); the 22 queries, the
 #          metadata checks and the prepared query run against each format's schema.
-# Ranger (table policy, mask, row filter) follows (PLUGINS-STATUS.md).
+#   ranger - Ranger admin 2.7.0 on PostgreSQL (tools/ci/service-ranger.sh) + the hive cell's Hive
+#          tables + the ldap cell's OpenLDAP; the server with FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive
+#          against Ranger's Hive service dev_hive: group analysts may select in tpch_parquet and
+#          tpch_orc (not tpch_text: refused), customer.c_phone is masked (MASK_SHOW_LAST_4), orders
+#          is filtered (o_orderstatus = 'F'); answers computed by DuckDB under the same mask and
+#          filter (tools/ci/service-ranger-data.py).
 # The job summary is a table service x profile -> pass/fail + first failed check. Test
 # credentials and the TLS CA are generated in the job. Only the plugins lane edits this file.
 name: Service matrix (security)
@@ -35,6 +40,8 @@ on:
       - tools/ci/service-tpch-gen.py
       - tools/ci/service-hive-data.py
       - tools/ci/service-hive.sh
+      - tools/ci/service-ranger.sh
+      - tools/ci/service-ranger-data.py
 
 permissions:
   contents: read
@@ -112,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ldap, jwt, hive]
+        service: [ldap, jwt, hive, ranger]
         profile: [balanced, speed]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,6 +143,11 @@ jobs:
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-tpch-gen.py "$RUNNER_TEMP/tpch" 1
           du -sh "$RUNNER_TEMP/tpch/data"
 
+      # Started first: the admin needs ~2 min, which the data and Hive steps cover.
+      - name: Ranger admin (start)
+        if: matrix.service == 'ranger'
+        run: tools/ci/service-ranger.sh start
+
       # A CA and one certificate for 127.0.0.1 / localhost, used by the Flight server and Keycloak.
       - name: Test CA and certificate
         run: |
@@ -153,7 +165,7 @@ jobs:
           echo "TRUST_PASSWORD=$store" >> "$GITHUB_ENV"
 
       - name: OpenLDAP
-        if: matrix.service == 'ldap'
+        if: matrix.service == 'ldap' || matrix.service == 'ranger'
         run: |
           set -euo pipefail
           admin=$(openssl rand -hex 12); user=$(openssl rand -hex 12)
@@ -239,7 +251,7 @@ jobs:
       # Not under $RUNNER_TEMP (/home/runner/work/_temp): Hive skips files below a directory whose
       # name starts with "_". The server reads the same file:// locations the metastore lists.
       - name: Hive 3.1.3 (tables, ORC/Avro written by Hive, view; then a standalone metastore)
-        if: matrix.service == 'hive'
+        if: matrix.service == 'hive' || matrix.service == 'ranger'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -250,12 +262,31 @@ jobs:
           gh release download ci-assets --repo "$GITHUB_REPOSITORY" --pattern 'duckdb-extensions-v1.5.6.tar.zst' \
             --dir "$RUNNER_TEMP"
           mkdir -p "$RUNNER_TEMP/ext"; tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-v1.5.6.tar.zst" -C "$RUNNER_TEMP/ext"
+          echo "SERVER_OPTS=-Darrowflight.duckdb.extensionDir=$RUNNER_TEMP/ext/extensions -Darrowflight.catalog=directory,hive -Darrowflight.plugins.dir=$RUNNER_TEMP/app/plugins -Darrowflight.hive.uris=thrift://localhost:9083 -Darrowflight.hive.roots=/tmp/hive-svc -Darrowflight.hive.orcTables=true -Darrowflight.hive.textTables=true -Darrowflight.hive.avroTables=true -Darrowflight.hive.views=true" >> "$GITHUB_ENV"
+          [ "${{ matrix.service }}" = hive ] || exit 0
           token=$(openssl rand -hex 24); echo "::add-mask::$token"
           {
             # The server's static bearer token (FLIGHT_BEARER_TOKEN): login is not what this cell tests.
             echo "FLIGHT_BEARER_TOKEN=$token"; echo "SERVICE_TOKEN=$token"
-            echo "SERVER_OPTS=-Darrowflight.duckdb.extensionDir=$RUNNER_TEMP/ext/extensions -Darrowflight.catalog=directory,hive -Darrowflight.plugins.dir=$RUNNER_TEMP/app/plugins -Darrowflight.hive.uris=thrift://localhost:9083 -Darrowflight.hive.roots=/tmp/hive-svc -Darrowflight.hive.orcTables=true -Darrowflight.hive.textTables=true -Darrowflight.hive.avroTables=true -Darrowflight.hive.views=true"
             echo "CHECK_OPTS=--schema tpch_parquet --schema tpch_text --schema tpch_orc --schema tpch_avro --view $RUNNER_TEMP/tpch/queries/view.json"
+          } >> "$GITHUB_ENV"
+
+      # Policies exist before the server starts: its Ranger plugin downloads them at start (then every 30 s).
+      - name: Ranger policies, expected restricted answers
+        if: matrix.service == 'ranger'
+        run: |
+          set -euo pipefail
+          tools/ci/service-ranger.sh setup analysts tpch_parquet tpch_orc
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-ranger-data.py "$RUNNER_TEMP/tpch" "$RUNNER_TEMP/ranger-queries"
+          mkdir -p "$RUNNER_TEMP/ranger-cache"
+          {
+            echo "FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive"
+            echo "RANGER_HIVE_SERVICE_NAME=dev_hive"
+            echo "RANGER_ADMIN_URL=http://127.0.0.1:6080"
+            echo "RANGER_POLICY_CACHE_DIR=$RUNNER_TEMP/ranger-cache"
+            echo "SERVER_CP=auth/ldap/*:auth/ranger-hive/*"
+            echo "QUERIES=$RUNNER_TEMP/ranger-queries"
+            echo "CHECK_OPTS=--schema tpch_parquet --schema tpch_orc --extra $RUNNER_TEMP/ranger-queries/extra.json"
           } >> "$GITHUB_ENV"
 
       - name: Server (${{ matrix.profile }})
@@ -286,11 +317,11 @@ jobs:
           set -euo pipefail
           creds=()
           case "${{ matrix.service }}" in
-            ldap) creds=(--user "$SERVICE_USER" --password-env SERVICE_PASSWORD) ;;
+            ldap | ranger) creds=(--user "$SERVICE_USER" --password-env SERVICE_PASSWORD) ;;
             jwt | hive) creds=(--token-env SERVICE_TOKEN) ;;
           esac
-          # shellcheck disable=SC2086 # CHECK_OPTS: options of the hive cell, no spaces inside values
-          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-check.py grpc+tls://127.0.0.1:32010 "$RUNNER_TEMP/tpch/queries" \
+          # shellcheck disable=SC2086 # CHECK_OPTS: options of the hive and ranger cells, no spaces inside values
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-check.py grpc+tls://127.0.0.1:32010 "${QUERIES:-$RUNNER_TEMP/tpch/queries}" \
             --ca "$RUNNER_TEMP/tls/ca.pem" "${creds[@]}" ${CHECK_OPTS:-} 2>&1 | tee "$RUNNER_TEMP/check.log"
 
       - name: Result
@@ -309,7 +340,10 @@ jobs:
           if [ -f "$RUNNER_TEMP/server.log" ]; then
             echo "--- server log (errors)"; grep -E 'ERROR|WARN|Exception' "$RUNNER_TEMP/server.log" | head -n 40 || true
           fi
-          if [ "${{ matrix.service }}" = hive ]; then
+          if [ "${{ matrix.service }}" = ranger ]; then
+            echo "--- Ranger"; docker logs ranger 2>&1 | grep -E 'ERROR|Exception' | head -n 20 || true
+          fi
+          if [ "${{ matrix.service }}" = hive ] || [ "${{ matrix.service }}" = ranger ]; then
             echo "--- Hive"; tail -n 30 /tmp/hive-svc/beeline.err 2> /dev/null || true
             docker logs hive-svc-hms 2>&1 | grep -E 'ERROR|Exception' | head -n 20 || true
           fi

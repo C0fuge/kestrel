@@ -1,7 +1,7 @@
 """Checks a running server end to end through the ADBC Flight SQL driver (Go), for the service workflows.
 
 Usage: service-check.py <uri> <queries dir> [--ca <pem>] [--user <name> --password-env <VAR>]
-                        [--token-env <VAR>] [--schema <name> ...] [--view <json>]
+                        [--token-env <VAR>] [--schema <name> ...] [--view <json>] [--extra <json>]
 
 <queries dir> is service-tpch-gen.py's output. Checks, in this order, each printed as one
 ``PASS <check>`` or ``FAIL <check>: <reason>`` line:
@@ -16,6 +16,9 @@ Usage: service-check.py <uri> <queries dir> [--ca <pem>] [--user <name> --passwo
   * ``qNN``: the 22 TPC-H queries in complete mode give DuckDB's in-process answer (rows compared
     as sorted multisets; numbers with a relative tolerance of 1e-9, dates as ISO text);
   * ``prepared``: a prepared query with two bound parameters gives DuckDB's answer;
+  * with ``--extra`` (a JSON list of ``{"name", "sql", "answer"}`` or ``{"name", "sql",
+    "denied": true}``): each query gives its answer, or is refused as unauthorized / permission
+    denied (the Ranger cell: masked values, filtered rows, a database without a policy);
 * ``view`` (with ``--view``, a JSON file with ``sql`` and ``answer`` rows): the query's answer.
 
 Exits 1 when any check failed. Credentials come from environment variables, never arguments.
@@ -111,8 +114,25 @@ def qualify(sql, schema):
     return sql if schema == "tpch" else re.sub(r"\btpch\.", schema + ".", sql)
 
 
-def check_schema(conn, queries, schema, tables):
-    """Runs the metadata, TPC-H and prepared checks against one schema."""
+def check_extra(conn, name, check, schema):
+    """Runs one --extra check: the query's answer, or its refusal for lack of rights."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(qualify(check["sql"], schema))
+            got = [[cell(v) for v in row] for row in cur.fetchall()]
+    except Exception as e:  # pylint: disable=broad-except
+        text = str(e).upper()
+        if check.get("denied") and ("UNAUTHORIZED" in text or "PERMISSION" in text):
+            report(name)
+        else:
+            report(name, e)
+        return
+    report(name, f"answered {len(got)} rows, expected a refusal" if check.get("denied")
+           else compare(got, check["answer"]))
+
+
+def check_schema(conn, queries, schema, tables, extra=()):
+    """Runs the metadata, TPC-H, prepared and extra checks against one schema."""
     p = "" if schema == "tpch" else schema + ":"
     try:
         objects = conn.adbc_get_objects(depth="tables", db_schema_filter=schema).read_all().to_pylist()
@@ -147,6 +167,8 @@ def check_schema(conn, queries, schema, tables):
         report(p + "prepared", compare([[cell(v) for v in r] for r in got], [[prepared["answer"]]]))
     except Exception as e:  # pylint: disable=broad-except
         report(p + "prepared", e)
+    for check in extra:
+        check_extra(conn, p + check["name"], check, schema)
 
 
 def main():
@@ -159,6 +181,7 @@ def main():
     parser.add_argument("--token-env")
     parser.add_argument("--schema", action="append")
     parser.add_argument("--view")
+    parser.add_argument("--extra")
     args = parser.parse_args()
     password = os.environ[args.password_env] if args.password_env else None
     token = os.environ[args.token_env] if args.token_env else None
@@ -184,8 +207,12 @@ def main():
             report("sql-info", None if info else "empty answer")
         except Exception as e:  # pylint: disable=broad-except
             report("sql-info", e)
+        extra = ()
+        if args.extra:
+            with open(args.extra, encoding="utf-8") as f:
+                extra = json.load(f)
         for schema in args.schema or ["tpch"]:
-            check_schema(conn, args.queries, schema, tables)
+            check_schema(conn, args.queries, schema, tables, extra)
         if args.view:
             with open(args.view, encoding="utf-8") as f:
                 view = json.load(f)
