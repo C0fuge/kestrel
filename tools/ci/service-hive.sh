@@ -45,9 +45,12 @@ du -sh "$dir"/{parquet,text,orc,avro}
 
 docker run -d --name hive-svc-hms -p 9083:9083 -v "$dir:$dir" -v "$derby:$derby" \
   -e SERVICE_NAME=metastore -e IS_RESUME=true -e SERVICE_OPTS="$opts" "$image" > /dev/null
+# Probed inside the container: docker's port proxy accepts on the host port before the metastore
+# listens (a server started then saw "Socket is closed by peer").
+listening() { docker exec hive-svc-hms bash -c '(exec 3<> /dev/tcp/localhost/9083)' 2> /dev/null; }
 for _ in $(seq 90); do
-  (exec 3<> /dev/tcp/localhost/9083) 2> /dev/null && break
+  listening && break
   sleep 2
 done
-(exec 3<> /dev/tcp/localhost/9083) 2> /dev/null || { docker logs hive-svc-hms | tail -50; exit 1; }
+listening || { docker logs hive-svc-hms | tail -50; exit 1; }
 echo "metastore up"
