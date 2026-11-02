@@ -94,6 +94,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 
 ### Added
 
+- **CI: service matrix, security part** (`service-security.yml`, item 25 / plugins lane): the server against real
+  security services, in `balanced` and `speed`, with Flight TLS - OpenLDAP login (search mode, service account,
+  group search) and Keycloak JWT login (JWKS over HTTPS, audience and groups claims); each cell checks refused
+  missing/wrong credentials, GetSqlInfo, GetTables, a table schema, TPC-H SF1 22/22 equal to DuckDB's in-process
+  answers and a prepared query with bound parameters (`tools/ci/service-check.py`, ADBC Flight SQL). Runs on
+  dispatch (input `server` = a pre-release tag, default this commit) and on pushes touching its files. Ranger and
+  Hive Metastore cells follow.
+
 - **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
   (`duckDbSharedDatabase=true`, `duckDbSharedMaxThreads=0`, `duckDbThreads`=cores, at least `balanced`'s 4 per query), node-wide `duckDbMemoryLimit` of

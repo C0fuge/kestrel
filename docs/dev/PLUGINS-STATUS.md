@@ -18,6 +18,34 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
 > into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
 
+*Service matrix, step 1 done 2026-11-02 (90da3772):* `.github/workflows/service-security.yml` - job `server` (build
+of the commit, or input `server` = pre-release tag: jar + libs + auth tars), matrix `cell` service x profile
+(balanced, `-DresourceProfile=speed`), job `summary` (table service | profile | pass/fail | first failed check).
+Each cell: TPC-H SF1 Parquet + DuckDB's in-process answers (`tools/ci/service-tpch-gen.py`), a test CA and a
+certificate for 127.0.0.1 (Flight TLS; both auth providers need TLS), the server on the runner, then
+`tools/ci/service-check.py` (ADBC Flight SQL 1.13): refused anonymous / wrong credential, GetSqlInfo, GetTables
+(exactly the 8 tables), lineitem schema (16 columns), 22 queries complete (rows as sorted multisets, numbers rel.
+1e-9), one prepared query with 2 bound parameters - 28 checks. Cells **ldap** (osixia/openldap 1.5.0, plaintext
+`ldap://` with `FLIGHT_LDAP_ALLOW_PLAINTEXT`, search mode + service account + group search, user `alice` in
+`analysts`) and **jwt** (Keycloak 26.4.2 `start-dev` over HTTPS with the test cert, JWKS URL + PKCS12 trust store,
+password grant of public client `flight`, audience mapper, `preferred_username`, groups claim `analysts`). Runs:
+push 41468664530 (90da3772) 4/4 cells 28/28; dispatch with `server=server-1.0.0-fca6512a8046` 41469307322 4/4.
+**Next (step 2): `hive` cell.** Hive Metastore 3.1.3 (production version; apache/hive:3.1.3 on Docker Hub) with
+TPC-H SF1 tables in Parquet, ORC, text and Avro, one schema per format, plus a view; plan: (1) data files on the
+runner at a path mounted at the same path in the containers (`file://` locations, as `tools/ci/hive-mm-writer.sh`
+does for lane 4) - Parquet and text ('|' delimited) by DuckDB, ORC by `pyarrow.orc`, Avro by DuckDB if it writes
+Avro else `fastavro` (decimal/date logical types); (2) DDL through a HiveServer2 container with an embedded Derby
+metastore (`CREATE EXTERNAL TABLE ... LOCATION 'file:///...'`, `CREATE VIEW`), then a standalone metastore on the
+same Derby (one at a time, as hive-mm-writer.sh); (3) server with the packaged hive plugin (`plugins/hive` - add
+`flight-plugin-hive` to the `server` job and the plugins tar to the download), `arrowflight.hive.orcTables/
+textTables/avroTables/views=true`; Avro needs DuckDB's avro extension (ci-assets tarball); (4) `service-check.py`
+gets `--schema` (queries rewritten `tpch.` -> `<schema>.`) and runs once per format schema, plus the view's
+answer. **Step 3: `ranger` cell** - needs the hive cell (ranger-hive applies to Hive catalog schemas only): try the
+Ranger admin container (apache/ranger 2.4+ with PostgreSQL; policies created over its REST API) and fall back to a
+local HTTP server serving the Hive service's `ServicePolicies` JSON at Ranger's download URL; LDAP user `alice` in
+group `analysts` (ldap provider, groups from the directory): a table policy, a column mask and a row filter, answers
+checked (masked/filtered expected answers computed by DuckDB), a denied table refused.
+
 
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
 > docs), then write "PLUGINS LANE DONE" and stop; no new items.
@@ -914,3 +942,9 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   module 34/34, hive plugin catalog tests, Checkstyle + SpotBugs clean. CI: Dev CI push run 40858061955 (c80d71cf)
   green; package dispatch 40860291863 (146e6757) green, pre-release `server-1.0.0-146e6757a01f`. Open questions
   updated (P6 conservative answers; former "P6, audit" answered). PLUGINS LANE DONE. Lock released.
+- 2026-11-02 (plugins session): SERVICE MATRIX step 1 - `service-security.yml` with LDAP (OpenLDAP) and JWT
+  (Keycloak) cells x balanced/speed, Flight TLS, TPC-H SF1 22/22 vs DuckDB + metadata + prepared query
+  (`tools/ci/service-check.py`, `service-tpch-gen.py`; CI only, no code change). Runs 41468664530 (push, 90da3772)
+  and 41469307322 (dispatch, pre-release server-1.0.0-fca6512a8046): 4/4 cells, 28/28 checks each - no bug found
+  for either lane. Next: hive cell, then ranger cell (plan in Next steps). Not yet "SERVICE MATRIX plugins DONE".
+  Lock released.
