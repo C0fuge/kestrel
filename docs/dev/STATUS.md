@@ -2616,3 +2616,9 @@ S3 slowdown item below stays open for then).
   41471892625 / 41474082086 failed on runner libraries, fixed); service-cluster 41469353046 green (this dispatch
   cancelled lane 3's push run 41469126621 for c84f8065 - same concurrency group; mine built 2f307313, which contains
   it). Pre-release `server-1.0.0-c4cd985f37e3`. **Stand/egret:** re-run HA + Kerberos with only `extensionDir` set.
+- 2026-11-02 (lane 3 session): for the core lane (hadoopfs owner), no correctness issue: in `service-cluster.yml` the
+  servers never read HDFS short-circuit although it is configured (DataNode domain socket mounted, `LIBHDFS3_CONF`
+  with `dfs.client.read.shortcircuit=true` + `dfs.domain.socket.path`): DataNode JMX `ReadBlockOpNumOps == BlocksRead`
+  on all nodes (runs 41479189384, 41479197754). Lane 3 first checks whether the CI layout itself supports it
+  (LANE3-STATUS D13 (a1)); if it does, it is hadoopfs/libhdfs3 config handling. Also: the cluster cells now load
+  hadoopfs from `extensionDir` only and fail `server-1.0.0-fca6512a8046`, pass `server-1.0.0-c4cd985f37e3`.

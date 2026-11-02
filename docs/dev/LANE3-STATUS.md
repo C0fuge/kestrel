@@ -18,16 +18,22 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 SERVICE MATRIX lane 3 DONE (2026-11-02, see Log): `.github/workflows/service-cluster.yml`, 8 cells green (run 41469353046).
 
-D13. Follow-ups of the service matrix (cluster), optional: (a) verify that short-circuit reads are actually used (the
-    DataNodes run with a domain socket and the servers get it through `LIBHDFS3_CONF`, but nothing asserts the
-    hadoopfs reads went over it - e.g. DataNode metrics `ShortCircuit*` or the socket's connections); (b) an HA
-    nameservice URI (`hdfs://<ns>/...`) for the cluster cells once the core lane's `service-hdfs.yml` has the HA
-    layout; (c) the loss cells saw no retryable error in the first run (kills landed between or before peer reads:
-    fallbacks 1-2, 0 wrong) - a longer load or a kill timed inside a merged answer would exercise `peerLost`;
-    (d) the cells set `DUCKDB_HDFS_EXTENSION` explicitly, so the 2026-11-02 HDFS bug (hadoopfs only via
-    `extensionDir`) passes even on `server-1.0.0-fca6512a8046`; once 2f307313 is in a pre-release, switch the HDFS
-    cells to `-Darrowflight.duckdb.extensionDir` only (as the maintainer's cluster runs) so the gate catches it.
-
+D13. Follow-ups of the service matrix (cluster), optional:
+    - (a) short-circuit reads: *measured 2026-11-02 (see Log)* - **not used**. With short-circuit configured (native
+      libhadoop loads, DataNode domain socket mounted, `LIBHDFS3_CONF` with `dfs.client.read.shortcircuit` +
+      `dfs.domain.socket.path`), every DataNode has `ReadBlockOpNumOps == BlocksRead` (all block reads over TCP) and
+      ~60 % of them come from remote clients. Answers are right; only speed is lost. Next: (a1) check the layout with
+      the Java client inside a DataNode container (`hdfs dfs -cat` of a local block, JMX before/after: no new
+      READ_BLOCK = the layout supports short-circuit) - if it does, it is a hadoopfs/libhdfs3 matter for the core lane
+      (noted in `STATUS.md` Log); then make the cell fail when short-circuit is configured but unused. (a2) why 60 %
+      remote reads: endpoints are not planned on the node holding the blocks (replication 1), or Parquet footers of
+      all files are read by every node - measure per query.
+    - (b) an HA nameservice URI (`hdfs://<ns>/...`) for the cluster cells once the core lane's `service-hdfs.yml` has
+      the HA layout.
+    - (c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
+      a longer load or a kill timed inside a merged answer would exercise `peerLost`.
+    - ~~(d) HDFS cells with `-Darrowflight.duckdb.extensionDir` only~~ *done 2026-11-02 (ff4b3310, see Log):* the gate
+      now fails `server-1.0.0-fca6512a8046` (start refused) and passes `server-1.0.0-c4cd985f37e3`.
 
 D1. ~~**Item 18 step 2 - distributed complete mode.**~~ *Done 2026-10-28 (738d1e7, see Log).* Opt-in `distributedComplete`
     (default false). Open follow-ups, folded into D2: (a) TLS + a real auth provider between two processes (the
@@ -400,3 +406,14 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   ok, 0 retryable, 0 wrong, 0 errors (fallbacks 2 / 1). Pre-release input path: run 41470187507 on
   `server-1.0.0-fca6512a8046` (before the hadoopfs fix; the
   workflow sets `DUCKDB_HDFS_EXTENSION` explicitly, the setting the maintainer found working) - **8/8 pass** too (prepare downloaded the release assets). Next: D12, D13.
+- 2026-11-02 (lane 3 session, 18th): lock 16:00Z. D13 (d) done, (a) measured, on `main` (ff4b3310, db1d4aa6,
+  4a9ae387; workflow only, no runtime change, so no pre-release). `service-cluster.yml`: the HDFS cells load hadoopfs
+  only through `-Darrowflight.duckdb.extensionDir` (a `<dir>/v1.5.6/linux_amd64/` copy of the ci-assets extensions; no
+  `DUCKDB_HDFS_EXTENSION`), as the maintainer's cluster runs; S3 cells keep `DUCKDB_HTTPFS_EXTENSION`. Gate check:
+  run 41477414245 on `server-1.0.0-fca6512a8046` (before the core lane's fix) - 4 HDFS cells **fail** (node start
+  refused: lockdown `allowed_directories` mismatch, the 2026-11-02 bug), 4 S3 cells pass; run 41479197754 on
+  `server-1.0.0-c4cd985f37e3` (contains 2f307313) **8/8 pass**; build runs 41477353037 (ff4b3310) and 41479189384
+  (4a9ae387) 8/8 pass, loss cells 0 wrong / 0 errors. HDFS notes now list each DataNode's JMX read counters (the
+  image does not log clienttrace, even with log4j set - run 41478120223, dropped again): `ReadBlockOpNumOps ==
+  BlocksRead` on all 3 DataNodes in every run (e.g. 328/356/919 block reads, 131/96/321 from a local client), so
+  the servers never read short-circuit although it is configured - see D13 (a). Next: D13 (a1), then D12.

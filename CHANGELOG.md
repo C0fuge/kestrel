@@ -99,6 +99,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   server next to its DataNode with short-circuit reads) and on S3 (MinIO), cells balanced / speed / speed +
   `distributedComplete=true` / a node killed under load; TPC-H SF1 22/22 checked against in-process DuckDB, Flight SQL
   metadata and a prepared query; job summary table cell -> pass/fail + first error.
+  The HDFS cells load hadoopfs from `-Darrowflight.duckdb.extensionDir` only (as a real cluster runs; catches the
+  2026-11-02 extensionDir bug) and note each DataNode's TCP block reads from JMX (lane 3, D13).
 - **CI: service matrix, security part** (`service-security.yml`, item 25 / plugins lane): the server against real
   security services, in `balanced` and `speed`, with Flight TLS - OpenLDAP login (search mode, service account,
   group search) and Keycloak JWT login (JWKS over HTTPS, audience and groups claims); each cell checks refused
