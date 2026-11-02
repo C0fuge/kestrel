@@ -7,7 +7,7 @@
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
 # SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
-# maintainer's cluster runs; the HDFS notes count short-circuit reads per DataNode). Cells per store:
+# maintainer's cluster runs; the HDFS notes have each DataNode's TCP block reads from JMX). Cells per store:
 # balanced, speed (-DresourceProfile=speed), speed-dc
 # (speed + -DdistributedComplete=true), and loss (speed-dc under a load of 3 clients while the third
 # server is killed: every answer exact or a retryable UNAVAILABLE whose retry is exact, never a
@@ -185,14 +185,10 @@ jobs:
             hcfg=(-e CORE-SITE.XML_fs.defaultFS=hdfs://172.30.0.10:8020 -e HDFS-SITE.XML_dfs.replication=1
               -e HDFS-SITE.XML_dfs.permissions.enabled=false -e HDFS-SITE.XML_dfs.namenode.rpc-bind-host=0.0.0.0
               -e HDFS-SITE.XML_dfs.namenode.name.dir=/tmp/hdfs/nn -e HDFS-SITE.XML_dfs.datanode.data.dir=/tmp/hdfs/dn
-              -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false
-              -e 'LOG4J.PROPERTIES_log4j.rootLogger=INFO, stdout' -e LOG4J.PROPERTIES_log4j.appender.stdout=org.apache.log4j.ConsoleAppender
-              -e LOG4J.PROPERTIES_log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
-              -e 'LOG4J.PROPERTIES_log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1}: %m%n'
-              -e LOG4J.PROPERTIES_log4j.logger.org.apache.hadoop.hdfs.server.datanode.DataNode.clienttrace=INFO)
+              -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false)
             sc=off
             if docker run --rm "$HADOOP_IMAGE" hadoop checknative 2>&1 | grep -E '^hadoop: +true'; then sc=on; fi
-            note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit reads: $sc"
+            note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit configured: $sc"
             docker run -d --name nn --network sc --ip 172.30.0.10 --hostname nn "${hcfg[@]}" "$HADOOP_IMAGE" \
               bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 && exec hdfs namenode' > /dev/null
             for i in 1 2 3; do
@@ -306,13 +302,13 @@ jobs:
             note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
           done
           if [ "$STORE" = hdfs ]; then
-            # Short-circuit reads: a client that reads a local block over the domain socket asks the DataNode for
-            # the block's file descriptors (clienttrace op REQUEST_SHORT_CIRCUIT_FDS); a read over TCP is HDFS_READ.
+            # Short-circuit reads: a client reading a local block over the domain socket opens the block file
+            # itself, so the DataNode counts no READ_BLOCK op for it; every block read over TCP is one
+            # ReadBlockOpNumOps (split into ReadsFromLocalClient / ReadsFromRemoteClient). ReadBlockOpNumOps ==
+            # BlocksRead with short-circuit "on" means the servers never read short-circuit (D13 a, 2026-11-02).
             for i in 1 2 3; do
-              dl=$(docker logs "dn$i" 2>&1)
-              jmx=$(curl -fsS --max-time 5 "http://172.30.0.1$i:9864/jmx" 2>/dev/null | grep -oiE '"[A-Za-z]*(ShortCircuit|ReadBlockOpNumOps|BlocksRead|ReadsFromLocalClient|ReadsFromRemoteClient)[A-Za-z]*" : [0-9]+' | tr -d '" ' | sort -u | tr '\n' ' ')
-              note "dn$i jmx: ${jmx:-(none)}"
-              note "dn$i: short-circuit fds $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: true' <<< "$dl") (failed $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: false' <<< "$dl")), tcp reads $(grep -c 'op: HDFS_READ' <<< "$dl")"
+              jmx=$(curl -fsS --max-time 5 "http://172.30.0.1$i:9864/jmx" 2>/dev/null | grep -oE '"(BlocksRead|ReadBlockOpNumOps|ReadsFromLocalClient|ReadsFromRemoteClient)" : [0-9]+' | tr -d '" ' | sort -u | tr '\n' ' ')
+              note "dn$i reads (TCP, from DataNode JMX): ${jmx:-(no JMX)}"
             done
           fi
           result=$(grep -m 1 '^result ' "$RUNNER_TEMP/client.log")
