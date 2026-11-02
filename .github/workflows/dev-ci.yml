@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Also publish a linux-only jar + plugins dir + libs set as a release server-<version>-<sha>"
+        description: "Also publish a linux-only jar + plugins dir + libs set as a release server-<version>-<sha> (after every service-*.yml run on the commit is green)"
         type: boolean
         default: false
 
@@ -188,8 +188,26 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  package:
+  # SERVICE MATRIX gate (item 25): the pre-release is published only when the latest run of every
+  # service-*.yml on this commit is green; missing (or cancelled) runs are dispatched on this branch
+  # and waited for (tools/ci/service-gate.sh).
+  service-gate:
     needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.package
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait for every service matrix workflow on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/ci/service-gate.sh "$GITHUB_SHA" "$GITHUB_REF_NAME" 180
+
+  package:
+    needs: [build, service-gate]
     if: github.event_name == 'workflow_dispatch' && inputs.package
     runs-on: ubuntu-latest
     timeout-minutes: 20
