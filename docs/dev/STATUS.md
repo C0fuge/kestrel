@@ -48,6 +48,19 @@
 > of a refused query with its stack); (d) `package=true` pre-release. Then write "HDFS FIX DONE" at the start of a line
 > and continue with item 24 (its build will then carry both).
 
+> **Plugins lane, 2026-11-02 (service matrix, cell `ranger`) - BUG FIRST (after the HDFS fix): under any authorization
+> provider half of TPC-H is refused.** `FlightAuthorization.requireQuery` names a query's tables with
+> `ParquetQueryParser.parse` unless `hasNestedQuery` is true, and that parse refuses what DuckDB would run: comma joins
+> (`FROM a, b WHERE ...`: q3, q5, q10, q12, q14, q19 -> INVALID_ARGUMENT "Can only select from ONE table"), a FROM
+> subquery that `flattenSubqueryWrapper` flattens so `hasNestedQuery` says false (q7, q8, q9, q13, q22 -> "A subquery
+> in FROM is supported only in the form ..."), and any `?` parameter (prepared statements with bound parameters ->
+> "Statement parameters (?) are not supported"). Without a provider (`ldap`/`jwt`/`hive` cells, allow-all) the same
+> 22 queries and the prepared query pass. Reproduce: `service-security.yml` cell `ranger` (run 41483268562; also with
+> the built-in `ranger` provider - same code path). Suggested fix: when the parse fails (or always), name the tables
+> with `QueryTables.of(text)` (DuckDB's parse; it accepts joins, subqueries and `?`), keep refusing what it refuses;
+> regression tests: a comma join, a FROM subquery and a `?` query under a test provider are answered, with every table
+> checked. Fixed when the `ranger` cell's 22 queries + prepared pass.
+
 > **Maintainer, 2026-11-02 18:30 - ITEM 25 SPLIT across the lanes** (runs in parallel): plugins lane ->
 > `service-security.yml` (LDAP, JWT, Ranger, Hive tables), catalogs lane -> `service-stores.yml` (S3, lakeFS, Ozone,
 > Iceberg, PostgreSQL/MySQL), lane 3 -> `service-cluster.yml` (3 nodes on HDFS and S3, node loss). **Core lane, after
