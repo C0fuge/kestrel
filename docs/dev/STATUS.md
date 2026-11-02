@@ -68,7 +68,8 @@ RANGER TABLE CHECK FIX DONE (2026-11-02, core session, 48090377). `FlightAuthori
 > without schema stays UNAUTHORIZED. Test `FlightAuthorizationTextParseTest` (TPC-H-shaped comma join, q13/q9-style
 > FROM subqueries, `?` and `$3`: answered with exactly their tables checked; an unreadable table in each denied).
 > service-security 41488081427 on 48090377: all 8 cells green, **ranger balanced + speed green** (22 queries +
-> prepared + mask/filter probes). Dev CI: see Log.
+> prepared + mask/filter probes). Dev CI + `package=true` 41491152401 green (branch `ci/core-authz-fix` = main f8ba588a;
+> the main push runs were cancelled by lane 3 pushes), pre-release `server-1.0.0-f8ba588a8295`. Next: item 25 core part.
 
 > **Maintainer, 2026-11-02 18:30 - ITEM 25 SPLIT across the lanes** (runs in parallel): plugins lane ->
 > `service-security.yml` (LDAP, JWT, Ranger, Hive tables), catalogs lane -> `service-stores.yml` (S3, lakeFS, Ozone,
@@ -2652,3 +2653,9 @@ S3 slowdown item below stays open for then).
   (`ReadBlockOpNumOps >= BlocksRead` on all DataNodes). So hadoopfs/libhdfs3 does not read short-circuit (config not
   read from `LIBHDFS3_CONF`, local-node check, or the domain-socket path) - speed only. The cells now emit a
   `short-circuit unused` warning annotation (not a failure) until it reads short-circuit.
+- 2026-11-02 (core session): bug first from the service matrix ranger cell fixed (48090377): the table check under an
+  authorization provider names the tables of comma joins, FROM subqueries the text parse cannot flatten and `?`/`$n`
+  queries with DuckDB's parse (`QueryTables`) and checks each; test `FlightAuthorizationTextParseTest`. service-security
+  41488081427 all cells green (ranger 59/59 both profiles). Dev CI push runs 41488065203 / 41489637613 cancelled by lane 3
+  pushes; Dev CI + `package=true` 41491152401 on `ci/core-authz-fix` (= main f8ba588a) green, pre-release
+  `server-1.0.0-f8ba588a8295`. Next: item 25 core part (`service-hdfs.yml` + the package gate).
