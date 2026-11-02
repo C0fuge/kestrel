@@ -185,7 +185,11 @@ jobs:
             hcfg=(-e CORE-SITE.XML_fs.defaultFS=hdfs://172.30.0.10:8020 -e HDFS-SITE.XML_dfs.replication=1
               -e HDFS-SITE.XML_dfs.permissions.enabled=false -e HDFS-SITE.XML_dfs.namenode.rpc-bind-host=0.0.0.0
               -e HDFS-SITE.XML_dfs.namenode.name.dir=/tmp/hdfs/nn -e HDFS-SITE.XML_dfs.datanode.data.dir=/tmp/hdfs/dn
-              -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false)
+              -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false
+              -e 'LOG4J.PROPERTIES_log4j.rootLogger=INFO, stdout' -e LOG4J.PROPERTIES_log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+              -e LOG4J.PROPERTIES_log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+              -e 'LOG4J.PROPERTIES_log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1}: %m%n'
+              -e LOG4J.PROPERTIES_log4j.logger.org.apache.hadoop.hdfs.server.datanode.DataNode.clienttrace=INFO)
             sc=off
             if docker run --rm "$HADOOP_IMAGE" hadoop checknative 2>&1 | grep -E '^hadoop: +true'; then sc=on; fi
             note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit reads: $sc"
@@ -306,6 +310,8 @@ jobs:
             # the block's file descriptors (clienttrace op REQUEST_SHORT_CIRCUIT_FDS); a read over TCP is HDFS_READ.
             for i in 1 2 3; do
               dl=$(docker logs "dn$i" 2>&1)
+              jmx=$(curl -fsS --max-time 5 "http://172.30.0.1$i:9864/jmx" 2>/dev/null | grep -oiE '"[A-Za-z]*(ShortCircuit|ReadBlockOpNumOps|BlocksRead|ReadsFromLocalClient|ReadsFromRemoteClient)[A-Za-z]*" : [0-9]+' | tr -d '" ' | sort -u | tr '\n' ' ')
+              note "dn$i jmx: ${jmx:-(none)}"
               note "dn$i: short-circuit fds $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: true' <<< "$dl") (failed $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: false' <<< "$dl")), tcp reads $(grep -c 'op: HDFS_READ' <<< "$dl")"
             done
           fi
