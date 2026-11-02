@@ -1009,5 +1009,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   restrictive tag policies refuse only tables carrying their tags (Ranger's tag enricher), unknown tags still refuse
   all; `HiveTagPoliciesTest` 4/4; ranger cell keeps Ranger's default `EXPIRES_ON` policy and checks an expired tag
   (3f71355e; cell setup fixes 201df3b2, 1ea39a30 - runs 41493587087 and 41494830118 failed in setup on Ranger's tag
-  REST, no server bug). Run 41496378967: 8/8 cells green, ranger 63/63. SERVICE MATRIX plugins DONE. Dev CI: run 41497330129 (f5579621, includes these commits) pending at this write.
-  Lock still held until Dev CI ends.
+  REST, no server bug). Run 41496378967: 8/8 cells green, ranger 63/63. SERVICE MATRIX plugins DONE. Dev CI run 41497330129
+  (f5579621, includes these commits): green. `package=true` pre-release dispatched on 7fa1c246: run 41500117177
+  (its service gate runs every service-*.yml; next session: check it published `server-1.0.0-7fa1c246...`).
+  Lock released.
