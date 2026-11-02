@@ -101,6 +101,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   answers and a prepared query with bound parameters (`tools/ci/service-check.py`, ADBC Flight SQL). Runs on
   dispatch (input `server` = a pre-release tag, default this commit) and on pushes touching its files. Ranger and
   Hive Metastore cells follow.
+- CI: service matrix, stores part (lane 4, STATUS item 25): workflow `service-stores.yml` (dispatch with input `server` =
+  a pre-release tag, default = build of the commit; on push to its files). Each cell starts the real service as
+  containers (MinIO with two s3 stores, Apache Ozone's S3 gateway, lakeFS on a branch and on a pinned commit,
+  PostgreSQL and MySQL through the jdbc plugin), the server with `balanced` and `-DresourceProfile=speed`, and checks
+  TPC-H SF1 22/22 answers against in-process DuckDB, Flight SQL metadata and a prepared query
+  (`tools/ci/service-tpch.py`, `tools/ci/service-stores-cell.sh`); the job summary is the service x profile table.
 
 - **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores

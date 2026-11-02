@@ -1,0 +1,220 @@
+# Service matrix, stores and catalogs part (lane 4, docs/dev/CATALOGS-STATUS.md; STATUS item 25):
+# every cell starts a real service as containers, the server (this commit's build, or the
+# pre-release named by input `server`) in a container with the balanced or the speed resource
+# profile, and runs tools/ci/service-tpch.py check: TPC-H SF1 22/22 answers compared with
+# in-process DuckDB over the same Parquet files, Flight SQL metadata (GetSqlInfo, GetObjects,
+# GetTableSchema) and a prepared query bound twice. Cells: tools/ci/service-stores-cell.sh. The
+# summary job writes the table service x profile -> pass/fail + first error line. Test-only
+# credentials, generated in the job (lakeFS: its documented quickstart pair). Only lane 4 edits
+# this file.
+name: Service stores
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/service-stores.yml"
+      - "tools/ci/service-stores-cell.sh"
+      - "tools/ci/service-tpch.py"
+      - "tools/ci/ozone-s3.sh"
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "kestrel pre-release tag (e.g. server-1.0.0-<sha>); empty = build this commit"
+        type: string
+        default: ""
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+
+# actions: read lets the later jobs fetch this run's artifacts with gh run download.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: service-stores-${{ github.ref }}-${{ inputs.server || 'build' }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+  DUCKDB_VERSION: v1.5.6
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: inputs.server == ''
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this commit (no tests)
+        if: inputs.server == ''
+        run: |
+          set -euo pipefail
+          ./mvnw package -Plinux-only -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+            -pl flight-server,flight-plugin-s3,flight-plugin-lakefs,flight-plugin-iceberg,flight-plugin-jdbc -am
+          srv="$RUNNER_TEMP/srv"
+          mkdir -p "$srv"
+          cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$srv/server.jar"
+          cp -r flight-server/target/libs "$srv/libs"
+          tools/make-plugin-dir.sh "$srv" s3 lakefs iceberg jdbc
+          echo "built $(git rev-parse --short=12 HEAD)" > "$srv/SOURCE"
+
+      - name: Download pre-release ${{ inputs.server }}
+        if: inputs.server != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.server }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid tag"; exit 1; }
+          dl="$RUNNER_TEMP/dl"; srv="$RUNNER_TEMP/srv"
+          mkdir -p "$dl" "$srv"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dl" \
+            --pattern 'arrow-flight-server-*-linux.jar' --pattern 'flight-server-libs-*.tar.zst' \
+            --pattern 'flight-plugins-*.tar.zst'
+          cp "$dl"/arrow-flight-server-*-linux.jar "$srv/server.jar"
+          tar --zstd -xf "$dl"/flight-server-libs-*.tar.zst -C "$srv"
+          tar --zstd -xf "$dl"/flight-plugins-*.tar.zst -C "$srv"
+          echo "pre-release $TAG" > "$srv/SOURCE"
+
+      # httpfs from ci-assets (else extensions.duckdb.org); the scanners from extensions.duckdb.org.
+      - name: DuckDB extensions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/srv/ext/${DUCKDB_VERSION}/linux_amd64"
+          mkdir -p "$ext" "$RUNNER_TEMP/assets"
+          if gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+              --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP/assets"; then
+            tar --zstd -xf "$RUNNER_TEMP/assets/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/assets"
+            for name in httpfs iceberg avro; do
+              f=$(find "$RUNNER_TEMP/assets" -path "*${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension" | head -n 1)
+              [ -n "$f" ] && cp "$f" "$ext/"
+            done
+          fi
+          for name in httpfs iceberg avro postgres_scanner mysql_scanner; do
+            [ -f "$ext/$name.duckdb_extension" ] && continue
+            curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension.gz" \
+              | gunzip > "$ext/$name.duckdb_extension"
+          done
+          ls -l "$ext"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-stores-server
+          path: ${{ runner.temp }}/srv
+          retention-days: 3
+
+  cell:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ s3, ozone, lakefs-branch, lakefs-commit, postgres, mysql ]
+        profile: [ balanced, speed ]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Server of the prepare job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n service-stores-server -D "$RUNNER_TEMP/srv"
+
+      - name: Python client and reference (DuckDB, ADBC)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet duckdb==1.5.6 pyarrow==26.0.0 \
+            adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-tpch.py gen "$RUNNER_TEMP/tpch" "${{ inputs.sf || '1' }}"
+          du -sh "$RUNNER_TEMP/tpch/data"
+
+      - name: Cell ${{ matrix.service }} / ${{ matrix.profile }}
+        env:
+          SRV: ${{ runner.temp }}/srv
+          EXT: ${{ runner.temp }}/srv/ext
+          TPCH: ${{ runner.temp }}/tpch
+          PY: ${{ runner.temp }}/py/bin/python
+          WORK: ${{ runner.temp }}/work
+          RESULT: ${{ runner.temp }}/result/${{ matrix.service }}-${{ matrix.profile }}.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$RESULT")"
+          cat "$SRV/SOURCE"
+          tools/ci/service-stores-cell.sh "${{ matrix.service }}" "${{ matrix.profile }}"
+
+      - name: Logs
+        if: failure()
+        run: |
+          for c in svc srv ozone-scm ozone-om ozone-dn ozone-s3g; do
+            docker inspect "$c" > /dev/null 2>&1 || continue
+            echo "=== $c"; docker logs "$c" 2>&1 | tail -n 80
+          done
+
+      - name: Result file
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/result/${{ matrix.service }}-${{ matrix.profile }}.json"
+          if [ ! -f "$f" ]; then
+            mkdir -p "$(dirname "$f")"
+            echo '{"ok": false, "error": "cell did not finish (see the job log)", "lines": []}' > "$f"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: service-stores-result-${{ matrix.service }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/result/
+          retention-days: 14
+
+  summary:
+    needs: cell
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Results of the cells
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p results
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -p 'service-stores-result-*' -D dl || true
+          find dl -name '*.json' -exec cp {} results/ \; 2>/dev/null || true
+          ls results
+      - name: Table
+        env:
+          SERVER: ${{ inputs.server || 'build of this commit' }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json, os
+          cells = {}
+          for path in sorted(glob.glob("results/*.json")):
+              name = os.path.basename(path)[:-5]
+              service, profile = name.rsplit("-", 1)
+              cells[(service, profile)] = json.load(open(path))
+          services = sorted({s for s, _ in cells})
+          print(f"### Service matrix - stores ({os.environ['SERVER']}, {os.environ['GITHUB_SHA'][:12]})\n")
+          print("| service | balanced | speed |\n| --- | --- | --- |")
+          def cell(r):
+              if r is None:
+                  return "missing"
+              if r["ok"]:
+                  return "pass"
+              return "**FAIL** " + r["error"].replace("|", "\\|")[:200]
+          for s in services:
+              print(f"| {s} | {cell(cells.get((s, 'balanced')))} | {cell(cells.get((s, 'speed')))} |")
+          bad = [k for k, r in cells.items() if not r["ok"]]
+          print(f"\n{len(cells) - len(bad)}/{len(cells)} cells pass.")
+          EOF
+          cat "$GITHUB_STEP_SUMMARY"
