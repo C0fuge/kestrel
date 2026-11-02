@@ -131,6 +131,22 @@ SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
 SET allowed_paths = ARRAY['<TMP>/local/parquet']
+QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
+SET allowed_directories = ['<TMP>/local/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
+SET autoinstall_known_extensions = false
+SET autoload_known_extensions = false
+SET allow_community_extensions = false
+SET enable_external_access = false
+SET lock_configuration = true
+QUERY SELECT name, value FROM duckdb_settings() WHERE name IN ('enable_external_access', 'lock_configuration', 'autoload_known_extensions', 'autoinstall_known_extensions')
+QUERY SELECT unnest(current_setting('allowed_directories')::VARCHAR[])
+QUERY SELECT current_setting('temp_directory')
+QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
+-- connection 2 jdbc:duckdb: {allow_persistent_secrets=false}
+SET threads = 2
+SET memory_limit = '1GB'
+SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET allowed_paths = ARRAY['<TMP>/local/parquet']
 SET allowed_directories = ['<TMP>/local/parquet/', '<TMP>/duckdb-tmp/<RUN>/']
 SET autoinstall_known_extensions = false
 SET autoload_known_extensions = false

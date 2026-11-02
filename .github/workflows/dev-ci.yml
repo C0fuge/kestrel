@@ -81,7 +81,8 @@ jobs:
           fi
 
       # The hadoopfs build links OpenSSL 1.1 (libhdfs3), which the runner does not have: the
-      # Ubuntu 20.04 libssl1.1 package goes on LD_LIBRARY_PATH of the build step only.
+      # Ubuntu 20.04 libssl1.1 package goes on LD_LIBRARY_PATH of the build step only. Missing
+      # libraries skip the hadoopfs tests with a warning instead of failing the build.
       - name: OpenSSL 1.1 for the hadoopfs extension
         if: env.HADOOPFS_IT != ''
         run: |
@@ -89,7 +90,16 @@ jobs:
           deb="$RUNNER_TEMP/libssl1.1.deb"
           curl -fsSL --retry 4 -o "$deb" http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
           dpkg-deb -x "$deb" "$RUNNER_TEMP/libssl1.1"
-          echo "HADOOPFS_LIBS=$RUNNER_TEMP/libssl1.1/usr/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
+          libs="$RUNNER_TEMP/libssl1.1/usr/lib/x86_64-linux-gnu"
+          # It also links libxml2 (libhdfs3), which the runner image may lack.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends libxml2 > /dev/null || true
+          missing=$(LD_LIBRARY_PATH="$libs" ldd "$HADOOPFS_IT" | grep "not found" || true)
+          if [ -n "$missing" ]; then
+            echo "::warning::hadoopfs lockdown tests skipped, libraries missing: $missing"
+            echo "HADOOPFS_IT=" >> "$GITHUB_ENV"
+          else
+            echo "HADOOPFS_LIBS=$libs" >> "$GITHUB_ENV"
+          fi
 
       # MIT klist / kvno read the HDFS ticket cache the server writes (HdfsTicketCacheTest), as libhdfs3 does.
       - name: MIT Kerberos client tools
