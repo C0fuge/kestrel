@@ -64,6 +64,8 @@ mask, row filter, refusal of an unpoliced database and the 11 queries the table 
 written bug-first into STATUS.md)** the server's table check under any authorization provider refuses comma joins,
 FROM subqueries and `?` parameters (q3, 5, 7-10, 12-14, 19, 22, prepared). **(our bug, item below)** Ranger's
 default tag policy refused every table until the cell deleted it.
+*Core fix confirmed:* run 41488081427 (dispatch on 48090377, the core lane's fix of the table check): **8/8 cells
+green, ranger 59/59 in both profiles** (with the tag-policy deletion still in place).
 
 **Next (bug first, this lane): `ranger-hive` refuses every table when the Hive service has a tag service.** Ranger
 creates the deny policy `EXPIRES_ON` (condition `accessed-after-expiry`) in every tag service, and
@@ -997,4 +999,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   ldap/jwt cells green; ranger 35/59 in both profiles. Two bugs found: (1) core - the table check under any
   authorization provider refuses comma joins, FROM subqueries and `?` parameters (written bug-first into STATUS.md
   Next steps); (2) this lane - `ranger-hive` refuses every table while the Hive service has a tag service (Ranger's
-  default `EXPIRES_ON` deny), next item. Not yet "SERVICE MATRIX plugins DONE". Lock released.
+  default `EXPIRES_ON` deny), next item. The core lane fixed (1) in 48090377 within the session; its dispatch run
+  41488081427: 8/8 cells green, ranger 59/59 in both profiles. Only (2) remains before "SERVICE MATRIX plugins
+  DONE" (the cell still deletes the tag policy). Lock released.
