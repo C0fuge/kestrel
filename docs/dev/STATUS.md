@@ -31,7 +31,14 @@
 > 2. **speed / dc** (shared DuckDB): start fails - `IllegalStateException: DuckDB cannot be set up for the data store`
 >    from `DuckDbAdapter.openSharedRoot -> LockdownCheck.verify`: `allowed_directories` reads back the HDFS root as a
 >    path *relative to the server's working directory* (`<cwd>/hdfs:/<nameservice>/data/parquet/`), not `hdfs:/...`.
-> Hypothesis: `SET allowed_directories` runs before `hadoopfs` is loaded, so DuckDB 1.5.6 does not know the `hdfs:`
+> **Root cause found on the maintainer's HA + Kerberos stand (2026-11-02 18:40):** with only
+> `-Darrowflight.duckdb.extensionDir` set, `hadoopfs` is NOT loaded for an `hdfs://` data dir; both failures reproduce
+> exactly. With `-DduckDbHdfsExtension=<extensionDir>/v1.5.6/linux_amd64/hadoopfs.duckdb_extension` (or env
+> `DUCKDB_HDFS_EXTENSION`) f06b5834e76e answers TPC-H SF1 22/22 in balanced AND speed. The load logic is the same in
+> 4eaab05 / 7562 / f06 (old gap). Fix instead of (b) below: resolve `hadoopfs` from `extensionDir` when the data dir
+> is `hdfs://` (like httpfs for S3), and if it cannot be found, stop at start with a clear message - never start and
+> refuse every query. Keep (a), (c), (d).
+> (Old) hypothesis: `SET allowed_directories` runs before `hadoopfs` is loaded, so DuckDB 1.5.6 does not know the `hdfs:`
 > scheme and makes the collapsed `hdfs:/ns/...` an absolute local path; then (1) every `hdfs://` read is outside the
 > allowed directories and the real error is hidden behind the pending-result wrapper. Do: (a) reproduce in CI with a
 > real HDFS (Hadoop container, nameservice-style URI `hdfs://<ns>/...` if an HA-less nameservice is not possible use
