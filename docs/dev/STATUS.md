@@ -23,6 +23,21 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-02 - ITEM 24 (take it first): `resourceProfile=speed` turns the DuckDB external file cache on.**
+> egret wave `fc-s3-f06b5834e76e` (run 41437523179, `results/fc-s3-f06b5834e76e-41437523179/`, S3, 2 CPUs / 6 GB, 3
+> rounds): speed + `-DduckDbExternalFileCache=true` vs speed: TPC-H SF10 ADBC 262.5 -> 42.7 s (0.16 every round); small
+> queries p95 at c1/c8/c32 0.03-0.05 (c32 p95 18.0 s -> 0.58 s, the S3 tail of ITEM 23b is gone), p50 0.25-0.44; scans x4/x8
+> +6-8 %, x1 0.93; peak RSS x1.6-2.1 (up to ~3 GB of 6). 0 errors. Upstream has DuckDB's file and metadata caches on by
+> default (its 325a26b2c6 adds a switch to turn them off). Do: (a) under `speed` with the shared DuckDB, offer
+> `duckDbExternalFileCache=true` (explicit setting still wins); the cache lives in the one shared instance, so it is
+> bounded by the shared memory limit - verify that (unit test of the profile + a CI check that peak RSS stays under the
+> container limit on S3 SF10 and on local); (b) HDFS: the cache was off because per-connection instances grew to the
+> container limit on HDFS - run the hadoopfs path (`tpch-perf.yml` on the HDFS store if there is one, else the fake-HDFS /
+> local path) with speed + cache and confirm memory is bounded; if HDFS still grows, keep the cache off for hdfs:// only;
+> (c) also check DuckDB's Parquet metadata cache (`parquet_metadata_cache`) the same way and add it if it helps;
+> (d) CHANGELOG + START-NOTES (speed row: what it turns on and the memory cost); (e) one `package=true` pre-release.
+> Then write "ITEM 24 DONE" at the start of a line.
+
 > **Maintainer, 2026-10-30 14:40 - ITEM 23b, bug first: `resourceProfile=speed` fails S3 small queries at 32 clients.**
 > egret run 41029626461 (`results/ITEM23-d752a7358a65.md`, 2 CPUs / 6 GB, -Xmx3g, direct 2g): under `speed`, S3 small
 > queries at 32 clients fail in every round (ADBC 702-753 / 1280, JDBC 66-91 / 1280; failed classes show as "answers
