@@ -568,7 +568,7 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q pyspark==3.5.3 duckdb==1.5.6 fastavro==1.13.1 \
-            backports.zstd==1.8.0 pyroaring==1.2.0
+            'backports.zstd==1.8.0; python_version < "3.14"' pyroaring==1.2.0
           jars="$RUNNER_TEMP/jars"
           for a in org.apache.paimon:paimon-spark-3.5:1.2.0 org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
               org.apache.hudi:hudi-spark3.5-bundle_2.12:1.0.2; do
