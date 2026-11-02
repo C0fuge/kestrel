@@ -41,7 +41,14 @@
 > of a refused query with its stack); (d) `package=true` pre-release. Then write "HDFS FIX DONE" at the start of a line
 > and continue with item 24 (its build will then carry both).
 
-> **Maintainer, 2026-11-02 18:10 - ITEM 25 right after the HDFS fix: SERVICE MATRIX gate for every pre-release.**
+> **Maintainer, 2026-11-02 18:30 - ITEM 25 SPLIT across the lanes** (runs in parallel): plugins lane ->
+> `service-security.yml` (LDAP, JWT, Ranger, Hive tables), catalogs lane -> `service-stores.yml` (S3, lakeFS, Ozone,
+> Iceberg, PostgreSQL/MySQL), lane 3 -> `service-cluster.yml` (3 nodes on HDFS and S3, node loss). **Core lane, after
+> the HDFS fix:** `service-hdfs.yml` (HDFS plain + **HA nameservice + Kerberos (KDC container) + short-circuit**, one
+> node, balanced and speed, TPC-H SF1 22/22) and the **gate**: the `package=true` job publishes only when the latest
+> run of every `service-*.yml` on the same commit is green (wait for them or dispatch them). The description below is
+> the original single-lane version; follow the split.
+> **(orig.) ITEM 25 right after the HDFS fix: SERVICE MATRIX gate for every pre-release.**
 > The HDFS failure reached a real cluster because no CI run talks to real services end to end with the current
 > build. Add a workflow `service-matrix.yml` that runs on every `package=true` (and on dispatch) and blocks the
 > pre-release if any cell fails. For each service a real container, the server in **balanced and speed** (single

@@ -4,6 +4,19 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, cluster part (take it first; this item goes straight to main, no
+> branch).** A real Hadoop cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it). Add
+> `.github/workflows/service-cluster.yml`: a **3-node cluster** of the server on **HDFS** (NameNode + 3 DataNodes, each
+> server next to a DataNode with short-circuit reads, as `docker-compose.ci.yml` lays out) and on **S3** (MinIO), in
+> balanced, speed and speed + `distributedComplete=true`; plus one node stopped mid-query (answers complete or a
+> repeatable error, never a partial answer). Own CI workflow of its own (only this lane edits it), triggered on `workflow_dispatch` with an input `server` (a kestrel
+> pre-release id; default: build from the checked-out commit) and on push to main touching its files. Each cell: a real
+> container of the service, the server in **balanced and `-DresourceProfile=speed`**, TPC-H SF1 22/22 with answers
+> checked against in-process DuckDB + Flight SQL metadata + one prepared query; job summary = table service x profile
+> -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
+> into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
+
+
 D1. ~~**Item 18 step 2 - distributed complete mode.**~~ *Done 2026-10-28 (738d1e7, see Log).* Opt-in `distributedComplete`
     (default false). Open follow-ups, folded into D2: (a) TLS + a real auth provider between two processes (the
     internal identity is unit-tested; the in-process test runs without auth); (b) peer streams are read one after the

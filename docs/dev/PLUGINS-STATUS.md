@@ -5,6 +5,20 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-02 18:30 - FINISH MODE lifted for this item: SERVICE MATRIX, plugins part (take it first).**
+> A real Hadoop cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real
+> services end to end. Add `.github/workflows/service-security.yml`: **LDAP** login (OpenLDAP container, a user + a
+> group mapped into Ranger), **JWT** login (a JWKS issuer container, e.g. Keycloak or a static JWKS + signed token),
+> **Ranger** (Ranger admin container if it fits in a runner, else the in-process Ranger but through the real server
+> process: table policy + a column mask + a row filter, answers checked), **Hive Metastore** tables of the hive plugin
+> (Parquet, ORC, text, Avro, a view) over HDFS or local. Own CI workflow of its own (only this lane edits it), triggered on `workflow_dispatch` with an input `server` (a kestrel
+> pre-release id; default: build from the checked-out commit) and on push to main touching its files. Each cell: a real
+> container of the service, the server in **balanced and `-DresourceProfile=speed`**, TPC-H SF1 22/22 with answers
+> checked against in-process DuckDB + Flight SQL metadata + one prepared query; job summary = table service x profile
+> -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
+> into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
+
+
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
 > docs), then write "PLUGINS LANE DONE" and stop; no new items.
 

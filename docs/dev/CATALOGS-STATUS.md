@@ -4,6 +4,18 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
+> cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
+> end. Add `.github/workflows/service-stores.yml`: **S3** (MinIO, s3 plugin, 2 stores), **lakeFS** (branch + commit),
+> **Ozone** (S3 gateway), **Iceberg** Hadoop catalog on S3 + one REST catalog (Polaris or Lakekeeper, vended
+> credentials on), **PostgreSQL** and **MySQL** through the jdbc plugin. Own CI workflow of its own (only this lane edits it), triggered on `workflow_dispatch` with an input `server` (a kestrel
+> pre-release id; default: build from the checked-out commit) and on push to main touching its files. Each cell: a real
+> container of the service, the server in **balanced and `-DresourceProfile=speed`**, TPC-H SF1 22/22 with answers
+> checked against in-process DuckDB + Flight SQL metadata + one prepared query; job summary = table service x profile
+> -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
+> into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
+
+
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish only what is started: C1 step 2b (vended credentials, per
 > Q1 answer) and C2 (the JDBC federation plugin, per Q4 answer). Delta, Paimon/Hudi and full ACID ORC stay as written
 > backlog (not started now). Then write "CATALOGS LANE DONE" and stop.
