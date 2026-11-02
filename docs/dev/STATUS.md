@@ -67,7 +67,7 @@
 > Ranger test, but through the real server). Matrix jobs in parallel; a summary table (service x profile -> pass/fail
 > + first error line) in the job summary. Document it in CONTRIBUTING/STATUS. Then "ITEM 25 DONE".
 
-> *Partly done 2026-11-02 (core session, 385fa083 + next commit) - **not** "HDFS FIX DONE": (a) real-HDFS end-to-end CI still open.*
+HDFS FIX DONE (2026-11-02, core session, 385fa083 / 2f307313 / c4cd985f; pre-release server-1.0.0-c4cd985f37e3).
 > **Cause found (reproduced locally on DuckDB 1.5.6 with our `hadoopfs-v1.5.6-afc3`):** 1.5.6 stores each
 > `allowed_directories` entry through `VirtualFileSystem::CanonicalizePath` of the file system that claims the path.
 > With hadoopfs loaded (`LOAD` already runs before the lockdown in `configureConnection`, so the order is right) an
@@ -87,9 +87,12 @@
 > own error line (`DuckDbErrors.errorLine`: `IO Error ...`/`Permission Error ...` instead of the wrapper) to the client
 > and the log, and the first refusal on a node is logged with its stack (`query=refused ... first=true`). Tests:
 > `LockdownCheckTest.namesTheExtensionAUriRootNeeds`, `.balancedServerWithoutHadoopfsStopsAtStartup`,
-> `DuckDbErrorsTest`, `DuckDbAdapterTest.hadoopfsUnderTheLockdownOfTheSharedDuckDb`. **Still open, next core session:**
-> (a) a Dev-CI-side HDFS end-to-end test (Hadoop container, `hdfs://<host>:<port>/...`, TPC-H SF1 22/22 under balanced
-> and speed with the hadoopfs extension; the runner needs only the Ubuntu 20.04 libssl1.1 package, see dev-ci.yml).
+> `DuckDbErrorsTest`, `DuckDbAdapterTest.hadoopfsUnderTheLockdownOfTheSharedDuckDb` (Dev CI now runs the three hadoopfs
+> tests with the real v1.5.6 extension: libssl1.1 / libxml2 2.9 / ICU 66 from the Ubuntu 20.04 pool on LD_LIBRARY_PATH).
+> (a) real HDFS end to end: lane 3's `service-cluster.yml` (apache/hadoop 3.4.1, NameNode + 3 DataNodes, short-circuit
+> on, 3 server nodes, TPC-H SF1 checked) on 2f307313, run 41469353046: hdfs balanced / speed / speed+dc / node loss all
+> green, 0 refused (it sets `DUCKDB_HDFS_EXTENSION`; the extensionDir path is covered by the unit test). Not covered: HA
+> nameservice + Kerberos (stand only). (d) `package=true` 41475681887 green, pre-release `server-1.0.0-c4cd985f37e3`.
 
 > **Maintainer, 2026-11-02 - ITEM 24 (take it first): `resourceProfile=speed` turns the DuckDB external file cache on.**
 > egret wave `fc-s3-f06b5834e76e` (run 41437523179, `results/fc-s3-f06b5834e76e-41437523179/`, S3, 2 CPUs / 6 GB, 3
@@ -2602,3 +2605,14 @@ S3 slowdown item below stays open for then).
   DuckDB (518a2475); private OOM-retry DuckDB never caches. Dev CI 41453962047 green; tpch-perf 41453978726 (s3 SF10:
   283.6 -> 91.2 s, peak 1640 -> 3317 MiB of 6 GiB) and 41458186484 (local 40.0 -> 37.6 s); small-query-perf
   41453983213 (s3, 0 errors; c1 214 vs 43 q/s). Pre-release: dev-ci `package=true` 41459673523 green, pre-release `server-1.0.0-fca6512a8046` (7 assets); **egret:** re-measure speed vs balanced on it (S3 and HDFS). HDFS left to the stand (no HDFS store in CI).
+- 2026-11-02 (core session): HDFS FIX DONE - root cause as the maintainer found: no hadoopfs in DuckDB (only
+  `extensionDir` set); 1.5.6 then stores an `hdfs://` allowed directory as `<cwd>/hdfs:/...`. Fixes: hadoopfs resolved
+  from `arrowflight.duckdb.extensionDir` for an `hdfs://` data dir (start stops if missing), balanced runs the lockdown
+  check at startup whenever the lockdown has roots (behaviour change at startup only: a server that could not answer
+  any query now refuses to start; golden setup file updated), the check names the missing extension, refused queries
+  carry DuckDB's error instead of the JDBC pending-result wrapper, first refusal logged with its stack. Dev CI runs the
+  hadoopfs tests with the real extension. Runs: Dev CI + package 41475681887 green (on branch `ci/core-hdfs-fix` =
+  main c4cd985f, because pushes of the other lanes cancelled the main runs 41468406682 / 41469255718 / 41470097917;
+  41471892625 / 41474082086 failed on runner libraries, fixed); service-cluster 41469353046 green (this dispatch
+  cancelled lane 3's push run 41469126621 for c84f8065 - same concurrency group; mine built 2f307313, which contains
+  it). Pre-release `server-1.0.0-c4cd985f37e3`. **Stand/egret:** re-run HA + Kerberos with only `extensionDir` set.
