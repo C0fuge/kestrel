@@ -2,6 +2,7 @@
 
 Usage:
   service-cluster-check.py check <host:port,...> <dir>
+  service-cluster-check.py locality <host:port,...> <dir>
   service-cluster-check.py loss <host:port,...> <dir> <seconds> <clients>
 
 ``check`` runs the 22 TPC-H queries through the ADBC Flight SQL driver (Go) in complete mode, query
@@ -12,6 +13,17 @@ order of a merged answer may change the last bits), then Flight SQL metadata (Ge
 one prepared query with a bound parameter. Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 
+With the environment variable ``SC_DATANODES`` (comma-separated ``host:port`` of the HDFS DataNodes'
+HTTP ports), ``check`` also prints one ``reads`` line per query: the change of every DataNode's JMX
+block-read counters (``ReadsFromLocalClient`` / ``ReadsFromRemoteClient``) over that query, so a
+query's remote reads can be told apart (D13 a2; the queries run one after the other).
+
+``locality`` (diagnostic, exit code 0 unless the probe cannot run) plans ``LOCALITY_QUERIES`` in
+partial mode on the first node with pyarrow.flight, reads every endpoint from its first location and
+prints one ``endpoint`` line each: the location and the DataNode counter changes over its read; then
+a ``locality`` summary line (endpoints reading only local blocks, mixed, only remote, none). It
+needs ``SC_DATANODES`` in the same order as the nodes (DataNode i shares node i's host).
+
 ``loss`` keeps <clients> clients running the 22 queries on every node but the last (the one the
 workflow stops) for <seconds>, and checks that each answer is either exactly the reference or an
 error a client may retry (gRPC UNAVAILABLE); a retryable error is retried once on the next node and
@@ -21,15 +33,22 @@ that answer must be exact. A wrong (e.g. partial) answer or a non-retryable erro
 import decimal
 import math
 import os
+import re
 import sys
 import threading
 import time
+import urllib.request
 
 import adbc_driver_flightsql.dbapi as flightsql
 import pyarrow.parquet as pq
 
 PREPARED = "SELECT count(*) FROM tpch.lineitem WHERE l_quantity < ?"
 PREPARED_VALUE = 24
+LOCALITY_QUERIES = {
+    "lineitem sum": "SELECT sum(l_extendedprice) FROM tpch.lineitem",
+    "orders count": "SELECT count(*) FROM tpch.orders WHERE o_totalprice > 1000",
+}
+STATEMENT_QUERY = "type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery"
 TABLES = {"customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"}
 
 
@@ -100,6 +119,39 @@ def run(conn, sql, parameters=None):
         return cursor.fetch_arrow_table()
 
 
+def datanodes():
+    """The DataNode HTTP addresses of ``SC_DATANODES`` (empty without it)."""
+    return [d for d in os.environ.get("SC_DATANODES", "").split(",") if d]
+
+
+def block_reads(nodes):
+    """Per DataNode (local, remote) block-read counters from JMX; (None, None) when unreadable."""
+    out = []
+    for dn in nodes:
+        try:
+            with urllib.request.urlopen(f"http://{dn}/jmx", timeout=5) as r:
+                text = r.read().decode("utf-8", "replace")
+            local = sum(int(v) for v in re.findall(r'"ReadsFromLocalClient" : (\d+)', text))
+            remote = sum(int(v) for v in re.findall(r'"ReadsFromRemoteClient" : (\d+)', text))
+            out.append((local, remote))
+        except Exception:  # noqa: BLE001 - a diagnostic, never a failure
+            out.append((None, None))
+    return out
+
+
+def reads_delta(before, after):
+    """(text, local, remote) of the counter changes between two block_reads snapshots."""
+    parts, local, remote = [], 0, 0
+    for i, ((lb, rb), (la, ra)) in enumerate(zip(before, after)):
+        if None in (lb, rb, la, ra):
+            parts.append(f"dn{i + 1} ?")
+            continue
+        local += la - lb
+        remote += ra - rb
+        parts.append(f"dn{i + 1} L+{la - lb} R+{ra - rb}")
+    return " ".join(parts), local, remote
+
+
 def first_line(error):
     """The first line of an error, shortened."""
     return str(error).strip().splitlines()[0][:300] if str(error).strip() else type(error).__name__
@@ -115,14 +167,22 @@ def check(servers, base):
         failures.append(what)
         print(f"FAIL {what}", flush=True)
 
+    dns = datanodes()
+    total_local = total_remote = 0
     for i, (name, sql, want) in enumerate(queries):
         node = i % len(conns)
+        before = block_reads(dns) if dns else None
         t0 = time.perf_counter()
         try:
             got = run(conns[node], sql)
         except Exception as e:  # noqa: BLE001 - every failure is reported
             fail(f"{name} on {servers[node]}: {first_line(e)}")
             continue
+        if dns:
+            text, local, remote = reads_delta(before, block_reads(dns))
+            total_local += local
+            total_remote += remote
+            print(f"reads {name} on {servers[node]}: {text} (local {local}, remote {remote})", flush=True)
         diff = difference(got, want)
         ms = (time.perf_counter() - t0) * 1000
         if diff:
@@ -131,6 +191,8 @@ def check(servers, base):
             print(f"ok {name} on {servers[node]} rows {got.num_rows} {ms:.0f} ms", flush=True)
     if len(queries) != 22:
         fail(f"{len(queries)} queries, expected 22")
+    if dns:
+        print(f"reads total of the 22 queries: local {total_local}, remote {total_remote}", flush=True)
 
     columns = pq.read_schema(os.path.join(base, "data", "tpch", "lineitem", "part-000.parquet")).names
     for node, conn in enumerate(conns):
@@ -165,6 +227,70 @@ def check(servers, base):
         c.close()
     print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
     return 1 if failures else 0
+
+
+def varint(n):
+    """Protobuf base-128 varint."""
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def field(number, data):
+    """One length-delimited protobuf field."""
+    return varint(number << 3 | 2) + varint(len(data)) + data
+
+
+def statement_command(sql):
+    """Any(CommandStatementQuery(query=sql)), the Flight SQL descriptor command of a statement."""
+    return field(1, STATEMENT_QUERY.encode()) + field(2, field(1, sql.encode()))
+
+
+def locality(servers, base):
+    """The ``locality`` mode; returns the process exit code."""
+    import pyarrow.flight as flight  # noqa: PLC0415 - only this mode needs it
+
+    del base
+    dns = datanodes()
+    if len(dns) != len(servers):
+        print(f"locality skipped: SC_DATANODES has {len(dns)} entries for {len(servers)} nodes", flush=True)
+        return 1
+    hosts = [s.split(":")[0] for s in servers]
+    options = flight.FlightCallOptions(headers=[(b"x-flight-result-mode", b"partial")])
+    endpoints = local_only = mixed = no_reads = 0
+    total_local = total_remote = 0
+    for label, sql in LOCALITY_QUERIES.items():
+        client = flight.connect(f"grpc://{servers[0]}")
+        info = client.get_flight_info(flight.FlightDescriptor.for_command(statement_command(sql)), options)
+        print(f"plan {label}: {len(info.endpoints)} endpoints", flush=True)
+        for k, ep in enumerate(info.endpoints):
+            uri = ep.locations[0].uri.decode() if ep.locations else f"grpc://{servers[0]}"
+            host = re.sub(r"^[a-z+]+://", "", uri).split(":")[0]
+            node = hosts.index(host) + 1 if host in hosts else "?"
+            before = block_reads(dns)
+            reader = flight.connect(uri).do_get(ep.ticket, options)
+            rows = reader.read_all().num_rows
+            text, local, remote = reads_delta(before, block_reads(dns))
+            endpoints += 1
+            total_local += local
+            total_remote += remote
+            # A read of node i counts as local on DataNode i (same network namespace) and remote elsewhere.
+            if local == 0 and remote == 0:
+                no_reads += 1  # served from a cache, or the DataNode counters could not be read
+            elif remote == 0:
+                local_only += 1
+            elif local:
+                mixed += 1
+            print(f"endpoint {label} #{k} at node {node} ({uri}): rows {rows}, {text}", flush=True)
+    print(f"locality partial: {endpoints} endpoints, {local_only} read only local blocks, {mixed} mixed, "
+          f"{endpoints - local_only - mixed - no_reads} only remote, {no_reads} no block reads; "
+          f"block reads local {total_local}, remote {total_remote}",
+          flush=True)
+    return 0
 
 
 def retryable(error):
@@ -241,6 +367,8 @@ def main():
     mode, servers, base = sys.argv[1], sys.argv[2].split(","), sys.argv[3]
     if mode == "check":
         sys.exit(check(servers, base))
+    if mode == "locality":
+        sys.exit(locality(servers, base))
     if mode == "loss":
         sys.exit(loss(servers, base, float(sys.argv[4]), int(sys.argv[5])))
     sys.exit(f"unknown mode {mode}")

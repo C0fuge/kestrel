@@ -308,8 +308,21 @@ jobs:
             grep -E '^event .* (unavailable|wrong|error|retry)' "$RUNNER_TEMP/client.log" | head -n 20
             note "$(grep '^summary' "$RUNNER_TEMP/client.log")"
           else
+            # D13 (a2): on HDFS the check prints each query's DataNode block reads (local / remote client).
+            [ "$STORE" = hdfs ] && export SC_DATANODES=172.30.0.11:9864,172.30.0.12:9864,172.30.0.13:9864
             "$py" -I tools/ci/service-cluster-check.py check "$nodes" "$in" > "$RUNNER_TEMP/client.log" 2>&1; rc=$?
             cat "$RUNNER_TEMP/client.log"
+            if [ "$STORE" = hdfs ]; then
+              note "$(grep -m 1 '^reads total' "$RUNNER_TEMP/client.log" || echo 'reads total: (none)')"
+              # Partial mode: does each endpoint run on the node holding its files' blocks? Diagnostic only.
+              timeout 300 "$py" -I tools/ci/service-cluster-check.py locality "$nodes" "$in" > "$RUNNER_TEMP/locality.log" 2>&1
+              cat "$RUNNER_TEMP/locality.log"
+              note "$(grep -m 1 '^locality' "$RUNNER_TEMP/locality.log" || echo "locality probe failed: $(tail -n 1 "$RUNNER_TEMP/locality.log" | cut -c1-200)")"
+              # Block hosts as the NameNode names them vs what a server resolves (planning matches them to node hosts).
+              dnNames=$(docker exec nn hdfs dfsadmin -report 2>/dev/null | grep -E '^Hostname:' | awk '{print $2}' | sort | tr '\n' ' ')
+              resolved=$(for h in $dnNames; do docker exec srv1 getent hosts "$h" > /dev/null 2>&1 && echo "$h=yes" || echo "$h=no"; done | tr '\n' ' ')
+              note "DataNode host names (NameNode report): ${dnNames:-?}; resolvable from srv1: ${resolved:-?}"
+            fi
           fi
           for i in 1 2 3; do
             note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
@@ -355,6 +368,7 @@ jobs:
             ${{ runner.temp }}/result.txt
             ${{ runner.temp }}/result-notes.txt
             ${{ runner.temp }}/client.log
+            ${{ runner.temp }}/locality.log
             ${{ runner.temp }}/srv*.log
             ${{ runner.temp }}/dn*.log
           retention-days: 7
