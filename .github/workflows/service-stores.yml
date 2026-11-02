@@ -16,6 +16,7 @@ on:
       - ".github/workflows/service-stores.yml"
       - "tools/ci/service-stores-cell.sh"
       - "tools/ci/service-tpch.py"
+      - "tools/ci/service-iceberg.py"
       - "tools/ci/ozone-s3.sh"
   workflow_dispatch:
     inputs:
@@ -122,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ s3, ozone, lakefs-branch, lakefs-commit, postgres, mysql ]
+        service: [ s3, iceberg-hadoop, ozone, lakefs-branch, lakefs-commit, postgres, mysql ]
         profile: [ balanced, speed ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,7 +137,7 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install --quiet duckdb==1.5.6 pyarrow==26.0.0 \
-            adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+            adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0 'pyiceberg[sql-sqlite,pyarrow]==0.10.0'
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-tpch.py gen "$RUNNER_TEMP/tpch" "${{ inputs.sf || '1' }}"
           du -sh "$RUNNER_TEMP/tpch/data"
 
@@ -211,7 +212,7 @@ jobs:
                   return "missing"
               if r["ok"]:
                   return "pass"
-              return "**FAIL** " + r["error"].replace("|", "\\|")[:200]
+              return "**FAIL** " + " ".join(r["error"].split()).replace("|", "\\|")[:200]
           for s in services:
               print(f"| {s} | {cell(cells.get((s, 'balanced')))} | {cell(cells.get((s, 'speed')))} |")
           bad = [k for k, r in cells.items() if not r["ok"]]

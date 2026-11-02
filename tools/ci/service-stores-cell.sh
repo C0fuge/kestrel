@@ -6,7 +6,7 @@
 # query). Writes $RESULT (json). Test-only credentials, generated here (lakeFS: its documented
 # quickstart key pair, a throw-away container).
 # Usage: service-stores-cell.sh <service> <profile>
-#   service: s3 | ozone | lakefs-branch | lakefs-commit | postgres | mysql
+#   service: s3 | iceberg-hadoop | ozone | lakefs-branch | lakefs-commit | postgres | mysql
 #   profile: balanced | speed
 # Environment: SRV, EXT (DuckDB extension dir: v1.5.6/linux_amd64/*), TPCH, PY (python with duckdb,
 # adbc), RESULT, WORK (scratch directory).
@@ -21,9 +21,13 @@ fail() { # writes a failed result without a check run
   echo "FAIL: $1"
   exit 1
 }
+trap 'fail "setup failed (line $LINENO): $BASH_COMMAND"' ERR
 
 key=$(openssl rand -hex 8)
 secret=$(openssl rand -hex 16)
+# AWS CLI 2.23+ sends streaming trailer checksums by default; the lakeFS gateway refuses their
+# signature (AccessDenied). Only when an operation requires one.
+export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 echo "::add-mask::$secret"
 s3put() { # endpoint bucket-path: uploads the Parquet tree below <bucket-path>/tpch/
   AWS_ACCESS_KEY_ID=$key AWS_SECRET_ACCESS_KEY=$secret AWS_DEFAULT_REGION=us-east-1 \
@@ -41,10 +45,11 @@ dataDir=/data
 schema=tpch
 mkdir -p "$WORK/data"
 case "$service" in
-  s3)
-    # MinIO; two stores: the data directory on bucket "lake" and a named store "wh" on bucket "wh"
-    # (holding a second copy, read by no catalog here: the named store must not disturb the
-    # main one; the Iceberg cells read through it).
+  s3|iceberg-hadoop)
+    # MinIO; two stores: the data directory on bucket "lake" and a named store "wh" on bucket "warehouse".
+    # s3 queries the data directory (a second copy on "warehouse" must not disturb it); iceberg-hadoop
+    # writes the tables as an Iceberg Hadoop catalog on "warehouse" (tools/ci/service-iceberg.py) and
+    # queries them through the iceberg plugin, which reads them through the named store.
     image=""
     for candidate in minio/minio:RELEASE.2025-04-22T22-12-26Z quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
         cgr.dev/chainguard/minio:latest; do
@@ -57,11 +62,18 @@ case "$service" in
       "$image" server /tmp/minio --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 > /dev/null
     for _ in $(seq 60); do curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready && break; sleep 1; done
     curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready || fail "MinIO did not become ready"
-    s3mb http://127.0.0.1:9000 lake && s3mb http://127.0.0.1:9000 wh
-    s3put http://127.0.0.1:9000 lake/data && s3put http://127.0.0.1:9000 wh/copy
+    s3mb http://127.0.0.1:9000 lake && s3mb http://127.0.0.1:9000 warehouse
+    s3put http://127.0.0.1:9000 lake/data
     dataDir=s3://lake/data
     opts+=(-Darrowflight.s3.endpoint=http://127.0.0.1:9000 -Darrowflight.s3.urlStyle=path
-      -Darrowflight.s3.stores=wh -Darrowflight.s3.wh.root=s3://wh/copy -Darrowflight.s3.wh.endpoint=http://127.0.0.1:9000)
+      -Darrowflight.s3.stores=wh -Darrowflight.s3.wh.root=s3://warehouse/ -Darrowflight.s3.wh.endpoint=http://127.0.0.1:9000)
+    if [ "$service" = iceberg-hadoop ]; then
+      "$PY" -I "$here/service-iceberg.py" hadoop "$TPCH" s3://warehouse/iceberg ice http://127.0.0.1:9000 "$key" "$secret"
+      opts+=(-Dcatalog=iceberg-hadoop -Darrowflight.iceberg-hadoop.warehouse=s3://warehouse/iceberg)
+      schema=ice
+    else
+      s3put http://127.0.0.1:9000 warehouse/copy
+    fi
     envs+=(-e "FLIGHT_S3_ACCESS_KEY=$key" -e "FLIGHT_S3_SECRET_KEY=$secret"
       -e "FLIGHT_S3_WH_ACCESS_KEY=$key" -e "FLIGHT_S3_WH_SECRET_KEY=$secret")
     ;;
@@ -134,7 +146,7 @@ EOF
       envs+=(-e "FLIGHT_JDBC_PG_PASSWORD=$secret")
       schema=pg
     else
-      docker run -d --name svc --network host -v "$TPCH/csv:/csv:ro" -e MYSQL_USER=tpch \
+      docker run -d --name svc --network host -v "$TPCH/csv:/csv" -e MYSQL_USER=tpch \
         -e "MYSQL_PASSWORD=$secret" -e MYSQL_DATABASE=tpch -e "MYSQL_ROOT_PASSWORD=$secret" mysql:8.4 \
         --secure-file-priv=/csv > /dev/null
       for _ in $(seq 90); do docker exec svc mysqladmin ping -h 127.0.0.1 -uroot "-p$secret" --silent > /dev/null 2>&1 && break; sleep 2; done
@@ -171,7 +183,9 @@ docker run -d --name srv --network host --memory=10g -v "$SRV:/app:ro" -v "$EXT:
 for _ in $(seq 120); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
 if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
   docker logs srv 2>&1 | tail -n 60
-  first=$(docker logs srv 2>&1 | grep -m 1 -E 'ERROR|Exception' || echo "no error line")
+  # The first exception with its message, else the first ERROR line.
+  first=$(set +o pipefail; docker logs srv 2>&1 | grep -E '^[A-Za-z0-9_.$]+(Exception|Error): ' | head -n 1)
+  [ -n "$first" ] || first=$(set +o pipefail; docker logs srv 2>&1 | grep -E 'ERROR' | head -n 1)
   fail "server did not start: $first"
 fi
 docker logs srv 2>&1 | grep -oE '(duckdb=sizing|resourceProfile) .*' | head -n 3 || true
