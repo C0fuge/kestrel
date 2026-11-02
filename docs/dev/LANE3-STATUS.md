@@ -19,7 +19,9 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 SERVICE MATRIX lane 3 DONE (2026-11-02, see Log): `.github/workflows/service-cluster.yml`, 8 cells green (run 41469353046).
 
 D13. Follow-ups of the service matrix (cluster), optional:
-    - (a) short-circuit reads: *measured 2026-11-02 (see Log)* - **not used**. With short-circuit configured (native
+    - (a) short-circuit reads: *measured 2026-11-02 (see Log)* - **not used**. *(a1) done 2026-11-02 (19th session):
+      the layout supports it (Java probe in dn1 reads short-circuit), so it is hadoopfs/libhdfs3 - handed to the core
+      lane (`STATUS.md` Log); the HDFS cells emit a `short-circuit unused` warning, not a failure (answers are right).* With short-circuit configured (native
       libhadoop loads, DataNode domain socket mounted, `LIBHDFS3_CONF` with `dfs.client.read.shortcircuit` +
       `dfs.domain.socket.path`), every DataNode has `ReadBlockOpNumOps == BlocksRead` (all block reads over TCP) and
       ~60 % of them come from remote clients. Answers are right; only speed is lost. Next: (a1) check the layout with
@@ -417,3 +419,14 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   image does not log clienttrace, even with log4j set - run 41478120223, dropped again): `ReadBlockOpNumOps ==
   BlocksRead` on all 3 DataNodes in every run (e.g. 328/356/919 block reads, 131/96/321 from a local client), so
   the servers never read short-circuit although it is configured - see D13 (a). Next: D13 (a1), then D12.
+- 2026-11-02 (lane 3 session, 19th): lock 17:16Z. D13 (a1) done on `main` (6218df4c, f8ba588a; workflow only, no
+  runtime change, so no pre-release). `service-cluster.yml` HDFS cells probe short-circuit before the servers start:
+  the Java client inside dn1 writes a 4 MB file (block on dn1), reads it back (byte count checked), and dn1's JMX
+  `ReadBlockOpNumOps` is unchanged = short-circuit. Result in every HDFS cell of runs 41489637645 (6218df4c) and
+  41490875832 (f8ba588a), both **8/8 pass**: the layout supports short-circuit, the servers never use it
+  (`ReadBlockOpNumOps >= BlocksRead` on all 3 DataNodes) -> hadoopfs/libhdfs3, written for the core lane in
+  `STATUS.md` Log. Decision: a `::warning` annotation ("short-circuit unused") instead of failing the cell - it is a
+  speed issue, and a red cell would hide correctness failures of the matrix; the warning disappears once hadoopfs
+  reads short-circuit. My push cancelled the core lane's Dev CI on 48090377 (contained in 6218df4c / f8ba588a); Dev
+  CI 41490875833 on f8ba588a was running at session end. Next: D13 (a2) (why ~60 % remote reads: planning vs block
+  locations, per query), then D12.

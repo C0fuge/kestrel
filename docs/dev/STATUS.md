@@ -2644,3 +2644,11 @@ S3 slowdown item below stays open for then).
   on all nodes (runs 41479189384, 41479197754). Lane 3 first checks whether the CI layout itself supports it
   (LANE3-STATUS D13 (a1)); if it does, it is hadoopfs/libhdfs3 config handling. Also: the cluster cells now load
   hadoopfs from `extensionDir` only and fail `server-1.0.0-fca6512a8046`, pass `server-1.0.0-c4cd985f37e3`.
+- 2026-11-02 (lane 3 session): for the core lane (hadoopfs owner), follow-up of the line above, **not a correctness
+  issue**: the CI layout supports short-circuit - a Java `hdfs dfs -cat` inside DataNode 1 of a block on that node
+  adds no READ_BLOCK on the DataNode (`service-cluster.yml` probe, runs 41489637645, 41490875832, all 4 HDFS cells),
+  while the servers in the same network namespace, with the same domain socket mounted and `LIBHDFS3_CONF` holding
+  `dfs.client.read.shortcircuit=true` + `dfs.domain.socket.path=/var/run/hdfs-sockets/dn`, read every block over TCP
+  (`ReadBlockOpNumOps >= BlocksRead` on all DataNodes). So hadoopfs/libhdfs3 does not read short-circuit (config not
+  read from `LIBHDFS3_CONF`, local-node check, or the domain-socket path) - speed only. The cells now emit a
+  `short-circuit unused` warning annotation (not a failure) until it reads short-circuit.
