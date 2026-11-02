@@ -61,6 +61,15 @@
 > regression tests: a comma join, a FROM subquery and a `?` query under a test provider are answered, with every table
 > checked. Fixed when the `ranger` cell's 22 queries + prepared pass.
 
+RANGER TABLE CHECK FIX DONE (2026-11-02, core session, 48090377). `FlightAuthorization.requireQuery`: when the text
+> parse refuses a query (comma join, `?`/`$n` parameter) or its FROM-subquery flattening throws (a FROM subquery with a
+> join, aggregate or GROUP BY), `QueryTables.of` (DuckDB's parse) names every table and each is checked; what it
+> refuses (table functions, catalog-qualified names, several statements, non-SELECT) stays INVALID_ARGUMENT; a name
+> without schema stays UNAUTHORIZED. Test `FlightAuthorizationTextParseTest` (TPC-H-shaped comma join, q13/q9-style
+> FROM subqueries, `?` and `$3`: answered with exactly their tables checked; an unreadable table in each denied).
+> service-security 41488081427 on 48090377: all 8 cells green, **ranger balanced + speed green** (22 queries +
+> prepared + mask/filter probes). Dev CI: see Log.
+
 > **Maintainer, 2026-11-02 18:30 - ITEM 25 SPLIT across the lanes** (runs in parallel): plugins lane ->
 > `service-security.yml` (LDAP, JWT, Ranger, Hive tables), catalogs lane -> `service-stores.yml` (S3, lakeFS, Ozone,
 > Iceberg, PostgreSQL/MySQL), lane 3 -> `service-cluster.yml` (3 nodes on HDFS and S3, node loss). **Core lane, after
