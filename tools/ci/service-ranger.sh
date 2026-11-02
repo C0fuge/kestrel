@@ -45,18 +45,21 @@ case "${1:-}" in
       exit 1
     fi
     echo "ranger admin up, service dev_hive present"
-    # The image links dev_hive to a tag service whose default policies include a deny (EXPIRES_ON,
-    # condition accessed-after-expiry). ranger-hive refuses every table while restrictive tag policies
-    # exist (documented; PLUGINS-STATUS.md bug item), so the cell unlinks it to check the rest.
-    service=$(api GET /service/public/v2/api/service/name/dev_hive)
-    tag=$(jq -r '.tagService // ""' <<< "$service")
+    # The image links dev_hive to tag service dev_tag, whose default policy EXPIRES_ON is a deny
+    # (condition accessed-after-expiry) - Ranger creates it in every tag service. ranger-hive refuses
+    # every table while restrictive tag policies exist (PLUGINS-STATUS.md bug item), so the cell
+    # deletes that policy to check the rest; remove this once the plugin evaluates tags.
+    tag=$(api GET /service/public/v2/api/service/name/dev_hive | jq -r '.tagService // ""')
     if [ -n "$tag" ]; then
-      echo "dev_hive's tag service: $tag; its policies:"
-      api GET "/service/public/v2/api/service/$tag/policy" \
-        | jq -c '.[] | {name, policyType, deny: (.denyPolicyItems | length), conditions: [.denyPolicyItems[]?.conditions[]?.type]}'
-      id=$(jq -r .id <<< "$service")
-      api PUT "/service/public/v2/api/service/$id" "$(jq -c 'del(.tagService)' <<< "$service")" \
-        | jq -c '{name, tagService}'
+      echo "dev_hive's tag service: $tag; its policies (restrictive ones are deleted):"
+      api GET "/service/public/v2/api/service/$tag/policy" > "${TMPDIR:-/tmp}/tag-policies.json"
+      jq -c '.[] | {id, name, deny: (.denyPolicyItems | length), conditions: [.denyPolicyItems[]?.conditions[]?.type]}' \
+        "${TMPDIR:-/tmp}/tag-policies.json"
+      for id in $(jq -r '.[] | select((.denyPolicyItems | length) > 0 or (.allowExceptions | length) > 0
+          or (.policyType // 0) != 0) | .id' "${TMPDIR:-/tmp}/tag-policies.json"); do
+        api DELETE "/service/public/v2/api/policy/$id" > /dev/null
+        echo "deleted tag policy $id"
+      done
     fi
     api POST /service/xusers/groups "{\"name\":\"$group\",\"description\":\"service matrix\"}" > /dev/null
     select_item="{\"groups\":[\"$group\"],\"accesses\":[{\"type\":\"select\",\"isAllowed\":true}]"
