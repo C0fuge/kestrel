@@ -1,0 +1,308 @@
+# Service matrix, security part (plugins lane, STATUS item 25 split of 2026-11-02): the server
+# against real security services, end to end, in the resource profiles balanced and speed. Each
+# cell starts the service in its own container, the server (this commit's build, or the
+# pre-release named by input `server`) on the runner with Flight TLS and TPC-H SF1 as local
+# Parquet, and runs tools/ci/service-check.py through the ADBC Flight SQL driver: credentials
+# refused when wrong or missing, GetSqlInfo, GetTables / GetDbSchemas, a table schema, the 22
+# TPC-H queries (complete mode) with answers equal to DuckDB's in-process answers, and one
+# prepared query with bound parameters. Cells:
+#   ldap - OpenLDAP container (osixia/openldap), login with user name + password (search mode,
+#          service account, group search: the user is in group "analysts");
+#   jwt  - Keycloak container over HTTPS (JWKS URL), access token of a password grant
+#          (audience mapper, preferred_username, groups claim).
+# Ranger (table policy, mask, row filter) and Hive Metastore tables follow (PLUGINS-STATUS.md).
+# The job summary is a table service x profile -> pass/fail + first failed check. Test
+# credentials and the TLS CA are generated in the job. Only the plugins lane edits this file.
+name: Service matrix (security)
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "kestrel pre-release tag to test, e.g. server-1.0.0-fca6512a8046 (empty = build this commit)"
+        type: string
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/service-security.yml
+      - tools/ci/service-check.py
+      - tools/ci/service-tpch-gen.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: inputs.server == ''
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this commit (no tests)
+        if: inputs.server == ''
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server,flight-auth-ldap,flight-auth-jwt,flight-auth-ranger-hive -am \
+            -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true
+          app="$RUNNER_TEMP/app"; mkdir -p "$app"
+          cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$app/server.jar"
+          cp -r flight-server/target/libs "$app/"
+          for provider in ldap jwt ranger-hive; do
+            mkdir -p "$app/auth/$provider"
+            cp "flight-auth-$provider/target/arrow-flight-auth-$provider-1.0.0.jar" "$app/auth/$provider/"
+            if [ -d "flight-auth-$provider/target/auth-libs" ]; then
+              cp flight-auth-$provider/target/auth-libs/*.jar "$app/auth/$provider/"
+            fi
+          done
+          echo "built $(git rev-parse --short=12 HEAD)" > "$app/SOURCE"
+
+      - name: Download pre-release ${{ inputs.server }}
+        if: inputs.server != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.server }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^server-[0-9A-Za-z.]+-[0-9a-f]{7,40}$ ]] || { echo "not a server pre-release tag: $TAG"; exit 1; }
+          dl="$RUNNER_TEMP/dl"; app="$RUNNER_TEMP/app"; mkdir -p "$dl" "$app"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dl" \
+            --pattern '*-linux.jar' --pattern 'flight-server-libs-*.tar.zst' --pattern 'flight-auth-*.tar.zst'
+          mv "$dl"/*-linux.jar "$app/server.jar"
+          tar --zstd -xf "$dl"/flight-server-libs-*.tar.zst -C "$app"
+          tar --zstd -xf "$dl"/flight-auth-*.tar.zst -C "$app"
+          echo "pre-release $TAG" > "$app/SOURCE"
+
+      - name: Pack
+        run: tar -C "$RUNNER_TEMP" -cf - app | zstd -3 -T0 > "$RUNNER_TEMP/app.tar.zst"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-security-app
+          path: ${{ runner.temp }}/app.tar.zst
+          retention-days: 3
+
+  cell:
+    needs: server
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ldap, jwt]
+        profile: [balanced, speed]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: service-security-app
+          path: ${{ runner.temp }}
+
+      - name: Server files, TPC-H SF1, client
+        run: |
+          set -euo pipefail
+          tar --zstd -xf "$RUNNER_TEMP/app.tar.zst" -C "$RUNNER_TEMP"
+          cat "$RUNNER_TEMP/app/SOURCE"
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet duckdb==1.5.6 pyarrow==26.0.0 \
+            adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-tpch-gen.py "$RUNNER_TEMP/tpch" 1
+          du -sh "$RUNNER_TEMP/tpch/data"
+
+      # A CA and one certificate for 127.0.0.1 / localhost, used by the Flight server and Keycloak.
+      - name: Test CA and certificate
+        run: |
+          set -euo pipefail
+          tls="$RUNNER_TEMP/tls"; mkdir -p "$tls"; cd "$tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=service-matrix test CA" \
+            -keyout ca.key -out ca.pem 2> /dev/null
+          openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" -keyout host.key -out host.csr 2> /dev/null
+          printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n' > ext.cnf
+          openssl x509 -req -in host.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 -extfile ext.cnf \
+            -out host.pem 2> /dev/null
+          chmod 644 host.key
+          store=$(openssl rand -hex 12); echo "::add-mask::$store"
+          keytool -importcert -noprompt -storetype PKCS12 -keystore ca.p12 -storepass "$store" -alias ca -file ca.pem
+          echo "TRUST_PASSWORD=$store" >> "$GITHUB_ENV"
+
+      - name: OpenLDAP
+        if: matrix.service == 'ldap'
+        run: |
+          set -euo pipefail
+          admin=$(openssl rand -hex 12); user=$(openssl rand -hex 12)
+          echo "::add-mask::$admin"; echo "::add-mask::$user"
+          docker run -d --name ldap -p 127.0.0.1:3389:389 -e LDAP_ORGANISATION=Example -e LDAP_DOMAIN=example.org \
+            -e LDAP_ADMIN_PASSWORD="$admin" -e LDAP_TLS=false osixia/openldap:1.5.0 > /dev/null
+          for _ in $(seq 60); do
+            docker exec ldap ldapsearch -x -H ldap://localhost -b dc=example,dc=org -D cn=admin,dc=example,dc=org \
+              -w "$admin" -s base > /dev/null 2>&1 && break
+            sleep 2
+          done
+          printf '%s\n' \
+            'dn: ou=people,dc=example,dc=org' 'objectClass: organizationalUnit' 'ou: people' '' \
+            'dn: ou=groups,dc=example,dc=org' 'objectClass: organizationalUnit' 'ou: groups' '' \
+            'dn: uid=alice,ou=people,dc=example,dc=org' 'objectClass: inetOrgPerson' 'uid: alice' 'cn: Alice' \
+            'sn: Analyst' "userPassword: $user" '' \
+            'dn: cn=analysts,ou=groups,dc=example,dc=org' 'objectClass: groupOfNames' 'cn: analysts' \
+            'member: uid=alice,ou=people,dc=example,dc=org' > "$RUNNER_TEMP/users.ldif"
+          docker cp "$RUNNER_TEMP/users.ldif" ldap:/tmp/users.ldif
+          docker exec ldap ldapadd -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w "$admin" -f /tmp/users.ldif
+          rm "$RUNNER_TEMP/users.ldif"
+          {
+            echo "SERVICE_USER=alice"; echo "SERVICE_PASSWORD=$user"
+            echo "FLIGHT_AUTH_PROVIDER=ldap"
+            echo "FLIGHT_LDAP_URL=ldap://127.0.0.1:3389"
+            echo "FLIGHT_LDAP_ALLOW_PLAINTEXT=true"
+            echo "FLIGHT_LDAP_USER_SEARCH_BASE=ou=people,dc=example,dc=org"
+            echo "FLIGHT_LDAP_USER_ATTRIBUTE=uid"
+            echo "FLIGHT_LDAP_BIND_DN=cn=admin,dc=example,dc=org"
+            echo "FLIGHT_LDAP_BIND_PASSWORD=$admin"
+            echo "FLIGHT_LDAP_GROUP_SEARCH_BASE=ou=groups,dc=example,dc=org"
+            echo "FLIGHT_LDAP_SESSION_SECRET=$(openssl rand -base64 32)"
+            echo "SERVER_CP=auth/ldap/*"
+          } >> "$GITHUB_ENV"
+
+      - name: Keycloak
+        if: matrix.service == 'jwt'
+        run: |
+          set -euo pipefail
+          admin=$(openssl rand -hex 12); user=$(openssl rand -hex 12)
+          echo "::add-mask::$admin"; echo "::add-mask::$user"
+          docker run -d --name kc --network host -v "$RUNNER_TEMP/tls:/tls:ro" \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD="$admin" \
+            quay.io/keycloak/keycloak:26.4.2 start-dev --http-port=8080 --https-port=8443 \
+            --https-certificate-file=/tls/host.pem --https-certificate-key-file=/tls/host.key \
+            --hostname-strict=false > /dev/null
+          for _ in $(seq 90); do curl -sf -o /dev/null http://127.0.0.1:8080/realms/master && break; sleep 2; done
+          kc() { docker exec kc /opt/keycloak/bin/kcadm.sh "$@"; }
+          kc config credentials --server http://127.0.0.1:8080 --realm master --user admin --password "$admin"
+          kc create realms -s realm=kestrel -s enabled=true -s accessTokenLifespan=3600
+          cid=$(kc create clients -r kestrel -s clientId=flight -s publicClient=true \
+            -s directAccessGrantsEnabled=true -s standardFlowEnabled=false -s enabled=true -i)
+          kc create "clients/$cid/protocol-mappers/models" -r kestrel -s name=audience -s protocol=openid-connect \
+            -s protocolMapper=oidc-audience-mapper -s 'config."included.client.audience"=flight' \
+            -s 'config."access.token.claim"=true'
+          kc create "clients/$cid/protocol-mappers/models" -r kestrel -s name=groups -s protocol=openid-connect \
+            -s protocolMapper=oidc-group-membership-mapper -s 'config."claim.name"=groups' \
+            -s 'config."full.path"=false' -s 'config."access.token.claim"=true'
+          gid=$(kc create groups -r kestrel -s name=analysts -i)
+          uid=$(kc create users -r kestrel -s username=alice -s enabled=true -s firstName=Alice -s lastName=Analyst \
+            -s email=alice@example.org -s emailVerified=true -i)
+          kc set-password -r kestrel --username alice --new-password "$user"
+          kc update "users/$uid/groups/$gid" -r kestrel -s realm=kestrel -s "userId=$uid" -s "groupId=$gid" -n
+          token=$(curl -sS --fail --cacert "$RUNNER_TEMP/tls/ca.pem" \
+            -d grant_type=password -d client_id=flight -d username=alice -d "password=$user" \
+            https://127.0.0.1:8443/realms/kestrel/protocol/openid-connect/token | jq -r .access_token)
+          echo "::add-mask::$token"
+          echo "$token" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2> /dev/null | jq -c '{iss, aud, preferred_username, groups}' || true
+          {
+            echo "SERVICE_TOKEN=$token"
+            echo "FLIGHT_AUTH_PROVIDER=jwt"
+            echo "FLIGHT_JWT_JWKS_URL=https://127.0.0.1:8443/realms/kestrel/protocol/openid-connect/certs"
+            echo "FLIGHT_JWT_TRUSTSTORE=$RUNNER_TEMP/tls/ca.p12"
+            echo "FLIGHT_JWT_TRUSTSTORE_TYPE=PKCS12"
+            echo "FLIGHT_JWT_TRUSTSTORE_PASSWORD=$TRUST_PASSWORD"
+            echo "FLIGHT_JWT_ISSUER=https://127.0.0.1:8443/realms/kestrel"
+            echo "FLIGHT_JWT_AUDIENCE=flight"
+            echo "FLIGHT_JWT_USER_CLAIM=preferred_username"
+            echo "FLIGHT_JWT_GROUPS_CLAIM=groups"
+            echo "SERVER_CP=auth/jwt/*"
+          } >> "$GITHUB_ENV"
+
+      - name: Server (${{ matrix.profile }})
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/app"
+          profile=()
+          [ "${{ matrix.profile }}" = speed ] && profile=(-DresourceProfile=speed)
+          cd "$app"
+          FLIGHT_TLS_CERT="$RUNNER_TEMP/tls/host.pem" FLIGHT_TLS_KEY="$RUNNER_TEMP/tls/host.key" \
+          nohup java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
+            --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+            -Dhazelcast.phone.home.enabled=false "${profile[@]}" -cp "server.jar:libs/*:$SERVER_CP" \
+            pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$RUNNER_TEMP/tpch/data" \
+            --localhost 127.0.0.1 --port 32010 --hosts 127.0.0.1 > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 120); do grep -q 'Server Arrow Flight SQL started' "$RUNNER_TEMP/server.log" && break; sleep 1; done
+          if ! grep -q 'Server Arrow Flight SQL started' "$RUNNER_TEMP/server.log"; then
+            echo "FAIL server-start: $(grep -m1 -E 'Exception|ERROR' "$RUNNER_TEMP/server.log" || tail -n 1 "$RUNNER_TEMP/server.log")" \
+              | tee "$RUNNER_TEMP/check.log"
+            tail -n 60 "$RUNNER_TEMP/server.log"
+            exit 1
+          fi
+          grep -m3 -E 'Server Arrow Flight SQL started|resourceProfile|duckdb=sizing' "$RUNNER_TEMP/server.log" || true
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          creds=()
+          case "${{ matrix.service }}" in
+            ldap) creds=(--user "$SERVICE_USER" --password-env SERVICE_PASSWORD) ;;
+            jwt) creds=(--token-env SERVICE_TOKEN) ;;
+          esac
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-check.py grpc+tls://127.0.0.1:32010 "$RUNNER_TEMP/tpch/queries" \
+            --ca "$RUNNER_TEMP/tls/ca.pem" "${creds[@]}" 2>&1 | tee "$RUNNER_TEMP/check.log"
+
+      - name: Result
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/check.log"
+          if [ -s "$log" ] && grep -q '^checks ' "$log" && ! grep -q '^FAIL ' "$log"; then
+            status=pass; detail=$(grep '^checks ' "$log")
+          else
+            status=fail; detail=$(grep -m1 '^FAIL ' "$log" 2> /dev/null || echo "no check ran (see the job log)")
+          fi
+          detail=$(echo "$detail" | tr '|' '/' | cut -c1-240)
+          mkdir -p "$RUNNER_TEMP/result"
+          echo "| ${{ matrix.service }} | ${{ matrix.profile }} | $status | $detail |" > "$RUNNER_TEMP/result/row.md"
+          cat "$RUNNER_TEMP/result/row.md"
+          if [ -f "$RUNNER_TEMP/server.log" ]; then
+            echo "--- server log (errors)"; grep -E 'ERROR|WARN|Exception' "$RUNNER_TEMP/server.log" | head -n 40 || true
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: service-security-${{ matrix.service }}-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/result/row.md
+            ${{ runner.temp }}/check.log
+            ${{ runner.temp }}/server.log
+          retention-days: 7
+
+  summary:
+    needs: [server, cell]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: service-security-*-*
+          path: rows
+      - name: Summary
+        run: |
+          {
+            echo "### Service matrix (security): ${{ inputs.server || github.sha }}"
+            echo
+            echo "| service | profile | result | detail |"
+            echo "| --- | --- | --- | --- |"
+            cat rows/*/result/row.md rows/*/row.md 2> /dev/null | sort -u || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          [ "${{ needs.server.result }}" = success ] && [ "${{ needs.cell.result }}" = success ]
