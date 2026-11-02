@@ -60,19 +60,29 @@ case "${1:-}" in
     api GET "/service/public/v2/api/service/$tag/policy" \
       | jq -c '.[] | {id, name, resources, deny: (.denyPolicyItems | length),
           conditions: [.denyPolicyItems[]?.conditions[]?.type]}'
-    api PUT /service/tags/importservicetags '{"op":"add_or_update","serviceName":"dev_hive",
-      "tags":{"1":{"id":1,"guid":"svc-tag-expired","type":"EXPIRES_ON","attributes":{"expiry_date":"2020/01/01"}}},
-      "serviceResources":[{"id":1,"guid":"svc-res-avro-nation","serviceName":"dev_hive",
-        "resourceElements":{"database":{"values":["tpch_avro"]},"table":{"values":["nation"]}}}],
-      "resourceToTagIds":{"1":[1]}}' > /dev/null
-    api GET "/service/tags/download/dev_hive?lastKnownVersion=-1&pluginId=service-matrix" \
-      > "${TMPDIR:-/tmp}/service-tags.json"
+    # A tag, a resource and their map, as tag-sync would create them (each call prints Ranger's
+    # error on failure).
+    tagapi() {
+      local out
+      if ! out=$(api "$@"); then echo "Ranger tag REST $1 $2 failed: $out"; exit 1; fi
+    }
+    tagapi POST /service/tags/tags/ '{"guid":"svc-tag-expired","type":"EXPIRES_ON",
+      "attributes":{"expiry_date":"2020/01/01"}}'
+    tagapi POST /service/tags/resources/ '{"guid":"svc-res-avro-nation","serviceName":"dev_hive",
+      "resourceElements":{"database":{"values":["tpch_avro"]},"table":{"values":["nation"]}}}'
+    tagapi POST "/service/tags/tagresourcemaps/?tag-guid=svc-tag-expired&resource-guid=svc-res-avro-nation"
+    # Ranger admin serves the new tags once its tag cache has caught up: wait for them (the server's
+    # plugin downloads them at start).
+    tags_file="${TMPDIR:-/tmp}/service-tags.json"
+    for _ in $(seq 30); do
+      api GET "/service/tags/download/dev_hive?lastKnownVersion=-1&pluginId=service-matrix" > "$tags_file" || true
+      jq -e '[.tags[]? | select(.type == "EXPIRES_ON")] | length > 0' "$tags_file" > /dev/null 2>&1 && break
+      sleep 2
+    done
     jq -c '{tagVersion, tags: [.tags[]? | {type, attributes}],
-        resources: [.serviceResources[]? | .resourceElements | map_values(.values)]}' \
-      "${TMPDIR:-/tmp}/service-tags.json"
-    if ! jq -e '[.tags[]? | select(.type == "EXPIRES_ON")] | length > 0' "${TMPDIR:-/tmp}/service-tags.json" \
-        > /dev/null; then
-      echo "tag EXPIRES_ON not imported into dev_hive"
+        resources: [.serviceResources[]? | .resourceElements | map_values(.values)]}' "$tags_file" || cat "$tags_file"
+    if ! jq -e '[.tags[]? | select(.type == "EXPIRES_ON")] | length > 0' "$tags_file" > /dev/null 2>&1; then
+      echo "tag EXPIRES_ON not served for dev_hive"
       exit 1
     fi
     api POST /service/xusers/groups "{\"name\":\"$group\",\"description\":\"service matrix\"}" > /dev/null
