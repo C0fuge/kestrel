@@ -67,20 +67,23 @@ default tag policy refused every table until the cell deleted it.
 *Core fix confirmed:* run 41488081427 (dispatch on 48090377, the core lane's fix of the table check): **8/8 cells
 green, ranger 59/59 in both profiles** (with the tag-policy deletion still in place).
 
-**Next (bug first, this lane): `ranger-hive` refuses every table when the Hive service has a tag service.** Ranger
-creates the deny policy `EXPIRES_ON` (condition `accessed-after-expiry`) in every tag service, and
-`HiveRestrictivePolicies.of` sets a global block for any restrictive tag policy ("Tags of unnamed columns are unknown
-here") - so on any cluster that uses tag-based policies at all, every query is refused (run 41484542642: q1
-PermissionDenied; 41486142813 after deleting the policy: passes). Also seen: Ranger 2.4's
-`RangerScriptConditionEvaluator` cannot create a JavaScript engine on Java 21 (no Nashorn), so script conditions
-cannot be evaluated by the plugin anyway. Fix: download the service tags (the base plugin adds `RangerTagEnricher`
-when the service has a tag service), and block a table only when a restrictive tag policy's tag is on the database,
-the table or one of its columns (or when tags cannot be read: deny); `EXPIRES_ON` can be evaluated exactly (the
-tag's `expiry_date` attribute vs now) or treated as a block for tagged tables only. Tests: unit (tag on a column /
-table / none) and the ranger cell without the deletion in `service-ranger.sh setup` plus a tag with a past expiry on
-one table (refused) - Ranger REST `/service/tags/...`. Then the cell is green once the core bug is fixed; write
-"SERVICE MATRIX plugins DONE" when all cells are green.
+*Step 4 done 2026-11-02 (3f71355e, 201df3b2, 1ea39a30): tag policies.* `ranger-hive` refused every table when the
+Hive service has a tag service with a restrictive tag policy (always: Ranger's default `EXPIRES_ON` deny).
+`HiveRestrictivePolicies` keeps one entry per restrictive tag policy (its tag names; null = any tag for exclusions,
+patterns, no values) and `probe(database, table, tags)` refuses a table only when a tag on the database, the table
+or one of its columns is one of them, or when the tags are unknown (no tag enricher / tags not loaded) - conditions
+are not evaluated (an `EXPIRES_ON` tag refuses whether expired or not; Ranger 2.x script conditions need a JS
+engine Java 21 lacks). `HiveRangerPlugin.tags` asks Ranger's own `RangerTagEnricher` (ANY access,
+`SELF_OR_DESCENDANTS`: ancestors' and columns' tags). Tests `HiveTagPoliciesTest` 4/4 (real tag enricher with
+`ServiceTags`: column / table / database tags, untagged table read, tags not loaded, excluded tag = any tag,
+allow-only tag policies). Ranger cell: the default tag policy stays; setup creates tag type + tag `EXPIRES_ON`
+(expiry 2020/01/01) on `tpch_avro.nation` through `/service/tags/tagdefs|tags|resources|tagresourcemaps`
+(`importservicetags` answered 400) and waits until it is served; analysts may also select in `tpch_avro`; extra
+checks `tag-expired` (refused) and `tag-untagged` (`tpch_avro.region` count 5). Run 41496378967 (1ea39a30):
+**8/8 cells green, ranger 63/63 in both profiles.**
 
+SERVICE MATRIX plugins DONE (2026-11-02, run 41496378967: ldap, jwt, hive, ranger x balanced, speed all green).
+Nothing of the service matrix item is open for this lane; the FINISH MODE note below applies again (no new items).
 
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
 > docs), then write "PLUGINS LANE DONE" and stop; no new items.
@@ -982,7 +985,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   (`tools/ci/service-check.py`, `service-tpch-gen.py`; CI only, no code change). Runs 41468664530 (push, 90da3772)
   and 41469307322 (dispatch, pre-release server-1.0.0-fca6512a8046): 4/4 cells, 28/28 checks each - no bug found
   for either lane. Next: hive cell, then ranger cell (plan in Next steps). Not yet "SERVICE MATRIX plugins DONE".
-  Lock released.
+  Lock still held until Dev CI ends.
 - 2026-11-02 (plugins session): SERVICE MATRIX step 2 - cell `hive` in `service-security.yml`: real Hive 3.1.3
   writes ORC and Avro TPC-H SF1 tables itself (Parquet/text external tables over DuckDB files) plus a view over all
   four formats; the server with the packaged hive plugin answers 22/22 + metadata + prepared per format and the view
@@ -1002,3 +1005,9 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   default `EXPIRES_ON` deny), next item. The core lane fixed (1) in 48090377 within the session; its dispatch run
   41488081427: 8/8 cells green, ranger 59/59 in both profiles. Only (2) remains before "SERVICE MATRIX plugins
   DONE" (the cell still deletes the tag policy). Lock released.
+- 2026-11-02 (plugins session): service matrix step 4 - `ranger-hive` tag policies (bug found by the ranger cell):
+  restrictive tag policies refuse only tables carrying their tags (Ranger's tag enricher), unknown tags still refuse
+  all; `HiveTagPoliciesTest` 4/4; ranger cell keeps Ranger's default `EXPIRES_ON` policy and checks an expired tag
+  (3f71355e; cell setup fixes 201df3b2, 1ea39a30 - runs 41493587087 and 41494830118 failed in setup on Ranger's tag
+  REST, no server bug). Run 41496378967: 8/8 cells green, ranger 63/63. SERVICE MATRIX plugins DONE. Dev CI: run 41497330129 (f5579621, includes these commits) pending at this write.
+  Lock still held until Dev CI ends.
