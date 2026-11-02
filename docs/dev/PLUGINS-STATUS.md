@@ -30,21 +30,45 @@ certificate for 127.0.0.1 (Flight TLS; both auth providers need TLS), the server
 `analysts`) and **jwt** (Keycloak 26.4.2 `start-dev` over HTTPS with the test cert, JWKS URL + PKCS12 trust store,
 password grant of public client `flight`, audience mapper, `preferred_username`, groups claim `analysts`). Runs:
 push 41468664530 (90da3772) 4/4 cells 28/28; dispatch with `server=server-1.0.0-fca6512a8046` 41469307322 4/4.
-**Next (step 2): `hive` cell.** Hive Metastore 3.1.3 (production version; apache/hive:3.1.3 on Docker Hub) with
-TPC-H SF1 tables in Parquet, ORC, text and Avro, one schema per format, plus a view; plan: (1) data files on the
-runner at a path mounted at the same path in the containers (`file://` locations, as `tools/ci/hive-mm-writer.sh`
-does for lane 4) - Parquet and text ('|' delimited) by DuckDB, ORC by `pyarrow.orc`, Avro by DuckDB if it writes
-Avro else `fastavro` (decimal/date logical types); (2) DDL through a HiveServer2 container with an embedded Derby
-metastore (`CREATE EXTERNAL TABLE ... LOCATION 'file:///...'`, `CREATE VIEW`), then a standalone metastore on the
-same Derby (one at a time, as hive-mm-writer.sh); (3) server with the packaged hive plugin (`plugins/hive` - add
-`flight-plugin-hive` to the `server` job and the plugins tar to the download), `arrowflight.hive.orcTables/
-textTables/avroTables/views=true`; Avro needs DuckDB's avro extension (ci-assets tarball); (4) `service-check.py`
-gets `--schema` (queries rewritten `tpch.` -> `<schema>.`) and runs once per format schema, plus the view's
-answer. **Step 3: `ranger` cell** - needs the hive cell (ranger-hive applies to Hive catalog schemas only): try the
-Ranger admin container (apache/ranger 2.4+ with PostgreSQL; policies created over its REST API) and fall back to a
-local HTTP server serving the Hive service's `ServicePolicies` JSON at Ranger's download URL; LDAP user `alice` in
-group `analysts` (ldap provider, groups from the directory): a table policy, a column mask and a row filter, answers
-checked (masked/filtered expected answers computed by DuckDB), a denied table refused.
+*Step 2 done 2026-11-02 (d566c427, e6b6ddca, 3297d041): cell **hive**.* `tools/ci/service-hive-data.py`
+copies the TPC-H Parquet files and writes '|' text files (DuckDB, no quoting) under `/tmp/hive-svc` (not under
+`$RUNNER_TEMP`: Hive skips paths below a `_` directory) plus `ddl.sql`: databases `tpch_parquet`, `tpch_text`,
+`tpch_orc`, `tpch_avro` (external tables, columns = the Parquet files' types in Hive types), `INSERT OVERWRITE`
+into the ORC and Avro tables from the text tables (so those files are **Hive's own**), and view
+`tpch_views.segment_lines` (joins customer Parquet x nation Avro x orders text x lineitem ORC, filter, group by;
+DuckDB's answer in `queries/view.json`). `tools/ci/service-hive.sh`: apache/hive:3.1.3 HiveServer2 (embedded
+Derby, Tez local, `-Xmx4g`) runs `ddl.sql` (SF1: 71-113 s), then a standalone metastore on the same Derby
+(readiness probed inside the container - docker's port proxy accepts early, which made a server start fail with
+"Socket is closed by peer"). Server: packaged hive plugin (`tools/make-plugin-dir.sh`, or the pre-release's
+plugins tar), `-Darrowflight.catalog=directory,hive`, `hive.orcTables/textTables/
+avroTables/views=true`, `arrowflight.duckdb.extensionDir` from ci-assets (the server refuses to start with Avro
+tables without DuckDB's avro extension); login = static bearer token (insecure mode refuses TLS).
+`service-check.py` gets `--schema` (repeatable; `tpch.` -> `<schema>.`, checks named `<schema>:<check>`) and
+`--view`. Hive cell: 104 checks (refusals, sql-info, 4 x (tables, lineitem schema, 22 queries, prepared), view).
+Runs: push 41477683286 (3297d041) 6/6 cells (hive 104/104 in both profiles); dispatch with
+`server=server-1.0.0-fca6512a8046` (plugins tar of the pre-release) 41480086139 6/6. Earlier runs 41474257754
+(insecure mode + TLS refused) and 41475888176 (balanced: metastore not yet listening) were CI-setup faults, no
+server or plugin bug found.
+**Next (step 3): `ranger` cell.** Findings of this session (local docker): `apache/ranger` and `apache/ranger-db`
+images are **arm64 only up to 2.6.0**; **2.7.0** has amd64. Ranger admin 2.7.0 + `apache/ranger-db:2.7.0`
+(PostgreSQL, preset) on a docker network, container names/hostnames `ranger-db` and `ranger` (the image's
+install.properties hard-code `db_host=ranger-db`; its `create-ranger-services.py` uses `http://ranger:6080` and
+creates service **`dev_hive`**), `-p 6080:6080`: admin up in ~2 min **without Solr** (audit_store=solr only breaks
+the audit UI), admin password `rangerR0cks!` (image default; fine for a throwaway CI container, but mask it).
+REST that worked: `POST /service/xusers/groups {"name":"analysts"}`; `POST /service/xusers/secure/users
+{"name":"alice","password":...,"status":1,"isVisible":1,"userRoleList":["ROLE_USER"],"groupNameList":["analysts"]}`;
+`POST /service/public/v2/api/policy` with `service=dev_hive`, `resources` database/table/column, `policyItems`
+(groups, accesses `select`); `policyType` 1 + `dataMaskPolicyItems[].dataMaskInfo.dataMaskType=MASK_SHOW_LAST_4`;
+`policyType` 2 + `rowFilterPolicyItems[].rowFilterInfo.filterExpr`; `GET /service/plugins/policies/download/
+dev_hive?lastKnownVersion=-1&pluginId=x` answers 200 without credentials. Ranger admin 2.7 vs the server's Ranger
+2.4 plugin client: the download format is compatible as far as known - the cell will tell. Plan: OpenLDAP (as the
+ldap cell, `alice` in `analysts`) + Hive (as the hive cell, `tpch_parquet` and `tpch_orc` enough) + Ranger;
+`FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`, `RANGER_HIVE_SERVICE_NAME=dev_hive`, `RANGER_ADMIN_URL=
+http://127.0.0.1:6080`, `auth/ldap/*:auth/ranger-hive/*` on the class path; policies: select on `tpch_parquet`
+and `tpch_orc` for `analysts` (not `tpch_text`: refused check), mask `MASK_SHOW_LAST_4` on `customer.c_phone`, row
+filter `o_orderstatus = 'F'` on `orders`; expected answers of the affected queries computed by DuckDB with the same
+mask/filter (a `--restricted` mode of `service-check.py`, or a separate small check script); wait for the
+policies (download every 30 s) before checking. Then write "SERVICE MATRIX plugins DONE".
 
 
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
@@ -948,3 +972,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   and 41469307322 (dispatch, pre-release server-1.0.0-fca6512a8046): 4/4 cells, 28/28 checks each - no bug found
   for either lane. Next: hive cell, then ranger cell (plan in Next steps). Not yet "SERVICE MATRIX plugins DONE".
   Lock released.
+- 2026-11-02 (plugins session): SERVICE MATRIX step 2 - cell `hive` in `service-security.yml`: real Hive 3.1.3
+  writes ORC and Avro TPC-H SF1 tables itself (Parquet/text external tables over DuckDB files) plus a view over all
+  four formats; the server with the packaged hive plugin answers 22/22 + metadata + prepared per format and the view
+  = DuckDB (104/104 checks, balanced and speed). `service-check.py` `--schema`/`--view`; new
+  `tools/ci/service-hive-data.py`, `service-hive.sh`. Runs 41477683286 (push, 3297d041) and 41480086139 (dispatch,
+  server-1.0.0-fca6512a8046) 6/6 cells. No bug for either lane. Found for step 3: Ranger admin images are amd64 only
+  from 2.7.0; 2.7.0 admin + ranger-db works without Solr, REST recipe in Next steps. FYI lane 4:
+  `tools/ci/hive-mm-writer.sh` waits for the metastore on the host port, which docker's proxy accepts before the
+  metastore listens (fixed here by probing inside the container). Not yet "SERVICE MATRIX plugins DONE". Lock released.
