@@ -2079,7 +2079,7 @@ class DuckDbAdapterTest {
     void hadoopfsExtensionTakesTheConfiguredTimeouts() throws Exception {
         String extension = System.getProperty("hadoopfs.it.extension");
         org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
-                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(extension)),
                 "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
         AppConfig config = new AppConfig(
                 3, 100, 1, 131072, 0, 1, 1,
@@ -2114,7 +2114,7 @@ class DuckDbAdapterTest {
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
         String extension = System.getProperty("hadoopfs.it.extension");
         org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
-                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(extension)),
                 "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
         AppConfig config = new AppConfig(
                 3, 100, 1, 131072, 0, 1, 1,
@@ -2146,7 +2146,7 @@ class DuckDbAdapterTest {
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
         String extension = System.getProperty("hadoopfs.it.extension");
         org.junit.jupiter.api.Assumptions.assumeTrue(extension != null
-                && java.nio.file.Files.isReadable(java.nio.file.Path.of(extension)),
+                && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(extension)),
                 "hadoopfs extension not configured (-Dhadoopfs.it.extension)");
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
         try {

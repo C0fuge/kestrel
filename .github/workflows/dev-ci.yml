@@ -83,16 +83,19 @@ jobs:
       # The hadoopfs build links OpenSSL 1.1 (libhdfs3), which the runner does not have: the
       # Ubuntu 20.04 libssl1.1 package goes on LD_LIBRARY_PATH of the build step only. Missing
       # libraries skip the hadoopfs tests with a warning instead of failing the build.
-      - name: OpenSSL 1.1 for the hadoopfs extension
+      - name: Libraries of the hadoopfs extension (OpenSSL 1.1, libxml2 2.9)
         if: env.HADOOPFS_IT != ''
         run: |
           set -euo pipefail
-          deb="$RUNNER_TEMP/libssl1.1.deb"
-          curl -fsSL --retry 4 -o "$deb" http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
-          dpkg-deb -x "$deb" "$RUNNER_TEMP/libssl1.1"
-          libs="$RUNNER_TEMP/libssl1.1/usr/lib/x86_64-linux-gnu"
-          # It also links libxml2 (libhdfs3), which the runner image may lack.
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends libxml2 > /dev/null || true
+          # libssl1.1, and libxml2 2.9 with its ICU (newer runner images ship libxml2.so.16 only).
+          pool=http://archive.ubuntu.com/ubuntu/pool/main
+          for deb in o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb \
+              libx/libxml2/libxml2_2.9.10+dfsg-5ubuntu0.20.04.10_amd64.deb \
+              i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb; do
+            curl -fsSL --retry 4 -o "$RUNNER_TEMP/lib.deb" "$pool/$deb"
+            dpkg-deb -x "$RUNNER_TEMP/lib.deb" "$RUNNER_TEMP/hadoopfs-libs"
+          done
+          libs="$RUNNER_TEMP/hadoopfs-libs/usr/lib/x86_64-linux-gnu"
           missing=$(LD_LIBRARY_PATH="$libs" ldd "$HADOOPFS_IT" | grep "not found" || true)
           if [ -n "$missing" ]; then
             echo "::warning::hadoopfs lockdown tests skipped, libraries missing: $missing"
