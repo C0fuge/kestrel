@@ -1,0 +1,199 @@
+# SERVICE MATRIX, HDFS part (core lane, STATUS item 25; only the core lane edits this file): one server
+# node on a real HDFS (apache/hadoop), checked end to end with the ADBC Flight SQL driver (Go).
+#
+# Cells: topology x resource profile. Topologies (tools/ci/service-hdfs-cell.sh): plain (one
+# NameNode), ha (HA nameservice ns1, nn1 standby / nn2 active: the client must fail over) and ha-krb
+# (ha + Kerberos with an MIT KDC container; the server logs in from its keytab with
+# hdfsKerberosPrincipal / hdfsKerberosKeytab, as the maintainer's production cluster runs);
+# short-circuit configured in each (the server runs in the DataNode's network namespace with its
+# domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02
+# bug). Profiles: balanced, speed. Each cell: TPC-H SF<sf> 22/22 answers compared with in-process
+# DuckDB over the same files, Flight SQL metadata and a prepared query
+# (tools/ci/service-cluster-data.py / service-cluster-check.py, shared with lane 3). The job summary
+# has the table cell -> pass/fail + first error. Dev CI's package=true gate waits for this workflow.
+#
+# Server: input "server" = a kestrel pre-release (tag server-1.0.0-<sha12> or just <sha12>), else
+# built from the checked-out commit.
+name: Service hdfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "kestrel pre-release (server-1.0.0-<sha12> or <sha12>); empty = build this commit"
+        type: string
+        default: ""
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/service-hdfs.yml
+      - tools/ci/service-hdfs-cell.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-hdfs-${{ github.ref }}-${{ inputs.server || 'build' }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+  DUCKDB_VERSION: v1.5.6
+  HADOOP_IMAGE: apache/hadoop:3.4.1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      server: ${{ steps.server.outputs.server }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: inputs.server == ''
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Server (pre-release or this commit)
+        id: server
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER: ${{ inputs.server }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/in/app"; mkdir -p "$out/plugins"
+          if [ -n "$SERVER" ]; then
+            tag=$SERVER; [[ "$tag" == server-* ]] || tag="server-1.0.0-$tag"
+            [[ "$tag" =~ ^server-[0-9A-Za-z.-]+$ ]] || { echo "bad server id: $SERVER"; exit 1; }
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/rel" \
+              --pattern '*-linux.jar' --pattern 'flight-server-libs-*.tar.zst'
+            cp "$RUNNER_TEMP"/rel/*-linux.jar "$out/arrow-flight-server.jar"
+            tar --zstd -xf "$RUNNER_TEMP"/rel/flight-server-libs-*.tar.zst -C "$out"
+            echo "server=$tag" >> "$GITHUB_OUTPUT"
+          else
+            ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+            cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$out/arrow-flight-server.jar"
+            cp -r flight-server/target/libs "$out/"
+            echo "server=build of $(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+          du -sh "$out"
+
+      - name: DuckDB hadoopfs extension (ci-assets), as an extension directory
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/all-ext" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64"
+          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
+          f=$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)
+          test -n "$f" || { echo "no hadoopfs for ${DUCKDB_VERSION} in ci-assets"; exit 1; }
+          cp "$f" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64/"
+
+      - name: TPC-H SF${{ inputs.sf || '1' }} and the reference answers
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" 4
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-hdfs-input
+          path: ${{ runner.temp }}/in
+          compression-level: 0
+          retention-days: 1
+
+  cell:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        topology: [plain, ha, ha-krb]
+        profile: [balanced, speed]
+    name: ${{ matrix.topology }} ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: service-hdfs-input
+          path: ${{ runner.temp }}/in
+
+      - name: Client and server image
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          # The hadoopfs build links libssl.so.1.1: an Ubuntu 20.04 base, the runner's JDK 21 mounted.
+          mkdir -p "$RUNNER_TEMP/img"
+          printf '%s\n' 'FROM eclipse-temurin:17-jdk-focal' \
+            'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libxml2 libkrb5-3 libgssapi-krb5-2 libgsasl7 libuuid1 > /dev/null && rm -rf /var/lib/apt/lists/*' \
+            > "$RUNNER_TEMP/img/Dockerfile"
+          docker build -q -t sc-server "$RUNNER_TEMP/img"
+
+      - name: Run the cell
+        run: tools/ci/service-hdfs-cell.sh "${{ matrix.topology }}" "${{ matrix.profile }}" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work" "${{ needs.prepare.outputs.server }}"
+
+      - name: Cell report
+        if: always()
+        run: |
+          w="$RUNNER_TEMP/work"; mkdir -p "$w"
+          [ -s "$w/result.txt" ] || echo "${{ matrix.topology }}|${{ matrix.profile }}|fail|setup failed (see the job log)" > "$w/result.txt"
+          [ -f "$w/notes.txt" ] || : > "$w/notes.txt"
+          { echo "### ${{ matrix.topology }} ${{ matrix.profile }}"; echo '```'; cat "$w/result.txt" "$w/notes.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: result-${{ matrix.topology }}-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/work/result.txt
+            ${{ runner.temp }}/work/notes.txt
+            ${{ runner.temp }}/work/*.log
+            ${{ runner.temp }}/work/conf/*-site.xml
+          retention-days: 7
+
+  summary:
+    needs: [prepare, cell]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: result-*
+          path: ${{ runner.temp }}/results
+      - name: Matrix
+        run: |
+          set -u
+          {
+            echo "### Service matrix, HDFS: ${{ needs.prepare.outputs.server || 'server not prepared' }} ($GITHUB_SHA)"
+            echo
+            echo "| topology | profile | result | first error |"
+            echo "|---|---|---|---|"
+            for f in "$RUNNER_TEMP"/results/*/result.txt; do
+              [ -f "$f" ] || continue
+              IFS='|' read -r topo profile status detail < "$f"
+              echo "| $topo | $profile | $([ "$status" = pass ] && echo pass || echo '**FAIL**') | ${detail:-} |"
+            done
+            echo
+            echo '<details><summary>notes</summary>'
+            echo
+            echo '```'
+            for d in "$RUNNER_TEMP"/results/*/; do echo "[$(basename "$d")]"; cat "$d/notes.txt" 2>/dev/null; done
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
+          [ "$n" -eq 6 ] || { echo "only $n of 6 cells reported"; exit 1; }
+          ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
