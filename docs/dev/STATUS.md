@@ -23,6 +23,25 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-03 00:45 - NEW ITEMS 26-27 (take 26 first). Every finished item: `package=true` (the service gate
+> must pass) and a dated Log line.**
+> **ITEM 26 - hadoopfs must read short-circuit.** service-hdfs / service-cluster show every block read over TCP
+> (`ReadBlockOpNumOps == BlocksRead`) although short-circuit is configured. On the target cluster DataNodes require
+> SASL data-transfer protection (`dfs.data.transfer.protection`), which libhdfs3 does not speak: there only
+> short-circuit local reads work. (a) find why hadoopfs does not use the domain socket (settings it reads: libhdfs3
+> `dfs.client.read.shortcircuit`, `dfs.domain.socket.path` in `LIBHDFS3_CONF`, the server's `duckDbHdfsShortcircuit` /
+> `duckDbHdfsDomainSocketPath`; socket permissions; DataNode `dfs.client.read.shortcircuit` and
+> `dfs.block.local-path-access.user`); (b) fix and prove it in CI: a service-hdfs cell whose DataNode enforces
+> `dfs.data.transfer.protection=authentication` (TCP reads must fail, short-circuit reads pass 22/22), with the
+> DataNode metrics showing short-circuit reads; (c) a clear startup/first-read error when a node can neither
+> short-circuit nor read over TCP.
+> **ITEM 27 - S3 single-stream scan and export vs upstream.** Fresh three-way run (upstream `6e264c10f403`): speed S3
+> scan x1 0.80 and ADBC export 0.73 of upstream (x4/x8 0.93-0.96); balanced lower still. Upstream lists with Hadoop s3a
+> and reads with httpfs. Profile one full `lineitem` read on S3 (CI fake S3), compare DuckDB httpfs settings
+> (`http_keep_alive`, `s3_url_style`, read-ahead / range sizes, `threads` per scan, parallel row-group reads), Arrow
+> batch sizes and the Flight writer path; implement what closes the gap; measure with the scan perf workflow (x1, x4,
+> export) against upstream on the same runner.
+
 > **Maintainer, 2026-11-02 18:00 - BUG FIRST (before item 24): HDFS is broken with `f06b5834e76e` on a real cluster.**
 > Production-like Hadoop 3.1.3 HA cluster (Kerberos, short-circuit local reads, `hdfs://<nameservice>/data/parquet`,
 > 3 DataNodes, our `hadoopfs` 1.5.6 extension). Two failures, every query, every node:
