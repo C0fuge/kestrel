@@ -749,6 +749,15 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   class loader, so the tests cover a new client against an old server; a framed-transport test was added.
 
 ### Changed
+- `resourceProfile=speed` (item 24) turns DuckDB's external file cache on (`duckDbExternalFileCache=true`) while the
+  shared DuckDB is on; an explicit `duckDbExternalFileCache` / `DUCKDB_EXTERNAL_FILE_CACHE` wins, `balanced` and
+  `speed` with `duckDbSharedDatabase=false` keep it off. All sessions share one buffer pool, so the cache stays within
+  the node-wide `memory_limit` (startup line `duckdb=externalFileCache nodeWide=<limit> bound=sharedMemoryLimit`); the
+  private DuckDB a query moves to after running out of the shared memory never caches. S3, 2 CPUs / 6 GB: small
+  queries c1 214 vs 43 q/s (p95 7.5 vs 38.6 ms), c32 392 vs 239 q/s (small-query-perf 41453983213, 0 errors);
+  TPC-H SF10 on S3 283.6 -> 91.2 s, same answers, peak
+  container memory 3317 vs 1640 MiB of 6 GiB (tpch-perf 41453978726); local Parquet unchanged (40.0 -> 37.6 s, peak 1717 vs 1690 MiB; DuckDB caches only
+  files read through an extension; tpch-perf 41458186484).
 - `shutdownDrainSeconds` defaults to 20 (was 0; maintainer, lane 3 Q2): a node stopped with SIGTERM leaves the pool,
   refuses new calls with `UNAVAILABLE` and lets running answers finish for up to 20 s instead of cutting them with
   `INTERNAL`. `docker stop` needs `-t 25` or more (its default is 10 s); `0` restores the immediate stop.

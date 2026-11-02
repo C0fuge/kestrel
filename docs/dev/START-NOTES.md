@@ -184,6 +184,7 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 | `duckDbSharedMaxThreads` | 0 (no cap) | |
 | `duckDbThreads` | all cores, at least what `balanced` gives one query (4) (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
 | `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
+| `duckDbExternalFileCache` | true (only while the shared DuckDB is on) | DuckDB keeps S3/HDFS file data in memory, within the node-wide `memory_limit` (evicted like any buffer): peak RSS about 2x balanced (S3 TPC-H SF10 on 2 CPUs / 6 GB: 3.3 vs 1.6 GiB); S3 small queries up to 5x faster, TPC-H SF10 on S3 3.1x faster (283.6 -> 91.2 s) |
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
 | `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |

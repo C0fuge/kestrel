@@ -37,6 +37,26 @@
 > (c) also check DuckDB's Parquet metadata cache (`parquet_metadata_cache`) the same way and add it if it helps;
 > (d) CHANGELOG + START-NOTES (speed row: what it turns on and the memory cost); (e) one `package=true` pre-release.
 > Then write "ITEM 24 DONE" at the start of a line.
+>
+ITEM 24 DONE (2026-11-02, core session, 518a2475).
+> (a) `speed` offers `duckDbExternalFileCache=true` while the shared DuckDB is
+> on (explicit `-D`/env wins; `speed` with `duckDbSharedDatabase=false` and `balanced` keep it off). One buffer pool, so
+> the node-wide `memory_limit` bounds it: `S3IntegrationTest.theExternalFileCacheOfTheSharedDuckDbStaysWithinItsLimit`
+> (2 sessions read 3x the 128 MiB limit twice: cache <= limit); the private OOM-retry DuckDB of a thread never caches
+> (`DuckDbSharedDatabaseTest.onlyTheSharedDatabaseKeepsTheExternalFileCache`); startup line `duckdb=externalFileCache
+> nodeWide=<limit> privateDatabase=off bound=sharedMemoryLimit`. Dev CI 41453962047 green. 2 CPUs / 6 GB, -Xmx3g,
+> direct 2g, 1 round: TPC-H SF10 **S3** balanced 283.6 s, speed 91.2 s, peak 1640 vs 3317 MiB, same answers (tpch-perf
+> 41453978726); **local** 40.0 vs 37.6 s, peak 1690 vs 1717 MiB (41458186484; local files are not cached).
+> small-query-perf 41453983213 (S3, 0 errors, 0 OOM retries), quota / pinned: speed c1 214 / 176 q/s p95 7.5 / 9.9 ms
+> (speed without the cache 43 / 42 q/s, 38.6 / 39.2 ms; balanced 42 q/s 39 ms); c8 314 / 323 q/s p95 65 / 43 ms
+> (no cache 170 / 179, 105 / 97 ms); c32 392 / 401 q/s p99 189 / 194 ms (no cache 239 / 260, 355 / 305 ms) - the c8
+> p95 spread of 23b is gone. (b) **HDFS not measured**: CI has no HDFS store (hadoopfs IT skipped). The OOM kills on
+> HDFS came from per-connection instances each caching up to their own limit; with the shared DuckDB there is one
+> limit, as shown on fake S3. **egret / stand:** run speed on the HDFS store and watch peak RSS; if it still grows past
+> the shared limit, the fallback is to keep the cache off for hdfs:// data dirs under `speed`. (c)
+> `parquet_metadata_cache`: the s3 plugin already turns it (and `enable_http_metadata_cache`) on by default
+> (`arrowflight.s3.metadataCache=true`, lakeFS inherits) in both profiles, so the S3 numbers above include it; local
+> reads footers from the page cache - not added. (d) CHANGELOG, README, START-NOTES speed row. (e) pre-release: @PKG@.
 
 > **Maintainer, 2026-10-30 14:40 - ITEM 23b, bug first: `resourceProfile=speed` fails S3 small queries at 32 clients.**
 > egret run 41029626461 (`results/ITEM23-d752a7358a65.md`, 2 CPUs / 6 GB, -Xmx3g, direct 2g): under `speed`, S3 small
@@ -2510,3 +2530,7 @@ S3 slowdown item below stays open for then).
   10e7b743 + speed + `duckDbProducingStreams` 4/8): the cap leaves c8 p95 at 96-99 ms (speed alone 96, balanced 74)
   and cuts c32 from 262 to 190 / 140 q/s; `duckDbThreadsUnderLoad` is ignored in shared mode. No code change; the
   spread is accepted (see Next steps). 0 errors, 0 OOM retries in every configuration.
+- 2026-11-02 (core session): ITEM 24 - `resourceProfile=speed` turns DuckDB's external file cache on with the shared
+  DuckDB (518a2475); private OOM-retry DuckDB never caches. Dev CI 41453962047 green; tpch-perf 41453978726 (s3 SF10:
+  283.6 -> 91.2 s, peak 1640 -> 3317 MiB of 6 GiB) and 41458186484 (local 40.0 -> 37.6 s); small-query-perf
+  41453983213 (s3, 0 errors; c1 214 vs 43 q/s). Pre-release: @PKG@. HDFS left to the stand (no HDFS store in CI).

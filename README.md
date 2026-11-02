@@ -309,7 +309,11 @@ thread that ran a query, plus the `duckDbThreadsUnderLoad` / `duckDbThreadsWhenI
 the cache on the startup line `duckdb=externalFileCache` names the per-connection bound; with
 `duckDbMemoryLimit=none` (80 % of the memory per connection) the server WARNs
 `duckdb=externalFileCacheUnbounded` - the setup that got servers OOM-killed on the stand. For a
-node-wide bound on S3 / lakeFS use the plugins' read cache (`arrowflight.s3.cacheMegabytes`).
+node-wide bound on S3 / lakeFS use the plugins' read cache (`arrowflight.s3.cacheMegabytes`). With
+`duckDbSharedDatabase=true` (and so under `resourceProfile=speed`, which turns the cache on there) all sessions share
+one buffer pool: the cache stays within the one node-wide `memory_limit` (startup line `duckdb=externalFileCache
+nodeWide=<limit> ... bound=sharedMemoryLimit`), and the private DuckDB a query moves to after running out of memory
+keeps no cache.
 
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per
