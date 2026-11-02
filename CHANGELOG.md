@@ -104,8 +104,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   group search) and Keycloak JWT login (JWKS over HTTPS, audience and groups claims); each cell checks refused
   missing/wrong credentials, GetSqlInfo, GetTables, a table schema, TPC-H SF1 22/22 equal to DuckDB's in-process
   answers and a prepared query with bound parameters (`tools/ci/service-check.py`, ADBC Flight SQL). Runs on
-  dispatch (input `server` = a pre-release tag, default this commit) and on pushes touching its files. Ranger and
-  Hive Metastore cells follow.
+  dispatch (input `server` = a pre-release tag, default this commit) and on pushes touching its files. Cell
+  `hive`: a real Hive 3.1.3 (HiveServer2, then a standalone metastore on the same Derby database) with TPC-H SF1 as
+  external tables in Parquet and text (files by DuckDB) and ORC and Avro (files written by Hive's own INSERT
+  OVERWRITE), plus a view joining all four formats; the server reads them through the packaged hive plugin and the
+  same checks run against each format's schema, plus the view's answer (`tools/ci/service-hive-data.py`,
+  `service-hive.sh`). A Ranger cell follows.
 - CI: service matrix, stores part (lane 4, STATUS item 25): workflow `service-stores.yml` (dispatch with input `server` =
   a pre-release tag, default = build of the commit; on push to its files). Each cell starts the real service as
   containers (MinIO with two s3 stores, Apache Ozone's S3 gateway, lakeFS on a branch and on a pinned commit,

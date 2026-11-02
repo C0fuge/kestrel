@@ -1,7 +1,7 @@
 """Checks a running server end to end through the ADBC Flight SQL driver (Go), for the service workflows.
 
 Usage: service-check.py <uri> <queries dir> [--ca <pem>] [--user <name> --password-env <VAR>]
-                        [--token-env <VAR>] [--bad-password | --bad-token]
+                        [--token-env <VAR>] [--schema <name> ...] [--view <json>]
 
 <queries dir> is service-tpch-gen.py's output. Checks, in this order, each printed as one
 ``PASS <check>`` or ``FAIL <check>: <reason>`` line:
@@ -9,11 +9,14 @@ Usage: service-check.py <uri> <queries dir> [--ca <pem>] [--user <name> --passwo
 * ``refused-anonymous`` / ``refused-bad-credential`` (only with --user or --token-env): a call
   without credentials and one with a wrong password (or a token with a broken signature) fail;
 * ``sql-info``: GetSqlInfo answers;
-* ``tables``: GetTables / GetDbSchemas list exactly the TPC-H tables in schema tpch;
-* ``table-schema``: lineitem's schema has its 16 columns;
-* ``qNN``: the 22 TPC-H queries in complete mode give DuckDB's in-process answer (rows compared
-  as sorted multisets; numbers with a relative tolerance of 1e-9, dates as ISO text);
-* ``prepared``: a prepared query with two bound parameters gives DuckDB's answer.
+* per schema (``--schema``, repeatable, default tpch; the queries' ``tpch.`` qualifiers are
+  replaced by the schema, and checks of a schema other than tpch are named ``<schema>:<check>``):
+  * ``tables``: GetTables / GetDbSchemas list exactly the TPC-H tables in the schema;
+  * ``table-schema``: lineitem's schema has its 16 columns;
+  * ``qNN``: the 22 TPC-H queries in complete mode give DuckDB's in-process answer (rows compared
+    as sorted multisets; numbers with a relative tolerance of 1e-9, dates as ISO text);
+  * ``prepared``: a prepared query with two bound parameters gives DuckDB's answer;
+* ``view`` (with ``--view``, a JSON file with ``sql`` and ``answer`` rows): the query's answer.
 
 Exits 1 when any check failed. Credentials come from environment variables, never arguments.
 """
@@ -23,6 +26,7 @@ import decimal
 import json
 import math
 import os
+import re
 import sys
 
 import adbc_driver_flightsql.dbapi as flightsql
@@ -102,6 +106,49 @@ def refused(name, args, **credentials):
             report(name, f"refused, but not as unauthenticated: {text}")
 
 
+def qualify(sql, schema):
+    """Replaces the queries' tpch. qualifiers by another schema."""
+    return sql if schema == "tpch" else re.sub(r"\btpch\.", schema + ".", sql)
+
+
+def check_schema(conn, queries, schema, tables):
+    """Runs the metadata, TPC-H and prepared checks against one schema."""
+    p = "" if schema == "tpch" else schema + ":"
+    try:
+        objects = conn.adbc_get_objects(depth="tables", db_schema_filter=schema).read_all().to_pylist()
+        names = sorted(t["table_name"] for c in objects for s in (c["catalog_db_schemas"] or [])
+                       if s["db_schema_name"] == schema for t in (s["db_schema_tables"] or []))
+        report(p + "tables", None if names == tables else f"{names}, expected {tables}")
+    except Exception as e:  # pylint: disable=broad-except
+        report(p + "tables", e)
+    try:
+        columns = conn.adbc_get_table_schema("lineitem", db_schema_filter=schema)
+        report(p + "table-schema", None if len(columns) == 16 else f"{len(columns)} columns: {columns.names}")
+    except Exception as e:  # pylint: disable=broad-except
+        report(p + "table-schema", e)
+    for name in sorted(f[:-4] for f in os.listdir(queries) if f.startswith("q") and f.endswith(".sql")):
+        with open(os.path.join(queries, name + ".sql"), encoding="utf-8") as f:
+            sql = qualify(f.read().strip().rstrip(";"), schema)
+        with open(os.path.join(queries, name + ".json"), encoding="utf-8") as f:
+            want = json.load(f)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                got = [[cell(v) for v in row] for row in cur.fetchall()]
+            report(p + name, compare(got, want))
+        except Exception as e:  # pylint: disable=broad-except
+            report(p + name, e)
+    with open(os.path.join(queries, "prepared.json"), encoding="utf-8") as f:
+        prepared = json.load(f)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(qualify(prepared["sql"], schema), parameters=tuple(prepared["parameters"]))
+            got = cur.fetchall()
+        report(p + "prepared", compare([[cell(v) for v in r] for r in got], [[prepared["answer"]]]))
+    except Exception as e:  # pylint: disable=broad-except
+        report(p + "prepared", e)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("uri")
@@ -110,6 +157,8 @@ def main():
     parser.add_argument("--user")
     parser.add_argument("--password-env")
     parser.add_argument("--token-env")
+    parser.add_argument("--schema", action="append")
+    parser.add_argument("--view")
     args = parser.parse_args()
     password = os.environ[args.password_env] if args.password_env else None
     token = os.environ[args.token_env] if args.token_env else None
@@ -135,39 +184,18 @@ def main():
             report("sql-info", None if info else "empty answer")
         except Exception as e:  # pylint: disable=broad-except
             report("sql-info", e)
-        try:
-            objects = conn.adbc_get_objects(depth="tables", db_schema_filter="tpch").read_all().to_pylist()
-            names = sorted(t["table_name"] for c in objects for s in (c["catalog_db_schemas"] or [])
-                           if s["db_schema_name"] == "tpch" for t in (s["db_schema_tables"] or []))
-            report("tables", None if names == tables else f"{names}, expected {tables}")
-        except Exception as e:  # pylint: disable=broad-except
-            report("tables", e)
-        try:
-            schema = conn.adbc_get_table_schema("lineitem", db_schema_filter="tpch")
-            report("table-schema", None if len(schema) == 16 else f"{len(schema)} columns: {schema.names}")
-        except Exception as e:  # pylint: disable=broad-except
-            report("table-schema", e)
-        for name in sorted(f[:-4] for f in os.listdir(args.queries) if f.startswith("q") and f.endswith(".sql")):
-            with open(os.path.join(args.queries, name + ".sql"), encoding="utf-8") as f:
-                sql = f.read().strip().rstrip(";")
-            with open(os.path.join(args.queries, name + ".json"), encoding="utf-8") as f:
-                want = json.load(f)
+        for schema in args.schema or ["tpch"]:
+            check_schema(conn, args.queries, schema, tables)
+        if args.view:
+            with open(args.view, encoding="utf-8") as f:
+                view = json.load(f)
             try:
                 with conn.cursor() as cur:
-                    cur.execute(sql)
+                    cur.execute(view["sql"])
                     got = [[cell(v) for v in row] for row in cur.fetchall()]
-                report(name, compare(got, want))
+                report("view", compare(got, view["answer"]))
             except Exception as e:  # pylint: disable=broad-except
-                report(name, e)
-        with open(os.path.join(args.queries, "prepared.json"), encoding="utf-8") as f:
-            prepared = json.load(f)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(prepared["sql"], parameters=tuple(prepared["parameters"]))
-                got = cur.fetchall()
-            report("prepared", compare([[cell(v) for v in r] for r in got], [[prepared["answer"]]]))
-        except Exception as e:  # pylint: disable=broad-except
-            report("prepared", e)
+                report("view", e)
     passed = sum(RESULTS)
     print(f"checks {passed}/{len(RESULTS)} passed", flush=True)
     sys.exit(0 if passed == len(RESULTS) else 1)

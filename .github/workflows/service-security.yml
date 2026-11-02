@@ -9,8 +9,13 @@
 #   ldap - OpenLDAP container (osixia/openldap), login with user name + password (search mode,
 #          service account, group search: the user is in group "analysts");
 #   jwt  - Keycloak container over HTTPS (JWKS URL), access token of a password grant
-#          (audience mapper, preferred_username, groups claim).
-# Ranger (table policy, mask, row filter) and Hive Metastore tables follow (PLUGINS-STATUS.md).
+#          (audience mapper, preferred_username, groups claim);
+#   hive - Hive 3.1.3 (apache/hive): TPC-H as external tables in Parquet and text (files by
+#          DuckDB), ORC and Avro (files written by Hive's INSERT OVERWRITE), a view joining all
+#          four formats; a standalone metastore on the same Derby database serves the server's
+#          hive plugin (tools/ci/service-hive-data.py, service-hive.sh); the 22 queries, the
+#          metadata checks and the prepared query run against each format's schema.
+# Ranger (table policy, mask, row filter) follows (PLUGINS-STATUS.md).
 # The job summary is a table service x profile -> pass/fail + first failed check. Test
 # credentials and the TLS CA are generated in the job. Only the plugins lane edits this file.
 name: Service matrix (security)
@@ -28,6 +33,8 @@ on:
       - .github/workflows/service-security.yml
       - tools/ci/service-check.py
       - tools/ci/service-tpch-gen.py
+      - tools/ci/service-hive-data.py
+      - tools/ci/service-hive.sh
 
 permissions:
   contents: read
@@ -57,9 +64,10 @@ jobs:
         if: inputs.server == ''
         run: |
           set -euo pipefail
-          ./mvnw install -pl flight-server,flight-auth-ldap,flight-auth-jwt,flight-auth-ranger-hive -am \
-            -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true
+          ./mvnw install -pl flight-server,flight-auth-ldap,flight-auth-jwt,flight-auth-ranger-hive,flight-plugin-hive \
+            -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true
           app="$RUNNER_TEMP/app"; mkdir -p "$app"
+          tools/make-plugin-dir.sh "$app" hive
           cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$app/server.jar"
           cp -r flight-server/target/libs "$app/"
           for provider in ldap jwt ranger-hive; do
@@ -81,10 +89,12 @@ jobs:
           [[ "$TAG" =~ ^server-[0-9A-Za-z.]+-[0-9a-f]{7,40}$ ]] || { echo "not a server pre-release tag: $TAG"; exit 1; }
           dl="$RUNNER_TEMP/dl"; app="$RUNNER_TEMP/app"; mkdir -p "$dl" "$app"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dl" \
-            --pattern '*-linux.jar' --pattern 'flight-server-libs-*.tar.zst' --pattern 'flight-auth-*.tar.zst'
+            --pattern '*-linux.jar' --pattern 'flight-server-libs-*.tar.zst' --pattern 'flight-auth-*.tar.zst' \
+            --pattern 'flight-plugins-*.tar.zst'
           mv "$dl"/*-linux.jar "$app/server.jar"
           tar --zstd -xf "$dl"/flight-server-libs-*.tar.zst -C "$app"
           tar --zstd -xf "$dl"/flight-auth-*.tar.zst -C "$app"
+          tar --zstd -xf "$dl"/flight-plugins-*.tar.zst -C "$app"
           echo "pre-release $TAG" > "$app/SOURCE"
 
       - name: Pack
@@ -102,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ldap, jwt]
+        service: [ldap, jwt, hive]
         profile: [balanced, speed]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -226,6 +236,26 @@ jobs:
             echo "SERVER_CP=auth/jwt/*"
           } >> "$GITHUB_ENV"
 
+      # Not under $RUNNER_TEMP (/home/runner/work/_temp): Hive skips files below a directory whose
+      # name starts with "_". The server reads the same file:// locations the metastore lists.
+      - name: Hive 3.1.3 (tables, ORC/Avro written by Hive, view; then a standalone metastore)
+        if: matrix.service == 'hive'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-hive-data.py "$RUNNER_TEMP/tpch" /tmp/hive-svc
+          tools/ci/service-hive.sh apache/hive:3.1.3 /tmp/hive-svc /tmp/hive-svc-derby
+          # The hive plugin reads Avro tables with DuckDB's avro extension (ci-assets).
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" --pattern 'duckdb-extensions-v1.5.6.tar.zst' \
+            --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/ext"; tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-v1.5.6.tar.zst" -C "$RUNNER_TEMP/ext"
+          {
+            echo "FLIGHT_ALLOW_INSECURE=true"  # no login in this cell (TLS stays on); Ranger's cell logs in
+            echo "SERVER_OPTS=-Darrowflight.duckdb.extensionDir=$RUNNER_TEMP/ext/extensions -Darrowflight.catalog=directory,hive -Darrowflight.plugins.dir=$RUNNER_TEMP/app/plugins -Darrowflight.hive.uris=thrift://localhost:9083 -Darrowflight.hive.roots=/tmp/hive-svc -Darrowflight.hive.orcTables=true -Darrowflight.hive.textTables=true -Darrowflight.hive.avroTables=true -Darrowflight.hive.views=true"
+            echo "CHECK_OPTS=--schema tpch_parquet --schema tpch_text --schema tpch_orc --schema tpch_avro --view $RUNNER_TEMP/tpch/queries/view.json"
+          } >> "$GITHUB_ENV"
+
       - name: Server (${{ matrix.profile }})
         run: |
           set -euo pipefail
@@ -237,7 +267,7 @@ jobs:
           nohup java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
             --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
             --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-            -Dhazelcast.phone.home.enabled=false "${profile[@]}" -cp "server.jar:libs/*:$SERVER_CP" \
+            -Dhazelcast.phone.home.enabled=false "${profile[@]}" ${SERVER_OPTS:-} -cp "server.jar:libs/*:${SERVER_CP:-}" \
             pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$RUNNER_TEMP/tpch/data" \
             --localhost 127.0.0.1 --port 32010 --hosts 127.0.0.1 > "$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 120); do grep -q 'Server Arrow Flight SQL started' "$RUNNER_TEMP/server.log" && break; sleep 1; done
@@ -257,8 +287,9 @@ jobs:
             ldap) creds=(--user "$SERVICE_USER" --password-env SERVICE_PASSWORD) ;;
             jwt) creds=(--token-env SERVICE_TOKEN) ;;
           esac
+          # shellcheck disable=SC2086 # CHECK_OPTS: options of the hive cell, no spaces inside values
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-check.py grpc+tls://127.0.0.1:32010 "$RUNNER_TEMP/tpch/queries" \
-            --ca "$RUNNER_TEMP/tls/ca.pem" "${creds[@]}" 2>&1 | tee "$RUNNER_TEMP/check.log"
+            --ca "$RUNNER_TEMP/tls/ca.pem" "${creds[@]}" ${CHECK_OPTS:-} 2>&1 | tee "$RUNNER_TEMP/check.log"
 
       - name: Result
         if: always()
@@ -275,6 +306,10 @@ jobs:
           cat "$RUNNER_TEMP/result/row.md"
           if [ -f "$RUNNER_TEMP/server.log" ]; then
             echo "--- server log (errors)"; grep -E 'ERROR|WARN|Exception' "$RUNNER_TEMP/server.log" | head -n 40 || true
+          fi
+          if [ "${{ matrix.service }}" = hive ]; then
+            echo "--- Hive"; tail -n 30 /tmp/hive-svc/beeline.err 2> /dev/null || true
+            docker logs hive-svc-hms 2>&1 | grep -E 'ERROR|Exception' | head -n 20 || true
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
