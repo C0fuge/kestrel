@@ -15,6 +15,23 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > -> pass/fail + first error line. A failure in a cell is a bug for the lane that owns the code (write it as bug-first
 > into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
 
+SERVICE MATRIX catalogs DONE (2026-11-02). `.github/workflows/service-stores.yml`: 8 services x 2 profiles = 16 cells,
+all green on this commit's build (run 41473152168) and on pre-release `server-1.0.0-fca6512a8046` (dispatch run
+41473218719). Cells (`tools/ci/service-stores-cell.sh <service> <profile>`): `s3` (MinIO, data directory on bucket
+`lake` + named store `wh` on bucket `warehouse`), `iceberg-hadoop` (pyiceberg-written Hadoop-layout tables on
+`s3://warehouse/iceberg`, read through the named store), `iceberg-rest` (Lakekeeper v0.13.8 on MinIO, STS on as a
+MinIO user, `vendedCredentials=true`; the server's own S3 key is a random one MinIO does not know, so every read
+uses the vended credentials), `ozone` (S3 gateway, Ozone 2.0.0), `lakefs-branch` / `lakefs-commit` (lakeFS 1.50.0
+quickstart; the commit cell pins the first commit after a second commit emptied `nation` on main), `postgres`
+(16.4) / `mysql` (8.4) through the jdbc plugin (TPC-H loaded with COPY / LOAD DATA). Check
+(`tools/ci/service-tpch.py check`, ADBC Flight SQL): 22 answers equal in-process DuckDB 1.5.6 over the same Parquet
+files (columns, rows as a multiset, numbers within 1e-6 rel / 0.005 abs), GetSqlInfo, GetObjects (8 tables + their
+columns), GetTableSchema, one prepared query bound twice; complete mode. MinIO: Docker Hub / quay.io refuse the
+pulls, the cell takes `cgr.dev/chainguard/minio` (the job log names the image). No cell failure, so no bug for
+another lane.
+Optional follow-ups (not required by the item): a `partial`-mode pass per cell; Polaris as a second REST catalog;
+SF10 on dispatch (`sf` input exists, runner disk/time not checked above SF1).
+
 
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish only what is started: C1 step 2b (vended credentials, per
 > Q1 answer) and C2 (the JDBC federation plugin, per Q4 answer). Delta, Paimon/Hudi and full ACID ORC stay as written
@@ -576,3 +593,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   40868732813 green on 1e7b43a4. Pre-release: Dev CI dispatch 40870896985 (package=true, head 1e7b43a4, plugin set
   now includes `jdbc`) green: pre-release `server-1.0.0-1e7b43a4e0c7` (7 assets).
   **CATALOGS LANE DONE.**
+- 2026-11-02: **SERVICE MATRIX, stores part** - `service-stores.yml` + `tools/ci/service-tpch.py` (TPC-H data,
+  reference answers, ADBC check), `service-stores-cell.sh`, `service-iceberg.py`. Runs: 41470097544 (first, 2/12:
+  AWS CLI 2.23+ trailer checksums stored raw by Ozone / refused by lakeFS -> `AWS_REQUEST_CHECKSUM_CALCULATION=
+  when_required`; MinIO bucket name too short; MySQL entrypoint chowns the CSV mount), 41471591465 (14/14),
+  41473152168 (16/16 with iceberg-rest, build of 880caeba), 41473218719 (dispatch, pre-release
+  server-1.0.0-fca6512a8046, 16/16). Catalogs CI's `paimon-hudi` job broke on the runners' Python 3.14
+  (`backports.zstd` has no 3.14 build; fastavro uses the stdlib `compression.zstd` there): requirement marker,
+  Catalogs CI 41471784761 green. No server, plugin or SPI change. Lock released.

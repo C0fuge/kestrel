@@ -112,10 +112,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   `service-hive.sh`). A Ranger cell follows.
 - CI: service matrix, stores part (lane 4, STATUS item 25): workflow `service-stores.yml` (dispatch with input `server` =
   a pre-release tag, default = build of the commit; on push to its files). Each cell starts the real service as
-  containers (MinIO with two s3 stores, Apache Ozone's S3 gateway, lakeFS on a branch and on a pinned commit,
-  PostgreSQL and MySQL through the jdbc plugin), the server with `balanced` and `-DresourceProfile=speed`, and checks
+  containers (MinIO with two s3 stores, an Iceberg Hadoop catalog on MinIO, Lakekeeper (Iceberg REST) on MinIO with
+  vended STS credentials only, Apache Ozone's S3 gateway, lakeFS on a branch and on a pinned commit, PostgreSQL and
+  MySQL through the jdbc plugin), the server with `balanced` and `-DresourceProfile=speed`, and checks
   TPC-H SF1 22/22 answers against in-process DuckDB, Flight SQL metadata and a prepared query
-  (`tools/ci/service-tpch.py`, `tools/ci/service-stores-cell.sh`); the job summary is the service x profile table.
+  (`tools/ci/service-tpch.py`, `tools/ci/service-stores-cell.sh`, `tools/ci/service-iceberg.py`); the job summary
+  is the service x profile table.
 
 - **Resource profile `speed`** (item 23): `resourceProfile` / `FLIGHT_RESOURCE_PROFILE`, default `balanced` (nothing
   changes). `speed` supplies defaults for the settings measured as faster: shared DuckDB with all cores
