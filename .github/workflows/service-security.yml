@@ -250,8 +250,10 @@ jobs:
           gh release download ci-assets --repo "$GITHUB_REPOSITORY" --pattern 'duckdb-extensions-v1.5.6.tar.zst' \
             --dir "$RUNNER_TEMP"
           mkdir -p "$RUNNER_TEMP/ext"; tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-v1.5.6.tar.zst" -C "$RUNNER_TEMP/ext"
+          token=$(openssl rand -hex 24); echo "::add-mask::$token"
           {
-            echo "FLIGHT_ALLOW_INSECURE=true"  # no login in this cell (TLS stays on); Ranger's cell logs in
+            # The server's static bearer token (FLIGHT_BEARER_TOKEN): login is not what this cell tests.
+            echo "FLIGHT_BEARER_TOKEN=$token"; echo "SERVICE_TOKEN=$token"
             echo "SERVER_OPTS=-Darrowflight.duckdb.extensionDir=$RUNNER_TEMP/ext/extensions -Darrowflight.catalog=directory,hive -Darrowflight.plugins.dir=$RUNNER_TEMP/app/plugins -Darrowflight.hive.uris=thrift://localhost:9083 -Darrowflight.hive.roots=/tmp/hive-svc -Darrowflight.hive.orcTables=true -Darrowflight.hive.textTables=true -Darrowflight.hive.avroTables=true -Darrowflight.hive.views=true"
             echo "CHECK_OPTS=--schema tpch_parquet --schema tpch_text --schema tpch_orc --schema tpch_avro --view $RUNNER_TEMP/tpch/queries/view.json"
           } >> "$GITHUB_ENV"
@@ -285,7 +287,7 @@ jobs:
           creds=()
           case "${{ matrix.service }}" in
             ldap) creds=(--user "$SERVICE_USER" --password-env SERVICE_PASSWORD) ;;
-            jwt) creds=(--token-env SERVICE_TOKEN) ;;
+            jwt | hive) creds=(--token-env SERVICE_TOKEN) ;;
           esac
           # shellcheck disable=SC2086 # CHECK_OPTS: options of the hive cell, no spaces inside values
           "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-check.py grpc+tls://127.0.0.1:32010 "$RUNNER_TEMP/tpch/queries" \
