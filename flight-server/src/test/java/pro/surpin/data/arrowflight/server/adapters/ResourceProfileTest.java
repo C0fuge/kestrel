@@ -73,6 +73,7 @@ class ResourceProfileTest {
         assertEquals(AppConfig.DEFAULT_ENDPOINTS_PER_SERVER, config.endpointsPerServer());
         assertNull(ConfigAdapter.duckDbShared(effective(raw, MEDIUM), MEDIUM));
         assertFalse(ConfigAdapter.flightZeroCopyWrites(effective(raw, MEDIUM)));
+        assertFalse(config.duckDbExternalFileCache());
     }
 
     /** A typo is refused instead of running balanced silently; the name ignores case. */
@@ -111,6 +112,7 @@ class ResourceProfileTest {
         assertEquals(4, config.endpointsPerServer());
         assertEquals(16 << 20, config.flightBackpressureThresholdBytes());
         assertEquals(threads, config.duckDbThreads());
+        assertTrue(config.duckDbExternalFileCache(), "external file cache " + host);
         for (String ns : List.of("s3", "lakefs")) {
             assertEquals(0, new PropertiesPluginConfig(ns, source, List.of()).getInt("cacheMegabytes", 0),
                     ns + " cache " + host);
@@ -213,5 +215,30 @@ class ResourceProfileTest {
         assertEquals(0, new PropertiesPluginConfig("s3", source, List.of()).getInt("cacheMegabytes", 0));
         // Balanced gives its two connections 1 GiB each; capped at 80 % of the 2 GiB.
         assertEquals("1638MiB", ConfigAdapter.duckDbShared(source, tiny).memoryLimit());
+    }
+
+    /**
+     * speed turns DuckDB's external file cache on only with the shared DuckDB, whose one memory
+     * limit bounds it, and an explicit setting wins (item 24).
+     */
+    @Test
+    void speedCachesFileDataOnlyInTheSharedDuckDb() {
+        ConfigSource on = effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), MEDIUM);
+        assertTrue(ConfigAdapter.getConfig(on, MEDIUM).duckDbExternalFileCache());
+        assertTrue(ResourceProfile.resolve(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()),
+                () -> MEDIUM).describe().contains(" duckDbExternalFileCache=true"));
+
+        ConfigSource perConnection = effective(raw(Map.of("resourceProfile", "speed"),
+                Map.of("DUCKDB_SHARED_DATABASE", "false"), Map.of()), MEDIUM);
+        assertFalse(ConfigAdapter.getConfig(perConnection, MEDIUM).duckDbExternalFileCache());
+
+        ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of("DUCKDB_EXTERNAL_FILE_CACHE", "false"),
+                Map.of());
+        assertFalse(ConfigAdapter.getConfig(effective(raw, MEDIUM), MEDIUM).duckDbExternalFileCache());
+        assertTrue(ResourceProfile.resolve(raw, () -> MEDIUM).describe()
+                .contains("duckDbExternalFileCache=false(explicit)"));
+        ConfigSource property = effective(raw(Map.of("resourceProfile", "speed",
+                "arrowflight.duckdb.externalFileCache", "false"), Map.of(), Map.of()), MEDIUM);
+        assertFalse(ConfigAdapter.getConfig(property, MEDIUM).duckDbExternalFileCache());
     }
 }

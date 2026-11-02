@@ -40,6 +40,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
+import pro.surpin.data.arrowflight.server.adapters.DuckDbSizing;
+import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
@@ -812,6 +814,63 @@ class S3IntegrationTest {
         assertArrayEquals(new long[] {rows, 64 * rows}, answer(last));
         long gets = s3.requests().stream().filter(r -> r.method().equals("GET")).count();
         assertTrue(gets < 2, gets + " GETs for a cached file");
+    }
+
+    /**
+     * Verifies that with the shared DuckDB of {@code resourceProfile=speed} (item 24) DuckDB's
+     * external file cache stays within the one node-wide {@code memory_limit} while several
+     * sessions read in parallel: the sessions share one buffer pool, so the node holds at most
+     * that limit, not the limit times its sessions. Reads three times the limit, twice.
+     */
+    @Test
+    void theExternalFileCacheOfTheSharedDuckDbStaysWithinItsLimit() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        int files = 14;
+        int sessions = 2;
+        long rows = 400_000L;
+        long limitBytes = 128L << 20;
+        Path data = dir.resolve("big.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT range AS id, md5(range::VARCHAR) || md5((range + 1)::VARCHAR) AS pad"
+                    + " FROM range(" + rows + ")) TO '" + data + "' (FORMAT parquet, COMPRESSION uncompressed)");
+        }
+        byte[] bytes = Files.readAllBytes(data);
+        assertTrue(files * (long) bytes.length > 3 * limitBytes, "data " + bytes.length + " x " + files);
+        for (int i = 0; i < files; i++) {
+            s3.put(bucket, "flight-it/m/x" + i + ".parquet", bytes);
+        }
+        externalFileCache = true;
+        openRegistry(null);
+        duckDb = new DuckDbAdapter(config(), ioPool, registry.duckDbSetup(), 0, 0, 4, ProducingStreamGate.OFF,
+                false, new DuckDbSizing.Shared(4, "128MiB", 0));
+        ExecutorService workers = Executors.newFixedThreadPool(sessions);
+        try {
+            List<java.util.concurrent.Future<Long>> peaks = new java.util.ArrayList<>();
+            for (int w = 0; w < sessions; w++) {
+                int first = w;
+                peaks.add(workers.submit(() -> {
+                    long peak = 0;
+                    for (int round = 0; round < 2; round++) {
+                        for (int i = first; i < files; i += sessions) {
+                            String one = "SELECT count(*), sum(length(pad)) FROM 's3://" + bucket
+                                    + "/flight-it/m/x" + i + ".parquet'";
+                            assertArrayEquals(new long[] {rows, 64 * rows}, answer(one));
+                            peak = Math.max(peak, externalFileCacheBytes());
+                        }
+                    }
+                    return peak;
+                }));
+            }
+            long peak = 0;
+            for (java.util.concurrent.Future<Long> one : peaks) {
+                peak = Math.max(peak, one.get(5, TimeUnit.MINUTES));
+            }
+            assertTrue(peak > 0, "the cache holds file data");
+            assertTrue(peak <= limitBytes, "cache " + peak + " bytes over the node-wide limit " + limitBytes);
+        } finally {
+            workers.shutdownNow();
+        }
     }
 
     private long[] answer(String sql) throws SQLException {

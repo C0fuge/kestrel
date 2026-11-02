@@ -86,6 +86,14 @@ class DuckDbSizingTest {
     }
 
     @Test
+    void sharedExternalFileCacheLineNamesTheNodeWideBound() {
+        assertEquals("nodeWide=2048MiB privateDatabase=off bound=sharedMemoryLimit",
+                new DuckDbSizing.Shared(2, "2048MiB").describeExternalFileCache());
+        assertEquals("nodeWide=duckdbDefault privateDatabase=off bound=sharedMemoryLimit",
+                new DuckDbSizing.Shared(2, null).describeExternalFileCache());
+    }
+
+    @Test
     void mediumHostSplitsTheBudget() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(4, 16 * GIB, 4 * GIB, 4 * GIB),
                 false, 0, null, 0);

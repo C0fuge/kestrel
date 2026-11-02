@@ -518,6 +518,31 @@ class DuckDbSharedDatabaseTest {
         }
     }
 
+    /**
+     * Verifies that with duckDbExternalFileCache the shared DuckDB keeps DuckDB's external file
+     * cache (bounded by its node-wide memory limit) while a thread's private DuckDB for queries
+     * that ran out of memory does not: it lives as long as its thread, beside the shared limit
+     * (item 24).
+     */
+    @Test
+    void onlyTheSharedDatabaseKeepsTheExternalFileCache() throws Exception {
+        AppConfig cached = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, true, 64, null, null,
+                "complete", true, true);
+        try (DuckDbAdapter adapter = new DuckDbAdapter(cached, Executors.newSingleThreadExecutor(),
+                DuckDbSetupPlan.of(List.of(), List.of()), 0, 0, 2, ProducingStreamGate.OFF, false, SHARED)) {
+            assertEquals("true", single(adapter.connection(), "SELECT current_setting('enable_external_file_cache')"));
+            assertEquals("false", single(adapter.privateDatabase(),
+                    "SELECT current_setting('enable_external_file_cache')"));
+        }
+        try (DuckDbAdapter adapter = sharedAdapter(List.of(), List.of())) {
+            assertEquals("false", single(adapter.connection(), "SELECT current_setting('enable_external_file_cache')"));
+        }
+    }
+
     /** Without the shared DuckDB a query that runs out of memory fails as before. */
     @Test
     void outOfMemoryWithoutTheSharedDatabaseIsNotRunAgain() throws Exception {

@@ -178,6 +178,18 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         }
 
         /**
+         * Describes how far DuckDB's external file cache may grow with the shared DuckDB: within
+         * its one memory limit, evicted like any other buffer; the private DuckDB of queries that
+         * ran out of memory keeps none.
+         *
+         * @return one line of key=value pairs for the startup log
+         */
+        public String describeExternalFileCache() {
+            return "nodeWide=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit)
+                    + " privateDatabase=off bound=sharedMemoryLimit";
+        }
+
+        /**
          * Describes the chosen values for the startup log.
          *
          * @return one line of key=value pairs

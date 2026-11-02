@@ -257,7 +257,11 @@ public final class ServerModule {
                 ResourceProfile.resolve(ConfigSource.systemWithoutProfile(), HostLimits::detect).describe());
         DuckDbSizing sizing = ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect());
         LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(), sizing.describe());
-        if (config.duckDbExternalFileCache()) {
+        DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared();
+        if (config.duckDbExternalFileCache() && shared != null) {
+            // One buffer pool: the shared DuckDB's memory limit bounds the cache for the node.
+            LOGGER.info("node={} duckdb=externalFileCache {}", LogUtil.node(), shared.describeExternalFileCache());
+        } else if (config.duckDbExternalFileCache()) {
             if (sizing.externalFileCacheUnbounded()) {
                 LOGGER.warn("node={} duckdb=externalFileCacheUnbounded {} hint=set duckDbMemoryLimit"
                         + " or leave it unset (not none) so each connection gets a share",
@@ -271,7 +275,7 @@ public final class ServerModule {
                 ConfigAdapter.duckDbThreadsUnderLoad(), ConfigAdapter.duckDbThreadsWhenIdle(),
                 Runtime.getRuntime().availableProcessors(),
                 new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
-                ConfigAdapter.flightZeroCopyWrites(), ConfigAdapter.duckDbShared());
+                ConfigAdapter.flightZeroCopyWrites(), shared);
         adapter.useTableSecrets(registry.tableSecrets());
         return adapter;
     }

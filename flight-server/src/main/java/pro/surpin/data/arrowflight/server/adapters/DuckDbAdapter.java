@@ -727,7 +727,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     /**
      * Opens a DuckDB of the current thread's own beside the shared DuckDB, sized as one
      * connection of the DuckDB-per-connection mode, for queries that ran out of memory in the
-     * shared DuckDB.
+     * shared DuckDB. It never keeps DuckDB's external file cache: it lives as long as its thread,
+     * so a cache there would add to the node's memory beyond the shared limit.
      *
      * @return session, registered for closing when the thread ends
      */
@@ -735,7 +736,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         try {
             Session session = new Session(Thread.currentThread(),
                     openConnection(false, shared.fallbackThreads(), shared.fallbackMemoryLimit(),
-                            tempRoot.resolve("c" + sessionIds.incrementAndGet())),
+                            tempRoot.resolve("c" + sessionIds.incrementAndGet()), 0, new ArrayList<>(),
+                            false),
                     appConfig.duckDbStatementCacheSize(), null, null, null);
             allSessions.add(session);
             return session;
@@ -795,7 +797,8 @@ public final class DuckDbAdapter implements AutoCloseable {
                     ? shared.bufferedConnections() : 0;
             List<Connection> spares = new ArrayList<>(spareCount);
             Connection conn = openConnection(logExtensions, shared.threads(), shared.memoryLimit(),
-                    tempRoot.resolve("shared" + sessionIds.incrementAndGet()), spareCount, spares);
+                    tempRoot.resolve("shared" + sessionIds.incrementAndGet()), spareCount, spares,
+                    appConfig.duckDbExternalFileCache());
             try {
                 if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
                     LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
@@ -908,7 +911,8 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Connection openConnection(boolean logExtensions, int threads, String memoryLimit,
             Path tempDirectory) throws Exception {
-        return openConnection(logExtensions, threads, memoryLimit, tempDirectory, 0, new ArrayList<>());
+        return openConnection(logExtensions, threads, memoryLimit, tempDirectory, 0, new ArrayList<>(),
+                appConfig.duckDbExternalFileCache());
     }
 
     /**
@@ -922,11 +926,13 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param spareCount    further connections to open
      * @param spares        receives the further connections; the caller closes them, also when
      *                      this method fails
+     * @param fileCache     whether DuckDB keeps its external file cache (duckDbExternalFileCache)
      * @return configured connection
      * @throws Exception when DuckDB cannot be opened or configured
      */
     private Connection openConnection(boolean logExtensions, int threads, String memoryLimit,
-            Path tempDirectory, int spareCount, List<Connection> spares) throws Exception {
+            Path tempDirectory, int spareCount, List<Connection> spares, boolean fileCache)
+            throws Exception {
         Properties props = new Properties();
         if (appConfig.duckDbAllowUnsignedExtensions()) {
             props.setProperty("allow_unsigned_extensions", "true");
@@ -940,7 +946,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
         try {
             configureConnection(conn, logExtensions, threads, memoryLimit, tempDirectory,
-                    spareCount, spares);
+                    spareCount, spares, fileCache);
         } catch (Exception e) {
             spares.forEach(Session::closeQuietly);
             Session.closeQuietly(conn);
@@ -979,11 +985,12 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param tempDirectory spill directory of this DuckDB
      * @param spareCount    further connections to open before the lockdown
      * @param spares        receives the further connections
+     * @param fileCache     whether DuckDB keeps its external file cache
      * @throws Exception on configuration failure
      */
     private void configureConnection(Connection conn, boolean logExtensions, int threads,
-            String memLimit, Path tempDirectory, int spareCount, List<Connection> spares)
-            throws Exception {
+            String memLimit, Path tempDirectory, int spareCount, List<Connection> spares,
+            boolean fileCache) throws Exception {
         try (Statement s = conn.createStatement()) {
             s.execute("SET threads = " + threads);
             if (memLimit != null && !memLimit.isBlank()) {
@@ -1009,7 +1016,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 // How far a streamed result may run ahead of the Flight consumer.
                 s.execute("SET streaming_buffer_size = " + sqlStringLiteral(streamingBuffer));
             }
-            if (!appConfig.duckDbExternalFileCache()) {
+            if (!fileCache) {
                 // The cache keeps file data read through an extension until memory_limit is
                 // reached, in every connection; the OS page cache already does that job.
                 s.execute("SET enable_external_file_cache = false");
@@ -1316,6 +1323,15 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     Connection sharedDatabase() {
         return sharedRoot;
+    }
+
+    /**
+     * Returns the current thread's private DuckDB beside the shared one, opening it, for tests.
+     *
+     * @return connection of the private DuckDB, or null when every session is a DuckDB of its own
+     */
+    Connection privateDatabase() {
+        return privateSession == null ? null : privateSession.get().conn;
     }
 
     /**

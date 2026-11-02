@@ -90,6 +90,14 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
             long mib = speedMemoryBytes(host, balanced) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
+        if (shared) {
+            // One buffer pool: the cache stays within the node-wide memory limit. Not with a DuckDB
+            // per connection, where every idle connection keeps its own (servers OOM-killed on HDFS).
+            // S3 TPC-H SF10 262.5 -> 42.7 s, c32 p95 18.0 -> 0.58 s, peak RSS x1.6-2.1 (egret
+            // fc-s3-f06b5834e76e, run 41437523179).
+            b.offer("true", "duckDbExternalFileCache", "arrowflight.duckdb.externalFileCache",
+                    "DUCKDB_EXTERNAL_FILE_CACHE");
+        }
         b.offer("true", "flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites", "FLIGHT_ZERO_COPY_WRITES");
         b.offer(Integer.toString(SPEED_ENDPOINTS_PER_SERVER), "endpointsPerServer",
                 "arrowflight.cluster.endpointsPerServer", "FLIGHT_ENDPOINTS_PER_SERVER");
