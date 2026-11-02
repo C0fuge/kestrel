@@ -56,7 +56,7 @@ ITEM 24 DONE (2026-11-02, core session, 518a2475).
 > the shared limit, the fallback is to keep the cache off for hdfs:// data dirs under `speed`. (c)
 > `parquet_metadata_cache`: the s3 plugin already turns it (and `enable_http_metadata_cache`) on by default
 > (`arrowflight.s3.metadataCache=true`, lakeFS inherits) in both profiles, so the S3 numbers above include it; local
-> reads footers from the page cache - not added. (d) CHANGELOG, README, START-NOTES speed row. (e) pre-release: @PKG@.
+> reads footers from the page cache - not added. (d) CHANGELOG, README, START-NOTES speed row. (e) pre-release: dev-ci `package=true` 41459673523 green, pre-release `server-1.0.0-fca6512a8046` (7 assets); **egret:** re-measure speed vs balanced on it (S3 and HDFS).
 
 > **Maintainer, 2026-10-30 14:40 - ITEM 23b, bug first: `resourceProfile=speed` fails S3 small queries at 32 clients.**
 > egret run 41029626461 (`results/ITEM23-d752a7358a65.md`, 2 CPUs / 6 GB, -Xmx3g, direct 2g): under `speed`, S3 small
@@ -2533,4 +2533,4 @@ S3 slowdown item below stays open for then).
 - 2026-11-02 (core session): ITEM 24 - `resourceProfile=speed` turns DuckDB's external file cache on with the shared
   DuckDB (518a2475); private OOM-retry DuckDB never caches. Dev CI 41453962047 green; tpch-perf 41453978726 (s3 SF10:
   283.6 -> 91.2 s, peak 1640 -> 3317 MiB of 6 GiB) and 41458186484 (local 40.0 -> 37.6 s); small-query-perf
-  41453983213 (s3, 0 errors; c1 214 vs 43 q/s). Pre-release: @PKG@. HDFS left to the stand (no HDFS store in CI).
+  41453983213 (s3, 0 errors; c1 214 vs 43 q/s). Pre-release: dev-ci `package=true` 41459673523 green, pre-release `server-1.0.0-fca6512a8046` (7 assets); **egret:** re-measure speed vs balanced on it (S3 and HDFS). HDFS left to the stand (no HDFS store in CI).
