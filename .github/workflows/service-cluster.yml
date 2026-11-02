@@ -1,0 +1,354 @@
+# SERVICE MATRIX, cluster part (lane 3; only lane 3 edits this file): a 3-node cluster of the server
+# on real storage services, checked end to end with the ADBC Flight SQL driver (Go).
+#
+# Stores: HDFS (apache/hadoop: a NameNode and 3 DataNodes; each server runs in its DataNode's
+# network namespace, as server-node-N of docker-compose.ci.yml, with the DataNode's domain socket
+# mounted for short-circuit reads when the image's native Hadoop library loads) and S3 (a MinIO
+# container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
+# SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
+# extensions of ci-assets. Cells per store: balanced, speed (-DresourceProfile=speed), speed-dc
+# (speed + -DdistributedComplete=true), and loss (speed-dc under a load of 3 clients while the third
+# server is killed: every answer exact or a retryable UNAVAILABLE whose retry is exact, never a
+# partial answer). Each non-loss cell runs the 22 queries (answers compared with in-process DuckDB
+# over the same files, tools/ci/service-cluster-data.py), Flight SQL metadata and a prepared query
+# (tools/ci/service-cluster-check.py). The job summary has the table cell -> pass/fail + first error.
+#
+# Server: input "server" = a kestrel pre-release (tag server-1.0.0-<sha12> or just <sha12>), else
+# built from the checked-out commit (push runs build).
+name: Service cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "kestrel pre-release (server-1.0.0-<sha12> or <sha12>); empty = build this commit"
+        type: string
+        default: ""
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+      files:
+        description: "Parquet files of lineitem and orders"
+        type: string
+        default: "6"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/service-cluster.yml
+      - tools/ci/service-cluster-*.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-cluster-${{ github.ref }}-${{ inputs.server || 'build' }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+  DUCKDB_VERSION: v1.5.6
+  HADOOP_IMAGE: apache/hadoop:3.4.1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      server: ${{ steps.server.outputs.server }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: inputs.server == ''
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Server (pre-release or this commit)
+        id: server
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER: ${{ inputs.server }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/in/app"; mkdir -p "$out/plugins"
+          if [ -n "$SERVER" ]; then
+            tag=$SERVER; [[ "$tag" == server-* ]] || tag="server-1.0.0-$tag"
+            [[ "$tag" =~ ^server-[0-9A-Za-z.-]+$ ]] || { echo "bad server id: $SERVER"; exit 1; }
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/rel" \
+              --pattern '*-linux.jar' --pattern 'flight-server-libs-*.tar.zst' --pattern 'flight-plugins-*.tar.zst'
+            cp "$RUNNER_TEMP"/rel/*-linux.jar "$out/arrow-flight-server.jar"
+            tar --zstd -xf "$RUNNER_TEMP"/rel/flight-server-libs-*.tar.zst -C "$out"
+            tar --zstd -xf "$RUNNER_TEMP"/rel/flight-plugins-*.tar.zst -C "$out"
+            echo "server=$tag" >> "$GITHUB_OUTPUT"
+          else
+            ./mvnw install -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+            cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$out/arrow-flight-server.jar"
+            cp -r flight-server/target/libs "$out/"
+            cp -r flight-plugin-s3/target/plugin/s3 "$out/plugins/"
+            echo "server=build of $(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+          ls "$out" "$out/plugins"; du -sh "$out"
+
+      - name: DuckDB httpfs and hadoopfs extensions (ci-assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/all-ext" "$RUNNER_TEMP/in/ext"
+          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
+          for name in httpfs hadoopfs; do
+            f=$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension" | head -n 1)
+            test -n "$f" || { echo "no ${name} for ${DUCKDB_VERSION} in ci-assets"; exit 1; }
+            cp "$f" "$RUNNER_TEMP/in/ext/${name}.duckdb_extension"
+          done
+          ls -l "$RUNNER_TEMP/in/ext"
+
+      - name: TPC-H SF${{ inputs.sf || '1' }} and the reference answers
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" "${{ inputs.files || '6' }}"
+          du -sh "$RUNNER_TEMP/in/data"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-cluster-input
+          path: ${{ runner.temp }}/in
+          compression-level: 0
+          retention-days: 1
+
+  cell:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [hdfs, s3]
+        cell: [balanced, speed, speed-dc, loss]
+    name: ${{ matrix.store }} ${{ matrix.cell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: service-cluster-input
+          path: ${{ runner.temp }}/in
+
+      - name: Client and server image
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          # The hadoopfs build links libssl.so.1.1: an Ubuntu 20.04 base, the runner's JDK 21 mounted.
+          mkdir -p "$RUNNER_TEMP/img"
+          printf '%s\n' 'FROM eclipse-temurin:17-jdk-focal' \
+            'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libxml2 libkrb5-3 libgsasl7 libuuid1 > /dev/null && rm -rf /var/lib/apt/lists/*' \
+            > "$RUNNER_TEMP/img/Dockerfile"
+          docker build -q -t sc-server "$RUNNER_TEMP/img"
+          docker run --rm -v "$RUNNER_TEMP/in/ext:/ext:ro" sc-server bash -c 'ldd /ext/hadoopfs.duckdb_extension | grep "not found" || echo "hadoopfs: all libraries found"'
+          docker network create --subnet 172.30.0.0/24 sc > /dev/null
+
+      - name: Run the cell
+        env:
+          STORE: ${{ matrix.store }}
+          CELL: ${{ matrix.cell }}
+        run: |
+          set +e -u
+          in="$RUNNER_TEMP/in"; res="$RUNNER_TEMP/result.txt"; notes="$RUNNER_TEMP/notes.txt"; : > "$notes"
+          finish() { # status, detail
+            printf '%s|%s|%s|%s\n' "$STORE" "$CELL" "$1" "$(echo "$2" | head -n 1 | tr '|' '/' | cut -c1-300)" > "$res"
+            for i in 1 2 3; do docker logs "srv$i" > "$RUNNER_TEMP/srv$i.log" 2>&1; done
+            [ "$1" = pass ]; exit $?
+          }
+          note() { echo "$*" | tee -a "$notes"; }
+          nodes="172.30.0.11:32010,172.30.0.12:32010,172.30.0.13:32010"
+          common=(-v "$in/app:/app:ro" -v "$in/ext:/ext:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$RUNNER_TEMP/conf:/conf:ro"
+            -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true
+            -e DUCKDB_HDFS_EXTENSION=/ext/hadoopfs.duckdb_extension -e DUCKDB_HTTPFS_EXTENSION=/ext/httpfs.duckdb_extension
+            -e FLIGHT_PLUGINS_DIR=/app/plugins)
+          mkdir -p "$RUNNER_TEMP/conf"
+          printf '<configuration></configuration>\n' > "$RUNNER_TEMP/conf/hdfs-site.xml"
+
+          if [ "$STORE" = hdfs ]; then
+            hcfg=(-e CORE-SITE.XML_fs.defaultFS=hdfs://172.30.0.10:8020 -e HDFS-SITE.XML_dfs.replication=1
+              -e HDFS-SITE.XML_dfs.permissions.enabled=false -e HDFS-SITE.XML_dfs.namenode.rpc-bind-host=0.0.0.0
+              -e HDFS-SITE.XML_dfs.namenode.name.dir=/tmp/hdfs/nn -e HDFS-SITE.XML_dfs.datanode.data.dir=/tmp/hdfs/dn
+              -e HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check=false)
+            sc=off
+            if docker run --rm "$HADOOP_IMAGE" hadoop checknative 2>&1 | grep -E '^hadoop: +true'; then sc=on; fi
+            note "HDFS $HADOOP_IMAGE, NameNode + 3 DataNodes, replication 1, short-circuit reads: $sc"
+            docker run -d --name nn --network sc --ip 172.30.0.10 --hostname nn "${hcfg[@]}" "$HADOOP_IMAGE" \
+              bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 && exec hdfs namenode' > /dev/null
+            for i in 1 2 3; do
+              scfg=()
+              if [ "$sc" = on ]; then
+                sudo install -d -o 1000 -g 1000 -m 755 "/srv/sc-sock/dn$i"
+                scfg=(-v "/srv/sc-sock/dn$i:/var/run/hdfs-sockets" -e HDFS-SITE.XML_dfs.domain.socket.path=/var/run/hdfs-sockets/dn
+                  -e HDFS-SITE.XML_dfs.client.read.shortcircuit=true)
+              fi
+              docker run -d --name "dn$i" --network sc --ip "172.30.0.1$i" --hostname "node$i" "${hcfg[@]}" "${scfg[@]}" \
+                "$HADOOP_IMAGE" hdfs datanode > /dev/null
+            done
+            for _ in $(seq 120); do
+              report=$(docker exec nn hdfs dfsadmin -report 2>/dev/null)
+              [[ $report == *'Live datanodes (3)'* && $report != *'Safe mode is ON'* ]] && break
+              sleep 1
+            done
+            [[ $report == *'Live datanodes (3)'* ]] || { docker logs nn 2>&1 | tail -n 20; docker logs dn1 2>&1 | tail -n 20; finish fail "HDFS did not come up with 3 DataNodes"; }
+            docker cp "$in/data" nn:/tmp/upload > /dev/null
+            docker exec nn bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
+            docker exec nn hdfs fsck /data/tpch/lineitem -files -blocks -locations 2>/dev/null | grep -oE 'DatanodeInfoWithStorage\[172\.30\.0\.1[1-3]' | sort | uniq -c | sed 's/^/lineitem blocks on /'
+            dataDir=hdfs://172.30.0.10:8020/data
+            if [ "$sc" = on ]; then
+              printf '%s\n' '<configuration>' \
+                '<property><name>dfs.client.read.shortcircuit</name><value>true</value></property>' \
+                '<property><name>dfs.domain.socket.path</name><value>/var/run/hdfs-sockets/dn</value></property>' \
+                '</configuration>' > "$RUNNER_TEMP/conf/hdfs-site.xml"
+            fi
+            netOf() { echo "--network container:dn$1"; }
+            sockOf() { [ "$sc" = on ] && echo "-v /srv/sc-sock/dn$1:/var/run/hdfs-sockets"; }
+            storeEnv=(-e LIBHDFS3_CONF=/conf/hdfs-site.xml)
+          else
+            key=$(openssl rand -hex 8); secret=$(openssl rand -hex 16); echo "::add-mask::$secret"
+            s3=""
+            for image in minio/minio:RELEASE.2025-09-07T16-13-09Z pgsty/minio:latest cgr.dev/chainguard/minio:latest; do
+              if docker pull -q "$image" > /dev/null 2>&1 \
+                  && docker run -d --name s3 --network sc --ip 172.30.0.20 -e MINIO_ROOT_USER="$key" -e MINIO_ROOT_PASSWORD="$secret" \
+                    "$image" server /data --address :9000 > /dev/null; then
+                for _ in $(seq 30); do curl -fsS -o /dev/null http://172.30.0.20:9000/minio/health/live && break; sleep 1; done
+                if curl -fsS -o /dev/null http://172.30.0.20:9000/minio/health/live; then s3="MinIO ($image)"; break; fi
+                docker logs s3 2>&1 | tail -n 5; docker rm -f s3 > /dev/null
+              fi
+            done
+            if [ -z "$s3" ]; then
+              docker run -d --name s3 --network sc --ip 172.30.0.20 python:3.12-slim \
+                bash -c 'pip install -q "moto[server]==5.2.5" && exec moto_server -H 0.0.0.0 -p 9000' > /dev/null
+              for _ in $(seq 120); do curl -fsS -o /dev/null http://172.30.0.20:9000/ && break; sleep 1; done
+              s3="moto 5.2.5 (no MinIO image could be pulled)"
+            fi
+            note "S3: $s3"
+            export AWS_ACCESS_KEY_ID=$key AWS_SECRET_ACCESS_KEY=$secret AWS_DEFAULT_REGION=us-east-1
+            aws --endpoint-url http://172.30.0.20:9000 s3 mb s3://lake > /dev/null || finish fail "S3 bucket not created ($s3)"
+            aws --endpoint-url http://172.30.0.20:9000 s3 cp --recursive --quiet "$in/data" s3://lake/data/ || finish fail "S3 upload failed"
+            dataDir=s3://lake/data
+            netOf() { echo "--network sc --ip 172.30.0.1$1"; }
+            sockOf() { :; }
+            storeEnv=(-e FLIGHT_S3_ENDPOINT=http://172.30.0.20:9000 -e FLIGHT_S3_URL_STYLE=path
+              -e FLIGHT_S3_ACCESS_KEY="$key" -e FLIGHT_S3_SECRET_KEY="$secret")
+          fi
+
+          case "$CELL" in
+            balanced) opts="" ;;
+            speed) opts="-DresourceProfile=speed" ;;
+            *) opts="-DresourceProfile=speed -DdistributedComplete=true" ;;
+          esac
+          note "server ${{ needs.prepare.outputs.server }}, options: ${opts:-(defaults)} -DendpointsPerServer=2; 3 nodes, 1 CPU / 3 GB each"
+          for i in 1 2 3; do
+            # shellcheck disable=SC2046
+            docker run -d --name "srv$i" $(netOf "$i") $(sockOf "$i") --cpus=1 --memory=3g "${common[@]}" "${storeEnv[@]}" \
+              sc-server /jdk/bin/java -Xmx1g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+              -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DendpointsPerServer=2 $opts \
+              -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
+              --data-dir "$dataDir" --localhost "172.30.0.1$i" --port 32010 --hazelcast-port 5701 \
+              --hosts 172.30.0.11:5701,172.30.0.12:5701,172.30.0.13:5701 --metrics-enabled false > /dev/null
+          done
+          for i in 1 2 3; do
+            for _ in $(seq 180); do
+              docker logs "srv$i" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+              [ "$(docker inspect -f '{{.State.Running}}' "srv$i")" = true ] || break
+              sleep 1
+            done
+            if ! docker logs "srv$i" 2>&1 | grep -q 'Server Arrow Flight SQL started'; then
+              docker logs "srv$i" 2>&1 | tail -n 40
+              finish fail "node $i did not start: $(docker logs "srv$i" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+            fi
+          done
+          sleep 5
+          py="$RUNNER_TEMP/py/bin/python"
+          if [ "$CELL" = loss ]; then
+            "$py" -I tools/ci/service-cluster-check.py loss "$nodes" "$in" 60 3 > "$RUNNER_TEMP/client.log" 2>&1 &
+            client=$!
+            for _ in $(seq 60); do grep -q '^load start' "$RUNNER_TEMP/client.log" && break; sleep 1; done
+            sleep 15
+            note "node 3 killed (docker kill -s KILL) at $(date -u +%T) under load of 3 clients on nodes 1-2"
+            docker kill -s KILL srv3 > /dev/null
+            wait "$client"; rc=$?
+            grep -E '^(summary|result)' "$RUNNER_TEMP/client.log"
+            grep -E '^event .* (unavailable|wrong|error|retry)' "$RUNNER_TEMP/client.log" | head -n 20
+            note "$(grep '^summary' "$RUNNER_TEMP/client.log")"
+          else
+            "$py" -I tools/ci/service-cluster-check.py check "$nodes" "$in" > "$RUNNER_TEMP/client.log" 2>&1; rc=$?
+            cat "$RUNNER_TEMP/client.log"
+          fi
+          for i in 1 2 3; do
+            note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
+          done
+          result=$(grep -m 1 '^result ' "$RUNNER_TEMP/client.log")
+          if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then finish pass ""; fi
+          detail=${result#result fail }
+          [ -n "$result" ] || detail="client failed: $(grep -m 1 -E 'Error|Exception' "$RUNNER_TEMP/client.log")"
+          finish fail "$detail"
+
+      - name: Cell report
+        if: always()
+        run: |
+          [ -s "$RUNNER_TEMP/result.txt" ] || echo "${{ matrix.store }}|${{ matrix.cell }}|fail|setup failed (see the job log)" > "$RUNNER_TEMP/result.txt"
+          cp "$RUNNER_TEMP/notes.txt" "$RUNNER_TEMP/result-notes.txt" 2>/dev/null || : > "$RUNNER_TEMP/result-notes.txt"
+          {
+            echo "### ${{ matrix.store }} ${{ matrix.cell }}"
+            echo '```'; cat "$RUNNER_TEMP/result.txt" "$RUNNER_TEMP/result-notes.txt"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: result-${{ matrix.store }}-${{ matrix.cell }}
+          path: |
+            ${{ runner.temp }}/result.txt
+            ${{ runner.temp }}/result-notes.txt
+            ${{ runner.temp }}/client.log
+            ${{ runner.temp }}/srv*.log
+          retention-days: 7
+
+  summary:
+    needs: [prepare, cell]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: result-*
+          path: ${{ runner.temp }}/results
+      - name: Matrix
+        run: |
+          set -u
+          {
+            echo "### Service matrix, cluster: ${{ needs.prepare.outputs.server || 'server not prepared' }} ($GITHUB_SHA)"
+            echo
+            echo "| store | cell | result | first error |"
+            echo "|---|---|---|---|"
+            for f in "$RUNNER_TEMP"/results/*/result.txt; do
+              [ -f "$f" ] || continue
+              IFS='|' read -r store cell status detail < "$f"
+              echo "| $store | $cell | $([ "$status" = pass ] && echo pass || echo '**FAIL**') | ${detail:-} |"
+            done
+            echo
+            echo '<details><summary>notes</summary>'
+            echo
+            echo '```'
+            for d in "$RUNNER_TEMP"/results/*/; do echo "[$(basename "$d")]"; cat "$d/result-notes.txt" 2>/dev/null; done
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
+          [ "$n" -eq 8 ] || { echo "only $n of 8 cells reported"; exit 1; }
+          ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
