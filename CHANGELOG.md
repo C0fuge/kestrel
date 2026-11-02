@@ -110,6 +110,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   metadata and a prepared query; job summary table cell -> pass/fail + first error.
   The HDFS cells load hadoopfs from `-Darrowflight.duckdb.extensionDir` only (as a real cluster runs; catches the
   2026-11-02 extensionDir bug) and note each DataNode's TCP block reads from JMX (lane 3, D13).
+  A third store `hdfs-ha` (lane 3, D13 b): the same cluster on an HA nameservice `hdfs://ns1` (nn1 standby / nn2
+  active, so every client fails over); its loss cell also fails the NameNodes over nn2 -> nn1 under load.
 - **CI: service matrix, security part** (`service-security.yml`, item 25 / plugins lane): the server against real
   security services, in `balanced` and `speed`, with Flight TLS - OpenLDAP login (search mode, service account,
   group search) and Keycloak JWT login (JWKS over HTTPS, audience and groups claims); each cell checks refused
