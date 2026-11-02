@@ -23,6 +23,24 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-02 18:00 - BUG FIRST (before item 24): HDFS is broken with `f06b5834e76e` on a real cluster.**
+> Production-like Hadoop 3.1.3 HA cluster (Kerberos, short-circuit local reads, `hdfs://<nameservice>/data/parquet`,
+> 3 DataNodes, our `hadoopfs` 1.5.6 extension). Two failures, every query, every node:
+> 1. **balanced**: every query is refused - `query=refused`, DuckDB `Invalid Input Error: Attempting to execute an
+>    unsuccessful or closed pending query result` (no stack in the log), even `SELECT count(*) FROM tpch.lineitem`;
+> 2. **speed / dc** (shared DuckDB): start fails - `IllegalStateException: DuckDB cannot be set up for the data store`
+>    from `DuckDbAdapter.openSharedRoot -> LockdownCheck.verify`: `allowed_directories` reads back the HDFS root as a
+>    path *relative to the server's working directory* (`<cwd>/hdfs:/<nameservice>/data/parquet/`), not `hdfs:/...`.
+> Hypothesis: `SET allowed_directories` runs before `hadoopfs` is loaded, so DuckDB 1.5.6 does not know the `hdfs:`
+> scheme and makes the collapsed `hdfs:/ns/...` an absolute local path; then (1) every `hdfs://` read is outside the
+> allowed directories and the real error is hidden behind the pending-result wrapper. Do: (a) reproduce in CI with a
+> real HDFS (Hadoop container, nameservice-style URI `hdfs://<ns>/...` if an HA-less nameservice is not possible use
+> `hdfs://<host>:<port>/...`) for balanced AND speed, TPC-H SF1 22/22 - this path has no end-to-end CI test today;
+> (b) fix the order (load the storage extensions before the lockdown) and/or allow-list the HDFS root in the form
+> DuckDB stores it; (c) surface the underlying DuckDB error instead of the pending-result wrapper (log the first error
+> of a refused query with its stack); (d) `package=true` pre-release. Then write "HDFS FIX DONE" at the start of a line
+> and continue with item 24 (its build will then carry both).
+
 > **Maintainer, 2026-11-02 - ITEM 24 (take it first): `resourceProfile=speed` turns the DuckDB external file cache on.**
 > egret wave `fc-s3-f06b5834e76e` (run 41437523179, `results/fc-s3-f06b5834e76e-41437523179/`, S3, 2 CPUs / 6 GB, 3
 > rounds): speed + `-DduckDbExternalFileCache=true` vs speed: TPC-H SF10 ADBC 262.5 -> 42.7 s (0.16 every round); small
