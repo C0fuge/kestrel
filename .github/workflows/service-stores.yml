@@ -18,6 +18,7 @@ on:
       - "tools/ci/service-tpch.py"
       - "tools/ci/service-iceberg.py"
       - "tools/ci/ozone-s3.sh"
+      - "tools/ci/lakekeeper-setup.sh"
   workflow_dispatch:
     inputs:
       server:
@@ -123,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ s3, iceberg-hadoop, ozone, lakefs-branch, lakefs-commit, postgres, mysql ]
+        service: [ s3, iceberg-hadoop, iceberg-rest, ozone, lakefs-branch, lakefs-commit, postgres, mysql ]
         profile: [ balanced, speed ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,7 +159,7 @@ jobs:
       - name: Logs
         if: failure()
         run: |
-          for c in svc srv ozone-scm ozone-om ozone-dn ozone-s3g; do
+          for c in svc srv catalog lakekeeper-pg ozone-scm ozone-om ozone-dn ozone-s3g; do
             docker inspect "$c" > /dev/null 2>&1 || continue
             echo "=== $c"; docker logs "$c" 2>&1 | tail -n 80
           done

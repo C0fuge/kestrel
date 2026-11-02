@@ -6,7 +6,7 @@
 # query). Writes $RESULT (json). Test-only credentials, generated here (lakeFS: its documented
 # quickstart key pair, a throw-away container).
 # Usage: service-stores-cell.sh <service> <profile>
-#   service: s3 | iceberg-hadoop | ozone | lakefs-branch | lakefs-commit | postgres | mysql
+#   service: s3 | iceberg-hadoop | iceberg-rest | ozone | lakefs-branch | lakefs-commit | postgres | mysql
 #   profile: balanced | speed
 # Environment: SRV, EXT (DuckDB extension dir: v1.5.6/linux_amd64/*), TPCH, PY (python with duckdb,
 # adbc), RESULT, WORK (scratch directory).
@@ -38,6 +38,21 @@ s3mb() {
     aws --endpoint-url "$1" s3 mb "s3://$2"
 }
 
+minio_start() { # MinIO on 127.0.0.1:9000, root user = the generated key pair
+  image=""
+  for candidate in minio/minio:RELEASE.2025-04-22T22-12-26Z quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
+      cgr.dev/chainguard/minio:latest; do
+    if docker pull -q "$candidate" > /dev/null 2>&1; then image=$candidate; break; fi
+    echo "cannot pull $candidate"
+  done
+  [ -n "$image" ] || fail "no MinIO image could be pulled (minio/minio, quay.io/minio/minio, cgr.dev/chainguard/minio)"
+  echo "MinIO image: $image"
+  docker run -d --name svc --network host -e "MINIO_ROOT_USER=$key" -e "MINIO_ROOT_PASSWORD=$secret" \
+    "$image" server /tmp/minio --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 > /dev/null
+  for _ in $(seq 60); do curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready && break; sleep 1; done
+  curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready || fail "MinIO did not become ready"
+}
+
 # Server options per service: data directory, -D options, environment.
 opts=()
 envs=()
@@ -50,18 +65,7 @@ case "$service" in
     # s3 queries the data directory (a second copy on "warehouse" must not disturb it); iceberg-hadoop
     # writes the tables as an Iceberg Hadoop catalog on "warehouse" (tools/ci/service-iceberg.py) and
     # queries them through the iceberg plugin, which reads them through the named store.
-    image=""
-    for candidate in minio/minio:RELEASE.2025-04-22T22-12-26Z quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z \
-        cgr.dev/chainguard/minio:latest; do
-      if docker pull -q "$candidate" > /dev/null 2>&1; then image=$candidate; break; fi
-      echo "cannot pull $candidate"
-    done
-    [ -n "$image" ] || fail "no MinIO image could be pulled (minio/minio, quay.io/minio/minio, cgr.dev/chainguard/minio)"
-    echo "MinIO image: $image"
-    docker run -d --name svc --network host -e "MINIO_ROOT_USER=$key" -e "MINIO_ROOT_PASSWORD=$secret" \
-      "$image" server /tmp/minio --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 > /dev/null
-    for _ in $(seq 60); do curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready && break; sleep 1; done
-    curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/ready || fail "MinIO did not become ready"
+    minio_start
     s3mb http://127.0.0.1:9000 lake && s3mb http://127.0.0.1:9000 warehouse
     s3put http://127.0.0.1:9000 lake/data
     dataDir=s3://lake/data
@@ -76,6 +80,30 @@ case "$service" in
     fi
     envs+=(-e "FLIGHT_S3_ACCESS_KEY=$key" -e "FLIGHT_S3_SECRET_KEY=$secret"
       -e "FLIGHT_S3_WH_ACCESS_KEY=$key" -e "FLIGHT_S3_WH_SECRET_KEY=$secret")
+    ;;
+  iceberg-rest)
+    # Lakekeeper (Iceberg REST, with its PostgreSQL) on MinIO, vended credentials on: Lakekeeper
+    # vends temporary credentials from MinIO's STS AssumeRole (as MinIO user "lakekeeper"), the
+    # plugin asks for them (vendedCredentials) and reads manifests and data with them. The
+    # server's own S3 key is unknown to MinIO, so any read without the vended credentials fails.
+    minio_start
+    s3mb http://127.0.0.1:9000 warehouse
+    lkkey=lakekeeper
+    lksecret=$(openssl rand -hex 16)
+    echo "::add-mask::$lksecret"
+    mc=(docker run --rm --network host -e "MC_HOST_m=http://$key:$secret@127.0.0.1:9000" cgr.dev/chainguard/minio-client:latest)
+    "${mc[@]}" admin user add m "$lkkey" "$lksecret"
+    "${mc[@]}" admin policy attach m readwrite --user "$lkkey"
+    "$here/lakekeeper-setup.sh" vakamo/lakekeeper:v0.13.8 tpch warehouse lakekeeper \
+      http://127.0.0.1:9000 "$lkkey" "$lksecret" sts
+    "$PY" -I "$here/service-iceberg.py" rest "$TPCH" http://127.0.0.1:8181/catalog tpch rest \
+      http://127.0.0.1:9000 "$lkkey" "$lksecret"
+    opts+=(-Darrowflight.s3.endpoint=http://127.0.0.1:9000 -Darrowflight.s3.urlStyle=path
+      -Dcatalog=iceberg-rest -Darrowflight.iceberg-rest.uri=http://127.0.0.1:8181/catalog
+      -Darrowflight.iceberg-rest.warehouse=tpch -Darrowflight.iceberg-rest.roots=s3://warehouse/lakekeeper
+      -Darrowflight.iceberg-rest.vendedCredentials=true)
+    envs+=(-e "FLIGHT_S3_ACCESS_KEY=$(openssl rand -hex 8)" -e "FLIGHT_S3_SECRET_KEY=$(openssl rand -hex 16)")
+    schema=rest
     ;;
   ozone)
     # Apache Ozone's S3 gateway (non-secure: any key is accepted, so the keys only travel).
