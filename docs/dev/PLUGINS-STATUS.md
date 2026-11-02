@@ -49,26 +49,35 @@ Runs: push 41477683286 (3297d041) 6/6 cells (hive 104/104 in both profiles); dis
 `server=server-1.0.0-fca6512a8046` (plugins tar of the pre-release) 41480086139 6/6. Earlier runs 41474257754
 (insecure mode + TLS refused) and 41475888176 (balanced: metastore not yet listening) were CI-setup faults, no
 server or plugin bug found.
-**Next (step 3): `ranger` cell.** Findings of this session (local docker): `apache/ranger` and `apache/ranger-db`
-images are **arm64 only up to 2.6.0**; **2.7.0** has amd64. Ranger admin 2.7.0 + `apache/ranger-db:2.7.0`
-(PostgreSQL, preset) on a docker network, container names/hostnames `ranger-db` and `ranger` (the image's
-install.properties hard-code `db_host=ranger-db`; its `create-ranger-services.py` uses `http://ranger:6080` and
-creates service **`dev_hive`**), `-p 6080:6080`: admin up in ~2 min **without Solr** (audit_store=solr only breaks
-the audit UI), admin password `rangerR0cks!` (image default; fine for a throwaway CI container, but mask it).
-REST that worked: `POST /service/xusers/groups {"name":"analysts"}`; `POST /service/xusers/secure/users
-{"name":"alice","password":...,"status":1,"isVisible":1,"userRoleList":["ROLE_USER"],"groupNameList":["analysts"]}`;
-`POST /service/public/v2/api/policy` with `service=dev_hive`, `resources` database/table/column, `policyItems`
-(groups, accesses `select`); `policyType` 1 + `dataMaskPolicyItems[].dataMaskInfo.dataMaskType=MASK_SHOW_LAST_4`;
-`policyType` 2 + `rowFilterPolicyItems[].rowFilterInfo.filterExpr`; `GET /service/plugins/policies/download/
-dev_hive?lastKnownVersion=-1&pluginId=x` answers 200 without credentials. Ranger admin 2.7 vs the server's Ranger
-2.4 plugin client: the download format is compatible as far as known - the cell will tell. Plan: OpenLDAP (as the
-ldap cell, `alice` in `analysts`) + Hive (as the hive cell, `tpch_parquet` and `tpch_orc` enough) + Ranger;
-`FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`, `RANGER_HIVE_SERVICE_NAME=dev_hive`, `RANGER_ADMIN_URL=
-http://127.0.0.1:6080`, `auth/ldap/*:auth/ranger-hive/*` on the class path; policies: select on `tpch_parquet`
-and `tpch_orc` for `analysts` (not `tpch_text`: refused check), mask `MASK_SHOW_LAST_4` on `customer.c_phone`, row
-filter `o_orderstatus = 'F'` on `orders`; expected answers of the affected queries computed by DuckDB with the same
-mask/filter (a `--restricted` mode of `service-check.py`, or a separate small check script); wait for the
-policies (download every 30 s) before checking. Then write "SERVICE MATRIX plugins DONE".
+*Step 3 done 2026-11-02 (d733dc7a, 496ef3c7, 629c36f7): cell **ranger** - red because of two bugs it found.*
+`tools/ci/service-ranger.sh start|setup`: Ranger admin 2.7.0 + `apache/ranger-db:2.7.0` (PostgreSQL) on network
+`ranger-svc`, container/host names `ranger-db` / `ranger`, `127.0.0.1:6080`, no Solr, started first (ready by the time
+Hive is done); setup waits for service `dev_hive`, creates group `analysts` and per database (`tpch_parquet`,
+`tpch_orc`) a select policy (all tables/columns), a `MASK_SHOW_LAST_4` mask on `customer.c_phone` and a row filter
+`o_orderstatus = 'F'` on `orders`; prints what the plugin downloads. The cell reuses the ldap cell's OpenLDAP (login
+`alice` in `analysts`) and the hive cell's Hive tables; server with `FLIGHT_AUTHORIZATION_PROVIDER=ranger-hive`,
+`auth/ldap/*:auth/ranger-hive/*`. `tools/ci/service-ranger-data.py`: DuckDB computes the 22 answers + prepared under
+the same mask and filter, plus `extra.json` probes (masked phones, order count per status, `tpch_text` refused);
+`service-check.py --extra`. Result (run 41486142813, both profiles): 35/59 - refusals, sql-info, listings, schemas,
+mask, row filter, refusal of an unpoliced database and the 11 queries the table check can name (q1, 2, 4, 6, 11,
+15-18, 20, 21; q4/q18/q21 read the filtered orders) equal DuckDB's restricted answers. Failing: **(core bug,
+written bug-first into STATUS.md)** the server's table check under any authorization provider refuses comma joins,
+FROM subqueries and `?` parameters (q3, 5, 7-10, 12-14, 19, 22, prepared). **(our bug, item below)** Ranger's
+default tag policy refused every table until the cell deleted it.
+
+**Next (bug first, this lane): `ranger-hive` refuses every table when the Hive service has a tag service.** Ranger
+creates the deny policy `EXPIRES_ON` (condition `accessed-after-expiry`) in every tag service, and
+`HiveRestrictivePolicies.of` sets a global block for any restrictive tag policy ("Tags of unnamed columns are unknown
+here") - so on any cluster that uses tag-based policies at all, every query is refused (run 41484542642: q1
+PermissionDenied; 41486142813 after deleting the policy: passes). Also seen: Ranger 2.4's
+`RangerScriptConditionEvaluator` cannot create a JavaScript engine on Java 21 (no Nashorn), so script conditions
+cannot be evaluated by the plugin anyway. Fix: download the service tags (the base plugin adds `RangerTagEnricher`
+when the service has a tag service), and block a table only when a restrictive tag policy's tag is on the database,
+the table or one of its columns (or when tags cannot be read: deny); `EXPIRES_ON` can be evaluated exactly (the
+tag's `expiry_date` attribute vs now) or treated as a block for tagged tables only. Tests: unit (tag on a column /
+table / none) and the ranger cell without the deletion in `service-ranger.sh setup` plus a tag with a past expiry on
+one table (refused) - Ranger REST `/service/tags/...`. Then the cell is green once the core bug is fixed; write
+"SERVICE MATRIX plugins DONE" when all cells are green.
 
 
 > **Maintainer, 2026-10-29 13:15 - FINISH MODE:** finish P6 completely (masks + row filters wired into queries, tests,
@@ -981,3 +990,11 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   from 2.7.0; 2.7.0 admin + ranger-db works without Solr, REST recipe in Next steps. FYI lane 4:
   `tools/ci/hive-mm-writer.sh` waits for the metastore on the host port, which docker's proxy accepts before the
   metastore listens (fixed here by probing inside the container). Not yet "SERVICE MATRIX plugins DONE". Lock released.
+- 2026-11-02 (plugins session): SERVICE MATRIX step 3 - cell `ranger` (Ranger admin 2.7.0 + PostgreSQL, Hive tables,
+  OpenLDAP; mask, row filter, unpoliced database; answers by DuckDB under the same restrictions):
+  `tools/ci/service-ranger.sh`, `service-ranger-data.py`, `service-check.py --extra`. Runs 41483268562 (d733dc7a,
+  cancelled by the next push after the ranger cells failed), 41484542642 (496ef3c7), 41486142813 (629c36f7):
+  ldap/jwt cells green; ranger 35/59 in both profiles. Two bugs found: (1) core - the table check under any
+  authorization provider refuses comma joins, FROM subqueries and `?` parameters (written bug-first into STATUS.md
+  Next steps); (2) this lane - `ranger-hive` refuses every table while the Hive service has a tag service (Ranger's
+  default `EXPIRES_ON` deny), next item. Not yet "SERVICE MATRIX plugins DONE". Lock released.
