@@ -6,7 +6,9 @@
 # mounted for short-circuit reads when the image's native Hadoop library loads) and S3 (a MinIO
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
 # SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
-# extensions of ci-assets. Cells per store: balanced, speed (-DresourceProfile=speed), speed-dc
+# extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
+# maintainer's cluster runs; the HDFS notes count short-circuit reads per DataNode). Cells per store:
+# balanced, speed (-DresourceProfile=speed), speed-dc
 # (speed + -DdistributedComplete=true), and loss (speed-dc under a load of 3 clients while the third
 # server is killed: every answer exact or a retryable UNAVAILABLE whose retry is exact, never a
 # partial answer). Each non-loss cell runs the 22 queries (answers compared with in-process DuckDB
@@ -107,6 +109,11 @@ jobs:
             cp "$f" "$RUNNER_TEMP/in/ext/${name}.duckdb_extension"
           done
           ls -l "$RUNNER_TEMP/in/ext"
+          # The layout of arrowflight.duckdb.extensionDir (<dir>/<version>/<platform>/), as the maintainer's
+          # cluster runs it: the HDFS cells load hadoopfs from there only (the 2026-11-02 bug: hadoopfs was not
+          # resolved from extensionDir, every HDFS query refused).
+          mkdir -p "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64"
+          cp "$RUNNER_TEMP"/in/ext/*.duckdb_extension "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64/"
 
       - name: TPC-H SF${{ inputs.sf || '1' }} and the reference answers
         run: |
@@ -163,14 +170,13 @@ jobs:
           in="$RUNNER_TEMP/in"; res="$RUNNER_TEMP/result.txt"; notes="$RUNNER_TEMP/notes.txt"; : > "$notes"
           finish() { # status, detail
             printf '%s|%s|%s|%s\n' "$STORE" "$CELL" "$1" "$(echo "$2" | head -n 1 | tr '|' '/' | cut -c1-300)" > "$res"
-            for i in 1 2 3; do docker logs "srv$i" > "$RUNNER_TEMP/srv$i.log" 2>&1; done
+            for i in 1 2 3; do docker logs "srv$i" > "$RUNNER_TEMP/srv$i.log" 2>&1; docker logs "dn$i" > "$RUNNER_TEMP/dn$i.log" 2>&1 || rm -f "$RUNNER_TEMP/dn$i.log"; done
             [ "$1" = pass ]; exit $?
           }
           note() { echo "$*" | tee -a "$notes"; }
           nodes="172.30.0.11:32010,172.30.0.12:32010,172.30.0.13:32010"
-          common=(-v "$in/app:/app:ro" -v "$in/ext:/ext:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$RUNNER_TEMP/conf:/conf:ro"
-            -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true
-            -e DUCKDB_HDFS_EXTENSION=/ext/hadoopfs.duckdb_extension -e DUCKDB_HTTPFS_EXTENSION=/ext/httpfs.duckdb_extension
+          common=(-v "$in/app:/app:ro" -v "$in/ext:/ext:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro"
+            -v "$RUNNER_TEMP/conf:/conf:ro" -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true
             -e FLIGHT_PLUGINS_DIR=/app/plugins)
           mkdir -p "$RUNNER_TEMP/conf"
           printf '<configuration></configuration>\n' > "$RUNNER_TEMP/conf/hdfs-site.xml"
@@ -214,6 +220,8 @@ jobs:
             netOf() { echo "--network container:dn$1"; }
             sockOf() { [ "$sc" = on ] && echo "-v /srv/sc-sock/dn$1:/var/run/hdfs-sockets"; }
             storeEnv=(-e LIBHDFS3_CONF=/conf/hdfs-site.xml)
+            # hadoopfs only through the extension directory (no DUCKDB_HDFS_EXTENSION), as on the maintainer's cluster.
+            extOpts="-Darrowflight.duckdb.extensionDir=/extdir"
           else
             key=$(openssl rand -hex 8); secret=$(openssl rand -hex 16); echo "::add-mask::$secret"
             s3=""
@@ -239,7 +247,9 @@ jobs:
             dataDir=s3://lake/data
             netOf() { echo "--network sc --ip 172.30.0.1$1"; }
             sockOf() { :; }
-            storeEnv=(-e FLIGHT_S3_ENDPOINT=http://172.30.0.20:9000 -e FLIGHT_S3_URL_STYLE=path
+            extOpts=""
+            storeEnv=(-e DUCKDB_HTTPFS_EXTENSION=/ext/httpfs.duckdb_extension
+              -e FLIGHT_S3_ENDPOINT=http://172.30.0.20:9000 -e FLIGHT_S3_URL_STYLE=path
               -e FLIGHT_S3_ACCESS_KEY="$key" -e FLIGHT_S3_SECRET_KEY="$secret")
           fi
 
@@ -248,14 +258,14 @@ jobs:
             speed) opts="-DresourceProfile=speed" ;;
             *) opts="-DresourceProfile=speed -DdistributedComplete=true" ;;
           esac
-          note "server ${{ needs.prepare.outputs.server }}, options: ${opts:-(defaults)} -DendpointsPerServer=2; 3 nodes, 1 CPU / 3 GB each"
+          note "server ${{ needs.prepare.outputs.server }}, options: ${opts:-(defaults)} -DendpointsPerServer=2 ${extOpts:-DUCKDB_HTTPFS_EXTENSION}; 3 nodes, 1 CPU / 3 GB each"
           for i in 1 2 3; do
             # shellcheck disable=SC2046
             docker run -d --name "srv$i" $(netOf "$i") $(sockOf "$i") --cpus=1 --memory=3g "${common[@]}" "${storeEnv[@]}" \
               sc-server /jdk/bin/java -Xmx1g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
               --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-              -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DendpointsPerServer=2 $opts \
+              -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DendpointsPerServer=2 $opts $extOpts \
               -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
               --data-dir "$dataDir" --localhost "172.30.0.1$i" --port 32010 --hazelcast-port 5701 \
               --hosts 172.30.0.11:5701,172.30.0.12:5701,172.30.0.13:5701 --metrics-enabled false > /dev/null
@@ -291,6 +301,14 @@ jobs:
           for i in 1 2 3; do
             note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
           done
+          if [ "$STORE" = hdfs ]; then
+            # Short-circuit reads: a client that reads a local block over the domain socket asks the DataNode for
+            # the block's file descriptors (clienttrace op REQUEST_SHORT_CIRCUIT_FDS); a read over TCP is HDFS_READ.
+            for i in 1 2 3; do
+              dl=$(docker logs "dn$i" 2>&1)
+              note "dn$i: short-circuit fds $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: true' <<< "$dl") (failed $(grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS.*success: false' <<< "$dl")), tcp reads $(grep -c 'op: HDFS_READ' <<< "$dl")"
+            done
+          fi
           result=$(grep -m 1 '^result ' "$RUNNER_TEMP/client.log")
           if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then finish pass ""; fi
           detail=${result#result fail }
@@ -316,6 +334,7 @@ jobs:
             ${{ runner.temp }}/result-notes.txt
             ${{ runner.temp }}/client.log
             ${{ runner.temp }}/srv*.log
+            ${{ runner.temp }}/dn*.log
           retention-days: 7
 
   summary:
