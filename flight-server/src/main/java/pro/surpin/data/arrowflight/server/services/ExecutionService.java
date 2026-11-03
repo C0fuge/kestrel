@@ -1650,14 +1650,15 @@ public final class ExecutionService {
     }
 
     /**
-     * Returns the cache limit that applies to a ticket's copies.
+     * Returns the bytes a batch of a ticket's copies may take: the cache limit, or less when the
+     * disk of the copies has less room ({@link LocalCopyCache#room}).
      *
      * @param unreadable files to copy, or null
-     * @return the cache limit, or 0 when there is nothing to copy
-     * @throws IOException when the cache cannot be created
+     * @return the batch limit, or 0 when there is nothing to copy
+     * @throws IOException when the cache cannot be created or the disk queried
      */
     private long copyLimit(List<DataFile> unreadable) throws IOException {
-        return unreadable == null || unreadable.isEmpty() ? 0 : localCopyCache().maxBytes();
+        return unreadable == null || unreadable.isEmpty() ? 0 : localCopyCache().room();
     }
 
     /**
@@ -1882,10 +1883,11 @@ public final class ExecutionService {
             DataStore store = parquetAdapter.dataStore();
             long maxBytes = ConfigAdapter.hdfsLocalCopyMaxBytes();
             int threads = ConfigAdapter.hdfsLocalCopyThreads();
+            long minFreeBytes = ConfigAdapter.hdfsLocalCopyMinFreeBytes();
             localCopyCache = new LocalCopyCache(duckDbAdapter.localCopyRoot(), maxBytes, threads,
-                    file -> store.inputFile(file).newStream());
-            LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={}", LogUtil.node(),
-                    localCopyCache.directory(), maxBytes, threads);
+                    file -> store.inputFile(file).newStream(), minFreeBytes, LocalCopyCache.FILE_STORE);
+            LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}",
+                    LogUtil.node(), localCopyCache.directory(), maxBytes, threads, minFreeBytes);
         }
         return localCopyCache;
     }

@@ -381,6 +381,46 @@ public class ConfigAdapter {
         return bytes;
     }
 
+    /** Default of {@code hdfsLocalCopyMinFreeBytes}: 1 GiB (item 30). */
+    public static final long DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_BYTES = 1L << 30;
+
+    /**
+     * Returns hdfsLocalCopyMinFreeBytes from the system configuration.
+     *
+     * @return bytes that must stay free on the disk of the node-local copies
+     */
+    public static long hdfsLocalCopyMinFreeBytes() {
+        return hdfsLocalCopyMinFreeBytes(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code hdfsLocalCopyMinFreeBytes} ({@code HDFS_LOCAL_COPY_MIN_FREE_BYTES}): bytes
+     * that must stay free on the disk of the node-local copies (item 30) after a query's new
+     * copies; a query whose copies would leave less is refused before anything is copied, naming
+     * the files, instead of filling the disk. Sizes take DuckDB's units or plain bytes; default
+     * 1 GiB; 0 only requires the copies to fit.
+     *
+     * @param props configuration source
+     * @return bytes
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long hdfsLocalCopyMinFreeBytes(ConfigSource props) {
+        String value = getStringWithEnv("hdfsLocalCopyMinFreeBytes",
+                "arrowflight.hdfs.localCopyMinFreeBytes", "HDFS_LOCAL_COPY_MIN_FREE_BYTES",
+                String.valueOf(DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_BYTES), props).trim();
+        Long bytes;
+        try {
+            bytes = value.matches("\\d+") ? Long.valueOf(value) : DuckDbSizing.parseBytes(value);
+        } catch (RuntimeException e) {
+            bytes = null;
+        }
+        if (bytes == null || bytes < 0) {
+            throw new IllegalArgumentException("hdfsLocalCopyMinFreeBytes must be a size such as"
+                    + " 1GiB or 0: " + value);
+        }
+        return bytes;
+    }
+
     /**
      * Returns hdfsLocalCopyDir from the system configuration.
      *

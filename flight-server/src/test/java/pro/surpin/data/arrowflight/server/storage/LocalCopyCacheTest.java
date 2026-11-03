@@ -269,6 +269,110 @@ class LocalCopyCacheTest {
         assertFalse(Files.exists(path));
     }
 
+    /**
+     * Returns a disk of a given capacity that holds only the files below the test directory.
+     *
+     * @param capacity bytes of the disk
+     * @return free space of that disk
+     */
+    private LocalCopyCache.FreeSpace disk(long capacity) {
+        return d -> {
+            try (java.util.stream.Stream<Path> files = Files.walk(dir)) {
+                long used = files.filter(Files::isRegularFile).mapToLong(f -> f.toFile().length()).sum();
+                return capacity - used;
+            }
+        };
+    }
+
+    @Test
+    void copiesTheDiskHasNoRoomForAreRefusedBeforeAnythingIsCopied() throws IOException {
+        DataFile a = file("s/t/a.parquet", 500, 1);
+        DataFile b = file("s/t/b.parquet", 400, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                200, disk(1000))) {
+            // 900 bytes would leave 100 free, 200 must stay free: neither copy is started.
+            IOException e = assertThrows(IOException.class, () -> cache.acquire(List.of(a, b)));
+            assertTrue(e.getMessage().contains("s/t/a.parquet"), e.getMessage());
+            assertTrue(e.getMessage().contains("900 bytes"), e.getMessage());
+            assertTrue(e.getMessage().contains("hdfsLocalCopyMinFreeBytes"), e.getMessage());
+            assertTrue(opens.isEmpty(), "nothing was copied");
+            assertEquals(0, cache.size());
+            assertEquals(0, cache.cachedBytes());
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                assertEquals(500, Files.size(lease.localPath(a.relativePath())));
+            }
+        }
+    }
+
+    @Test
+    void unusedCopiesBelowTheLimitAreEvictedForDiskRoom() throws IOException {
+        DataFile a = file("s/t/a.parquet", 500, 1);
+        DataFile b = file("s/t/b.parquet", 500, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                100, disk(1000))) {
+            Path pathA;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                pathA = lease.localPath(a.relativePath());
+            }
+            // The cache limit has room for both, the disk only for one.
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(b))) {
+                assertEquals(500, Files.size(lease.localPath(b.relativePath())));
+            }
+            assertFalse(Files.exists(pathA));
+            assertEquals(1, cache.size());
+        }
+    }
+
+    @Test
+    void copiesInUseAreNotEvictedForDiskRoom() throws IOException {
+        DataFile a = file("s/t/a.parquet", 500, 1);
+        DataFile b = file("s/t/b.parquet", 500, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                100, disk(1000))) {
+            try (LocalCopyCache.Lease held = cache.acquire(List.of(a))) {
+                assertThrows(IOException.class, () -> cache.acquire(List.of(b)));
+                assertArrayEquals(content(a), Files.readAllBytes(held.localPath(a.relativePath())));
+                // A file the running query already has costs no room.
+                try (LocalCopyCache.Lease again = cache.acquire(List.of(a))) {
+                    assertEquals(1, again.reused());
+                }
+            }
+            cache.acquire(List.of(b)).close();
+            assertEquals(1, opens.get(b.location()).get());
+        }
+    }
+
+    @Test
+    void roomIsTheLimitOrWhatTheDiskLeaves() throws IOException {
+        DataFile a = file("s/t/a.parquet", 300, 1);
+        try (LocalCopyCache big = new LocalCopyCache(dir.resolve("big"), 800, 1, copier(),
+                100, disk(1_000_000))) {
+            assertEquals(800, big.room());
+            assertEquals(100, big.minFreeBytes());
+        }
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 800, 1, copier(),
+                100, disk(600))) {
+            assertEquals(500, cache.room());
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                // In use: its bytes are not room.
+                assertEquals(200, cache.room());
+            }
+            // Unused: it can be evicted, so it still counts as room.
+            assertEquals(500, cache.room());
+        }
+        try (LocalCopyCache full = new LocalCopyCache(dir.resolve("full"), 800, 1, copier(),
+                100, d -> 0)) {
+            assertEquals(1, full.room());
+        }
+    }
+
+    @Test
+    void refusesANegativeFreeSpaceReserve() {
+        InputStream unused = InputStream.nullInputStream();
+        assertThrows(IllegalArgumentException.class,
+                () -> new LocalCopyCache(dir, 10, 1, f -> unused, -1, LocalCopyCache.FILE_STORE));
+    }
+
     @Test
     void refusesANonPositiveLimit() {
         InputStream unused = InputStream.nullInputStream();

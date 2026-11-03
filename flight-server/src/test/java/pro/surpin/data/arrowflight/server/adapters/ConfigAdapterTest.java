@@ -293,6 +293,21 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void hdfsLocalCopyMinFreeBytesDefaultsTo1GiBAndTakesSizes() throws IOException {
+        assertEquals(1L << 30, ConfigAdapter.hdfsLocalCopyMinFreeBytes(source(Map.of(), Map.of())));
+        assertEquals(500_000_000L, ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "500MB"), Map.of())));
+        assertEquals(10L << 30, ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_MIN_FREE_BYTES", " 10GiB "))));
+        assertEquals(0L, ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "0"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "-5"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "plenty"), Map.of())));
+    }
+
+    @Test
     void hdfsLocalCopyDirIsUnsetByDefaultAndMustBeAbsolute() throws IOException {
         assertNull(ConfigAdapter.hdfsLocalCopyDir(source(Map.of(), Map.of())));
         assertNull(ConfigAdapter.hdfsLocalCopyDir(source(Map.of("hdfsLocalCopyDir", " "), Map.of())));

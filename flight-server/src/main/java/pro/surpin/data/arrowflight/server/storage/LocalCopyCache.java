@@ -13,12 +13,14 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -34,7 +36,10 @@ import pro.surpin.data.arrowflight.spi.storage.DataFile;
  * A copy is keyed by location, length and modification time, so a rewritten file is copied
  * again; copies are reused across queries and evicted least recently used first. A copy in use
  * by a query is never evicted; when the copies in use exceed the limit, the extra copies are
- * deleted as soon as their last query releases them.
+ * deleted as soon as their last query releases them. A query's new copies are made only when the
+ * disk of the cache directory keeps {@code minFreeBytes} free after them (unused copies are
+ * evicted for room first); otherwise the query is refused naming the files, before anything is
+ * copied, instead of filling the disk.
  */
 public final class LocalCopyCache implements AutoCloseable {
 
@@ -53,6 +58,22 @@ public final class LocalCopyCache implements AutoCloseable {
          */
         InputStream open(DataFile file) throws IOException;
     }
+
+    /** Tells the free bytes of the disk of a directory; the file store's usable space in the server. */
+    @FunctionalInterface
+    public interface FreeSpace {
+        /**
+         * Returns the bytes that can still be written below a directory.
+         *
+         * @param directory existing directory
+         * @return usable bytes
+         * @throws IOException when the disk cannot be queried
+         */
+        long usableBytes(Path directory) throws IOException;
+    }
+
+    /** Free space of the file store that holds a directory. */
+    public static final FreeSpace FILE_STORE = d -> Files.getFileStore(d).getUsableSpace();
 
     /**
      * One cached copy.
@@ -80,12 +101,16 @@ public final class LocalCopyCache implements AutoCloseable {
 
     private final Path directory;
     private final long maxBytes;
+    private final long minFreeBytes;
+    private final FreeSpace freeSpace;
     private final Copier copier;
     private final ExecutorService copyPool;
     /** Entries in least recently used order; guarded by this. */
     private final LinkedHashMap<String, Entry> entries = new LinkedHashMap<>(64, 0.75f, true);
     /** Bytes of every entry, made or being made; guarded by this. */
     private long cachedBytes;
+    /** Bytes of the entries being made, not yet complete on disk; guarded by this. */
+    private long pendingBytes;
 
     /**
      * Creates a cache.
@@ -98,12 +123,34 @@ public final class LocalCopyCache implements AutoCloseable {
      */
     public LocalCopyCache(Path directory, long maxBytes, int threads, Copier copier)
             throws IOException {
+        this(directory, maxBytes, threads, copier, 0, FILE_STORE);
+    }
+
+    /**
+     * Creates a cache that keeps bytes free on the disk of its directory.
+     *
+     * @param directory directory of the copies, created when missing
+     * @param maxBytes bytes the copies not in use may take together
+     * @param threads files copied at the same time
+     * @param copier reads a file's bytes
+     * @param minFreeBytes bytes that must stay free on the disk after a query's copies
+     * @param freeSpace tells the free bytes of the disk
+     * @throws IOException when the directory cannot be created
+     */
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public LocalCopyCache(Path directory, long maxBytes, int threads, Copier copier,
+            long minFreeBytes, FreeSpace freeSpace) throws IOException {
         if (maxBytes <= 0) {
             throw new IllegalArgumentException("maxBytes must be positive: " + maxBytes);
         }
         if (threads <= 0) {
             throw new IllegalArgumentException("threads must be positive: " + threads);
         }
+        if (minFreeBytes < 0) {
+            throw new IllegalArgumentException("minFreeBytes must not be negative: " + minFreeBytes);
+        }
+        this.minFreeBytes = minFreeBytes;
+        this.freeSpace = Objects.requireNonNull(freeSpace, "freeSpace");
         this.directory = Files.createDirectories(Objects.requireNonNull(directory, "directory"));
         this.maxBytes = maxBytes;
         this.copier = Objects.requireNonNull(copier, "copier");
@@ -154,7 +201,8 @@ public final class LocalCopyCache implements AutoCloseable {
      *
      * @param files files to copy
      * @return lease mapping each file's relative path to its local copy
-     * @throws IOException when a file cannot be copied; no copy stays pinned then
+     * @throws IOException when a file cannot be copied, or the disk has no room for the new
+     *         copies (nothing is copied then); no copy stays pinned then
      */
     public Lease acquire(List<DataFile> files) throws IOException {
         // Not LogUtil.mark(): that is -1 unless timing is logged, and this time is always logged.
@@ -164,6 +212,22 @@ public final class LocalCopyCache implements AutoCloseable {
         try {
             List<CompletableFuture<Path>> waits = new ArrayList<>(files.size());
             synchronized (this) {
+                // The new copies are known, and must have room, before any of them is started.
+                List<DataFile> toCopy = new ArrayList<>();
+                Set<String> paths = new HashSet<>();
+                Set<String> keys = new HashSet<>();
+                long needed = 0;
+                for (DataFile file : files) {
+                    String key = key(file);
+                    if (paths.add(file.relativePath()) && !entries.containsKey(key) && keys.add(key)) {
+                        toCopy.add(file);
+                        needed += file.size();
+                    }
+                }
+                if (!toCopy.isEmpty()) {
+                    evictFor(needed);
+                    requireRoom(needed, toCopy);
+                }
                 for (DataFile file : files) {
                     String key = key(file);
                     if (lease.entries.containsKey(file.relativePath())) {
@@ -171,11 +235,11 @@ public final class LocalCopyCache implements AutoCloseable {
                     }
                     Entry entry = entries.get(key);
                     if (entry == null) {
-                        evictFor(file.size());
                         entry = new Entry(key, directory.resolve(copyPath(key, file.relativePath())),
                                 file.size());
                         entries.put(key, entry);
                         cachedBytes += entry.bytes;
+                        pendingBytes += entry.bytes;
                         made.add(entry);
                         Entry copy = entry;
                         copyPool.execute(() -> copy(file, copy));
@@ -239,10 +303,14 @@ public final class LocalCopyCache implements AutoCloseable {
             long ms = Math.max(1L, (System.nanoTime() - started) / 1_000_000L);
             LOGGER.info("node={} hdfs=localCopy file={} bytes={} ms={} MBps={}", LogUtil.node(),
                     file.relativePath(), copied, ms, copied * 1000L / ms / (1024 * 1024));
+            synchronized (this) {
+                pendingBytes -= entry.bytes;
+            }
             entry.ready.complete(entry.path);
         } catch (IOException | RuntimeException e) {
             deleteCopy(partial);
             synchronized (this) {
+                pendingBytes -= entry.bytes;
                 if (entries.get(entry.key) == entry) {
                     entries.remove(entry.key);
                     cachedBytes -= entry.bytes;
@@ -295,6 +363,70 @@ public final class LocalCopyCache implements AutoCloseable {
                     + " copies in use are kept, the extra ones are deleted after use",
                     LogUtil.node(), cachedBytes, bytes, maxBytes);
         }
+    }
+
+    /**
+     * Makes sure the disk keeps {@code minFreeBytes} free after a query's new copies, evicting
+     * unused copies (also below the limit) for room; the caller holds this. Copies being made
+     * count with their full length, so the check is conservative while they are written.
+     *
+     * @param needed bytes of the new copies
+     * @param toCopy files of the new copies, for the message
+     * @throws IOException when the disk has no room for them even without unused copies
+     */
+    private void requireRoom(long needed, List<DataFile> toCopy) throws IOException {
+        long free = freeSpace.usableBytes(directory) - pendingBytes;
+        Iterator<Entry> it = entries.values().iterator();
+        while (free - needed < minFreeBytes && it.hasNext()) {
+            Entry entry = it.next();
+            if (entry.pins == 0 && entry.ready.isDone()) {
+                it.remove();
+                cachedBytes -= entry.bytes;
+                deleteCopy(entry.path);
+                free = freeSpace.usableBytes(directory) - pendingBytes;
+            }
+        }
+        if (free - needed >= minFreeBytes) {
+            return;
+        }
+        long inUse = cachedBytes;
+        LOGGER.warn("node={} hdfs=localCopyNoSpace dir={} files={} neededBytes={} freeBytes={}"
+                + " minFreeBytes={} inUseBytes={}", LogUtil.node(), directory, toCopy.size(), needed,
+                free, minFreeBytes, inUse);
+        throw new IOException("No room on the disk of the node-local copy cache " + directory
+                + " for this query's " + toCopy.size() + " file copies (" + needed + " bytes, e.g. "
+                + toCopy.get(0).relativePath() + "): " + Math.max(0, free) + " bytes are free and "
+                + minFreeBytes + " must stay free (hdfsLocalCopyMinFreeBytes); copies in use by"
+                + " running queries take " + inUse + " bytes. Nothing was copied; retry when other"
+                + " queries end, or give hdfsLocalCopyDir a larger disk");
+    }
+
+    /**
+     * Returns the bytes one query's new copies may take now: the cache limit, or less when the
+     * disk of the cache directory has less room (keeping {@code minFreeBytes} free, counting
+     * unused copies as room since they can be evicted).
+     *
+     * @return bytes, at least 1
+     * @throws IOException when the disk cannot be queried
+     */
+    public synchronized long room() throws IOException {
+        long evictable = 0;
+        for (Entry entry : entries.values()) {
+            if (entry.pins == 0 && entry.ready.isDone()) {
+                evictable += entry.bytes;
+            }
+        }
+        long disk = freeSpace.usableBytes(directory) - pendingBytes + evictable - minFreeBytes;
+        return Math.max(1L, Math.min(maxBytes, disk));
+    }
+
+    /**
+     * Returns the bytes that must stay free on the disk of the cache directory.
+     *
+     * @return bytes
+     */
+    public long minFreeBytes() {
+        return minFreeBytes;
     }
 
     /**

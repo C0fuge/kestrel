@@ -108,7 +108,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   do not fit the limit is read in batches that fit, each batch's copies deleted before the next is copied (log
   `hdfs=copyBatches`); other query shapes still hold all their copies at once. Put the temp directory on a disk with that much room, or give the copies a disk of their own with
   `hdfsLocalCopyDir=<absolute path>` (the server copies into a `duckdb-<pid>-*` subdirectory there, startup line
-  `hdfs=localCopyCache dir=...` at the first copy); `hdfsLocalCopyMaxBytes=0`
+  `hdfs=localCopyCache dir=...` at the first copy). A query's new copies must leave `hdfsLocalCopyMinFreeBytes`
+  (default 1 GiB) free on that disk (unused copies are evicted for room first, batches shrink to the room left);
+  otherwise it fails at once naming the files and the free bytes (`hdfs=localCopyNoSpace`) instead of filling the
+  disk. `hdfsLocalCopyMaxBytes=0`
   turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted
   when the server stops.
 - S3: DuckDB keeps its S3 connections and reads later ranges and queries over them

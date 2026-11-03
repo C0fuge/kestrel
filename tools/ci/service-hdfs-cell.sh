@@ -346,6 +346,13 @@ if [ "$n" -gt 1 ]; then
   if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$rowsBatched" -eq 0 ]; then
     finish fail "the cache is smaller than chunks.lineitem, but no DISTINCT / LIMIT scan was merged from batches of copies"
   fi
+  # Item 30 part 2b: the free-space guard is on (minFreeBytes in the cache line) and never refuses on a runner's disk.
+  guardLines=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopyCache .*minFreeBytes=' || true)
+  noSpace=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopyNoSpace' || true)
+  note "copy disk guard: $guardLines cache line(s) with minFreeBytes, $noSpace refusal(s) for lack of disk room"
+  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$guardLines" -eq 0 ] || [ "$noSpace" -ne 0 ]; }; then
+    finish fail "copy disk guard: $guardLines cache line(s) with minFreeBytes (want > 0), $noSpace hdfs=localCopyNoSpace (want 0)"
+  fi
   if [ "$profile" != speed ]; then
     # Every node copied into hdfsLocalCopyDir, and its directory there is gone once it stops.
     customDirs=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1 | grep -m 1 -c 'hdfs=localCopyCache dir=/copies/duckdb-' || true; done | awk '{ s += $1 } END { print s + 0 }')

@@ -53,6 +53,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
 | `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
 | `hdfsLocalCopyDir` (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`) | unset = below the DuckDB temp root | absolute directory (another disk) for the node-local copies; the server copies into its own `duckdb-<pid>-*` subdirectory there, allowed to DuckDB, deleted when it stops |
+| `hdfsLocalCopyMinFreeBytes` (`arrowflight.hdfs.localCopyMinFreeBytes`, `HDFS_LOCAL_COPY_MIN_FREE_BYTES`) | `1GiB` (0 = the copies only have to fit) | only with node-local copies: bytes that must stay free on the copies' disk after a query's new copies; a query that would leave less is refused before anything is copied (unused copies are evicted for room first) |
 
 **New plugin settings (all off by default)**
 
@@ -96,6 +97,18 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Added - `hdfsLocalCopyMinFreeBytes`: node-local copies never fill their disk (STATUS item 30, part 2b)
+
+- Before a query's new node-local copies (HDFS with SASL DataNodes) are started, the node checks the free space of
+  the copies' disk (`hdfsLocalCopyDir`, else the DuckDB temp root): the copies must leave `hdfsLocalCopyMinFreeBytes`
+  (default 1 GiB) free there, counting copies still being made at their full length. Unused copies are evicted for
+  room first, also below `hdfsLocalCopyMaxBytes`; if that is not enough the query fails at once with a message naming
+  the files, the bytes needed and free, and the bytes held by running queries' copies (log `hdfs=localCopyNoSpace`),
+  and nothing is copied. Before, such a query copied until the disk was full ("No space left on device"), which could
+  also break DuckDB spills sharing that disk. Scans and mergeable aggregates read in batches of copies now size the
+  batches by the cache limit or the disk's room, whichever is smaller, so they still finish on a small disk. Startup
+  line `hdfs=localCopyCache ... minFreeBytes=`.
 
 ### Added - `hdfsLocalCopyDir`: node-local copies on a disk of their own (STATUS item 30, part 2b)
 
