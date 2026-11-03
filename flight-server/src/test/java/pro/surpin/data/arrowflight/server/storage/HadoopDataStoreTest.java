@@ -209,6 +209,54 @@ class HadoopDataStoreTest {
         assertTrue(store.localInventory("dn2").isEmpty());
     }
 
+    /**
+     * Verifies that with whole-file reads (SASL DataNodes, short-circuit only) a file's hosts
+     * are the hosts holding every block, not every host holding one (item 29).
+     */
+    @Test
+    void wholeFileReadsKeepOnlyHostsHoldingEveryBlock() {
+        HadoopDataStore store = store("dn1");
+        org.apache.hadoop.fs.LocatedFileStatus file = new org.apache.hadoop.fs.LocatedFileStatus(
+                300L, false, 2, 100L, 0L, 0L, null, null, null, null,
+                new org.apache.hadoop.fs.Path("file:/d/s/t/f.parquet"),
+                new org.apache.hadoop.fs.BlockLocation[] {
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn1", "dn2"}, 0L, 100L),
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn2", "dn3"}, 100L, 100L),
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn3", "dn2"}, 200L, 100L)});
+
+        assertFalse(store.wholeFileReadsOnly());
+        assertEquals(Set.of("dn1", "dn2", "dn3"), store.readableHosts(file));
+        store.setWholeFileReadsOnly(true);
+        assertTrue(store.wholeFileReadsOnly());
+        assertEquals(Set.of("dn2"), store.readableHosts(file));
+    }
+
+    /**
+     * Verifies whole-file reads keep the listing, inventory and the local check of a file whose
+     * blocks are all on this node, and refuse one held elsewhere.
+     *
+     * @throws IOException when the directory cannot be listed
+     */
+    @Test
+    void wholeFileReadsKeepFilesHeldWholeHere() throws IOException {
+        HadoopDataStore store = store("dn1");
+        store.setWholeFileReadsOnly(true);
+
+        List<DataFile> files = store.tableFiles("s1", "t1");
+
+        assertEquals(Set.of("dn1"), files.get(0).hosts());
+        assertEquals(Set.of("s1/t1/a.parquet", "s1/t1/sub/b.PARQUET"),
+                store.localInventory("dn1").keySet());
+        assertTrue(store.readableHere(files.get(0)));
+        assertFalse(store.readableHere(new DataFile("s1/t1/x.parquet", "file:/x", 1L, 0L,
+                Set.of("dn2"))));
+        assertFalse(store.readableHere(new DataFile("s1/t1/y.parquet", "file:/y", 1L, 0L,
+                Set.of())));
+        store.setWholeFileReadsOnly(false);
+        assertTrue(store.readableHere(new DataFile("s1/t1/y.parquet", "file:/y", 1L, 0L,
+                Set.of())), "only whole-file reads restrict");
+    }
+
     /** Verifies a missing data directory gives an empty inventory instead of an error. */
     @Test
     void missingDataDirectoryHasEmptyInventory() throws IOException {

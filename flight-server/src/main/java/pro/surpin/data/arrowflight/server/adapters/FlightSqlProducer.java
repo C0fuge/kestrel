@@ -719,6 +719,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 // A query of catalog views runs as checked: its views replaced by their queries.
                 if (distributed == null || state.parameters() != null || !expanded.equals(query)
                         || !distributed.stream(query, user, listener)) {
+                    requireReadableHere(query);
                     executionService.readComplete(allocator, expanded, state.parameters(), listener,
                             true);
                 }
@@ -1816,5 +1817,25 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             T request, FlightDescriptor descriptor, Schema schema) {
         final List<FlightEndpoint> endpoints = determineEndpoints(request, descriptor, schema);
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
+    }
+
+    /**
+     * Refuses a complete answer this node would compute from files it cannot read: on HDFS
+     * read short-circuit only (SASL DataNodes), DuckDB reads only files with every block on the
+     * node's own DataNode, and a missing block would fail later as "Connection reset".
+     *
+     * @param query client SQL
+     * @throws org.apache.arrow.flight.FlightRuntimeException INVALID_ARGUMENT naming the files
+     */
+    private void requireReadableHere(String query) {
+        List<String> unreadable = queryPlanner.filesNotReadableHere(query);
+        if (!unreadable.isEmpty()) {
+            throw CallStatus.INVALID_ARGUMENT.withDescription(QueryPlanner.unreadableFilesMessage(
+                    unreadable, "a complete answer is computed on the node that receives the query,"
+                    + " and this node lacks blocks of")
+                    + "; ask for partial results (header x-flight-result-mode: partial), set"
+                    + " distributedComplete=true, or send the query to a node that holds them")
+                    .toRuntimeException();
+        }
     }
 }

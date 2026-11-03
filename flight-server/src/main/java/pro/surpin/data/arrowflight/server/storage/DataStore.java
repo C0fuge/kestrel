@@ -33,4 +33,27 @@ public interface DataStore extends pro.surpin.data.arrowflight.spi.storage.DataS
     default InputFile inputFile(DataFile file) {
         return ParquetInputFiles.of(open(file), file.location());
     }
+
+    /**
+     * Tells whether DuckDB on a node can read only the files that have every block on that
+     * node's own storage host (HDFS DataNodes that require SASL data-transfer protection, read
+     * short-circuit only). File hosts and local inventories then name only such holders, and no
+     * query may send a file to another node.
+     *
+     * @return true when only whole-file holders can read a file
+     */
+    default boolean wholeFileReadsOnly() {
+        return false;
+    }
+
+    /**
+     * Tells whether DuckDB on this node can read a listed file: always, unless only whole-file
+     * holders can read files, in which case this node's storage host must hold every block.
+     *
+     * @param file listed file, with its hosts
+     * @return true when this node can read the file
+     */
+    default boolean readableHere(DataFile file) {
+        return true;
+    }
 }

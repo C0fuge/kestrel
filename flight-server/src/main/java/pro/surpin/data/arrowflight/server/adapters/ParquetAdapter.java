@@ -751,6 +751,16 @@ public class ParquetAdapter {
     }
 
     /**
+     * Tells whether a node can read only the files that have every block on its own storage
+     * host (HDFS with SASL data-transfer protection, read short-circuit only).
+     *
+     * @return true when files must go to nodes holding all their blocks
+     */
+    public boolean wholeFileReadsOnly() {
+        return store.wholeFileReadsOnly();
+    }
+
+    /**
      * Tells whether files have no hosts (object stores): queries are then planned from the
      * store's listing, not from the nodes' local inventories.
      *

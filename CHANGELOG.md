@@ -94,6 +94,19 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters: files go only to nodes holding every block (STATUS item 29, part 2)
+
+- When the DataNodes require SASL data-transfer protection (`dfs.data.transfer.protection`, startup warning
+  `hdfs=shortCircuitOnly`), DuckDB on a node can read only files with every block on its own DataNode. A file's
+  hosts and each node's published inventory now name only such whole-file holders (before: any node holding one
+  block), so queries in parts and `distributedComplete` send each file only to a node that can read it, and backup
+  locations are only such nodes (before: any live node).
+- A file no live node holds whole, a server-side join no single node can read, or a `complete` answer computed on a
+  node missing blocks of the query's files now fails at once naming the files (at most ten) and the remedy
+  (replication / a node on that DataNode / partial results / `distributedComplete=true`), instead of
+  "Connection reset" from the hadoopfs extension after a few seconds. Clusters without SASL protection are unchanged.
+  Reading such files anyway (a node-local copy) is item 30.
+
 ### Fixed - SASL HDFS clusters: table schemas through the Java client, one bad table no longer refuses all (STATUS item 29, part 1)
 
 - On HDFS the complete-answer views described every table with DuckDB (`DESCRIBE SELECT * FROM read_parquet(...)` of

@@ -33,6 +33,7 @@ import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
+import pro.surpin.data.arrowflight.server.storage.HadoopDataStore;
 
 /**
  * Main entry point for the Hadoop Arrow Flight SQL server.
@@ -184,11 +185,16 @@ public class HadoopArrowFlightServer {
                 LOGGER.warn("hdfs=shortCircuitSocketMissing socket={}: DuckDB reads every block over TCP"
                         + " on this node", shortCircuit.socketPath());
             } else if (shortCircuit.transferProtection() != null) {
+                if (store instanceof HadoopDataStore hadoopStore) {
+                    hadoopStore.setWholeFileReadsOnly(true);
+                }
                 LOGGER.warn("hdfs=shortCircuitOnly transferProtection={}: table schemas (Parquet"
                         + " footers) are read through the Java Hadoop client, which speaks SASL; DuckDB"
-                        + " (hadoopfs) reads data only short-circuit, so this node can read only files"
-                        + " that have every block on its own DataNode, and a query reading any other"
-                        + " file fails", shortCircuit.transferProtection());
+                        + " (hadoopfs) reads data only short-circuit, so this node reads only files"
+                        + " that have every block on its own DataNode. Queries in parts send each file"
+                        + " to a node holding all its blocks; a file no live node holds whole, or a"
+                        + " complete answer on a node missing some of its files, fails naming the"
+                        + " files", shortCircuit.transferProtection());
             }
             LOGGER.info("HDFS DataNode timeouts set in DuckDB: connect={} read={} (0 = left to the"
                     + " hadoopfs extension / LIBHDFS3_CONF)", config.duckDbHdfsConnectTimeoutMs(),

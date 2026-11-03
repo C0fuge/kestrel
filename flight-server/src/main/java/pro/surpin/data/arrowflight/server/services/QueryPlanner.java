@@ -244,7 +244,7 @@ public final class QueryPlanner {
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
 
         Map<String, Long> loads = new HashMap<>(cluster.serverLoads());
-        Backups backups = new Backups(pathLocations, loads, parquetAdapter.sharedStorage(),
+        Backups backups = new Backups(pathLocations, loads, anyNodeReadsAnyFile(),
                 plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
         List<FlightEndpoint> endpoints;
         if (parquetAdapter.withoutLocality()) {
@@ -502,6 +502,75 @@ public final class QueryPlanner {
         return new QueryPlan(List.of(new FlightEndpoint(ticket)), -1L, -1L);
     }
 
+    /**
+     * Lists the files of a query's Parquet tables this node cannot read: on HDFS read
+     * short-circuit only, those without every block on this node's DataNode. Catalog tables and
+     * queries the parser does not understand are not checked (DuckDB reports what it cannot
+     * read).
+     *
+     * @param query client SQL
+     * @return relative paths, in table and path order; empty when every file is readable here
+     */
+    public List<String> filesNotReadableHere(String query) {
+        if (!parquetAdapter.wholeFileReadsOnly()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        try {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            DataStore store = parquetAdapter.dataStore();
+            List<String[]> tables = new ArrayList<>();
+            if (parsed.isJoin) {
+                for (ParquetQueryParser.JoinTable table : parsed.joinTables) {
+                    tables.add(new String[] {table.schema(), table.table()});
+                }
+            } else {
+                tables.add(new String[] {parsed.schema, parsed.table});
+            }
+            for (String[] table : tables) {
+                for (pro.surpin.data.arrowflight.spi.storage.DataFile file
+                        : tableFiles(table[0], table[1])) {
+                    if (!store.readableHere(file)) {
+                        result.add(file.relativePath());
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("node={} planning=readableHereSkipped reason='{}'", LogUtil.node(), e.toString());
+            return List.of();
+        }
+        return result;
+    }
+
+    /**
+     * Lists the files of every non-catalog table with a name, in schema and path order.
+     *
+     * @param schema schema name, or null for every schema
+     * @param table table name, or null for none
+     * @return listed files
+     * @throws IOException on storage access failure
+     */
+    private List<pro.surpin.data.arrowflight.spi.storage.DataFile> tableFiles(String schema,
+            String table) throws IOException {
+        List<pro.surpin.data.arrowflight.spi.storage.DataFile> result = new ArrayList<>();
+        if (table == null) {
+            return result;
+        }
+        for (String schemaName : new java.util.TreeSet<>(parquetAdapter.getSchemas(null).keySet())) {
+            if (schema != null && !schema.isEmpty() && !schemaName.equalsIgnoreCase(schema)
+                    || parquetAdapter.isCatalogSchema(schemaName)) {
+                continue;
+            }
+            for (String tableName : new java.util.TreeSet<>(
+                    parquetAdapter.getTables(schemaName, null).keySet())) {
+                if (tableName.equalsIgnoreCase(table)) {
+                    result.addAll(parquetAdapter.tableFiles(schemaName, tableName));
+                }
+            }
+        }
+        return result;
+    }
+
     private ClusterSnapshot validatedCluster() throws IOException {
         long t = LogUtil.mark();
         Map<String, Long> registry = clusterService.allServerLoads();
@@ -533,7 +602,8 @@ public final class QueryPlanner {
             // The store's own listing is current (and cached by the store); node inventories
             // are empty without locality.
             Map<String, FileAssignment> listed = listedFiles(parsed);
-            validatePathLocations(listed, parsed, allServerUris, parquetAdapter.sharedStorage());
+            validatePathLocations(listed, parsed, allServerUris, parquetAdapter.sharedStorage(),
+                    false);
             return listed;
         }
         String cacheKey = sourceCacheKey(parsed);
@@ -548,7 +618,7 @@ public final class QueryPlanner {
         }
         try {
             validatePathLocations(pathLocations, parsed, allServerUris,
-                    parquetAdapter.sharedStorage());
+                    parquetAdapter.sharedStorage(), parquetAdapter.wholeFileReadsOnly());
         } catch (IOException e) {
             if (!reusedCache) {
                 throw e;
@@ -556,7 +626,7 @@ public final class QueryPlanner {
             filePlanCache.remove(cacheKey, cached);
             pathLocations = loadFilePlan(parsed, cacheKey, System.nanoTime());
             validatePathLocations(pathLocations, parsed, allServerUris,
-                    parquetAdapter.sharedStorage());
+                    parquetAdapter.sharedStorage(), parquetAdapter.wholeFileReadsOnly());
         }
         return pathLocations;
     }
@@ -659,26 +729,8 @@ public final class QueryPlanner {
      */
     private void addListedFiles(Map<String, FileAssignment> result, String schema, String table)
             throws IOException {
-        if (table == null) {
-            return;
-        }
-        for (String schemaName : new java.util.TreeSet<>(parquetAdapter.getSchemas(null).keySet())) {
-            if (schema != null && !schema.isEmpty() && !schemaName.equalsIgnoreCase(schema)) {
-                continue;
-            }
-            if (parquetAdapter.isCatalogSchema(schemaName)) {
-                continue;   // catalog tables have no listed files (and their catalog may be down)
-            }
-            for (String tableName : new java.util.TreeSet<>(
-                    parquetAdapter.getTables(schemaName, null).keySet())) {
-                if (tableName.equalsIgnoreCase(table)) {
-                    for (pro.surpin.data.arrowflight.spi.storage.DataFile file
-                            : parquetAdapter.tableFiles(schemaName, tableName)) {
-                        result.putIfAbsent(file.relativePath(),
-                                new FileAssignment(file.size(), Set.of()));
-                    }
-                }
-            }
+        for (pro.surpin.data.arrowflight.spi.storage.DataFile file : tableFiles(schema, table)) {
+            result.putIfAbsent(file.relativePath(), new FileAssignment(file.size(), Set.of()));
         }
     }
 
@@ -688,15 +740,31 @@ public final class QueryPlanner {
      * @param pathLocations file assignments
      * @param parsed parsed SQL query
      * @param allServerUris live server URIs
-     * @param sharedStorage whether every node can read every file
+     * @param sharedStorage whether every node can name every file
+     * @param wholeFileReadsOnly whether only nodes holding every block of a file can read it
      * @throws IOException when files or required shard owners are unavailable
      */
-    private static void validatePathLocations(
+    static void validatePathLocations(
             Map<String, FileAssignment> pathLocations,
-            ParquetQueryParser parsed, Set<String> allServerUris, boolean sharedStorage)
+            ParquetQueryParser parsed, Set<String> allServerUris, boolean sharedStorage,
+            boolean wholeFileReadsOnly)
             throws IOException {
         if (pathLocations.isEmpty()) {
             throw new IOException("No distributed Parquet files found for query: " + parsed);
+        }
+        if (sharedStorage && wholeFileReadsOnly) {
+            // A node holding only some blocks cannot read the file (SASL, short-circuit only):
+            // a file without a live whole-file holder fails here, not as "Connection reset".
+            List<String> unreadable = pathLocations.entrySet().stream()
+                    .filter(file -> file.getValue().hosts().stream()
+                            .noneMatch(allServerUris::contains))
+                    .map(Map.Entry::getKey)
+                    .toList();
+            if (!unreadable.isEmpty()) {
+                throw new IOException(unreadableFilesMessage(unreadable,
+                        "no live Flight node runs on a DataNode that holds every block of"));
+            }
+            return;
         }
         if (sharedStorage) {
             // Every node can read every file: a file whose nodes are all down goes to a live
@@ -715,14 +783,46 @@ public final class QueryPlanner {
         requireShardCoverage(pathLocations, parsed, allServerUris);
     }
 
+    /**
+     * Tells whether any live node can read any file: shared storage that every node reads
+     * remotely, not HDFS read only short-circuit.
+     *
+     * @return true when a file may go to a node that does not hold it
+     */
+    private boolean anyNodeReadsAnyFile() {
+        return parquetAdapter.sharedStorage() && !parquetAdapter.wholeFileReadsOnly();
+    }
+
+    /**
+     * Describes files no node can read on HDFS whose DataNodes require SASL data-transfer
+     * protection, naming the first ten.
+     *
+     * @param files relative paths of the unreadable files
+     * @param where why they cannot be read, completing "N file(s): ..."
+     * @return message for the client
+     */
+    public static String unreadableFilesMessage(List<String> files, String where) {
+        int shown = Math.min(10, files.size());
+        return "HDFS DataNodes require SASL data-transfer protection and DuckDB reads blocks only"
+                + " short-circuit from its own DataNode: " + where + " " + files.size()
+                + " file(s): " + String.join(", ", files.subList(0, shown))
+                + (files.size() > shown ? ", ... (" + (files.size() - shown) + " more)" : "")
+                + ". Raise their replication so that a node holds every block, or run a Flight"
+                + " node on a DataNode that holds them";
+    }
+
     private List<FlightEndpoint> joinEndpoints(String query,
             Map<String, FileAssignment> pathLocations, Set<String> allServerUris,
             boolean loadTracked, Backups backups)
             throws IOException {
         String allFilesServer = findServerWithAllFiles(pathLocations, allServerUris);
-        if (allFilesServer == null && parquetAdapter.sharedStorage()) {
+        if (allFilesServer == null && anyNodeReadsAnyFile()) {
             // Every node can read every file: run the join where most of its input is local.
             allFilesServer = serverWithMostLocalBytes(pathLocations, allServerUris);
+        }
+        if (allFilesServer == null && parquetAdapter.wholeFileReadsOnly()) {
+            throw new IOException(unreadableFilesMessage(new ArrayList<>(pathLocations.keySet()),
+                    "a join runs on one node, and no live node holds every block of all"));
         }
         if (allFilesServer == null) {
             throw new IOException(

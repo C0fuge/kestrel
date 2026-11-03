@@ -47,6 +47,8 @@ public final class HadoopDataStore implements DataStore {
     private final String storageHost;
     /** Whether a local data directory is a mount every node reads (dataDirShared). */
     private final boolean sharedMount;
+    /** Whether only nodes holding every block of a file can read it (SASL, short-circuit only). */
+    private volatile boolean wholeFileReadsOnly;
     /** The data directory as the file system names it; looked up once, it never changes. */
     private volatile URI rootUri;
 
@@ -95,6 +97,27 @@ public final class HadoopDataStore implements DataStore {
     }
 
     @Override
+    public boolean wholeFileReadsOnly() {
+        return wholeFileReadsOnly;
+    }
+
+    @Override
+    public boolean readableHere(DataFile file) {
+        return !wholeFileReadsOnly || hasLocalBlock(file.hosts(), storageHost);
+    }
+
+    /**
+     * Makes files readable only where every block has a replica: set at startup, before the
+     * first listing, when DataNodes require SASL data-transfer protection and DuckDB reads
+     * short-circuit only.
+     *
+     * @param wholeFileReadsOnly whether hosts and the local inventory name only whole-file holders
+     */
+    public void setWholeFileReadsOnly(boolean wholeFileReadsOnly) {
+        this.wholeFileReadsOnly = wholeFileReadsOnly;
+    }
+
+    @Override
     public String root() {
         return dataDirectory;
     }
@@ -130,7 +153,7 @@ public final class HadoopDataStore implements DataStore {
         URI root = rootUri();
         List<DataFile> result = new ArrayList<>(statuses.size());
         for (LocatedFileStatus file : statuses) {
-            result.add(dataFile(root, file, fileLocality(file).keySet()));
+            result.add(dataFile(root, file, readableHosts(file)));
         }
         return result;
     }
@@ -143,7 +166,7 @@ public final class HadoopDataStore implements DataStore {
         URI root = rootUri();
         List<DataFile> result = new ArrayList<>(statuses.size());
         for (LocatedFileStatus file : statuses) {
-            result.add(dataFile(root, file, fileLocality(file).keySet()));
+            result.add(dataFile(root, file, readableHosts(file)));
         }
         return result;
     }
@@ -237,7 +260,7 @@ public final class HadoopDataStore implements DataStore {
         while (files.hasNext()) {
             LocatedFileStatus file = files.next();
             scanned++;
-            if (isParquetFile(file) && hasLocalBlock(fileLocality(file).keySet(), host)) {
+            if (isParquetFile(file) && hasLocalBlock(readableHosts(file), host)) {
                 // Decoded, as every other relative path: "part 1.parquet", not "part%201.parquet".
                 String relativePath = base.relativize(file.getPath().toUri()).getPath();
                 result.put(relativePath, file.getLen());
@@ -261,6 +284,30 @@ public final class HadoopDataStore implements DataStore {
         return blockHosts.stream()
                 .map(HostUtils::normalize)
                 .anyMatch(normalizedLocalHost::equals);
+    }
+
+    /**
+     * Returns the hosts that can read a file locally: those holding a block of it, or, when
+     * only whole-file holders can read it, those holding every block.
+     *
+     * @param file listed file
+     * @return host names, fewest blocks first; empty when no host qualifies
+     */
+    Set<String> readableHosts(LocatedFileStatus file) {
+        LinkedHashMap<String, Long> locality = fileLocality(file);
+        if (!wholeFileReadsOnly) {
+            return locality.keySet();
+        }
+        BlockLocation[] blocks = file.getBlockLocations();
+        long blockCount = blocks == null ? 0 : blocks.length;
+        Set<String> result = new java.util.LinkedHashSet<>();
+        for (Map.Entry<String, Long> host : locality.entrySet()) {
+            // A host lists each block once, so a count equal to the block count means all of them.
+            if (host.getValue() == blockCount) {
+                result.add(host.getKey());
+            }
+        }
+        return result;
     }
 
     /**

@@ -424,6 +424,128 @@ class QueryPlannerTest {
         assertTrue(planner.planComplete("SELECT 1").endpoints().get(0).getLocations().isEmpty());
     }
 
+    /**
+     * Verifies HDFS read short-circuit only (SASL DataNodes): each file goes to a node holding
+     * all its blocks, and backups are only such holders, never any other live node.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void wholeFileReadsSendEachFileToAWholeFileHolder() throws Exception {
+        lenient().when(clusterService.serverUri()).thenReturn(P1);
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2)),
+                "s/t/b.parquet", new FileAssignment(100L, Set.of(P2, P3))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        storageListsTheInventories();
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        for (FlightEndpoint endpoint : planner.plan("SELECT * FROM s.t", true).endpoints()) {
+            List<String> locations = locations(endpoint);
+            assertFalse(locations.contains(P1), "P1 holds no file whole: " + locations);
+            if (locations.get(0).equals(P2) && locations.size() == 1) {
+                continue;   // a, or a and b together: only P2 holds a
+            }
+            assertEquals(Set.of(P2, P3), Set.copyOf(locations));
+        }
+    }
+
+    /**
+     * Verifies a file no live node holds whole fails the plan naming it, instead of going to
+     * the least loaded node, which would fail with "Connection reset" (item 29).
+     *
+     * @throws Exception never
+     */
+    @Test
+    void wholeFileReadsRefuseFilesWithoutALiveHolder() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        // c is listed by the store but in no inventory: no node holds all its blocks.
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2))));
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        storageLists(List.of("s/t/a.parquet", "s/t/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of()),
+                "s/t/c.parquet", new FileAssignment(100L, Set.of())));
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        IOException e = assertThrows(IOException.class, () -> planner.plan("SELECT * FROM s.t"));
+        assertTrue(e.getMessage().contains("SASL"), e.getMessage());
+        assertTrue(e.getMessage().contains("1 file(s): s/t/c.parquet"), e.getMessage());
+        assertFalse(e.getMessage().contains("a.parquet"), e.getMessage());
+    }
+
+    /** Verifies the static check: a holder that is down does not count, others pass. */
+    @Test
+    void wholeFileValidationNeedsALiveHolder() throws Exception {
+        ParquetQueryParser parsed = ParquetQueryParser.parse("SELECT * FROM s.t");
+        Map<String, FileAssignment> files = Map.of(
+                "s/t/a.parquet", new FileAssignment(1L, Set.of(P3)));
+
+        QueryPlanner.validatePathLocations(files, parsed, Set.of(P1, P3), true, true);
+        // Without whole-file reads any node reads it.
+        QueryPlanner.validatePathLocations(files, parsed, Set.of(P1), true, false);
+        IOException e = assertThrows(IOException.class,
+                () -> QueryPlanner.validatePathLocations(files, parsed, Set.of(P1), true, true));
+        assertTrue(e.getMessage().contains("s/t/a.parquet"), e.getMessage());
+    }
+
+    /** Verifies the message names at most ten files and counts the rest. */
+    @Test
+    void unreadableFilesMessageNamesTenFiles() {
+        List<String> files = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            files.add("s/t/f" + i + ".parquet");
+        }
+
+        String message = QueryPlanner.unreadableFilesMessage(files, "nobody holds");
+
+        assertTrue(message.contains("nobody holds 12 file(s): s/t/f0.parquet"), message);
+        assertTrue(message.contains("s/t/f9.parquet, ... (2 more)"), message);
+        assertFalse(message.contains("f10"), message);
+        assertTrue(message.contains("replication"), message);
+    }
+
+    /**
+     * Verifies a complete answer checks the files of the query's tables against this node's
+     * DataNode: only on whole-file reads, and naming the files the node cannot read.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void filesNotReadableHereListsFilesThisNodeCannotRead() throws Exception {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        storageLists(List.of("s/t/a.parquet", "s/t/b.parquet", "s/u/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(1L, Set.of()),
+                "s/t/b.parquet", new FileAssignment(1L, Set.of()),
+                "s/u/c.parquet", new FileAssignment(1L, Set.of())));
+        lenient().when(parquetAdapter.dataStore()).thenReturn(store);
+        lenient().when(store.readableHere(any())).thenAnswer(
+                call -> !((pro.surpin.data.arrowflight.spi.storage.DataFile) call.getArgument(0))
+                        .relativePath().endsWith("b.parquet")
+                        && !((pro.surpin.data.arrowflight.spi.storage.DataFile) call.getArgument(0))
+                        .relativePath().endsWith("c.parquet"));
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(false);
+        assertEquals(List.of(), planner.filesNotReadableHere("SELECT count(*) FROM s.t"));
+
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        assertEquals(List.of("s/t/b.parquet"), planner.filesNotReadableHere("SELECT count(*) FROM s.t"));
+        assertEquals(List.of("s/t/b.parquet", "s/u/c.parquet"), planner.filesNotReadableHere(
+                "SELECT * FROM s.t JOIN s.u ON t.x = u.x"));
+        // A query the parser does not take is left to DuckDB.
+        assertEquals(List.of(), planner.filesNotReadableHere("not sql at all"));
+    }
+
     /** Verifies 0 backup locations gives the planned node only. */
     @Test
     void zeroBackupLocationsKeepOneLocation() throws Exception {
