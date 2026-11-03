@@ -35,7 +35,7 @@
 > `dfs.data.transfer.protection=authentication` (TCP reads must fail, short-circuit reads pass 22/22), with the
 > DataNode metrics showing short-circuit reads; (c) a clear startup/first-read error when a node can neither
 > short-circuit nor read over TCP.
-ITEM 26 DONE (2026-11-03, core session, e016818c / ad141bf5 / 78c7e875; CI: see Log). **(a) Cause:** the hadoopfs
+ITEM 26 DONE (2026-11-03, core session, e016818c..25aa7eec; pre-release `server-1.0.0-25aa7eec0f0f`). **Next: item 27.** **(a) Cause:** the hadoopfs
 > extension hands libhdfs3 its own `hdfs_shortcircuit` (default false) and `hdfs_domain_socket_path` (default empty),
 > which override `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` in `LIBHDFS3_CONF`; libhdfs3 reads
 > short-circuit only with both set (reproduced locally against apache/hadoop 3.4.1: either one alone, or LIBHDFS3_CONF
@@ -2720,3 +2720,14 @@ S3 slowdown item below stays open for then).
   `ci/core-gate` = 57e05488 (dispatched and waited for service-cluster 41500347523, -hdfs 41500352375, -security
   41500357307, -stores 41500362497, all green), pre-release `server-1.0.0-57e054887f7a`. Note for all lanes: from now on a
   `package=true` run takes ~30 min longer (the service matrix) and fails if any service cell fails.
+- 2026-11-03 (core session): item 26 done (hadoopfs short-circuit). Cause: hadoopfs's own `hdfs_shortcircuit` (default
+  false) / `hdfs_domain_socket_path` (default empty) override LIBHDFS3_CONF and both are needed; reproduced locally
+  (apache/hadoop 3.4.1 in docker). The server now fills them from LIBHDFS3_CONF, then the Hadoop config
+  (`HdfsShortCircuit`, test `HdfsShortCircuitTest`), stops at start when `dfs.data.transfer.protection` is set and the
+  node cannot read short-circuit. service-hdfs: new cell `ha-krb-sasl`, every cell checks short-circuit (~920 fd requests
+  per cell; was 900 TCP block reads); 16 TCP blocks remain = the server's Java footer reads without native libhadoop (Open
+  questions). Runs: service-hdfs 41577631525 8/8 green (41575267837 / 41576424084 failed on the first, too strict check
+  and the summary's cell count); Dev CI 41575270685, 41577631438 green; `package=true` 41577668888 on `ci/core-sc` =
+  25aa7eec (build retried once: `S3IntegrationTest.theExternalFileCacheStaysWithinTheMemoryLimit` "2 GETs for a cached
+  file" failed once, passed on rerun - unrelated, watch for flakiness), gate dispatched service-cluster 41579846717,
+  -security 41579850394, -stores 41579854352 (all green), pre-release `server-1.0.0-25aa7eec0f0f`. Next: item 27.
