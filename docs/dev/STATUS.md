@@ -138,7 +138,7 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > GROUP BY with about as many groups as rows holds about its answer per node (not bounded yet).
 > **Still open (part 2b, next session):** (2) (c) cache smaller than a query's
 > input for the other shapes - other aggregates (LIMIT / HAVING / DISTINCT / expressions), joins and complete answers
-> (also: a footer-answered `count(*)` without filter still copies its files - it need not): today the copies
+> (the footer-answered `count(*)` no longer copies: done 2026-11-03 evening, 712047f8): today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled.
 > (`ConcatenatingStreamListener` sends several DuckDB readers as one stream and can be reused for that.) Complete
@@ -148,8 +148,8 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: the
 > sasl-cluster cell is the `ha-krb-sasl` topology with 3 DataNodes / 3 servers and now has TPC-H 22/22 (spread,
 > complete) + full scan + GROUP BY over `chunks` (no file held whole), and under `speed` a cache smaller than every
-> file (so smaller than the table and than `split.t`); left: assert the per-query `hdfs=reads` lines (counts of
-> shortCircuit vs localCopy) and a bound on the copy directory's peak size; (5) `package=true`, then "ITEM 30 DONE".
+> file (so smaller than the table and than `split.t`); the cell now requires `hdfs=reads` lines with local copies and
+> footer-only `count(*)` lines (`footerOnly=`); left: a bound on the copy directory's peak size; (5) `package=true`, then "ITEM 30 DONE".
 
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
@@ -2990,3 +2990,13 @@ S3 slowdown item below stays open for then).
   Dev CI 41679739414 green, service-hdfs 41679739329 green 10/10 (sasl-cluster speed: 18 batched scans, 6 aggregates
   merged, 0 fallback), Catalogs CI 41679739422 green. No `package=true` (item 30 not done: joins / complete answers /
   other aggregates over the cache, `hdfsLocalCopyDir`, `hdfs=reads` assertions left). Lock released.
+- 2026-11-03 (cloud session, core): item 30 part 2b, footer-answered `count(*)` (712047f8, 4c74c89f): a `count(*)`
+  over all rows (no filter / GROUP BY / ORDER BY / LIMIT / DISTINCT, `ExecutionService.footerCountOnly`) is answered
+  from the footers through the Java client without copying the files the node lacks blocks of; log `hdfs=reads ...
+  localCopy=0 footerOnly=<n>`. Test `ExecutionServiceTest.footerAnsweredCountCopiesNothing` (real DuckDB, nothing in
+  the copy directory, FOOTER_COUNT path). sasl-cluster cell: `count(*)` over `chunks` in both modes on every node
+  (exact), and the cell now fails without `hdfs=reads` lines with local copies and footer-only count lines (both
+  profiles: 18 footer-only, 102/121 with copies). Runs: service-hdfs 41687057123 green (712047f8); Dev CI 41687057083
+  red (new test built the service without its AppConfig; test fixed in 4c74c89f), Dev CI 41689345981 green. No
+  `package=true` (item 30 not done: other aggregates / joins / complete answers over the cache, `hdfsLocalCopyDir`,
+  copy-directory peak bound left). Lock released.
