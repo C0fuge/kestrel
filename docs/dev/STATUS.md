@@ -157,7 +157,16 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > sasl-cluster cell is the `ha-krb-sasl` topology with 3 DataNodes / 3 servers and now has TPC-H 22/22 (spread,
 > complete) + full scan + GROUP BY over `chunks` (no file held whole), and under `speed` a cache smaller than every
 > file (so smaller than the table and than `split.t`); the cell now requires `hdfs=reads` lines with local copies and
-> footer-only `count(*)` lines (`footerOnly=`); left: a bound on the copy directory's peak size; (5) `package=true`, then "ITEM 30 DONE".
+> footer-only `count(*)` lines (`footerOnly=`); left: a bound on the copy directory's peak size (disk part done
+> 2026-11-03 night, 336f9607: `hdfsLocalCopyMinFreeBytes`, default 1 GiB - a query's new copies must leave that free
+> on the copies' disk, unused copies evicted for room first, else refused before copying, naming the files
+> (`hdfs=localCopyNoSpace`); copy batches sized by min(cache limit, disk room). So the disk is never filled; a join /
+> complete answer larger than the free disk now fails clearly. Still open: a bound below the disk for those shapes =
+> the Open question; a CI cell with a copy disk smaller than a query's input - e.g. a size-limited tmpfs `/copies`
+> on one node - is not built yet, the cell only checks the guard is on and never refuses on a runner); (5)
+> `package=true`, then "ITEM 30 DONE". **Next session:** the small-disk CI cell, then HAVING / avg / DISTINCT
+> aggregates over copy batches (single-node clusters and distributed complete parts), unless the Open question is
+> answered first.
 
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
@@ -1223,7 +1232,10 @@ S3 slowdown item below stays open for then).
   `hdfsLocalCopyHardMaxBytes` (default e.g. 2x the cache or a share of the disk's free space): run while the
   copies fit it, refuse beyond it; (3) keep today's behaviour (bounded only by the disk) and document it. Core lane's
   suggestion: (2), with the free-space check at copy time so a query fails with a clear message instead of filling the
-  disk. Until answered, the core lane continues with the remaining shapes that can be batched (other aggregates).
+  disk. Until answered, the core lane continues with the remaining shapes that can be batched (other aggregates). *Update
+  2026-11-03 night (336f9607):* the free-space check part of (2) is in (`hdfsLocalCopyMinFreeBytes`, default 1 GiB:
+  such a query is refused before copying when its copies would leave less free on the copies' disk), so the disk is
+  no longer filled; the question left is whether to refuse earlier (a hard bound below the free disk, or option 1).
 
 - **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   failed once in Dev CI 41644812393 (load 1000, want 700); passed before and locally. Watch for a repeat (likely a
@@ -3042,3 +3054,13 @@ S3 slowdown item below stays open for then).
   Runs on a4bbbab0: Dev CI 41707251465, service-hdfs 41707251290 (10/10), Catalogs CI 41707251341, all green. No
   `package=true` (item 30 not done: HAVING / DISTINCT aggregates / expressions, ORDER BY-only scans, joins / complete
   over the cache - Open question - and the copy-directory peak bound). Lock released.
+- 2026-11-03 (cloud session, core): item 30 part 2b, copy-disk guard (336f9607): new optional setting
+  `hdfsLocalCopyMinFreeBytes` (`arrowflight.hdfs.localCopyMinFreeBytes`, `HDFS_LOCAL_COPY_MIN_FREE_BYTES`, default
+  1 GiB; only with local copies, which are not in any pre-release yet). `LocalCopyCache.acquire` sums a query's new
+  copies first, evicts unused copies (also below the limit) for disk room, and refuses before starting any copy when
+  free space minus copies in progress minus the new ones would drop below the reserve (`hdfs=localCopyNoSpace`, message
+  names files, bytes needed / free / held by running queries); `room()` = min(cache limit, disk room) sizes the copy
+  batches. Tests: `LocalCopyCacheTest` (refused before copying, eviction for disk room, copies in use kept, `room()`),
+  `ConfigAdapterTest.hdfsLocalCopyMinFreeBytesDefaultsTo1GiBAndTakesSizes`; sasl-cluster cell requires the
+  `minFreeBytes=` cache line and no `hdfs=localCopyNoSpace`. Runs on 336f9607: Dev CI 41715910689, service-hdfs
+  41715910681 (10/10, both sasl-cluster cells), Catalogs CI 41715910716, all green. No `package=true` (item 30 not done). Lock released.
