@@ -114,10 +114,13 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > whole) now answered from copies in both modes + a join with spread.orders in parts; TCP-read bound includes the
 > copies. 750fea75: a one-endpoint `distributedComplete` plan whose files this node lacks is read from the endpoint
 > (it copies) instead of refused; joins described on samples / footer stubs (first CI run 41639379768: join schema
-> guessed as utf8 on 2 of 3 nodes, complete split.t refused). **Part 2 (next session), from the 13:15/14:45 notes:**
-> (1) `complete` computed on a node lacking blocks (non-mergeable shapes such as TPC-H joins, or
-> `distributedComplete=false`) still refused (`requireReadableHere`): copy the referenced tables' files and run the
-> views over the copies (views are per session snapshot - needs a per-query view rewrite); (2) (c) cache smaller than a query's input: today the copies
+> guessed as utf8 on 2 of 3 nodes, complete split.t refused). **Part 2a done (2026-11-03, 690becd9, 0ebb0171):**
+> (1) a `complete` answer computed on a node lacking blocks (non-mergeable shapes such as TPC-H joins, or
+> `distributedComplete=false`) copies the files of the tables it reads that the node lacks
+> (`ExecutionService.completeFromCopies`: tables named by `QueryTables`, schema-qualified references replaced by
+> `read_parquet` over copies + files held whole, typed as the view; a reference the rewrite misses is refused naming
+> the files; log `hdfs=completeFromCopies`). sasl-cluster cell: TPC-H 22/22 over `spread` (replication 2) in complete
+> mode on all 3 nodes = 66/66 exact, `split.t` join in complete mode too. **Still open (part 2b, next session):** (2) (c) cache smaller than a query's input: today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled;
 > (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: run the
