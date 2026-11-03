@@ -2908,3 +2908,18 @@ S3 slowdown item below stays open for then).
   5122cea1: service-cluster 41628772790 (incl. hdfs-ha / loss), -security 41628777405, -stores 41628781826, all green;
   with service-hdfs 41624568709 the pre-release has passed the whole matrix. Lesson: while a package run waits, push
   nothing to its branch (or dispatch it on a `ci/core-*` branch). Lock released.
+- 2026-11-03 (core session): item 30 part 1 (a523356e, 750fea75, ffdadd8a, 59d8b2e5): node-local copies of files no
+  node holds whole on SASL HDFS (`LocalCopyCache`, settings `hdfsLocalCopyMaxBytes` default 32GiB / 0 = off and
+  `hdfsLocalCopyThreads` 4 - additive, only where such queries failed before); planner treats such files as readable
+  anywhere when copies are on; partial endpoints and joins copy the unreadable ticket files; a one-endpoint
+  distributedComplete plan over files the receiving node lacks is read from the endpoint (it copies) instead of being
+  refused; joins described on samples / Java footer stubs. Tests: `LocalCopyCacheTest` (keys, LRU, in-use pinning
+  over the limit, file larger than the limit, one copy for concurrent queries, failed / short copy, Hive paths),
+  `ExecutionServiceTest.ticketFilesThisNodeCannotReadAreReadFromALocalCopy` (DuckDB reads the copy),
+  `.joinDescribeUsesFooterStubsForFilesThisNodeCannotRead`, `QueryPlannerTest.localCopiesPlanFilesWithoutAWholeFileHolder`,
+  `ConfigAdapterTest.hdfsLocalCopiesDefaultTo32GiBAndTakeSizes`. Runs: service-hdfs 41639379768 red (complete split.t
+  refused on a one-endpoint plan; join schema guessed utf8 on 2 nodes - both fixed in 750fea75), 41640582266 red only
+  on the cell's TCP-read bound (320 > 312: the copy of split's 50 blocks; bound widened in ffdadd8a), 41641719428
+  green 10/10 (sasl-cluster: TPC-H 22/22, split.t from copies in both modes on all 3 nodes + join in parts). That run
+  logged copyMs = uptime (LogUtil.mark() is -1 without DEBUG): fixed in 59d8b2e5. Dev CI 41642899878 on 59d8b2e5:
+  see the next line. No `package=true` yet: item 30 is not done (part 2 list in Next steps). Lock released.
