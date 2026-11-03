@@ -2927,5 +2927,5 @@ S3 slowdown item below stays open for then).
   logged copyMs = uptime (LogUtil.mark() is -1 without DEBUG): fixed in 59d8b2e5. Dev CI 41642899878 (59d8b2e5): all
   1112 server tests green, SpotBugs null-parent warning in `LocalCopyCache` -> 4df6f53c; Dev CI 41644812393 (4df6f53c)
   attempt 1: one flake, `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
-  (load 1000, want 700; untouched code, green in the run before and 3/3 locally) - failed job rerun, result: RERUN.
+  (load 1000, want 700; untouched code, green in the run before and 3/3 locally) - attempt 2 green.
   No `package=true` yet: item 30 is not done (part 2 list in Next steps). Lock released.
