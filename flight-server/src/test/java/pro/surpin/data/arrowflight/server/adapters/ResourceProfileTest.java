@@ -74,6 +74,7 @@ class ResourceProfileTest {
         assertNull(ConfigAdapter.duckDbShared(effective(raw, MEDIUM), MEDIUM));
         assertFalse(ConfigAdapter.flightZeroCopyWrites(effective(raw, MEDIUM)));
         assertFalse(config.duckDbExternalFileCache());
+        assertTrue(config.duckDbPreserveInsertionOrder());
     }
 
     /** A typo is refused instead of running balanced silently; the name ignores case. */
@@ -113,6 +114,7 @@ class ResourceProfileTest {
         assertEquals(16 << 20, config.flightBackpressureThresholdBytes());
         assertEquals(threads, config.duckDbThreads());
         assertTrue(config.duckDbExternalFileCache(), "external file cache " + host);
+        assertFalse(config.duckDbPreserveInsertionOrder(), "insertion order " + host);
         for (String ns : List.of("s3", "lakefs")) {
             assertEquals(0, new PropertiesPluginConfig(ns, source, List.of()).getInt("cacheMegabytes", 0),
                     ns + " cache " + host);
@@ -240,5 +242,29 @@ class ResourceProfileTest {
         ConfigSource property = effective(raw(Map.of("resourceProfile", "speed",
                 "arrowflight.duckdb.externalFileCache", "false"), Map.of(), Map.of()), MEDIUM);
         assertFalse(ConfigAdapter.getConfig(property, MEDIUM).duckDbExternalFileCache());
+    }
+
+    /**
+     * speed lets parallel scan threads hand on batches out of file order (item 27); a setting given
+     * as a system property or in the environment keeps the order, and balanced keeps it.
+     */
+    @Test
+    void speedDropsTheInsertionOrderUnlessSet() {
+        ConfigSource speed = raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of());
+        assertFalse(ConfigAdapter.getConfig(effective(speed, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+        assertTrue(ResourceProfile.resolve(speed, () -> MEDIUM).describe()
+                .contains(" duckDbPreserveInsertionOrder=false"));
+
+        ConfigSource env = raw(Map.of("resourceProfile", "speed"), Map.of("DUCKDB_PRESERVE_INSERTION_ORDER", "true"),
+                Map.of());
+        assertTrue(ConfigAdapter.getConfig(effective(env, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+        assertTrue(ResourceProfile.resolve(env, () -> MEDIUM).describe()
+                .contains("duckDbPreserveInsertionOrder=true(explicit)"));
+        ConfigSource property = raw(Map.of("resourceProfile", "speed", "duckDbPreserveInsertionOrder", "true"),
+                Map.of(), Map.of());
+        assertTrue(ConfigAdapter.getConfig(effective(property, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+
+        ConfigSource balanced = raw(Map.of(), Map.of(), Map.of());
+        assertTrue(ConfigAdapter.getConfig(effective(balanced, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
     }
 }

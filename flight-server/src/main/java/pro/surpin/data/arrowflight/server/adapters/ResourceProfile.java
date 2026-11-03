@@ -98,6 +98,11 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
             b.offer("true", "duckDbExternalFileCache", "arrowflight.duckdb.externalFileCache",
                     "DUCKDB_EXTERNAL_FILE_CACHE");
         }
+        // Parallel scan threads hand their batches on as they finish instead of in file order (rows of a
+        // query without ORDER BY come in any order, as upstream's default): one full lineitem read on S3
+        // 910 -> 1118 MB/s, same answers, same peak memory (item 27, scan-perf runs 41585815577, 41587292385).
+        b.offer("false", "duckDbPreserveInsertionOrder", "arrowflight.duckdb.preserveInsertionOrder",
+                "DUCKDB_PRESERVE_INSERTION_ORDER");
         b.offer("true", "flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites", "FLIGHT_ZERO_COPY_WRITES");
         b.offer(Integer.toString(SPEED_ENDPOINTS_PER_SERVER), "endpointsPerServer",
                 "arrowflight.cluster.endpointsPerServer", "FLIGHT_ENDPOINTS_PER_SERVER");

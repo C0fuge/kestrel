@@ -24,6 +24,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `duckDbMemoryLimit` (`arrowflight.duckdb.memoryLimit`) | unset = per connection (memory - `-Xmx` - direct memory - 15 %) / `duckDbMemoryConnections`, at least 1 GiB, at most 80 % of memory; `none` = DuckDB's own; a size (e.g. `4GB`) wins | DuckDB's 80 % of RAM per instance |
 | `shutdownDrainSeconds` (`arrowflight.server.shutdownDrainSeconds`, `FLIGHT_SHUTDOWN_DRAIN_SECONDS`) | 20: a stopping node leaves the pool, refuses new calls `UNAVAILABLE`, lets running answers finish (`docker stop -t 25`) | did not exist; stop cut running answers (`INTERNAL`); `0` restores that |
 | `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath` (`HDFS_SHORTCIRCUIT` / `HDFS_DOMAIN_SOCKET_PATH`) | unset = `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` from the `LIBHDFS3_CONF` file, else from the server's Hadoop configuration (a socket path alone turns short-circuit on); startup line `hdfs=shortCircuit` | unset = hadoopfs's own defaults (off, no socket), so DuckDB read every HDFS block over TCP whatever `LIBHDFS3_CONF` said |
+| `duckDbPreserveInsertionOrder` under `resourceProfile=speed` only | `false` (rows without ORDER BY in any order) | `true` (balanced unchanged) |
 
 **New server settings (opt-in or unchanged behaviour by default)**
 
@@ -92,6 +93,16 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Changed - `speed` drops DuckDB's insertion order (STATUS item 27)
+
+- `resourceProfile=speed` now also offers `duckDbPreserveInsertionOrder=false` (upstream's default): parallel scan
+  threads hand on their batches as they finish, so rows of a query without ORDER BY come in any order (ORDER BY
+  answers unchanged). One full `lineitem` read on S3 (SF5, ADBC, 4 CPUs): 910 -> 1118 MB/s, 4 concurrent reads +5 %,
+  same peak memory, same answers. An explicit `-DduckDbPreserveInsertionOrder=true` (or
+  `DUCKDB_PRESERVE_INSERTION_ORDER=true`) wins; `balanced` is unchanged.
+- New manual workflow `scan-perf.yml` + `tools/ci/scan-adbc.py`: full-table read x1 / xN / Parquet export over a local
+  S3 endpoint for this ref, option variants and an upstream commit on the same runner, answers checked.
 
 ### Fixed - hadoopfs reads HDFS short-circuit (STATUS item 26)
 
