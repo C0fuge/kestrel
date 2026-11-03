@@ -112,8 +112,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   it) the extra copies are deleted as soon as the query ends. Copies are deleted when the server stops.
 - Logs: `hdfs=localCopy file=... bytes=... ms=... MBps=...` per copy and `hdfs=reads files=N shortCircuit=N
   localCopy=N copied=N reused=N copiedBytes=N copyMs=N copyMBps=N` per query on a node that copies.
-- Not yet (part 2): a `complete` answer on a node lacking blocks is still refused (use partial results or
-  `distributedComplete=true`); the disk the copies take for one query is not yet bounded below its input size.
+- `complete` with `distributedComplete=true`: a mergeable query planned as one endpoint whose files the receiving node
+  lacks blocks of is read from that endpoint's node (which copies) instead of being refused. Joins are described on a
+  readable sample or a Java footer stub (they got a guessed all-text schema on nodes lacking the first file).
+- Not yet (part 2): a `complete` answer computed on a node lacking blocks (non-mergeable shapes, or
+  `distributedComplete=false`) is still refused naming the files; the disk the copies take for one query is not yet
+  bounded below its input size.
 
 ### Fixed - SASL HDFS clusters: files go only to nodes holding every block (STATUS item 29, part 2)
 

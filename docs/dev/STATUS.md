@@ -112,9 +112,12 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > local input). Logs `hdfs=localCopy` per copy, `hdfs=reads files shortCircuit localCopy copied reused copiedBytes
 > copyMs copyMBps` per query. START-NOTES documents the disk cost. sasl-cluster cell: `split.t` (no node holds it
 > whole) now answered from copies in both modes + a join with spread.orders in parts; TCP-read bound includes the
-> copies. **Part 2 (next session), from the 13:15/14:45 notes:** (1) `complete` on a node lacking blocks still
-> refused (`requireReadableHere`): copy the referenced tables' files and run the views over the copies (views are
-> per session snapshot - needs per-query view rewrite); (2) (c) cache smaller than a query's input: today the copies
+> copies. 750fea75: a one-endpoint `distributedComplete` plan whose files this node lacks is read from the endpoint
+> (it copies) instead of refused; joins described on samples / footer stubs (first CI run 41639379768: join schema
+> guessed as utf8 on 2 of 3 nodes, complete split.t refused). **Part 2 (next session), from the 13:15/14:45 notes:**
+> (1) `complete` computed on a node lacking blocks (non-mergeable shapes such as TPC-H joins, or
+> `distributedComplete=false`) still refused (`requireReadableHere`): copy the referenced tables' files and run the
+> views over the copies (views are per session snapshot - needs a per-query view rewrite); (2) (c) cache smaller than a query's input: today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled;
 > (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: run the
