@@ -579,6 +579,74 @@ class ExecutionServiceTest {
         assertEquals(null, service.localCopies(ticket));
     }
 
+    /**
+     * Item 30 part 2: a complete answer on a node lacking blocks of a table (a comma join, as in
+     * TPC-H) reads that table from local copies: its references are replaced by read_parquet over
+     * the copies and the files held whole, and the answer equals the one over the original files.
+     */
+    @Test
+    void completeAnswerReadsTablesThisNodeLacksBlocksOfFromLocalCopies(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path a = dir.resolve("a.parquet");
+        java.nio.file.Path b = dir.resolve("b.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT range AS v FROM range(1000)) TO '" + a + "' (FORMAT parquet)");
+            st.execute("COPY (SELECT range AS v FROM range(1000, 2000)) TO '" + b + "' (FORMAT parquet)");
+        }
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile remote = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet",
+                java.nio.file.Files.size(a), 1L, Set.of());
+        DataFile held = new DataFile("s/t/b.parquet", "hdfs://ns/data/s/t/b.parquet",
+                java.nio.file.Files.size(b), 1L, Set.of("dn1"));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.tableFiles("s", "t")).thenReturn(List.of(remote, held));
+        when(parquet.tableFiles("s", "u")).thenReturn(List.of());
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        when(store.readableHere(remote)).thenReturn(false);
+        when(store.readableHere(held)).thenReturn(true);
+        when(store.inputFile(remote)).thenReturn(new org.apache.parquet.io.LocalInputFile(a));
+        when(store.duckDbUri("s/t/b.parquet")).thenReturn(b.toString());
+        when(duckDb.localCopyRoot()).thenReturn(dir.resolve("localcopy"));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+        String query = "SELECT count(*) AS n, sum(x.v) AS q FROM s.t x, s.u WHERE x.v % 10 = u.k"
+                + " AND x.v IN (SELECT v FROM s.t)";
+
+        try (ExecutionService.CopiedQuery copied = service.completeFromCopies(query);
+                java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            assertTrue(copied.copied());
+            assertFalse(copied.sql().contains("s.t"), copied.sql());
+            assertTrue(copied.sql().contains(dir.resolve("localcopy").toString()), copied.sql());
+            assertTrue(copied.sql().contains(b.toString()), "held file read in place: " + copied.sql());
+            st.execute("CREATE SCHEMA s");
+            st.execute("CREATE TABLE s.u AS SELECT 3 AS k");
+            try (java.sql.ResultSet rs = st.executeQuery(copied.sql())) {
+                assertTrue(rs.next());
+                assertEquals(200, rs.getLong(1));
+                long want = 0;
+                for (long v = 3; v < 2000; v += 10) {
+                    want += v;
+                }
+                assertEquals(want, rs.getLong(2));
+            }
+        }
+        // Every file held whole, or copies off: the SQL is left as it is.
+        when(store.readableHere(remote)).thenReturn(true);
+        try (ExecutionService.CopiedQuery same = service.completeFromCopies(query)) {
+            assertFalse(same.copied());
+            assertEquals(query, same.sql());
+        }
+        when(store.readableHere(remote)).thenReturn(false);
+        when(parquet.localCopies()).thenReturn(false);
+        assertEquals(query, service.completeFromCopies(query).sql());
+    }
+
     /** The table directory of a ticket file is its first two segments. */
     @Test
     void tableDirectoryOfATicketFile() {

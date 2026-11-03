@@ -13,17 +13,28 @@ every endpoint from its location) and complete (``distributedComplete=true`` mer
 nodes holding the files) must give the row count and sum(l_quantity) of the local files. ``split.t``
 (no node holds it whole) is read from a node-local copy (item 30): its count and sum(l_quantity)
 must match the local file in both modes, and in parts a join of it with ``spread.orders`` (every
-lineitem row has its order) must count its rows; never "Connection reset". Prints ``ok``/``FAIL`` lines and a last line
+lineitem row has its order) must count its rows, in both modes; never "Connection reset". Then the
+22 TPC-H queries over ``spread`` (``tpch.`` replaced by ``spread.``) in complete mode on every node
+must equal <dir>/expected/qNN.parquet: a non-mergeable answer is computed on the receiving node,
+which lacks some of spread's files and reads them from local copies (item 30 part 2). Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
 import glob
+import importlib.util
 import os
 import sys
 
 import adbc_driver_flightsql.dbapi as flightsql
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+
+_SPEC = importlib.util.spec_from_file_location(
+    "service_cluster_check", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "service-cluster-check.py"))
+_CLUSTER = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_CLUSTER)
+difference, load = _CLUSTER.difference, _CLUSTER.load
 
 SPREAD = "SELECT count(*) AS n, sum(l_quantity) AS q FROM spread.lineitem"
 SPLIT = "SELECT count(*) AS n, sum(l_quantity) AS q FROM split.t"
@@ -90,7 +101,7 @@ def main():
             except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
                 print(f"error text: {e}", flush=True)
                 fail(f"{server} {mode} spread.lineitem: {first_line(e)}")
-            checks = [("split.t", SPLIT)] + ([("split.t join", SPLIT_JOIN)] if mode == "partial" else [])
+            checks = [("split.t", SPLIT), ("split.t join", SPLIT_JOIN)]
             for name, sql in checks:
                 try:
                     with connect(server, mode) as conn:
@@ -104,6 +115,24 @@ def main():
                 except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
                     print(f"error text: {e}", flush=True)
                     fail(f"{server} {mode} {name}: {first_line(e)}")
+    queries = load(base)
+    with_copies = 0
+    for i, server in enumerate(servers):
+        with connect(server, "complete") as conn:
+            for name, sql, want in queries:
+                try:
+                    got = run(conn, sql.replace("tpch.", "spread."))
+                except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                    print(f"error text: {e}", flush=True)
+                    fail(f"{server} complete spread {name}: {first_line(e)}")
+                    continue
+                diff = difference(got, want)
+                if diff:
+                    fail(f"{server} complete spread {name}: wrong answer: {diff}")
+                else:
+                    with_copies += 1
+    print(f"ok complete spread TPC-H: {with_copies} of {len(queries) * len(servers)} answers exact",
+          flush=True)
     print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
     return 1 if failures else 0
 

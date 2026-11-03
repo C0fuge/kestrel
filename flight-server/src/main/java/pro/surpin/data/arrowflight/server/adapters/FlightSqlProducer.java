@@ -719,9 +719,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 // A query of catalog views runs as checked: its views replaced by their queries.
                 if (distributed == null || state.parameters() != null || !expanded.equals(query)
                         || !distributed.stream(query, user, listener)) {
-                    requireReadableHere(query);
-                    executionService.readComplete(allocator, expanded, state.parameters(), listener,
-                            true);
+                    try (ExecutionService.CopiedQuery copied =
+                            executionService.completeFromCopies(expanded)) {
+                        if (!copied.copied()) {
+                            requireReadableHere(query);
+                        }
+                        executionService.readComplete(allocator, copied.sql(), state.parameters(),
+                                listener, true);
+                    }
                 }
             } else {
                 executionService.readParquet(

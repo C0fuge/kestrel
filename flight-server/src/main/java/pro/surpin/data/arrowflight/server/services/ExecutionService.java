@@ -75,6 +75,8 @@ public final class ExecutionService {
     private static final String ARROW_SOURCE_PLACEHOLDER = "__kestrel_arrow_source";
     private static final long SCHEMA_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private static final int SCHEMA_CACHE_CAPACITY = 1024;
+    /** Schema name standing for a copied table in the check that every reference was replaced. */
+    private static final String COPY_CHECK_SCHEMA = "__localcopy_check";
 
     /**
      * A query's result schema with its refresh deadline.
@@ -1357,20 +1359,165 @@ public final class ExecutionService {
             return null;
         }
         DataStore store = parquetAdapter.dataStore();
-        List<DataFile> unreadable = filesToCopy(store, fileUris);
+        return copies(filesToCopy(store, fileUris), fileUris.length);
+    }
+
+    /**
+     * Copies files this node cannot read where they are and logs how the query's files are read.
+     *
+     * @param unreadable files to copy
+     * @param files number of files the query reads
+     * @return lease of the copies, or null when there is nothing to copy
+     * @throws IOException when a file cannot be copied
+     */
+    private LocalCopyCache.Lease copies(List<DataFile> unreadable, int files) throws IOException {
         if (unreadable.isEmpty()) {
             LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy=0",
-                    LogUtil.qid(), LogUtil.node(), fileUris.length, fileUris.length);
+                    LogUtil.qid(), LogUtil.node(), files, files);
             return null;
         }
         LocalCopyCache.Lease lease = localCopyCache().acquire(unreadable);
         long ms = Math.max(1L, lease.millis());
         LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy={} copied={}"
                 + " reused={} copiedBytes={} copyMs={} copyMBps={}", LogUtil.qid(), LogUtil.node(),
-                fileUris.length, fileUris.length - unreadable.size(), unreadable.size(),
+                files, files - unreadable.size(), unreadable.size(),
                 lease.copied(), lease.reused(), lease.copiedBytes(), lease.millis(),
                 lease.copiedBytes() * 1000L / ms / (1024 * 1024));
         return lease;
+    }
+
+    /**
+     * A complete answer's SQL with the tables this node lacks blocks of read from local copies.
+     *
+     * @param sql SQL to run, unchanged when nothing is copied
+     * @param lease copies the SQL reads, or null; closed when the answer has been streamed
+     */
+    public record CopiedQuery(String sql, LocalCopyCache.Lease lease) implements AutoCloseable {
+        /**
+         * Tells whether the SQL reads local copies.
+         *
+         * @return true when files were copied for it
+         */
+        public boolean copied() {
+            return lease != null;
+        }
+
+        @Override
+        public void close() {
+            if (lease != null) {
+                lease.close();
+            }
+        }
+    }
+
+    /**
+     * Prepares a complete answer on a node lacking blocks of the tables it reads (HDFS read
+     * short-circuit only, item 30): copies the files of those tables that this node cannot read
+     * to the node-local cache and replaces each reference to such a table (named with its
+     * schema) by {@code read_parquet} over the files as they are read here, local copies for the
+     * missing ones, typed as the table's view. SQL is returned unchanged when local copies are
+     * off, when every file is readable here, or when DuckDB cannot name the query's tables.
+     *
+     * @param sql SQL of the complete answer (restrictions already applied)
+     * @return SQL to run and the copies it reads; close it after streaming
+     * @throws IOException when a file cannot be listed or copied
+     * @throws IllegalArgumentException when a table whose files are copied is also read in a way
+     *         the rewrite cannot replace (e.g. without its schema), naming its files
+     */
+    public CopiedQuery completeFromCopies(String sql) throws IOException {
+        if (!parquetAdapter.localCopies() || TimeTravelClause.present(sql)) {
+            return new CopiedQuery(sql, null);
+        }
+        List<ParquetQueryParser.JoinTable> tables;
+        try {
+            tables = QueryTables.of(sql);
+        } catch (IllegalArgumentException e) {
+            return new CopiedQuery(sql, null);
+        }
+        DataStore store = parquetAdapter.dataStore();
+        Map<String, List<DataFile>> copied = new LinkedHashMap<>();
+        List<DataFile> unreadable = new ArrayList<>();
+        int files = 0;
+        for (ParquetQueryParser.JoinTable table : tables) {
+            String key = copyKey(table.schema(), table.table());
+            if (table.schema() == null || copied.containsKey(key)
+                    || parquetAdapter.isCatalogSchema(table.schema())) {
+                continue;
+            }
+            List<DataFile> listed;
+            try {
+                listed = parquetAdapter.tableFiles(table.schema(), table.table());
+            } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
+                continue;   // not a table of the data store: DuckDB reports it
+            }
+            List<DataFile> missing = new ArrayList<>();
+            for (DataFile file : listed) {
+                if (!store.readableHere(file)) {
+                    missing.add(file);
+                }
+            }
+            if (!missing.isEmpty()) {
+                copied.put(key, listed);
+                unreadable.addAll(missing);
+                files += listed.size();
+            }
+        }
+        if (copied.isEmpty()) {
+            return new CopiedQuery(sql, null);
+        }
+        List<TableReferences.Reference> references = TableReferences.find(sql,
+                (schema, table) -> copied.containsKey(copyKey(schema, table)));
+        // Every read of a copied table must be one of the replaced references.
+        List<String> checks = new ArrayList<>(references.size());
+        for (TableReferences.Reference reference : references) {
+            checks.add(DuckDbAdapter.quoteIdentifier(COPY_CHECK_SCHEMA) + "."
+                    + DuckDbAdapter.quoteIdentifier(reference.table()));
+        }
+        for (ParquetQueryParser.JoinTable table : QueryTables.of(
+                TableReferences.rewrite(sql, references, checks))) {
+            if (copied.containsKey(copyKey(table.schema(), table.table()))) {
+                List<String> names = new ArrayList<>();
+                for (DataFile file : unreadable) {
+                    names.add(file.relativePath());
+                }
+                throw new IllegalArgumentException(QueryPlanner.unreadableFilesMessage(names,
+                        "a reference to " + table.schema() + "." + table.table()
+                        + " cannot be read from local copies; this node lacks blocks of"));
+            }
+        }
+        LocalCopyCache.Lease lease = copies(unreadable, files);
+        try {
+            List<String> sources = new ArrayList<>(references.size());
+            for (TableReferences.Reference reference : references) {
+                List<String> paths = new ArrayList<>();
+                for (DataFile file : copied.get(copyKey(reference.schema(), reference.table()))) {
+                    paths.add(duckDbUri(store, file.relativePath(), lease));
+                }
+                String source = tableSource(reference.schema(), reference.table(), paths);
+                if (!source.startsWith("(")) {
+                    source = "(SELECT * FROM " + source + ")";
+                }
+                sources.add(source + (reference.aliased() ? ""
+                        : " AS " + DuckDbAdapter.quoteIdentifier(reference.table())));
+            }
+            LOGGER.info("qid={} node={} hdfs=completeFromCopies tables={} references={}",
+                    LogUtil.qid(), LogUtil.node(), copied.size(), references.size());
+            return new CopiedQuery(TableReferences.rewrite(sql, references, sources), lease);
+        } catch (RuntimeException e) {
+            lease.close();
+            throw e;
+        }
+    }
+
+    /**
+     * Keys a table by its lower-case schema and name.
+     *
+     * @param schema schema name, or null
+     * @param table table name
+     * @return key
+     */
+    private static String copyKey(String schema, String table) {
+        return (schema + "\u0000" + table).toLowerCase(java.util.Locale.ROOT);
     }
 
     /**

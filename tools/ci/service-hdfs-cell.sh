@@ -302,7 +302,7 @@ if [ "$n" -gt 1 ]; then
   cat "$work/sasl-check.log"
   note "sasl check: $(grep -m 1 '^result ' "$work/sasl-check.log" || echo 'no result line')"
   for i in $(seq "$n"); do
-    note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
+    note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), complete from copies $(docker logs "srv$i" 2>&1 | grep -c 'hdfs=completeFromCopies'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
   done
   if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
