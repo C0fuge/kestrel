@@ -41,6 +41,7 @@ difference, load = _CLUSTER.difference, _CLUSTER.load
 SPREAD = "SELECT count(*) AS n, sum(l_quantity) AS q FROM spread.lineitem"
 SPLIT = "SELECT count(*) AS n, sum(l_quantity) AS q FROM split.t"
 CHUNKS_SCAN = "SELECT l_orderkey, l_quantity FROM chunks.lineitem"
+CHUNKS_COUNT = "SELECT count(*) AS n FROM chunks.lineitem"
 CHUNKS_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
                 " FROM chunks.lineitem GROUP BY l_returnflag, l_linestatus")
 SPLIT_JOIN = ("SELECT count(*) AS n, sum(s.l_quantity) AS q FROM split.t s"
@@ -161,6 +162,12 @@ def main():
                     n = scan.num_rows
                     q = decimal.Decimal(str(pc.sum(scan.column("l_quantity")).as_py() or 0))
                     got_groups = groups(run(conn, CHUNKS_GROUP))
+                    # Answered from the footers (Java client): no local copy (item 30 part 2b).
+                    counted = sum(int(r["n"] or 0) for r in run(conn, CHUNKS_COUNT).to_pylist())
+                if counted != want_n:
+                    fail(f"{server} {mode} chunks.lineitem count(*): {counted}, want {want_n}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem count(*) ({counted})", flush=True)
                 if n != want_n or abs(q - want_q) > decimal.Decimal("0.0001"):
                     fail(f"{server} {mode} chunks.lineitem full scan: rows {n} sum {q},"
                          f" want {want_n} / {want_q}")

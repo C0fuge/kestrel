@@ -322,6 +322,14 @@ if [ "$n" -gt 1 ]; then
   aggMerged=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches merged' || true)
   aggFallback=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches merge=fallback' || true)
   note "aggregates in batches of copies: $aggBatched, merged $aggMerged, fallback $aggFallback; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=copyBatches merged.*' || echo 'no merged line')"
+  # Item 30 part 2b: per-query read lines; a footer-answered count(*) copies nothing.
+  readLines=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=reads ' || true)
+  copyReads=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -cE 'hdfs=reads .*localCopy=[1-9]' || true)
+  footerOnly=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -cE 'hdfs=reads .*footerOnly=[1-9]' || true)
+  note "hdfs=reads lines: $readLines, with local copies $copyReads, count(*) from footers without copies $footerOnly"
+  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$copyReads" -eq 0 ] || [ "$footerOnly" -eq 0 ]; }; then
+    finish fail "expected hdfs=reads lines with local copies ($copyReads) and count(*) answered from footers without copies ($footerOnly)"
+  fi
   if [ "$profile" = speed ] && [ "$batched" -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "the cache is smaller than chunks.lineitem, but no scan was read in batches of copies"
   fi

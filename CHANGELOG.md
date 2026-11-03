@@ -96,6 +96,13 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - SASL HDFS clusters: a footer-answered `count(*)` copies nothing (STATUS item 30, part 2b)
+
+- A `SELECT count(*)` over all rows of a table (no filter, GROUP BY, ORDER BY, LIMIT or DISTINCT) is answered from the
+  Parquet footers, which the Java Hadoop client reads under SASL too; files the node lacks blocks of are no longer
+  copied to the local-copy cache for it. Log line `hdfs=reads files=... shortCircuit=... localCopy=0 footerOnly=<files
+  not held whole>`. Same answer; other queries unchanged.
+
 ### Changed - SASL HDFS clusters: aggregates larger than the local-copy cache merged from batches (STATUS item 30, part 2b)
 
 - A partial-mode aggregate of one table whose answer distributed complete mode can merge (counts, sums, minima,

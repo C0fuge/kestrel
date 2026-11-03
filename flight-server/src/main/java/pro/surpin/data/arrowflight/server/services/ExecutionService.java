@@ -723,6 +723,13 @@ public final class ExecutionService {
             return;
         }
         List<DataFile> unreadable = unreadableFiles(fileUris);
+        if (unreadable != null && !unreadable.isEmpty() && footerCountOnly(parsedQuery)) {
+            // The row counts come from the footers, read through the Java client: no copies.
+            LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy=0 footerOnly={}",
+                    LogUtil.qid(), LogUtil.node(), fileUris.length,
+                    fileUris.length - unreadable.size(), unreadable.size());
+            unreadable = null;
+        }
         boolean concatenatable = concatenatable(parsedQuery);
         List<String[]> batches = startListener && unreadable != null
                 && (concatenatable || mergeable(parsedQuery))
@@ -875,6 +882,34 @@ public final class ExecutionService {
     }
 
     /**
+     * Tells whether an aggregate has no GROUP BY, filter, ORDER BY, LIMIT, DISTINCT or HAVING.
+     *
+     * @param pq parsed query
+     * @return true for such an aggregate over all rows
+     */
+    private static boolean noGroupByNoFilter(ParquetQueryParser pq) {
+        return pq.groupByColumnNames.isEmpty()
+                && (pq.filter == null || pq.filter.isBlank())
+                && !pq.hasOrderOrLimit()
+                && !pq.distinct && pq.having == null
+                && pq.selectExprs.stream().noneMatch(e -> e.distinct)
+                && !pq.selectExprs.isEmpty();
+    }
+
+    /**
+     * Tells whether a query is answered from the row counts in the Parquet footers alone
+     * (only COUNT(*) over all rows), so no data file needs to be read or copied.
+     *
+     * @param pq parsed query
+     * @return true for a footer-answered COUNT(*)
+     */
+    static boolean footerCountOnly(ParquetQueryParser pq) {
+        return pq.hasAggregation && !pq.isJoin && noGroupByNoFilter(pq)
+                && pq.selectExprs.stream().allMatch(
+                        e -> e.func == ParquetQueryParser.SelectExpr.AggFunc.COUNT_STAR);
+    }
+
+    /**
      * Tells whether the answer of an aggregate for a set of files can be merged from its answers
      * for parts of that set, as {@link CompleteAnswerMerge} merges endpoint answers.
      *
@@ -1017,17 +1052,10 @@ public final class ExecutionService {
             return;
         }
 
-        boolean noGroupByNoFilter = pq.groupByColumnNames.isEmpty()
-                && (pq.filter == null || pq.filter.isBlank())
-                && !pq.hasOrderOrLimit()
-                && !pq.distinct && pq.having == null
-                && pq.selectExprs.stream().noneMatch(e -> e.distinct)
-                && !pq.selectExprs.isEmpty();
+        boolean noGroupByNoFilter = noGroupByNoFilter(pq);
 
         // Fast path A: COUNT(*) only — read row counts from Parquet footer
-        if (noGroupByNoFilter
-                && pq.selectExprs.stream().allMatch(
-                        e -> e.func == ParquetQueryParser.SelectExpr.AggFunc.COUNT_STAR)) {
+        if (footerCountOnly(pq)) {
             pathTracker.select(ExecutionPath.FOOTER_COUNT);
             List<Future<Long>> futs = new ArrayList<>(parquetFiles.size());
             DataStore store = parquetAdapter.dataStore();

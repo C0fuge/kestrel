@@ -818,6 +818,70 @@ class ExecutionServiceTest {
         }
     }
 
+    /**
+     * Item 30 part 2b: a COUNT(*) over all rows is answered from the footers, read through the
+     * Java client, so files this node lacks blocks of are not copied.
+     */
+    @Test
+    void footerAnsweredCountCopiesNothing(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path root = dir.resolve("localcopy");
+        String[] ticket = {"s/t/a.parquet", "s/t/b.parquet", "s/t/c.parquet"};
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        List<DataFile> remote = new java.util.ArrayList<>();
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            for (int i = 0; i < ticket.length; i++) {
+                java.nio.file.Path file = dir.resolve("f" + i + ".parquet");
+                st.execute("COPY (SELECT range AS v FROM range(" + i * 1000 + ", " + (i + 1) * 1000
+                        + ")) TO '" + file + "' (FORMAT parquet)");
+                DataFile data = new DataFile(ticket[i], "hdfs://ns/data/" + ticket[i],
+                        java.nio.file.Files.size(file), 1L, Set.of());
+                when(store.readableHere(data)).thenReturn(false);
+                when(store.inputFile(data)).thenReturn(new org.apache.parquet.io.LocalInputFile(file));
+                when(store.inputFile(ticket[i])).thenReturn(new org.apache.parquet.io.LocalInputFile(file));
+                when(store.duckDbUri(ticket[i])).thenReturn(file.toString());
+                when(store.duckDbUri(data)).thenReturn(file.toString());
+                when(store.file(ticket[i])).thenReturn(data);
+                remote.add(data);
+            }
+        }
+        when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(remote.get(0)));
+        when(store.parquetFiles("s/t")).thenReturn(new java.util.ArrayList<>(remote));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        java.util.concurrent.ExecutorService ioPool = java.util.concurrent.Executors.newCachedThreadPool();
+        DuckDbAdapter duckDb = org.mockito.Mockito.spy(new DuckDbAdapter(new pro.surpin.data.arrowflight
+                .server.model.AppConfig(3, 100, 1, 131072, 0, 1, 1, null, false, null, null, null, null,
+                null, false, 1048576, 67108864, 60000L, null, null, 32010, 5701, 60, 3, 1000, 30000, true,
+                false, 64, null, null, "complete", true, true), ioPool));
+        org.mockito.Mockito.doReturn(root).when(duckDb).localCopyRoot();
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, ioPool);
+        pro.surpin.data.arrowflight.server.model.ExecutionPathTracker path =
+                new pro.surpin.data.arrowflight.server.model.ExecutionPathTracker();
+        try (BufferAllocator allocator = new RootAllocator()) {
+            TextRows listener = new TextRows();
+            service.readParquet(allocator, "SELECT count(*) FROM s.t", ticket, listener, true, path);
+            assertEquals(List.of("3000"), listener.rows);
+            assertEquals(0, allocator.getAllocatedMemory());
+        } finally {
+            duckDb.close();
+            ioPool.shutdownNow();
+        }
+        assertEquals(pro.surpin.data.arrowflight.server.model.ExecutionPath.FOOTER_COUNT, path.path());
+        assertFalse(java.nio.file.Files.exists(root), "nothing copied");
+        assertTrue(ExecutionService.footerCountOnly(ParquetQueryParser.parse("SELECT count(*) AS n FROM s.t")));
+        for (String query : List.of("SELECT count(*) FROM s.t WHERE v > 1", "SELECT count(v) FROM s.t",
+                "SELECT v, count(*) FROM s.t GROUP BY v", "SELECT count(*), sum(v) FROM s.t",
+                "SELECT count(DISTINCT v) FROM s.t", "SELECT v FROM s.t")) {
+            assertFalse(ExecutionService.footerCountOnly(ParquetQueryParser.parse(query)), query);
+        }
+    }
+
     /** Item 30 part 2b: which aggregates are merged from batches of copies. */
     @Test
     void onlyMergeableAggregatesAreAnsweredPerBatch() {
