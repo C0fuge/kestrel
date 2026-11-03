@@ -56,6 +56,18 @@ ITEM 26 DONE (2026-11-03, core session, e016818c..25aa7eec; pre-release `server-
 > (`http_keep_alive`, `s3_url_style`, read-ahead / range sizes, `threads` per scan, parallel row-group reads), Arrow
 > batch sizes and the Flight writer path; implement what closes the gap; measure with the scan perf workflow (x1, x4,
 > export) against upstream on the same runner.
+ITEM 27 DONE (2026-11-03, core session, 413485ba; pre-release `server-1.0.0-413485ba80fd`). **Next: no open item from
+> the maintainer's 2026-11-03 list; take the next open numbered item below or ask.** New manual workflow `scan-perf.yml`
+> (`tools/ci/scan-adbc.py`): lineitem on a local S3 endpoint (rclone), full `SELECT *` read x1 / x4 / Parquet export via
+> ADBC, for this ref (profile), option variants and the upstream commit (built with its Hadoop runtime, `s3a://` data
+> dir) on one runner, answers checked. **Cause of the scan gap:** `preserve_insertion_order` (upstream sets false, ours kept
+> DuckDB's true): with it, parallel scan threads wait to hand on batches in file order. Same batches (458), batch size and
+> Flight path otherwise; a 64 MiB `streaming_buffer_size` gives nothing on S3 (x1 910 vs 910, +300 MiB peak). **Fix:**
+> `speed` offers `duckDbPreserveInsertionOrder=false` (explicit setting wins, balanced unchanged). SF5, 4 CPUs, best of 3,
+> MB/s (ratio to upstream 6e264c10): speed before x1 548 (1.05) / x4 751 (0.90) / export 191 (1.05); after 653 (1.25) /
+> 856 (1.02) / 178 (0.98); same answers, peak 1.9 GiB vs upstream 2.7 GiB (run 41589080058; without upstream 41585815577,
+> 41587292385: x1 886-910 -> 1118-1121). The export shape is bound by the client's Parquet writer on the runner (all
+> configs ~180-330 MB/s), so it cannot show a server gap here; the stand's export 0.73 needs the stand rerun (Open questions).
 
 > **Maintainer, 2026-11-02 18:00 - BUG FIRST (before item 24): HDFS is broken with `f06b5834e76e` on a real cluster.**
 > Production-like Hadoop 3.1.3 HA cluster (Kerberos, short-circuit local reads, `hdfs://<nameservice>/data/parquet`,
@@ -1048,6 +1060,12 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **Item 27 stand rerun (2026-11-03, core lane).** CI cannot reproduce the stand's S3 x1 0.80 / export 0.73: on a runner
+  ours (speed) was already 1.05 x1 / 0.90 x4 of upstream before the fix and 1.25 / 1.02 after it; the export shape there is
+  client-bound. Please rerun the three-way scan x1 / x4 / ADBC export with `server-1.0.0-413485ba80fd` (speed). If export
+  stays below upstream, say how the stand's export client writes (format, batch handling) so `scan-adbc.py` can match it.
+  Note: under `speed`, rows of queries without ORDER BY now come in any order (`-DduckDbPreserveInsertionOrder=true`
+  restores the file order).
 - **Java client short-circuit (2026-11-03, core lane, FYI).** The server's own Java HDFS client (Parquet footers,
   ~1 block per file) reads short-circuit only with the native Hadoop library (`-Djava.library.path` with libhadoop); without
   it those few reads go over TCP and, on a SASL cluster, speak SASL (they work). hadoopfs (all data reads) is fixed (item
@@ -2731,3 +2749,9 @@ S3 slowdown item below stays open for then).
   25aa7eec (build retried once: `S3IntegrationTest.theExternalFileCacheStaysWithinTheMemoryLimit` "2 GETs for a cached
   file" failed once, passed on rerun - unrelated, watch for flakiness), gate dispatched service-cluster 41579846717,
   -security 41579850394, -stores 41579854352 (all green), pre-release `server-1.0.0-25aa7eec0f0f`. Next: item 27.
+- 2026-11-03 (core session): item 27 done - `speed` offers `duckDbPreserveInsertionOrder=false` (413485ba, test
+  `ResourceProfileTest.speedDropsTheInsertionOrderUnlessSet`); new manual workflow `scan-perf.yml` (S3 scan x1/x4/export vs
+  upstream on one runner). scan-perf runs 41585815577, 41587292385, 41589080058 (with upstream 6e264c10: x1 1.05 -> 1.25,
+  x4 0.90 -> 1.02 of upstream, same answers; 41585602654 failed on the short upstream SHA). Dev CI 41589351305 green;
+  `package=true` 41591029319 on `ci/core-27` = 413485ba, gate service-cluster 41592454233, -hdfs 41592458259, -security
+  41592462281, -stores 41592466574 all green, pre-release `server-1.0.0-413485ba80fd`. Stand rerun asked (Open questions).
