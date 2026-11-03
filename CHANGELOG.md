@@ -109,7 +109,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - Views no longer make DuckDB read a remote footer on such clusters: DuckDB binds a table's view on its first file,
   so a node lacking that file's blocks failed **every** query (found by the new CI cell). The view is now bound on
   a file the node holds whole; a table the node holds no file of gets a typed view that fails with the reason when
-  read (queries in parts still read it on the nodes holding its files).
+  read (queries in parts still read it on the nodes holding its files). A view DuckDB still cannot create is logged
+  (`views=createFailed`) and skipped alone instead of failing every other table's view.
 - CI: `service-hdfs.yml` cell `sasl-cluster` (3 DataNodes, 3 servers, Kerberos + SASL; schemas with replication
   3 / 2 and a file no DataNode holds whole).
 

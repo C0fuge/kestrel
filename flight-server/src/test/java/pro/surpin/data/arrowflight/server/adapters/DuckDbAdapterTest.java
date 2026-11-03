@@ -2211,4 +2211,30 @@ class DuckDbAdapterTest {
             ioPool.shutdownNow();
         }
     }
+
+    /**
+     * Verifies one view DuckDB cannot bind (its first file unreadable, as on HDFS under SASL)
+     * does not keep the other tables' views from being created (item 29).
+     *
+     * @throws Exception when DuckDB fails otherwise
+     */
+    @Test
+    void oneViewThatCannotBindLeavesTheOthers() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
+            List<String> drops = DuckDbAdapter.applyViews(conn, List.of(), List.of(
+                    "CREATE SCHEMA IF NOT EXISTS s",
+                    "CREATE OR REPLACE VIEW s.a AS SELECT 1 AS x",
+                    "CREATE OR REPLACE VIEW s.bad AS SELECT * FROM read_parquet(['/nonexistent/f.parquet'])",
+                    "CREATE OR REPLACE VIEW s.c AS SELECT 2 AS y"), List.of("DROP SCHEMA IF EXISTS s CASCADE"));
+
+            assertEquals(List.of("DROP SCHEMA IF EXISTS s CASCADE"), drops);
+            try (Statement s = conn.createStatement(); ResultSet rows = s.executeQuery(
+                    "SELECT (SELECT x FROM s.a) + (SELECT y FROM s.c)")) {
+                assertTrue(rows.next());
+                assertEquals(3, rows.getInt(1));
+            }
+            assertThrows(java.sql.SQLException.class, () -> DuckDbAdapter.applyViews(conn, List.of(),
+                    List.of("CREATE SCHEMA s"), List.of()), "other statements still fail");
+        }
+    }
 }

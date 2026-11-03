@@ -62,6 +62,8 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 public final class DuckDbAdapter implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DuckDbAdapter.class);
+    /** Prefix of the catalog view statements. */
+    private static final String CREATE_VIEW = "CREATE OR REPLACE VIEW ";
     private static final long LISTENER_STATE_POLL_NANOS =
             TimeUnit.MILLISECONDS.toNanos(5);
     private static final long LISTENER_TIMING_LOG_THRESHOLD_NANOS =
@@ -3071,20 +3073,35 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param statements CREATE SCHEMA / CREATE VIEW statements
      * @param drops      statements that remove what the new statements create
      * @return the drop statements now in force
-     * @throws java.sql.SQLException when a statement fails
+     * @throws java.sql.SQLException when a drop or a statement other than CREATE VIEW fails
      */
-    private static List<String> applyViews(Connection conn, List<String> oldDrops,
+    static List<String> applyViews(Connection conn, List<String> oldDrops,
             List<String> statements, List<String> drops) throws java.sql.SQLException {
         try (Statement s = conn.createStatement()) {
             for (String drop : oldDrops) {
                 s.execute(drop);
             }
             for (String statement : statements) {
-                s.execute(statement);
+                // A statement of its own: DuckDB's JDBC statement is unusable after a failure.
+                try (Statement one = conn.createStatement()) {
+                    one.execute(statement);
+                } catch (java.sql.SQLException e) {
+                    if (!statement.startsWith(CREATE_VIEW)) {
+                        throw e;
+                    }
+                    // DuckDB binds a view on its first file: one unreadable table (HDFS under SASL,
+                    // item 29) must not take every other table's view with it.
+                    String name = statement.substring(CREATE_VIEW.length(),
+                            Math.max(CREATE_VIEW.length(), statement.indexOf(" AS ")));
+                    LOGGER.warn("node={} views=createFailed view={} error='{}': queries of this table"
+                            + " fail, other tables are unaffected", LogUtil.node(), name,
+                            firstLine(String.valueOf(e.getMessage())));
+                }
             }
         }
         return drops;
     }
+
 
     /**
      * Refuses anything but a read-only query: its first word must be a query keyword and DuckDB
