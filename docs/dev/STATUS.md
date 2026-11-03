@@ -68,6 +68,9 @@ ITEM 27 DONE (2026-11-03, core session, 413485ba; pre-release `server-1.0.0-4134
 > 856 (1.02) / 178 (0.98); same answers, peak 1.9 GiB vs upstream 2.7 GiB (run 41589080058; without upstream 41585815577,
 > 41587292385: x1 886-910 -> 1118-1121). The export shape is bound by the client's Parquet writer on the runner (all
 > configs ~180-330 MB/s), so it cannot show a server gap here; the stand's export 0.73 needs the stand rerun (Open questions).
+> *2026-11-03 07:45 (core session): no open core item.* Every numbered item left is a stand check (2, 13, 15, 27
+> rerun) or waits on the maintainer (0 S7/S8, 8, 9, 1b libs pruning, Open questions: item 27 stand rerun, libhadoop for the
+> Java client). The core lane idles until the maintainer adds an item or answers one of those.
 
 > **Maintainer, 2026-11-02 18:00 - BUG FIRST (before item 24): HDFS is broken with `f06b5834e76e` on a real cluster.**
 > Production-like Hadoop 3.1.3 HA cluster (Kerberos, short-circuit local reads, `hdfs://<nameservice>/data/parquet`,
@@ -2755,3 +2758,5 @@ S3 slowdown item below stays open for then).
   x4 0.90 -> 1.02 of upstream, same answers; 41585602654 failed on the short upstream SHA). Dev CI 41589351305 green;
   `package=true` 41591029319 on `ci/core-27` = 413485ba, gate service-cluster 41592454233, -hdfs 41592458259, -security
   41592462281, -stores 41592466574 all green, pre-release `server-1.0.0-413485ba80fd`. Stand rerun asked (Open questions).
+- 2026-11-03 07:45 (core session): no open item in Next steps (all remaining items are stand checks or wait on Open
+  questions); nothing changed, lock released. Dev CI on main last green 41589351305 (413485ba).
