@@ -30,6 +30,12 @@
 > profile table that rows of queries without ORDER BY come in any order under `speed` and how to restore the file
 > order. (3) Item 27 stand rerun: egret runs the three-way (scan x1/x4/x8 + ADBC export) on `413485ba80fd` now.
 > Then "ITEM 28 DONE"; no pre-release needed for docs only.
+ITEM 28 DONE (2026-11-03, core session, docs only, no CI/pre-release). START-NOTES: libhadoop bullet (not bundled;
+> `-Djava.library.path` / `LD_LIBRARY_PATH` to an existing Hadoop 3.x `lib/native`, `dfs.client.read.shortcircuit` +
+> `dfs.domain.socket.path` in the class-path `hdfs-site.xml`; without it only the Java footer reads go over TCP, SASL
+> works); "Row order under `speed`" paragraph + profile table cell (ORDER BY or `-DduckDbPreserveInsertionOrder=true` /
+> `DUCKDB_PRESERVE_INSERTION_ORDER=true` restores the file order); CHANGELOG "Documentation" entry. **Next:** no open core
+> item; item 27 stand rerun is with egret (Open questions).
 
 > **Maintainer, 2026-11-03 00:45 - NEW ITEMS 26-27 (take 26 first). Every finished item: `package=true` (the service gate
 > must pass) and a dated Log line.**
@@ -1077,10 +1083,6 @@ S3 slowdown item below stays open for then).
   stays below upstream, say how the stand's export client writes (format, batch handling) so `scan-adbc.py` can match it.
   Note: under `speed`, rows of queries without ORDER BY now come in any order (`-DduckDbPreserveInsertionOrder=true`
   restores the file order).
-- **Java client short-circuit (2026-11-03, core lane, FYI).** The server's own Java HDFS client (Parquet footers,
-  ~1 block per file) reads short-circuit only with the native Hadoop library (`-Djava.library.path` with libhadoop); without
-  it those few reads go over TCP and, on a SASL cluster, speak SASL (they work). hadoopfs (all data reads) is fixed (item
-  26). Say whether the release should bundle or document libhadoop for the server JVM.
 - **Item 23 `speed` details (2026-10-29, core lane, FYI - all opt-in).** (1) The note says "a larger backpressure
   threshold (16 MiB)", but the effective default is 256 MiB (bundled `arrowflight.properties`); `speed` uses 16 MiB, as
   TUNING.md measured it necessary with 4 endpoints per node. (2) `duckDbMemoryLimit` under `speed` is 75 % of memory
@@ -2768,3 +2770,7 @@ S3 slowdown item below stays open for then).
   41592462281, -stores 41592466574 all green, pre-release `server-1.0.0-413485ba80fd`. Stand rerun asked (Open questions).
 - 2026-11-03 07:45 (core session): no open item in Next steps (all remaining items are stand checks or wait on Open
   questions); nothing changed, lock released. Dev CI on main last green 41589351305 (413485ba).
+- 2026-11-03 (core session): item 28 done (docs only): START-NOTES libhadoop how-to (maintainer: document, do not bundle)
+  and row order under `speed` (profile table + paragraph), CHANGELOG entry; Open question "Java client short-circuit"
+  removed (answered). No code change, so no CI run and no pre-release (as the maintainer asked); dev CI on main last
+  green 41589351305 (413485ba).

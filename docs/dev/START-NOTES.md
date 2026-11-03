@@ -88,6 +88,16 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN
   says when it is not the cache the extension reads (`KRB5CCNAME` / `hadoop.security.kerberos.ticket.cache.path`).
+- HDFS short-circuit and the native Hadoop library (libhadoop): all data reads go through the hadoopfs extension
+  (libhdfs3), which reads short-circuit without libhadoop. Only the server's own Java HDFS client (Parquet footers and
+  metadata, about one block per file) needs libhadoop for short-circuit; without it those few reads go over TCP, and on
+  a cluster with `dfs.data.transfer.protection` they speak SASL (they work). The release does not bundle libhadoop; to
+  use an existing one, point the server JVM at its directory: `-Djava.library.path=/opt/hadoop/lib/native` (also
+  `LD_LIBRARY_PATH=/opt/hadoop/lib/native` for the libraries it loads), with `dfs.client.read.shortcircuit=true` and
+  `dfs.domain.socket.path` in the `hdfs-site.xml` on the server's class path and the DataNode socket visible on the node.
+  Take libhadoop from a Hadoop 3.x install for the same CPU and glibc (CI runs the 3.4.1 one with the server's 3.5.0
+  jars). Without it Hadoop logs `NativeCodeLoader: Unable to load native-hadoop library` once at start; that WARN is
+  harmless.
 - S3: DuckDB keeps its S3 connections and reads later ranges and queries over them
   (`arrowflight.s3.connectionCaching`, default true; startup line `s3=open ... connectionCaching=true`). Only with
   `connectionCaching=false` set `net.ipv4.tcp_tw_reuse=1` in the server's network namespace (container: `--sysctl
@@ -185,10 +195,15 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 | `duckDbThreads` | all cores, at least what `balanced` gives one query (4) (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
 | `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
 | `duckDbExternalFileCache` | true (only while the shared DuckDB is on) | DuckDB keeps S3/HDFS file data in memory, within the node-wide `memory_limit` (evicted like any buffer): peak RSS about 2x balanced (S3 TPC-H SF10 on 2 CPUs / 6 GB: 3.3 vs 1.6 GiB); S3 small queries up to 5x faster, TPC-H SF10 on S3 3.1x faster (283.6 -> 91.2 s) |
-| `duckDbPreserveInsertionOrder` | false (item 27) | rows of a query without ORDER BY come in any order (as upstream's default; ORDER BY answers are unchanged): one full `lineitem` read on S3 910 -> 1118 MB/s (+23 %), 4 concurrent reads +5 %, same peak memory; `-DduckDbPreserveInsertionOrder=true` keeps the file order |
+| `duckDbPreserveInsertionOrder` | false (item 27) | rows of a query without ORDER BY come in any order (as upstream's default; ORDER BY answers are unchanged): one full `lineitem` read on S3 910 -> 1118 MB/s (+23 %), 4 concurrent reads +5 %, same peak memory; `-DduckDbPreserveInsertionOrder=true` (or `DUCKDB_PRESERVE_INSERTION_ORDER=true`) restores the file order |
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
 | `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |
+
+**Row order under `speed`:** a query without ORDER BY returns its rows in any order (they may differ from run to
+run and from `balanced`, which keeps the file order); counts, aggregates and ORDER BY answers are unchanged. Clients
+that rely on the file order should add ORDER BY, or start the server with `-DduckDbPreserveInsertionOrder=true` (or
+`DUCKDB_PRESERVE_INSERTION_ORDER=true`), which keeps the rest of `speed` (a full scan on S3 then reads about 20 % slower: 1118 -> 910 MB/s in item 27).
 
 A query that runs out of the shared DuckDB's memory before anything was sent runs once more on a private DuckDB of
 its thread, sized as one `balanced` connection (log `duckdb=outOfMemoryRetry`); that DuckDB stays open for the thread's

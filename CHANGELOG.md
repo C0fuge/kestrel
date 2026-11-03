@@ -104,6 +104,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - New manual workflow `scan-perf.yml` + `tools/ci/scan-adbc.py`: full-table read x1 / xN / Parquet export over a local
   S3 endpoint for this ref, option variants and an upstream commit on the same runner, answers checked.
 
+### Documentation - libhadoop and row order under `speed` (STATUS item 28)
+
+- START-NOTES: libhadoop is not bundled (data reads go through hadoopfs, which needs none); how to point the server JVM
+  at an existing one (`-Djava.library.path`) so its Java footer reads go short-circuit, and that without it those few
+  reads go over TCP (SASL on a protected cluster works).
+- START-NOTES / profile table: under `resourceProfile=speed` rows of a query without ORDER BY come in any order;
+  ORDER BY or `-DduckDbPreserveInsertionOrder=true` (`DUCKDB_PRESERVE_INSERTION_ORDER=true`) restores the file order.
+
 ### Fixed - hadoopfs reads HDFS short-circuit (STATUS item 26)
 
 - The hadoopfs extension hands libhdfs3 its own `hdfs_shortcircuit` (default false) and `hdfs_domain_socket_path`
