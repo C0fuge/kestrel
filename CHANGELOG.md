@@ -94,6 +94,20 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters: table schemas through the Java client, one bad table no longer refuses all (STATUS item 29, part 1)
+
+- On HDFS the complete-answer views described every table with DuckDB (`DESCRIBE SELECT * FROM read_parquet(...)` of
+  its first file through hadoopfs). With DataNodes that require SASL data-transfer protection hadoopfs can read only
+  blocks with a local replica, so one table whose first footer was not on the node failed the whole setup and every
+  query (even `select 1`) with `Connection reset by peer`. The footer is now read through the Java Hadoop client
+  (which speaks SASL) and DuckDB describes a local copy of it without row groups (below the DuckDB temp root, removed
+  at once; same columns, types and hive partition columns). Other stores are unchanged.
+- A table whose first file cannot be described (any store) is left out of the views with a `views=skipTable ...
+  reason=describe` warning instead of failing every query; a query naming it gets that reason, not "does not exist".
+- The `hdfs=shortCircuitOnly` startup warning now says that schemas go through the Java client and that DuckDB can read
+  only files with every block on the node's DataNode. Planner routing of such files to nodes holding all their blocks
+  is the next step of item 29.
+
 ### Changed - `speed` drops DuckDB's insertion order (STATUS item 27)
 
 - `resourceProfile=speed` now also offers `duckDbPreserveInsertionOrder=false` (upstream's default): parallel scan

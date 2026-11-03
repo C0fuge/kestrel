@@ -374,7 +374,8 @@ public final class ExecutionService {
 
     /**
      * Turns DuckDB's "table does not exist" for a schema whose catalog could not be read into
-     * that catalog's error, so that a metastore outage is not reported as a missing table.
+     * that catalog's error, and for a data table whose first file could not be described into
+     * that error, so that neither is reported as a missing table.
      *
      * @param query client SQL
      * @param message DuckDB error message
@@ -386,6 +387,9 @@ public final class ExecutionService {
             return;
         }
         String unavailable = catalogViews.unavailableCatalog(query);
+        if (unavailable == null) {
+            unavailable = catalogViews.unavailableTable(query, message);
+        }
         if (unavailable != null) {
             throw new java.io.UncheckedIOException(new IOException(unavailable, cause));
         }

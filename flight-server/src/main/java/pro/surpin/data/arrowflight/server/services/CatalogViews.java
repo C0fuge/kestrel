@@ -13,6 +13,7 @@ import pro.surpin.data.arrowflight.server.catalog.ArrowScanRequests;
 import pro.surpin.data.arrowflight.server.catalog.ArrowStreamScans;
 import pro.surpin.data.arrowflight.server.catalog.CatalogSources;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
+import pro.surpin.data.arrowflight.server.duckdb.FooterStub;
 import pro.surpin.data.arrowflight.spi.catalog.ArrowScan;
 import pro.surpin.data.arrowflight.spi.catalog.CatalogView;
 import pro.surpin.data.arrowflight.spi.catalog.ColumnSpec;
@@ -144,6 +145,8 @@ public final class CatalogViews {
     private final Map<String, TableViews> tables = new HashMap<>();
     /** Catalog schemas without views because their catalog failed: schema to error. */
     private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Data tables without views because their first file could not be described: key to error. */
+    private volatile Map<String, String> failedTables = Map.of();
     /** Catalog tables read as Arrow streams: lower-case "schema\0table" to the stored names. */
     private volatile Map<String, List<String>> streamTables = Map.of();
     private Snapshot snapshot;
@@ -205,6 +208,8 @@ public final class CatalogViews {
         // made before without asking the catalog again (a metastore that hangs would otherwise
         // cost its timeouts once per table, while every request waits for this refresh).
         Map<CatalogTables.Entry, String> failed = new HashMap<>();
+        // Data tables whose first file could not be described in this refresh: key to error.
+        Map<String, String> undescribed = new HashMap<>();
         for (String schema : parquetAdapter.getSchemas(null).keySet().stream().sorted().toList()) {
             if (RESERVED_SCHEMAS.contains(schema.toLowerCase(Locale.ROOT))) {
                 LOGGER.warn("node={} views=skipSchema schema={} reason=reservedName",
@@ -277,7 +282,22 @@ public final class CatalogViews {
                     String fingerprint = ParquetAdapter.filesFingerprint(files);
                     views = tables.get(key);
                     if (views == null || !views.fingerprint().equals(fingerprint)) {
-                        views = describe(schema, table, files, fingerprint);
+                        try {
+                            views = describe(schema, table, files, fingerprint);
+                        } catch (IOException | SQLException | RuntimeException e) {
+                            // One table whose first file cannot be read must not refuse the
+                            // queries over every other table: it gets no view, and a query
+                            // naming it is told why.
+                            String error = "Table " + schema + "." + table
+                                    + " cannot be described from its first file: " + e.getMessage();
+                            undescribed.put(tableKey(schema, table), error);
+                            if (!error.equals(failedTables.get(tableKey(schema, table)))) {
+                                LOGGER.warn("node={} views=skipTable table={}.{} reason=describe"
+                                        + " error='{}'", LogUtil.node(), schema, table,
+                                        e.getMessage());
+                            }
+                            continue;
+                        }
                     }
                 }
                 seen.put(key, views);
@@ -307,6 +327,7 @@ public final class CatalogViews {
         }
         tables.clear();
         tables.putAll(seen);
+        failedTables = Map.copyOf(undescribed);
         streamTables = Map.copyOf(streams);
         long version = (data.hashCode() * 31L) + empty.hashCode();
         if (snapshot == null || snapshot.version() != version) {
@@ -327,10 +348,11 @@ public final class CatalogViews {
      * @param files the table's Parquet files
      * @param fingerprint file paths and lengths
      * @return view definitions
+     * @throws IOException when the first file's footer cannot be read through the store
      * @throws SQLException when DuckDB cannot read the file
      */
     private TableViews describe(String schema, String table, List<DataFile> files,
-            String fingerprint) throws SQLException {
+            String fingerprint) throws IOException, SQLException {
         DataStore store = parquetAdapter.dataStore();
         List<String> paths = new ArrayList<>(files.size());
         for (DataFile file : files) {
@@ -341,9 +363,15 @@ public final class CatalogViews {
         List<String> typed = new ArrayList<>();
         boolean widened = false;
         Connection conn = duckDbAdapter.connection();
-        try (Statement s = conn.createStatement();
+        // On HDFS the footer is read through the Java Hadoop client (it speaks SASL data-transfer
+        // protection, DuckDB's hadoopfs does not) and DuckDB describes a local copy of it.
+        FooterStub stub = javaFooters(store) ? FooterStub.write(store.inputFile(files.get(0)),
+                duckDbAdapter.footerStubRoot(), paths.get(0)) : null;
+        String described = stub == null ? paths.get(0) : stub.file().toString();
+        try (FooterStub ignored = stub;
+                Statement s = conn.createStatement();
                 ResultSet columns = s.executeQuery("DESCRIBE SELECT * FROM "
-                        + DuckDbAdapter.readParquetFromClause(paths.subList(0, 1)))) {
+                        + DuckDbAdapter.readParquetFromClause(List.of(described)))) {
             while (columns.next()) {
                 String name = DuckDbAdapter.quoteIdentifier(columns.getString("column_name"));
                 String type = columns.getString("column_type");
@@ -364,6 +392,63 @@ public final class CatalogViews {
         String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
                 + String.join(", ", typed) + " WHERE false";
         return new TableViews(fingerprint, data, empty);
+    }
+
+    /**
+     * Tells whether table footers are read through the store's Java client rather than DuckDB.
+     *
+     * @param store data store
+     * @return true for HDFS
+     */
+    static boolean javaFooters(DataStore store) {
+        return store != null && "hdfs".equalsIgnoreCase(store.kind());
+    }
+
+    /**
+     * Returns the key of a data table in the failed-table map.
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return lower-case key
+     */
+    private static String tableKey(String schema, String table) {
+        return schema.toLowerCase(Locale.ROOT) + "\u0000" + table.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Tells why a query that DuckDB reports a missing table for names a data table without a
+     * view: that table's first file could not be described when the views were made.
+     *
+     * @param query client SQL
+     * @param message DuckDB error message
+     * @return the describe error, or null when the missing table is not such a table
+     */
+    public String unavailableTable(String query, String message) {
+        if (failedTables.isEmpty() || message == null) {
+            return null;
+        }
+        java.util.regex.Matcher missing = java.util.regex.Pattern.compile(
+                "Table with name (\\S+) does not exist").matcher(message);
+        if (!missing.find()) {
+            return null;
+        }
+        String table = missing.group(1).replace("\"", "").toLowerCase(Locale.ROOT);
+        String lower = query == null ? "" : query.toLowerCase(Locale.ROOT);
+        String fallback = null;
+        for (Map.Entry<String, String> entry : failedTables.entrySet()) {
+            String[] parts = entry.getKey().split("\u0000", 2);
+            if (!parts[1].equals(table)) {
+                continue;
+            }
+            if (java.util.regex.Pattern.compile("(?<![a-z0-9_])\"?" + java.util.regex.Pattern.quote(
+                    parts[0]) + "\"?\\s*\\.").matcher(lower).find()) {
+                return entry.getValue();
+            }
+            if (fallback == null) {
+                fallback = entry.getValue();
+            }
+        }
+        return fallback;
     }
 
     /**

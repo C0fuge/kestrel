@@ -1668,6 +1668,36 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies a locked-down connection may describe a footer stub below its temp root. */
+    @Test
+    void lockdownReadsFooterStubs(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path data = java.nio.file.Files.createDirectories(dir.resolve("data"));
+        java.nio.file.Path file = dir.resolve("elsewhere.parquet");
+        try (Connection free = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = free.createStatement()) {
+            s.execute("COPY (SELECT 42::DECIMAL(9,2) AS x) TO '" + file + "' (FORMAT parquet)");
+        }
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try {
+            DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool, List.of(data.toString()));
+            Connection conn = adapter.connection();
+            try (pro.surpin.data.arrowflight.server.duckdb.FooterStub stub =
+                        pro.surpin.data.arrowflight.server.duckdb.FooterStub.write(
+                                new org.apache.parquet.io.LocalInputFile(file), adapter.footerStubRoot(),
+                                "hdfs://ns/data/t/f.parquet");
+                    Statement s = conn.createStatement();
+                    ResultSet rs = s.executeQuery("DESCRIBE SELECT * FROM read_parquet('"
+                            + stub.file() + "')")) {
+                assertTrue(rs.next());
+                assertEquals("DECIMAL(9,2)", rs.getString("column_type"));
+            }
+            adapter.close();
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Verifies the store's setup statements run in every connection before the lockdown. */
     @Test
     void storageSetupRunsBeforeLockdown(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)

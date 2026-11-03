@@ -133,6 +133,64 @@ class CatalogViewsTest {
     }
 
     /**
+     * Verifies that on HDFS the views are described from footers read through the store's Java
+     * client (DuckDB itself could not read the hdfs:// file here), and that a table whose first
+     * file cannot be read is left out with its reason while every other table keeps its view.
+     */
+    @Test
+    void hdfsTablesAreDescribedFromJavaFootersAndOneBadTableDoesNotRefuseTheOthers(
+            @TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path good = dir.resolve("good.parquet");
+        java.nio.file.Path bad = dir.resolve("bad.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT 1::UTINYINT AS x, 2.5::DECIMAL(9,2) AS d) TO '" + good
+                    + "' (FORMAT parquet)");
+        }
+        java.nio.file.Files.writeString(bad, "not parquet");
+        DataFile goodFile = new DataFile("tpch/good/k=7/f.parquet", "hdfs://ns/data/tpch/good/k=7/f.parquet",
+                java.nio.file.Files.size(good), 0, null);
+        DataFile badFile = new DataFile("tpch/bad/f.parquet", "hdfs://ns/data/tpch/bad/f.parquet",
+                java.nio.file.Files.size(bad), 0, null);
+        DataStore store = mock(DataStore.class);
+        when(store.kind()).thenReturn("hdfs");
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> inv.<DataFile>getArgument(0).location());
+        when(store.inputFile(goodFile)).thenReturn(new org.apache.parquet.io.LocalInputFile(good));
+        when(store.inputFile(badFile)).thenReturn(new org.apache.parquet.io.LocalInputFile(bad));
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("tpch", "/tpch"));
+        when(parquet.getTables(eq("tpch"), any())).thenReturn(Map.of("good", "/tpch/good", "bad", "/tpch/bad"));
+        when(parquet.tableFiles("tpch", "good")).thenReturn(List.of(goodFile));
+        when(parquet.tableFiles("tpch", "bad")).thenReturn(List.of(badFile));
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            CatalogViews catalogViews = new CatalogViews(parquet, duck, true);
+            CatalogViews.Snapshot views = catalogViews.current();
+
+            String data = views.dataStatements().toString();
+            assertTrue(data.contains("CREATE OR REPLACE VIEW \"tpch\".\"good\" AS SELECT CAST(\"x\" AS SMALLINT)"
+                    + " AS \"x\", \"d\", \"k\" FROM read_parquet(['hdfs://ns/data/tpch/good/k=7/f.parquet'])"), data);
+            assertTrue(views.emptyStatements().toString().contains("CAST(NULL AS DECIMAL(9,2)) AS \"d\""),
+                    views.emptyStatements().toString());
+            assertTrue(data.contains("main.\"good\""), data);
+            assertTrue(!data.contains("\"bad\""), data);
+            String reason = catalogViews.unavailableTable("SELECT * FROM tpch.bad",
+                    "Catalog Error: Table with name bad does not exist!");
+            assertTrue(reason != null && reason.contains("tpch.bad") && reason.contains("hdfs://ns/data/tpch/bad/f.parquet"),
+                    String.valueOf(reason));
+            assertNull(catalogViews.unavailableTable("SELECT * FROM tpch.other",
+                    "Catalog Error: Table with name other does not exist!"));
+            try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.list(
+                    java.nio.file.Files.createDirectories(duck.footerStubRoot()))) {
+                assertEquals(0, left.count(), "footer stubs are removed after the describe");
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Builds a server configuration for the test.
      *
      * @return configuration

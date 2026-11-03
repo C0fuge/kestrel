@@ -184,9 +184,11 @@ public class HadoopArrowFlightServer {
                 LOGGER.warn("hdfs=shortCircuitSocketMissing socket={}: DuckDB reads every block over TCP"
                         + " on this node", shortCircuit.socketPath());
             } else if (shortCircuit.transferProtection() != null) {
-                LOGGER.warn("hdfs=shortCircuitOnly transferProtection={}: DuckDB reads only blocks with a"
-                        + " replica on this node's DataNode; a query touching any other block fails",
-                        shortCircuit.transferProtection());
+                LOGGER.warn("hdfs=shortCircuitOnly transferProtection={}: table schemas (Parquet"
+                        + " footers) are read through the Java Hadoop client, which speaks SASL; DuckDB"
+                        + " (hadoopfs) reads data only short-circuit, so this node can read only files"
+                        + " that have every block on its own DataNode, and a query reading any other"
+                        + " file fails", shortCircuit.transferProtection());
             }
             LOGGER.info("HDFS DataNode timeouts set in DuckDB: connect={} read={} (0 = left to the"
                     + " hadoopfs extension / LIBHDFS3_CONF)", config.duckDbHdfsConnectTimeoutMs(),

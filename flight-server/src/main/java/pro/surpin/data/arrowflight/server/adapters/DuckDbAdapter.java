@@ -1468,6 +1468,15 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the directory for footer stubs, below the temp root every DuckDB may read.
+     *
+     * @return footer stub directory
+     */
+    public Path footerStubRoot() {
+        return tempRoot.resolve("footers");
+    }
+
+    /**
      * Returns this thread's DuckDB connection.
      *
      * @return JDBC connection
