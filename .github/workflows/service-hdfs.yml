@@ -197,5 +197,5 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
-          [ "$n" -eq 6 ] || { echo "only $n of 6 cells reported"; exit 1; }
+          [ "$n" -eq 8 ] || { echo "only $n of 8 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
