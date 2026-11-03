@@ -730,6 +730,9 @@ class ExecutionServiceTest {
         assertEquals(1, ExecutionService.copyBatches(ticket, unreadable, 240).size());
         assertEquals(1, ExecutionService.copyBatches(ticket, unreadable, 0).size());
         assertEquals(1, ExecutionService.copyBatches(ticket, List.of(), 1).size());
+        // Local copies off (Dev CI 41669461235: every scan failed with a NullPointerException).
+        assertEquals(1, ExecutionService.copyBatches(ticket, null, 0).size());
+        assertEquals(1, ExecutionService.copyBatches(ticket, null, 100).size());
         List<String[]> batches = ExecutionService.copyBatches(ticket, unreadable, 100);
         assertEquals(List.of(List.of("c", "a", "b"), List.of("d"), List.of("e")),
                 batches.stream().map(List::of).toList());

@@ -719,7 +719,7 @@ public final class ExecutionService {
             return;
         }
         List<DataFile> unreadable = unreadableFiles(fileUris);
-        List<String[]> batches = startListener && concatenatable(parsedQuery)
+        List<String[]> batches = startListener && unreadable != null && concatenatable(parsedQuery)
                 ? copyBatches(fileUris, unreadable, copyLimit(unreadable)) : List.of();
         if (batches.size() > 1) {
             readInCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
@@ -801,12 +801,15 @@ public final class ExecutionService {
      * where they are go into the first batch, a file larger than the limit gets a batch alone.
      *
      * @param fileUris the ticket's relative file paths
-     * @param unreadable files among them that must be copied
+     * @param unreadable files among them that must be copied, or null when nothing is copied
      * @param maxBytes the cache limit, or 0 when nothing is copied
      * @return batches in ticket order, or one batch holding every file when the copies fit
      */
     static List<String[]> copyBatches(String[] fileUris, List<DataFile> unreadable,
             long maxBytes) {
+        if (unreadable == null || maxBytes <= 0) {
+            return Collections.singletonList(fileUris);
+        }
         Map<String, Long> sizes = new HashMap<>();
         long total = 0;
         for (DataFile file : unreadable) {
@@ -814,7 +817,7 @@ public final class ExecutionService {
                 total += file.size();
             }
         }
-        if (maxBytes <= 0 || total <= maxBytes) {
+        if (total <= maxBytes) {
             return Collections.singletonList(fileUris);
         }
         List<String> direct = new ArrayList<>();
