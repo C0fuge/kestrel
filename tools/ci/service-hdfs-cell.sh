@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SERVICE MATRIX, HDFS part (core lane, STATUS item 25): one cell of service-hdfs.yml.
 #
-# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb|ha-krb-sasl> <balanced|speed> <input dir> <work dir> <server label>
+# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb|ha-krb-sasl|sasl-cluster> <balanced|speed> <input dir> <work dir> <server label>
 #
 # Topologies (apache/hadoop, one DataNode, replication 1, short-circuit configured when the image's
 # native Hadoop library loads):
@@ -17,6 +17,11 @@
 #           transfer without SASL, which hadoopfs (libhdfs3) cannot speak, so only short-circuit reads
 #           work (the maintainer's production cluster; STATUS item 26). The cell first shows that a
 #           plain TCP read is refused and a SASL one passes.
+#   sasl-cluster  ha-krb-sasl with 3 DataNodes and 3 servers (one in each DataNode's network namespace,
+#           -DdistributedComplete=true; STATUS item 29): schemas tpch (replication 3: 22/22 on every
+#           node), spread (replication 2) and split (one lineitem file, 1 MiB blocks, replication 1, no
+#           DataNode holding all its blocks); tools/ci/service-hdfs-sasl-check.py: spread.lineitem
+#           exact in parts and complete on every node, split.t refused naming the file.
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, two blocks per file (the Java client has no native Hadoop library in the
@@ -34,19 +39,21 @@ mkdir -p "$work"; : > "$notes"
 note() { echo "$*" | tee -a "$notes"; }
 finish() { # status, detail
   printf '%s|%s|%s|%s\n' "$topo" "$profile" "$1" "$(echo "$2" | head -n 1 | tr '|' '/' | cut -c1-300)" > "$res"
-  for c in kdc nn1 nn2 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || rm -f "$work/$c.log"; done
+  for c in kdc nn1 nn2 dn1 dn2 dn3 srv srv1 srv2 srv3; do docker logs "$c" > "$work/$c.log" 2>&1 || rm -f "$work/$c.log"; done
   [ "$1" = pass ]; exit $?
 }
 
-case "$topo" in plain|ha|ha-krb|ha-krb-sasl) ;; *) finish fail "unknown topology $topo" ;; esac
+case "$topo" in plain|ha|ha-krb|ha-krb-sasl|sasl-cluster) ;; *) finish fail "unknown topology $topo" ;; esac
 case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) finish fail "unknown profile $profile" ;; esac
-krb=false; [[ $topo == ha-krb* ]] && krb=true
-sasl=false; [ "$topo" = ha-krb-sasl ] && sasl=true
+krb=false; [[ $topo == ha-krb* || $topo == sasl-cluster ]] && krb=true
+sasl=false; [[ $topo == ha-krb-sasl || $topo == sasl-cluster ]] && sasl=true
+n=1; [ "$topo" = sasl-cluster ] && n=3
+dnIp() { echo "172.31.0.$(( 11 + $1 ))"; }   # DataNode i (and server i): 172.31.0.12, .13, .14
 ha=false; [ "$topo" != plain ] && ha=true
 
 docker network create --subnet 172.31.0.0/24 hd > /dev/null || finish fail "docker network not created"
 hd=/srv/hd
-sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/nn2" "$hd/shared" "$hd/sock" "$hd/krb"
+sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/nn2" "$hd/shared" "$hd/sock" "$hd/sock2" "$hd/sock3" "$hd/krb"
 conf="$work/conf"; mkdir -p "$conf"
 
 sc=off
@@ -117,7 +124,7 @@ cat > "$conf/krb5.conf" <<'EOF'
     admin_server = 172.31.0.5
   }
 EOF
-note "HDFS $image, topology $topo ($([ "$ha" = true ] && echo 'nameservice ns1, nn1 standby / nn2 active' || echo 'one NameNode')$([ "$krb" = true ] && echo ', Kerberos realm CI.TEST'), 1 DataNode), short-circuit configured: $sc"
+note "HDFS $image, topology $topo ($([ "$ha" = true ] && echo 'nameservice ns1, nn1 standby / nn2 active' || echo 'one NameNode')$([ "$krb" = true ] && echo ', Kerberos realm CI.TEST'), $n DataNode(s)), short-circuit configured: $sc"
 
 hconf=(-v "$conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro" -v "$conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro")
 kenv=()
@@ -152,8 +159,7 @@ EOF
   note "KDC: MIT krb5 (ubuntu:24.04), principals nn/dn/HTTP of hdfs.ci and flight@CI.TEST (server keytab)"
 fi
 
-sock=()
-[ "$sc" = on ] && sock=(-v "$hd/sock:/var/run/hdfs-sockets")
+sockOf() { [ "$sc" = on ] && echo "-v $hd/sock$([ "$1" -gt 1 ] && echo "$1"):/var/run/hdfs-sockets"; }
 # nn1 formats its name directory (and the shared edits), waits until it is copied to nn2, then runs.
 docker run -d --name nn1 --network hd --ip 172.31.0.10 --hostname nn1 "${hconf[@]}" -v "$hd/nn1:/hd/name" \
   -v "$hd/shared:/hd/shared" "$image" bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 \
@@ -166,7 +172,10 @@ if $ha; then
     -v "$hd/shared:/hd/shared" "$image" hdfs namenode > /dev/null
 fi
 sudo touch "$hd/nn1/.go"
-docker run -d --name dn1 --network hd --ip 172.31.0.12 --hostname dn1 "${hconf[@]}" "${sock[@]}" "$image" hdfs datanode > /dev/null
+for i in $(seq "$n"); do
+  # shellcheck disable=SC2046
+  docker run -d --name "dn$i" --network hd --ip "$(dnIp "$i")" --hostname "dn$i" "${hconf[@]}" $(sockOf "$i") "$image" hdfs datanode > /dev/null
+done
 admin=nn1
 if $ha; then
   admin=nn2
@@ -182,17 +191,37 @@ if $ha; then
 fi
 for _ in $(seq 120); do
   report=$(docker exec "${kenv[@]}" "$admin" hdfs dfsadmin -report 2>/dev/null)
-  [[ $report == *'Live datanodes (1)'* && $report != *'Safe mode is ON'* ]] && break
+  [[ $report == *"Live datanodes ($n)"* && $report != *'Safe mode is ON'* ]] && break
   sleep 1
 done
-if [[ $report != *'Live datanodes (1)'* ]]; then
+if [[ $report != *"Live datanodes ($n)"* ]]; then
   docker logs "$admin" 2>&1 | tail -n 20; docker logs dn1 2>&1 | tail -n 30
   finish fail "HDFS did not come up: $(docker logs dn1 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-200)"
 fi
 docker cp "$in/data" "$admin:/tmp/upload" > /dev/null
-docker exec "${kenv[@]}" "$admin" bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
-files=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data/tpch 2>/dev/null | awk '{print $2}')
-note "data: $(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data/tpch 2>/dev/null | awk '{print $2 " files, " $3 " bytes"}')"
+if [ "$n" -eq 1 ]; then
+  docker exec "${kenv[@]}" "$admin" bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
+else
+  # tpch whole on every DataNode, spread whole on two of three, split's one file on no single one.
+  splitFile=$(basename "$(ls "$in"/data/tpch/lineitem/*.parquet | head -n 1)")
+  docker exec "${kenv[@]}" "$admin" bash -c "hdfs dfs -mkdir -p /data/spread /data/split/t \
+    && hdfs dfs -D dfs.replication=3 -put /tmp/upload/tpch /data/ \
+    && hdfs dfs -D dfs.replication=2 -put /tmp/upload/tpch/* /data/spread/ \
+    && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem/$splitFile /data/split/t/" \
+    || finish fail "HDFS upload failed"
+  docker exec "${kenv[@]}" "$admin" hdfs fsck "/data/split/t/$splitFile" -files -blocks -locations > "$work/fsck-split.log" 2>&1
+  blocks=$(grep -cE '^[0-9]+\. BP-' "$work/fsck-split.log")
+  held=""
+  for i in $(seq "$n"); do held="$held dn$i=$(grep -cE "^[0-9]+\. BP-.*$(dnIp "$i"):" "$work/fsck-split.log")"; done
+  note "split/t/$splitFile: $blocks blocks, held by$held"
+  [ "$blocks" -gt 1 ] || finish fail "split/t/$splitFile has $blocks block(s); the check needs blocks on several DataNodes"
+  for i in $(seq "$n"); do
+    [ "$(grep -cE "^[0-9]+\. BP-.*$(dnIp "$i"):" "$work/fsck-split.log")" -lt "$blocks" ] \
+      || finish fail "dn$i holds every block of split/t/$splitFile (placement); rerun"
+  done
+fi
+files=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data 2>/dev/null | awk '{print $2}')
+note "data: $(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data 2>/dev/null | awk '{print $2 " files, " $3 " bytes"}')"
 if $sasl; then
   # The NameNode container is not on the DataNode's host: its reads go over TCP.
   probe=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -ls -R /data/tpch 2>/dev/null | awk '$1 ~ /^-/ {print $NF}' | head -n 1)
@@ -203,9 +232,18 @@ if $sasl; then
     || finish fail "a SASL TCP read failed: $(grep -m 1 -E 'Exception|ERROR' "$work/probe-sasl.log" | cut -c1-200)"
   note "SASL data transfer enforced: plain TCP read refused ($(grep -m 1 -oE '[A-Za-z.]*(Exception|Error)[^,]*' "$work/probe-plain.log" | cut -c1-150)), SASL read passes"
 fi
-blocksRead() { curl -fsS --max-time 5 "http://172.31.0.12:9864/jmx" 2>/dev/null | grep -m 1 -oE '"BlocksRead" : [0-9]+' | grep -oE '[0-9]+$'; }
+blocksRead() { # TCP block reads of every DataNode, summed
+  local t=0 v i
+  for i in $(seq "$n"); do
+    v=$(curl -fsS --max-time 5 "http://$(dnIp "$i"):9864/jmx" 2>/dev/null | grep -m 1 -oE '"BlocksRead" : [0-9]+' | grep -oE '[0-9]+$') || return 0
+    [ -n "$v" ] || return 0
+    t=$(( t + v ))
+  done
+  echo "$t"
+}
+fdRequests() { local t=0 i; for i in $(seq "$n"); do t=$(( t + $(docker logs "dn$i" 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS') )); done; echo "$t"; }
 sleep 12 # DataNode JMX values are cached for ~10 s
-read0=$(blocksRead); fds0=$(docker logs dn1 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS')
+read0=$(blocksRead); fds0=$(fdRequests)
 
 srvKrb=()
 if $krb; then
@@ -213,49 +251,74 @@ if $krb; then
     -e KRB5_CONFIG=/etc/krb5.conf -e KRB5CCNAME=/tmp/krb5cc_flight)
   opts="$opts -Djava.security.krb5.conf=/etc/krb5.conf -DhdfsKerberosPrincipal=flight@CI.TEST -DhdfsKerberosKeytab=/krb/flight.keytab"
 fi
-note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; 1 node, 2 CPUs / 6 GB"
-# shellcheck disable=SC2086
-docker run -d --name srv --network container:dn1 "${sock[@]}" "${srvKrb[@]}" "${native[@]}" --cpus=2 --memory=6g \
+srvName() { [ "$n" -eq 1 ] && echo srv || echo "srv$1"; }
+peers=$(for i in $(seq "$n"); do printf '%s:5701,' "$(dnIp "$i")"; done); peers=${peers%,}
+cpus=2 mem=6g xmx=2g
+if [ "$n" -gt 1 ]; then
+  cpus=1 mem=3g xmx=1g
+  opts="$opts -DdistributedComplete=true"
+fi
+note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; $n node(s), $cpus CPU(s) / $mem each"
+for i in $(seq "$n"); do
+# shellcheck disable=SC2086,SC2046
+docker run -d --name "$(srvName "$i")" --network "container:dn$i" $(sockOf "$i") "${srvKrb[@]}" "${native[@]}" --cpus=$cpus --memory=$mem \
   -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
-  sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+  sc-server /jdk/bin/java -Xmx$xmx -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
   --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
   --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-  -Dhazelcast.phone.home.enabled=false -DnumServers=1 $opts -Darrowflight.duckdb.extensionDir=/extdir \
+  -Dhazelcast.phone.home.enabled=false -DnumServers=$n $opts -Darrowflight.duckdb.extensionDir=/extdir \
   -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
-  --data-dir "$dataDir" --localhost 172.31.0.12 --port 32010 --hazelcast-port 5701 \
-  --hosts 172.31.0.12:5701 --metrics-enabled false > /dev/null
-for _ in $(seq 180); do
-  docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
-  [ "$(docker inspect -f '{{.State.Running}}' srv)" = true ] || break
-  sleep 1
+  --data-dir "$dataDir" --localhost "$(dnIp "$i")" --port 32010 --hazelcast-port 5701 \
+  --hosts "$peers" --metrics-enabled false > /dev/null
 done
-if ! docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started'; then
-  docker logs srv 2>&1 | tail -n 40
-  finish fail "server did not start: $(docker logs srv 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
-fi
-note "$(docker logs srv 2>&1 | grep -m 1 -oE 'duckdb=hdfsExtensionLoaded.*' || echo 'no duckdb=hdfsExtensionLoaded line')"
-$krb && note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=kerberosTicketCache.*' || echo 'no hdfs=kerberosTicketCache line')"
-note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=shortCircuit .*' || echo 'no hdfs=shortCircuit line')"
-[ "$sc" = on ] && note "server JVM: $(docker logs srv 2>&1 | grep -m 1 -oE '(Loaded the native-hadoop library|Unable to load native-hadoop library)' || echo 'no native-hadoop line')"
+for i in $(seq "$n"); do
+  c=$(srvName "$i")
+  for _ in $(seq 180); do
+    docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+    [ "$(docker inspect -f '{{.State.Running}}' "$c")" = true ] || break
+    sleep 1
+  done
+  if ! docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started'; then
+    docker logs "$c" 2>&1 | tail -n 40
+    finish fail "server $c did not start: $(docker logs "$c" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+  fi
+done
+srv=$(srvName 1)
+note "$(docker logs "$srv" 2>&1 | grep -m 1 -oE 'duckdb=hdfsExtensionLoaded.*' || echo 'no duckdb=hdfsExtensionLoaded line')"
+$krb && note "$(docker logs "$srv" 2>&1 | grep -m 1 -oE 'hdfs=kerberosTicketCache.*' || echo 'no hdfs=kerberosTicketCache line')"
+note "$(docker logs "$srv" 2>&1 | grep -m 1 -oE 'hdfs=shortCircuit .*' || echo 'no hdfs=shortCircuit line')"
+[ "$sc" = on ] && note "server JVM: $(docker logs "$srv" 2>&1 | grep -m 1 -oE '(Loaded the native-hadoop library|Unable to load native-hadoop library)' || echo 'no native-hadoop line')"
 sleep 3
 py="$RUNNER_TEMP/py/bin/python"
-export SC_DATANODES=172.31.0.12:9864
-"$py" -I tools/ci/service-cluster-check.py check 172.31.0.12:32010 "$in" > "$work/client.log" 2>&1; rc=$?
+servers=$(for i in $(seq "$n"); do printf '%s:32010,' "$(dnIp "$i")"; done); servers=${servers%,}
+SC_DATANODES=$(for i in $(seq "$n"); do printf '%s:9864,' "$(dnIp "$i")"; done); export SC_DATANODES=${SC_DATANODES%,}
+"$py" -I tools/ci/service-cluster-check.py check "$servers" "$in" > "$work/client.log" 2>&1; rc=$?
 cat "$work/client.log"
+if [ "$n" -gt 1 ]; then
+  "$py" -I tools/ci/service-hdfs-sasl-check.py "$servers" "$in" "$splitFile" > "$work/sasl-check.log" 2>&1; rc2=$?
+  cat "$work/sasl-check.log"
+  note "sasl check: $(grep -m 1 '^result ' "$work/sasl-check.log" || echo 'no result line')"
+  for i in $(seq "$n"); do
+    note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
+  done
+  if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
+    finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
+  fi
+fi
 note "$(grep -m 1 '^reads total' "$work/client.log" || echo 'reads total: (none)')"
 jmx=$(curl -fsS --max-time 5 "http://172.31.0.12:9864/jmx" 2>/dev/null | grep -oE '"(BlocksRead|ReadBlockOpNumOps|ReadsFromLocalClient|ReadsFromRemoteClient)" : [0-9]+' | tr -d '" ' | sort -u | tr '\n' ' ')
 note "dn1 reads (TCP, from DataNode JMX): ${jmx:-(no JMX)}"
-note "srv: refused $(docker logs srv 2>&1 | grep -c 'query=refused')"
+note "srv: refused $(docker logs "$srv" 2>&1 | grep -c 'query=refused')"
 sleep 12
-read1=$(blocksRead); fds1=$(docker logs dn1 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS')
+read1=$(blocksRead); fds1=$(fdRequests)
 tcp=$(( ${read1:-0} - ${read0:-0} )) fds=$(( fds1 - fds0 ))
-note "dn1 during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
+note "DataNodes during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
 result=$(grep -m 1 '^result ' "$work/client.log")
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
-  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 2 * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
-    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 2 * ${files:-0} )), $fds short-circuit fd requests)"
+  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 2 * n * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
+    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 2 * n * ${files:-0} )), $fds short-circuit fd requests)"
   fi
   finish pass ""
 fi

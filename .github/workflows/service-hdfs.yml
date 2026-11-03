@@ -6,7 +6,9 @@
 # (ha + Kerberos with an MIT KDC container; the server logs in from its keytab with
 # hdfsKerberosPrincipal / hdfsKerberosKeytab, as the maintainer's production cluster runs) and
 # ha-krb-sasl (ha-krb with dfs.data.transfer.protection=authentication: TCP reads refused, so the
-# server must read short-circuit; STATUS item 26); every cell fails when a block goes over TCP;
+# server must read short-circuit; STATUS item 26) and sasl-cluster (ha-krb-sasl with 3 DataNodes and 3
+# servers, schemas with replication 3 / 2 / a file no DataNode holds whole; STATUS item 29, see
+# tools/ci/service-hdfs-sasl-check.py); every cell fails when a block goes over TCP;
 # short-circuit configured in each (the server runs in the DataNode's network namespace with its
 # domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02
 # bug). Profiles: balanced, speed. Each cell: TPC-H SF<sf> 22/22 answers compared with in-process
@@ -34,6 +36,7 @@ on:
     paths:
       - .github/workflows/service-hdfs.yml
       - tools/ci/service-hdfs-cell.sh
+      - tools/ci/service-hdfs-sasl-check.py
 
 permissions:
   contents: read
@@ -121,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        topology: [plain, ha, ha-krb, ha-krb-sasl]
+        topology: [plain, ha, ha-krb, ha-krb-sasl, sasl-cluster]
         profile: [balanced, speed]
     name: ${{ matrix.topology }} ${{ matrix.profile }}
     steps:
@@ -197,5 +200,5 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
-          [ "$n" -eq 8 ] || { echo "only $n of 8 cells reported"; exit 1; }
+          [ "$n" -eq 10 ] || { echo "only $n of 10 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
