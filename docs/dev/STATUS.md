@@ -128,9 +128,17 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > (`ConcatenatingStreamListener`: listener-owned root fed by `VectorUnloader`/`VectorLoader`; other columns or
 > dictionaries refused); log `hdfs=copyBatches`. sasl-cluster cell: schema `chunks` (all lineitem, 1 MiB blocks,
 > replication 1), full scan + GROUP BY in both modes on every node; `speed` sets the cache below the smallest file and
-> requires a `hdfs=copyBatches` line. **Still open (part 2b, next session):** (2) (c) cache smaller than a query's
-> input for the other shapes - aggregates (next: per batch the endpoint's part query, AverageMerge for avg, into a
-> DuckDB temp table, then `CompleteAnswerMerge.mergeSql` over it), joins and complete answers: today the copies
+> requires a `hdfs=copyBatches` line. **Part 2b step 2 (2026-11-03, b2630cfe):** a partial-mode aggregate that
+> `CompleteAnswerMerge` can merge (`ExecutionService.mergeable`: count/sum/min/max per selected group, ORDER BY of
+> output columns; endpoint tickets never carry avg - distributed complete sends sum/count) whose copies exceed the
+> cache is answered per batch that fits, part answers kept in memory (`CollectedAnswers`) and merged into the
+> ticket's answer via `readArrowParts` + `mergeSql`, typed as `resultSchema` (else `merge=fallback`: old path). Logs
+> `hdfs=copyBatches ... merge=aggregate`, `hdfs=copyBatches merged parts= partBytes=`. sasl-cluster `speed` now
+> requires the chunks GROUP BY merged, no fallback (6 merged, 0 fallback). Part answers are held in JVM memory: a
+> GROUP BY with about as many groups as rows holds about its answer per node (not bounded yet).
+> **Still open (part 2b, next session):** (2) (c) cache smaller than a query's
+> input for the other shapes - other aggregates (LIMIT / HAVING / DISTINCT / expressions), joins and complete answers
+> (also: a footer-answered `count(*)` without filter still copies its files - it need not): today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled.
 > (`ConcatenatingStreamListener` sends several DuckDB readers as one stream and can be reused for that.) Complete
@@ -2973,3 +2981,12 @@ S3 slowdown item below stays open for then).
   not rerun on 94a45267: the fix only touches the copies-off path, and service-hdfs runs with copies on.
   No `package=true` (item 30 not done: aggregates/joins/complete over the cache, `hdfsLocalCopyDir`, `hdfs=reads`
   assertions left). Lock released.
+- 2026-11-03 (cloud session, core): item 30 part 2b step 2 (b2630cfe): mergeable partial-mode aggregates over more than
+  `hdfsLocalCopyMaxBytes` are answered per batch of copies and merged (`CollectedAnswers`, `ExecutionService.mergeable`
+  / `mergeCopyBatches`); avg branch dropped (endpoint aggregates never carry avg). Tests:
+  `ExecutionServiceTest.aggregateLargerThanTheCopyCacheIsMergedFromBatchesThatFit` (real DuckDB, 3 queries = DuckDB over
+  all files, one copy on disk per batch, no fallback, no leaked Arrow memory), `onlyMergeableAggregatesAreAnsweredPerBatch`.
+  sasl-cluster speed cell fails unless the chunks GROUP BY was merged from batches with no fallback. Runs on b2630cfe:
+  Dev CI 41679739414 green, service-hdfs 41679739329 green 10/10 (sasl-cluster speed: 18 batched scans, 6 aggregates
+  merged, 0 fallback), Catalogs CI 41679739422 green. No `package=true` (item 30 not done: joins / complete answers /
+  other aggregates over the cache, `hdfsLocalCopyDir`, `hdfs=reads` assertions left). Lock released.
