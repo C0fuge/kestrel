@@ -34,9 +34,9 @@ on:
         type: string
         default: "-DduckDbPreserveInsertionOrder=false;-DduckDbStreamingBufferSize=64MiB;-DduckDbPreserveInsertionOrder=false -DduckDbStreamingBufferSize=64MiB"
       upstream:
-        description: "upstream commit measured with its defaults (empty = none)"
+        description: "upstream commit (full SHA, or a branch or tag) measured with its defaults (empty = none)"
         type: string
-        default: "6e264c10f403"
+        default: "6e264c10f4031edcc7c021cd86dc807c8fff9bc6"
       cpus:
         description: "server container CPUs"
         type: string
@@ -204,7 +204,7 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
-          out="$RUNNER_TEMP/results.txt"
+          out="$RUNNER_TEMP/results.txt"; touch "$out"
           python3 - "$out" > "$RUNNER_TEMP/summary.txt" <<'EOF'
           import re, sys, collections
           best, answers, notes, failed = collections.defaultdict(dict), {}, [], False
@@ -237,6 +237,9 @@ jobs:
               print(f"{label:<12}{cells}  {b.get('batches', '-')}")
           print()
           print("\n".join(notes))
+          if not best:
+              failed = True
+              notes.append("no result")
           print("RESULT", "FAIL" if failed else "ok")
           EOF
           cat "$RUNNER_TEMP/summary.txt"
