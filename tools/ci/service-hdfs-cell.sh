@@ -17,9 +17,10 @@
 #           transfer without SASL, which hadoopfs (libhdfs3) cannot speak, so only short-circuit reads
 #           work (the maintainer's production cluster; STATUS item 26). The cell first shows that a
 #           plain TCP read is refused and a SASL one passes.
-# With short-circuit configured every cell requires that the server read no block over TCP: DataNode
-# JMX BlocksRead stays 0 and the DataNode log shows REQUEST_SHORT_CIRCUIT_FDS (STATUS item 26); the
-# server JVM gets the image's native Hadoop library so its Java client reads short-circuit too.
+# With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
+# DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
+# own Java footer reads, two blocks per file (the Java client has no native Hadoop library in the
+# server image; its reads speak SASL). In ha-krb-sasl a TCP read by hadoopfs cannot succeed at all.
 # The server runs in the DataNode's network namespace (the domain socket mounted), loads hadoopfs from
 # -Darrowflight.duckdb.extensionDir only, reads the client configuration from /conf (class path and
 # LIBHDFS3_CONF). Check: tools/ci/service-cluster-check.py check (22 TPC-H answers against the
@@ -190,6 +191,7 @@ if [[ $report != *'Live datanodes (1)'* ]]; then
 fi
 docker cp "$in/data" "$admin:/tmp/upload" > /dev/null
 docker exec "${kenv[@]}" "$admin" bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
+files=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data/tpch 2>/dev/null | awk '{print $2}')
 note "data: $(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data/tpch 2>/dev/null | awk '{print $2 " files, " $3 " bytes"}')"
 if $sasl; then
   # The NameNode container is not on the DataNode's host: its reads go over TCP.
@@ -252,8 +254,8 @@ tcp=$(( ${read1:-0} - ${read0:-0} )) fds=$(( fds1 - fds0 ))
 note "dn1 during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
 result=$(grep -m 1 '^result ' "$work/client.log")
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
-  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -ne 0 ] || [ "$fds" -eq 0 ]; }; then
-    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP ($fds short-circuit fd requests)"
+  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 2 * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
+    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 2 * ${files:-0} )), $fds short-circuit fd requests)"
   fi
   finish pass ""
 fi
