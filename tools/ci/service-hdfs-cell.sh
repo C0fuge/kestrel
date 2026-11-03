@@ -18,7 +18,8 @@
 #           work (the maintainer's production cluster; STATUS item 26). The cell first shows that a
 #           plain TCP read is refused and a SASL one passes.
 # With short-circuit configured every cell requires that the server read no block over TCP: DataNode
-# JMX BlocksRead stays 0 and the DataNode log shows REQUEST_SHORT_CIRCUIT_FDS (STATUS item 26).
+# JMX BlocksRead stays 0 and the DataNode log shows REQUEST_SHORT_CIRCUIT_FDS (STATUS item 26); the
+# server JVM gets the image's native Hadoop library so its Java client reads short-circuit too.
 # The server runs in the DataNode's network namespace (the domain socket mounted), loads hadoopfs from
 # -Darrowflight.duckdb.extensionDir only, reads the client configuration from /conf (class path and
 # LIBHDFS3_CONF). Check: tools/ci/service-cluster-check.py check (22 TPC-H answers against the
@@ -49,6 +50,14 @@ conf="$work/conf"; mkdir -p "$conf"
 
 sc=off
 if docker run --rm "$image" hadoop checknative 2>&1 | grep -qE '^hadoop: +true'; then sc=on; fi
+native=()
+if [ "$sc" = on ]; then
+  # The server's own (Java) HDFS client reads short-circuit only with the native Hadoop library.
+  docker create --name hlib "$image" > /dev/null && docker cp hlib:/opt/hadoop/lib/native "$work/hnative" > /dev/null
+  docker rm hlib > /dev/null
+  native=(-v "$work/hnative:/hnative:ro" -e LD_LIBRARY_PATH=/hnative)
+  opts="$opts -Djava.library.path=/hnative"
+fi
 $sasl && [ "$sc" != on ] && finish fail "ha-krb-sasl needs short-circuit, but the image's native Hadoop library does not load"
 
 # Properties: core (both files) and hdfs (hdfs-site.xml). The server's LIBHDFS3_CONF is hdfs-site.xml,
@@ -204,7 +213,7 @@ if $krb; then
 fi
 note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; 1 node, 2 CPUs / 6 GB"
 # shellcheck disable=SC2086
-docker run -d --name srv --network container:dn1 "${sock[@]}" "${srvKrb[@]}" --cpus=2 --memory=6g \
+docker run -d --name srv --network container:dn1 "${sock[@]}" "${srvKrb[@]}" "${native[@]}" --cpus=2 --memory=6g \
   -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
@@ -227,6 +236,7 @@ fi
 note "$(docker logs srv 2>&1 | grep -m 1 -oE 'duckdb=hdfsExtensionLoaded.*' || echo 'no duckdb=hdfsExtensionLoaded line')"
 $krb && note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=kerberosTicketCache.*' || echo 'no hdfs=kerberosTicketCache line')"
 note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=shortCircuit .*' || echo 'no hdfs=shortCircuit line')"
+[ "$sc" = on ] && note "server JVM: $(docker logs srv 2>&1 | grep -m 1 -oE '(Loaded the native-hadoop library|Unable to load native-hadoop library)' || echo 'no native-hadoop line')"
 sleep 3
 py="$RUNNER_TEMP/py/bin/python"
 export SC_DATANODES=172.31.0.12:9864
