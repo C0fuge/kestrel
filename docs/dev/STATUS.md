@@ -57,6 +57,17 @@
 > per-table like a failed describe (skip + reason), never failing other tables. Add this exact layout (non-local first
 > file of a table the query does not touch) to the sasl-cluster CI cell.
 
+> **Maintainer, 2026-11-03 14:45 - item 30 is the build that goes to the real cluster; its CI must look like it.**
+> The target is 3 DataNodes with SASL data transfer, Kerberos, HA NameNodes, one server per DataNode, and a
+> ~1.3 TB single table whose files have blocks on several nodes (most files are not held whole by any node). So, in
+> addition to the 13:15 note: (a) run the item 30 checks in the `ha-krb-sasl` topology too, not only plain SASL;
+> (b) 3 servers, one per DataNode, both profiles, TPC-H 22/22 with correct answers plus a full scan and a
+> GROUP BY over a table where NO file is held whole by any node; (c) a cache smaller than the data the query
+> needs (`hdfsLocalCopyMaxBytes` below the table size): the query must finish (evict/stream, delete after use),
+> not fail or fill the disk; (d) a file larger than the cache limit; (e) log per query how many files went
+> short-circuit vs local copy and the copy throughput. The maintainer's local stand will not be available for the
+> next hours, so the CI cells are the acceptance test: "ITEM 30 DONE" only with these green and `package=true`.
+
 > **Maintainer, 2026-11-03 13:15 - ITEM 30 right after item 29 part 2 (decision on the Open question "reading
 > non-local HDFS blocks under SASL"): option (3), a local copy.** When a file needed by a query has no node holding
 > all its blocks (SASL DataNodes, short-circuit only), the node that runs the query copies the file through the Java
