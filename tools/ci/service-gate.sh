@@ -76,7 +76,13 @@ while :; do
   sleep 60
 done
 
+# The verdict is taken here, not inside the piped table below: a pipe runs its left side in a
+# subshell, and a failure recorded there was lost (the 5122cea1 pre-release passed a failed gate).
 ok=0
+for wf in "${wfs[@]}"; do
+  read -r conclusion rest <<< "${state[$wf]}"
+  [ "$conclusion" = success ] || ok=1
+done
 {
   echo "### Service matrix gate ($sha)"
   echo
@@ -84,7 +90,6 @@ ok=0
   echo "|---|---|---|"
   for wf in "${wfs[@]}"; do
     read -r conclusion rest <<< "${state[$wf]}"
-    [ "$conclusion" = success ] || ok=1
     echo "| $wf | $([ "$conclusion" = success ] && echo success || echo "**${conclusion}**") | ${rest} |"
   done
 } | tee -a "$summary"
