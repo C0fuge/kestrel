@@ -23,6 +23,28 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-03 12:20 - BUG FIRST, ITEM 29 (before 28): SASL data-transfer clusters refuse every query.**
+> Found on the maintainer's HA + Kerberos stand with `413485ba80fd`, DataNodes set to
+> `dfs.data.transfer.protection=authentication`, server on a DataNode with short-circuit (replication 2, 3 DataNodes):
+> the server starts (`hdfs=shortCircuitOnly ... a query touching any other block fails`) but then **every** query, even
+> `select 1`, fails after ~3 s: `IO Error: Failed to read from HDFS file "hdfs://<ns>/data/parquet/tpch/lineitem/
+> data_0.parquet" ... no valid replica can be read for Block ... Connection reset by peer` - that file has no replica on
+> the server's DataNode. Likely cause: the setup describes every table of every schema (`DESCRIBE SELECT * FROM
+> read_parquet([...])`) through DuckDB/hadoopfs, which reads each table's first footer; one non-local footer fails the
+> whole setup (with replication 3 on tpch only, `count(*) from tpch.lineitem` still failed on `types/alltypes`). With
+> every block local it is 22/22 in balanced and speed (short-circuit fd requests on the DataNode, no TCP reads).
+> The target production cluster is exactly this setup (SASL DataNodes, many schemas, replication not on every node).
+> Do: (a) table schemas / footers through the **Java Hadoop client** (it speaks SASL), never through hadoopfs, and
+> one table's failure must never refuse other tables; (b) on a SASL cluster a node may only read files it has every
+> block of locally: the planner must send each file (partial, distributedComplete) to a node that holds all its
+> blocks, and a `complete` query on a node without them must be routed to such a node or fail with a clear message
+> naming the files - not "Connection reset"; (c) the startup warning must say exactly that; (d) CI: a service-hdfs /
+> service-cluster cell with **3 DataNodes, replication 2, SASL protection**, several schemas, servers on the DataNodes
+> - TPC-H 22/22 through the partial / distributedComplete path and a clear error for a deliberately non-local file;
+> (e) `package=true`. Longer term (write it as an Open question with options, do not build now): reading non-local
+> blocks under SASL (a SASL-capable libhdfs3 / hadoopfs, or a Java-client read path for remote blocks).
+> Then "ITEM 29 DONE".
+
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
 > speed anything up: data reads go through hadoopfs, only the few Java footer reads would gain); document in START-NOTES
 > how to point the server JVM at an existing libhadoop (`-Djava.library.path`) and that without it footer reads go over
