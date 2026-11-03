@@ -1,0 +1,253 @@
+# Manual perf run of item 27 (S3 single-stream scan and export vs upstream): generates TPC-H SF<sf>
+# lineitem as Parquet, serves it from a local S3 endpoint (rclone serve s3 on the runner, as
+# tpch-perf.yml), and measures full `SELECT * FROM tpch.lineitem` reads through the ADBC Flight SQL
+# driver (tools/ci/scan-adbc.py): one client (x1), <clients> concurrent clients, and an export of the
+# stream into a Parquet file. Configurations: this ref with the <profile> resource profile, the same
+# with each option set of <variants> (separated by ';'), and the upstream server at <upstream> with
+# its defaults, each started alone in a container with <cpus> CPUs / <memory> on the same runner.
+# Fails when a read fails or two configurations disagree on the answer (rows + checksum). Prints
+# MB/s per shape and configuration and the ratio to upstream into the job summary. Not part of Dev CI.
+name: Scan perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      sf:
+        description: "TPC-H scale factor of lineitem"
+        type: string
+        default: "10"
+      rounds:
+        description: "measured passes per configuration"
+        type: string
+        default: "3"
+      clients:
+        description: "concurrent clients of the xN shape"
+        type: string
+        default: "4"
+      profile:
+        description: "resource profile of this ref"
+        type: choice
+        options: [speed, balanced]
+        default: speed
+      variants:
+        description: "further server option sets of this ref, separated by ';' (empty = none)"
+        type: string
+        default: "-DduckDbPreserveInsertionOrder=false;-DduckDbStreamingBufferSize=64MiB;-DduckDbPreserveInsertionOrder=false -DduckDbStreamingBufferSize=64MiB"
+      upstream:
+        description: "upstream commit measured with its defaults (empty = none)"
+        type: string
+        default: "6e264c10f403"
+      cpus:
+        description: "server container CPUs"
+        type: string
+        default: "4"
+      memory:
+        description: "server container memory"
+        type: string
+        default: "8g"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scan-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+  UPSTREAM_REPO: https://github.com/VadimSurpin/arrow-flight-server
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref and upstream (no tests)
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          mkdir -p "$RUNNER_TEMP/jars/head/plugins"
+          cp -r flight-server/target/arrow-flight-server-1.0.0-shaded.jar flight-server/target/libs "$RUNNER_TEMP/jars/head/"
+          cp -r flight-plugin-s3/target/plugin/s3 "$RUNNER_TEMP/jars/head/plugins/"
+          if [ -n "${{ inputs.upstream }}" ]; then
+            git init -q "$RUNNER_TEMP/up"
+            git -C "$RUNNER_TEMP/up" fetch -q --depth 1 "$UPSTREAM_REPO" "${{ inputs.upstream }}"
+            git -C "$RUNNER_TEMP/up" checkout -q FETCH_HEAD
+            (cd "$RUNNER_TEMP/up" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+            mkdir -p "$RUNNER_TEMP/jars/up"
+            cp "$RUNNER_TEMP"/up/flight-server/target/*-shaded.jar "$RUNNER_TEMP/jars/up/arrow-flight-server-1.0.0-shaded.jar"
+            if [ -d "$RUNNER_TEMP/up/flight-server/target/libs" ]; then
+              cp -r "$RUNNER_TEMP/up/flight-server/target/libs" "$RUNNER_TEMP/jars/up/"
+            else
+              mkdir -p "$RUNNER_TEMP/jars/up/libs"
+            fi
+          fi
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: Generate lineitem SF${{ inputs.sf }}
+        run: |
+          set -euo pipefail
+          pip install -q duckdb==1.5.6 || pip install -q duckdb
+          mkdir -p "$RUNNER_TEMP/s3root/lake/data/tpch/lineitem"
+          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" <<'EOF'
+          import os, sys, duckdb
+          tmp, sf = sys.argv[1], float(sys.argv[2])
+          db = duckdb.connect(os.path.join(tmp, "gen.duckdb"))
+          db.execute("SET memory_limit='10GB'")
+          db.execute("INSTALL tpch; LOAD tpch")
+          db.execute(f"CALL dbgen(sf={sf})")
+          out = os.path.join(tmp, "s3root", "lake", "data", "tpch", "lineitem", "data.parquet")
+          db.execute(f"COPY lineitem TO '{out}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+          print("lineitem rows", db.execute("SELECT count(*) FROM lineitem").fetchone()[0])
+          db.close()
+          os.remove(os.path.join(tmp, "gen.duckdb"))
+          EOF
+          du -sh "$RUNNER_TEMP/s3root/lake/data/tpch/lineitem"
+          python3 -m venv "$RUNNER_TEMP/adbc"
+          "$RUNNER_TEMP/adbc/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+
+      # The httpfs extension of the server's DuckDB (ci-assets, else extensions.duckdb.org) and an S3
+      # endpoint on 127.0.0.1:9000: bucket "lake", data directory s3://lake/data (test-only keys, generated here).
+      - name: S3 endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DUCKDB_VERSION: v1.5.6
+        run: |
+          set -euo pipefail
+          ext="$RUNNER_TEMP/ext"; mkdir -p "$ext"
+          if gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+              --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"; then
+            tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$ext"
+          fi
+          httpfs=$(find "$ext" -path "*${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension" | head -n 1)
+          if [ -z "$httpfs" ]; then
+            httpfs="$ext/httpfs.duckdb_extension"
+            curl -fsSL --retry 4 "https://extensions.duckdb.org/${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension.gz" \
+              | gunzip > "$httpfs"
+          fi
+          cp "$httpfs" "$RUNNER_TEMP/httpfs.duckdb_extension"
+          curl -fsSL --retry 4 -o "$RUNNER_TEMP/rclone.zip" \
+            https://github.com/rclone/rclone/releases/download/v1.69.1/rclone-v1.69.1-linux-amd64.zip
+          unzip -q -j "$RUNNER_TEMP/rclone.zip" '*/rclone' -d "$RUNNER_TEMP/bin"
+          key=$(openssl rand -hex 8); secret=$(openssl rand -hex 16)
+          echo "::add-mask::$secret"
+          nohup "$RUNNER_TEMP/bin/rclone" serve s3 --addr 127.0.0.1:9000 --auth-key "$key,$secret" \
+            --vfs-cache-mode off "$RUNNER_TEMP/s3root" > "$RUNNER_TEMP/s3.log" 2>&1 &
+          for _ in $(seq 30); do curl -sS -o /dev/null http://127.0.0.1:9000/ && break; sleep 1; done
+          { echo "S3_KEY=$key"; echo "S3_SECRET=$secret"; } >> "$GITHUB_ENV"
+
+      - name: Measure
+        env:
+          VARIANTS: ${{ inputs.variants }}
+        run: |
+          set +e -u
+          out="$RUNNER_TEMP/results.txt"; : > "$out"
+          measure() { # label, jars, extra server options
+            local label=$1 jars=$2 opts=$3 storeArgs
+            if [ "$jars" = up ]; then
+              storeArgs=(-e FLIGHT_S3_ENDPOINT=http://127.0.0.1:9000 -e FLIGHT_S3_PATH_STYLE=true)
+            else
+              storeArgs=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro"
+                -e DUCKDB_HTTPFS_EXTENSION=/ext/httpfs.duckdb_extension -e FLIGHT_PLUGINS_DIR=/app/plugins
+                -e FLIGHT_S3_ENDPOINT=http://127.0.0.1:9000 -e FLIGHT_S3_URL_STYLE=path
+                -e FLIGHT_RESOURCE_PROFILE=${{ inputs.profile }})
+            fi
+            docker run -d --name srv --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+              -v "$RUNNER_TEMP/jars/$jars:/app:ro" -e FLIGHT_ALLOW_INSECURE=true \
+              -e FLIGHT_S3_ACCESS_KEY="$S3_KEY" -e FLIGHT_S3_SECRET_KEY="$S3_SECRET" \
+              "${storeArgs[@]}" eclipse-temurin:21-jre \
+              java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+              -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir s3://lake/data --localhost 127.0.0.1 \
+              --port 32010 --hosts 127.0.0.1 > /dev/null
+            for i in $(seq 180); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
+            if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
+              echo "$label: server did not start" >> "$out"; docker logs srv 2>&1 | tail -n 40; docker rm -f srv > /dev/null
+              return
+            fi
+            docker logs srv 2>&1 | grep -o 'profile=.*\|duckdb=\(sizing\|threads\) .*' | head -n 3 | sed "s/^/$label: /" >> "$out"
+            "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/scan-adbc.py 127.0.0.1:32010 tpch.lineitem "${{ inputs.rounds }}" \
+              "${{ inputs.clients }}" "$RUNNER_TEMP/export.parquet" > "$RUNNER_TEMP/client.log" 2>&1 \
+              || echo "$label: client failed" >> "$out"
+            sed "s/^/$label: /" "$RUNNER_TEMP/client.log" >> "$out"
+            local peak; peak=$(docker exec srv cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)
+            [ -n "$peak" ] && echo "$label: container memory peak $((peak / 1048576)) MiB" >> "$out"
+            if grep -q 'client failed' "$out"; then docker logs srv 2>&1 | tail -n 40; fi
+            docker rm -f srv > /dev/null
+          }
+          measure "${{ inputs.profile }}" head ""
+          i=0
+          IFS=';' read -ra sets <<< "$VARIANTS"
+          for v in "${sets[@]}"; do
+            v=$(echo "$v" | xargs)
+            [ -z "$v" ] && continue
+            i=$((i + 1))
+            echo "v$i = $v" >> "$out"
+            measure "v$i" head "$v"
+          done
+          if [ -n "${{ inputs.upstream }}" ]; then
+            measure "upstream" up ""
+          fi
+          cat "$out"
+
+      - name: Check and summarize
+        if: always()
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/results.txt"
+          python3 - "$out" > "$RUNNER_TEMP/summary.txt" <<'EOF'
+          import re, sys, collections
+          best, answers, notes, failed = collections.defaultdict(dict), {}, [], False
+          for line in open(sys.argv[1]):
+              line = line.rstrip()
+              m = re.match(r"(\S+): (x\d+|export) r(\d+) ([\d.]+) s rows (\d+) mb ([\d.]+) mbs ([\d.]+) batches (\d+) sum (\w+)( \(warm-up\))?$", line)
+              if m:
+                  label, shape, mbs = m.group(1), m.group(2), float(m.group(7))
+                  answers.setdefault((m.group(5), m.group(9)), set()).add(label)
+                  if not m.group(10):
+                      best[label][shape] = max(best[label].get(shape, 0.0), mbs)
+                      best[label]["batches"] = m.group(8)
+              elif re.search(r": (client failed|server did not start)$|: \S+ r\d+ (error|wrong) ", line):
+                  failed = True
+                  notes.append(line)
+              elif re.match(r"v\d+ = ", line) or "memory peak" in line:
+                  notes.append(line)
+          if len(answers) > 1:
+              failed = True
+              notes.append("answers differ: " + repr(answers))
+          shapes = sorted({s for b in best.values() for s in b if s != "batches"}, key=lambda s: (s == "export", s))
+          ref = best.get("upstream", {})
+          print("config      " + "".join(f"{s:>16}" for s in shapes) + "  batches")
+          for label, b in best.items():
+              cells = ""
+              for s in shapes:
+                  v = b.get(s)
+                  r = f" ({v / ref[s]:.2f})" if v and ref.get(s) else ""
+                  cells += f"{(f'{v:.0f}' if v else '-') + r:>16}"
+              print(f"{label:<12}{cells}  {b.get('batches', '-')}")
+          print()
+          print("\n".join(notes))
+          print("RESULT", "FAIL" if failed else "ok")
+          EOF
+          cat "$RUNNER_TEMP/summary.txt"
+          {
+            echo "### Scan perf: lineitem SF${{ inputs.sf }} on S3 (rclone), $(nproc) runner cores, $GITHUB_SHA"
+            echo
+            echo "Best MB/s (Arrow bytes) of ${{ inputs.rounds }} passes after a warm-up; (ratio to upstream ${{ inputs.upstream || 'none' }})."
+            echo "Server: ${{ inputs.cpus }} CPUs / ${{ inputs.memory }}, this ref with profile ${{ inputs.profile }}; ADBC client, complete mode."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q '^RESULT ok' "$RUNNER_TEMP/summary.txt"
