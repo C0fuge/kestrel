@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.List;
@@ -717,10 +718,135 @@ public final class ExecutionService {
             LOGGER.warn("No Parquet files to read for query: {}", query);
             return;
         }
-        try (LocalCopyCache.Lease copies = localCopies(fileUris)) {
+        List<DataFile> unreadable = unreadableFiles(fileUris);
+        List<String[]> batches = startListener && concatenatable(parsedQuery)
+                ? copyBatches(fileUris, unreadable, copyLimit(unreadable)) : List.of();
+        if (batches.size() > 1) {
+            readInCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
+                    pathTracker);
+            return;
+        }
+        try (LocalCopyCache.Lease copies = copies(unreadable, fileUris.length)) {
             readParquetFiles(allocator, query, parsedQuery, parquetFiles,
                     resolveUris(fileUris, copies), listener, startListener, pathTracker);
         }
+    }
+
+    /**
+     * Reads a scan whose local copies do not fit the cache at once (item 30): the ticket's files
+     * go in batches whose copies fit, each batch's copies are released (and, over the limit,
+     * deleted) before the next batch is copied, and the batches' rows are sent as one stream.
+     *
+     * @param allocator   Arrow buffer allocator
+     * @param query       SQL query
+     * @param parsedQuery parsed query, a plain scan
+     * @param batches     the ticket's files in batches
+     * @param unreadable  files this node cannot read where they are
+     * @param listener    Flight stream listener, not started
+     * @param pathTracker runtime execution-path tracker
+     * @throws Exception on copy or execution failure
+     */
+    private void readInCopyBatches(BufferAllocator allocator, String query,
+            ParquetQueryParser parsedQuery, List<String[]> batches, List<DataFile> unreadable,
+            FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
+            throws Exception {
+        Map<String, DataFile> byPath = new HashMap<>();
+        for (DataFile file : unreadable) {
+            byPath.put(file.relativePath(), file);
+        }
+        LOGGER.info("qid={} node={} hdfs=copyBatches batches={} files={} maxBytes={}",
+                LogUtil.qid(), LogUtil.node(), batches.size(),
+                batches.stream().mapToInt(b -> b.length).sum(), localCopyCache().maxBytes());
+        try (ConcatenatingStreamListener stream =
+                new ConcatenatingStreamListener(listener, allocator)) {
+            for (String[] batch : batches) {
+                List<DataFile> toCopy = new ArrayList<>();
+                for (String rel : batch) {
+                    DataFile file = byPath.get(rel);
+                    if (file != null) {
+                        toCopy.add(file);
+                    }
+                }
+                List<String> parquetFiles = resolveParquetFiles(batch);
+                if (parquetFiles.isEmpty()) {
+                    continue;
+                }
+                try (LocalCopyCache.Lease copies = copies(toCopy, batch.length)) {
+                    readParquetFiles(allocator, query, parsedQuery, parquetFiles,
+                            resolveUris(batch, copies), stream, true, pathTracker);
+                }
+                if (stream.isCancelled()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * Tells whether the rows a query returns for a set of files are the concatenation of its
+     * rows for parts of that set: a scan without aggregate, ORDER BY, LIMIT, OFFSET, DISTINCT or
+     * per-query expressions (window functions).
+     *
+     * @param parsed parsed query
+     * @return true for such a plain scan
+     */
+    static boolean concatenatable(ParquetQueryParser parsed) {
+        return !parsed.isJoin && !parsed.hasAggregation && !parsed.hasOrderOrLimit()
+                && !parsed.distinct && parsed.having == null
+                && parsed.singleNodeFeature() == null && parsed.completeAnswerReason == null;
+    }
+
+    /**
+     * Splits a ticket's files into batches whose local copies fit the cache limit; files read
+     * where they are go into the first batch, a file larger than the limit gets a batch alone.
+     *
+     * @param fileUris the ticket's relative file paths
+     * @param unreadable files among them that must be copied
+     * @param maxBytes the cache limit, or 0 when nothing is copied
+     * @return batches in ticket order, or one batch holding every file when the copies fit
+     */
+    static List<String[]> copyBatches(String[] fileUris, List<DataFile> unreadable,
+            long maxBytes) {
+        Map<String, Long> sizes = new HashMap<>();
+        long total = 0;
+        for (DataFile file : unreadable) {
+            if (sizes.putIfAbsent(file.relativePath(), file.size()) == null) {
+                total += file.size();
+            }
+        }
+        if (maxBytes <= 0 || total <= maxBytes) {
+            return Collections.singletonList(fileUris);
+        }
+        List<String> direct = new ArrayList<>();
+        List<String[]> batches = new ArrayList<>();
+        List<String> current = new ArrayList<>();
+        long currentBytes = 0;
+        Set<String> seen = new HashSet<>();
+        for (String rel : fileUris) {
+            Long size = sizes.get(rel);
+            if (size == null) {
+                direct.add(rel);
+                continue;
+            }
+            if (!seen.add(rel)) {
+                continue;
+            }
+            if (!current.isEmpty() && currentBytes + size > maxBytes) {
+                batches.add(current.toArray(new String[0]));
+                current = new ArrayList<>();
+                currentBytes = 0;
+            }
+            current.add(rel);
+            currentBytes += size;
+        }
+        if (!current.isEmpty()) {
+            batches.add(current.toArray(new String[0]));
+        }
+        if (!direct.isEmpty()) {
+            direct.addAll(List.of(batches.get(0)));
+            batches.set(0, direct.toArray(new String[0]));
+        }
+        return batches;
     }
 
     /**
@@ -1355,11 +1481,33 @@ public final class ExecutionService {
      * @throws IOException when the files cannot be listed or copied
      */
     LocalCopyCache.Lease localCopies(String[] fileUris) throws IOException {
+        List<DataFile> unreadable = unreadableFiles(fileUris);
+        return unreadable == null ? null : copies(unreadable, fileUris.length);
+    }
+
+    /**
+     * Lists the files of a ticket that this node cannot read where they are.
+     *
+     * @param fileUris relative paths of the ticket, or null
+     * @return files to copy, or null when this node copies nothing (every file is read where it is)
+     * @throws IOException when the files cannot be listed
+     */
+    private List<DataFile> unreadableFiles(String[] fileUris) throws IOException {
         if (fileUris == null || fileUris.length == 0 || !parquetAdapter.localCopies()) {
             return null;
         }
-        DataStore store = parquetAdapter.dataStore();
-        return copies(filesToCopy(store, fileUris), fileUris.length);
+        return filesToCopy(parquetAdapter.dataStore(), fileUris);
+    }
+
+    /**
+     * Returns the cache limit that applies to a ticket's copies.
+     *
+     * @param unreadable files to copy, or null
+     * @return the cache limit, or 0 when there is nothing to copy
+     * @throws IOException when the cache cannot be created
+     */
+    private long copyLimit(List<DataFile> unreadable) throws IOException {
+        return unreadable == null || unreadable.isEmpty() ? 0 : localCopyCache().maxBytes();
     }
 
     /**
@@ -1371,6 +1519,9 @@ public final class ExecutionService {
      * @throws IOException when a file cannot be copied
      */
     private LocalCopyCache.Lease copies(List<DataFile> unreadable, int files) throws IOException {
+        if (unreadable == null) {
+            return null;
+        }
         if (unreadable.isEmpty()) {
             LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy=0",
                     LogUtil.qid(), LogUtil.node(), files, files);

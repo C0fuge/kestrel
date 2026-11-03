@@ -104,7 +104,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   reads the copy (log `hdfs=localCopy`, per query `hdfs=reads ... shortCircuit=N localCopy=N`). **Disk cost:** up to
   `hdfsLocalCopyMaxBytes` (default 32 GiB) of unused copies per node, kept for reuse and evicted least recently used,
   plus whatever the running queries need at once (a query's copies are never evicted while it runs; beyond the limit
-  they are deleted when it ends). Put the temp directory on a disk with that much room; `hdfsLocalCopyMaxBytes=0`
+  they are deleted when it ends). A plain scan of one table (no aggregate, ORDER BY, LIMIT, DISTINCT) whose copies
+  do not fit the limit is read in batches that fit, each batch's copies deleted before the next is copied (log
+  `hdfs=copyBatches`); other query shapes still hold all their copies at once. Put the temp directory on a disk with that much room; `hdfsLocalCopyMaxBytes=0`
   turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted
   when the server stops.
 - S3: DuckDB keeps its S3 connections and reads later ranges and queries over them

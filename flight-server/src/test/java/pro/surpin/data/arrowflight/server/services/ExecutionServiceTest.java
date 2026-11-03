@@ -647,6 +647,106 @@ class ExecutionServiceTest {
         assertEquals(query, service.completeFromCopies(query).sql());
     }
 
+    /**
+     * Item 30 part 2b: a scan whose local copies do not fit the cache is read in batches whose
+     * copies fit, each batch's copies deleted before the next is copied, and every row is sent
+     * through one stream (files read in place go with the first batch).
+     */
+    @Test
+    void scanLargerThanTheCopyCacheIsReadInBatchesThatFit(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path root = dir.resolve("localcopy");
+        List<DataFile> remote = new java.util.ArrayList<>();
+        String[] ticket = {"s/t/a.parquet", "s/t/b.parquet", "s/t/c.parquet", "s/t/d.parquet"};
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        long largest = 0;
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            for (int i = 0; i < ticket.length; i++) {
+                java.nio.file.Path file = dir.resolve("f" + i + ".parquet");
+                st.execute("COPY (SELECT range AS v FROM range(" + i * 1000 + ", " + (i + 1) * 1000
+                        + ")) TO '" + file + "' (FORMAT parquet)");
+                DataFile data = new DataFile(ticket[i], "hdfs://ns/data/" + ticket[i],
+                        java.nio.file.Files.size(file), 1L, i == 3 ? Set.of("dn1") : Set.of());
+                when(store.readableHere(data)).thenReturn(i == 3);
+                when(store.inputFile(data)).thenReturn(new org.apache.parquet.io.LocalInputFile(file));
+                when(store.duckDbUri(ticket[i])).thenReturn(file.toString());
+                if (i < 3) {
+                    remote.add(data);
+                    largest = Math.max(largest, data.size());
+                }
+                when(store.file(ticket[i])).thenReturn(data);
+            }
+        }
+        List<DataFile> listed = new java.util.ArrayList<>(remote);
+        when(store.parquetFiles("s/t")).thenReturn(listed);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        when(duckDb.localCopyRoot()).thenReturn(root);
+        List<Long> rows = new java.util.ArrayList<>();
+        List<Integer> copiesOnDisk = new java.util.ArrayList<>();
+        org.mockito.Mockito.doAnswer(call -> {
+            assertInstanceOf(ConcatenatingStreamListener.class, call.getArgument(2));
+            try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(root);
+                    java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                    java.sql.Statement st = conn.createStatement();
+                    java.sql.ResultSet rs = st.executeQuery("SELECT count(*) FROM ("
+                            + call.getArgument(1, String.class) + ")")) {
+                copiesOnDisk.add((int) walk.filter(p -> p.toString().endsWith(".parquet")).count());
+                assertTrue(rs.next());
+                rows.add(rs.getLong(1));
+            }
+            return null;
+        }).when(duckDb).streamSql(any(), anyString(), any(), org.mockito.ArgumentMatchers.eq(true));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+        org.apache.arrow.flight.FlightProducer.ServerStreamListener listener =
+                mock(org.apache.arrow.flight.FlightProducer.ServerStreamListener.class);
+
+        System.setProperty("hdfsLocalCopyMaxBytes", String.valueOf(largest));
+        try (BufferAllocator allocator = new RootAllocator()) {
+            service.readParquet(allocator, "SELECT v FROM s.t WHERE v >= 0", ticket, listener, true);
+        } finally {
+            System.clearProperty("hdfsLocalCopyMaxBytes");
+        }
+        // Three batches of one copy each; the held file goes with the first; all 4000 rows.
+        assertEquals(List.of(2000L, 1000L, 1000L), rows);
+        assertEquals(List.of(1, 1, 1), copiesOnDisk);
+    }
+
+    /** Item 30 part 2b: copies that fit the cache stay one batch; others are cut to fit. */
+    @Test
+    void copyBatchesFitTheCacheLimit() {
+        String[] ticket = {"a", "b", "c", "d", "e"};
+        List<DataFile> unreadable = List.of(
+                new DataFile("a", "hdfs://a", 40, 1L, Set.of()),
+                new DataFile("b", "hdfs://b", 40, 1L, Set.of()),
+                new DataFile("d", "hdfs://d", 150, 1L, Set.of()),
+                new DataFile("e", "hdfs://e", 10, 1L, Set.of()));
+        assertEquals(1, ExecutionService.copyBatches(ticket, unreadable, 240).size());
+        assertEquals(1, ExecutionService.copyBatches(ticket, unreadable, 0).size());
+        assertEquals(1, ExecutionService.copyBatches(ticket, List.of(), 1).size());
+        List<String[]> batches = ExecutionService.copyBatches(ticket, unreadable, 100);
+        assertEquals(List.of(List.of("c", "a", "b"), List.of("d"), List.of("e")),
+                batches.stream().map(List::of).toList());
+    }
+
+    /** Item 30 part 2b: only plain scans are read in batches of copies. */
+    @Test
+    void onlyPlainScansAreConcatenatable() {
+        assertTrue(ExecutionService.concatenatable(ParquetQueryParser.parse(
+                "SELECT a, b FROM s.t WHERE a > 1")));
+        for (String query : List.of("SELECT count(*) FROM s.t", "SELECT a FROM s.t ORDER BY a",
+                "SELECT a FROM s.t LIMIT 3", "SELECT DISTINCT a FROM s.t",
+                "SELECT a, b FROM s.t GROUP BY a, b", "SELECT a FROM s.t OFFSET 2")) {
+            assertFalse(ExecutionService.concatenatable(ParquetQueryParser.parse(query)), query);
+        }
+    }
+
     /** The table directory of a ticket file is its first two segments. */
     @Test
     void tableDirectoryOfATicketFile() {

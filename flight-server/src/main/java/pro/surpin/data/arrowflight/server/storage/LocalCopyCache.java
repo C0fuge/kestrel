@@ -310,6 +310,15 @@ public final class LocalCopyCache implements AutoCloseable {
     }
 
     /**
+     * Returns the bytes the copies not in use may take together.
+     *
+     * @return the limit in bytes
+     */
+    public long maxBytes() {
+        return maxBytes;
+    }
+
+    /**
      * Returns the bytes of the copies made or being made.
      *
      * @return bytes

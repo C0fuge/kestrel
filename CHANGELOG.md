@@ -96,6 +96,16 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - SASL HDFS clusters: scans larger than the local-copy cache read in batches (STATUS item 30, part 2b)
+
+- A partial-mode plain scan of one table (no aggregate, ORDER BY, LIMIT, OFFSET, DISTINCT or window function) whose
+  files to copy exceed `hdfsLocalCopyMaxBytes` used to copy them all at once (over the limit, deleted after the
+  query): the disk could fill. It now reads the ticket's files in batches whose copies fit the limit (a file larger
+  than the limit alone), releasing each batch's copies before copying the next, and sends all rows as one stream
+  (same rows; files the node holds whole go with the first batch). Log line `hdfs=copyBatches batches=... files=...
+  maxBytes=...` plus one `hdfs=reads` line per batch. Aggregates, joins and complete answers over more than the
+  limit still hold their copies at once (next step).
+
 ### Added - SASL HDFS clusters: complete answers over tables the node lacks blocks of (STATUS item 30, part 2)
 
 - A complete answer computed on the node that receives the query (non-mergeable shapes such as TPC-H joins, or
