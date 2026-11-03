@@ -1,64 +1,66 @@
 # Orchestration status
 
-Status as of **2026-11-03 09:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 10:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 29** (maintainer's bug-first, SASL DataNodes; part 1 of 2 done) and an egret FRESH result for
-the newest pre-release (`server-1.0.0-413485ba80fd`; run 41604206524 in progress since 08:33Z).
-Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE** (kestrel), **IMPROVEMENTS DONE** (marten and heron).
+Not ready yet: **ITEM 29** (maintainer's bug-first, SASL DataNodes; part 2 in progress), then **ITEM 30** (maintainer's
+decision: local copy of non-local files under SASL); egret FRESH report for `server-1.0.0-413485ba80fd` (run green,
+report pending). Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
+and heron).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 29 in progress: part 1 done (footers through the Java client, a bad table skipped, warning text); next part 2 (planner: files only to nodes holding every block; SASL service cell; `package=true`) | 09:15Z (00e3e896, 42 min) | taken 08:57Z (1 h, active) | Dev CI 41607831413 (75e63681) **red** = SpotBugs, fixed by dcc8f919: 41609483775 green; dispatch 41612114451 (00e3e896) running |
+| core (`STATUS.md`) | ITEM 29 part 2: planner sends files only to nodes holding every block (8ec89fe9), views bind on a whole-local file (ed7cd026), one failing view no longer fails others (df3c23f1), service-hdfs sasl-cluster cell (73970819, 56283139); maintainer stand finding 13:45 (+03) addressed by ed7cd026/df3c23f1, not yet re-checked | 10:55Z (56283139, 1 min) | taken 10:14:57Z (42 min, active) | Dev CI 41620905057 (df3c23f1) **green**; 3 earlier runs cancelled by newer pushes |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | Catalogs CI 41609482721 green |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
 
-No stale locks (kestrel core lock active, others free; marten and heron free). Newest completed Dev CI on main green,
-nothing to rerun.
+No stale locks (kestrel core lock active, other lanes free; marten and heron free). Newest Dev CI on main green, nothing
+to rerun.
 
 ## Service matrix
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 41614141178 (main) | 00e3e896 | queued (previous 41592454233 on 413485ba: pass) |
-| service-hdfs.yml | 41614145511 (main) | 00e3e896 | running (previous 41592458259: pass) |
-| service-security.yml | 41614149731 (main) | 00e3e896 | running (previous 41592462281: pass) |
-| service-stores.yml | 41614153424 (main) | 00e3e896 | running (previous 41592466574: pass) |
+| service-cluster.yml | 41614141178 (dispatch, main) | 00e3e896 | **fail**: cell hdfs-ha / loss, q18 non-retryable during the NameNode failover: `Unable to get file info: hdfs://ns1/.../lineitem/part-004.parquet: Operation category READ is not supported in state standby` (other 11 cells pass; previous 41592454233 on 413485ba: pass). Not in STATUS yet - see below |
+| service-hdfs.yml | 41623262313 (main) | 56283139 | running (sasl-cluster cell, item 29) |
+| service-security.yml | 41614149731 (main) | 00e3e896 | pass |
+| service-stores.yml | 41614153424 (main) | 00e3e896 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`; `scan-perf.yml`).
+- `server-1.0.0-00e3e896b31e` (2026-11-03 09:15Z): item 29 part 1 (footers through the Java client, bad table skipped).
+- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`).
 - `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:21Z): item 26 (hadoopfs short-circuit from LIBHDFS3_CONF / hdfs-site.xml).
-- `server-1.0.0-f8ba588a8295` (2026-11-02 17:24Z): HDFS fix + ranger table check fix.
 
-No pre-release with item 29 yet.
+No pre-release with item 29 part 2 yet.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (09:53Z). Join-key IN list up to 50 000 (series `4a9848e-fl1eb792`, FE 41605517022,
-  BE 41605520176, m4 41606940223 S3 checks 1-9 PASS); compare SF10 41606943229: q19 2.89 vs up 2.91 s; q01/q12/q14/q17/q19
-  at parity; SF10 common-20 ours / up 1.15 default, 0.93 speed. Not released. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 100: nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (10:00Z); 10:41Z session: no new maintainer items, finish mode. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 100 (09:51Z): nothing open. Lock free.
 
 ## egret
 
-- Newest: `results/FRESH-25aa7eec0f0f.md` (run 41584018828, upstream `6e264c10f403`; pre item 27): speed / upstream
-  S3 scan x1 / x4 / x8 1.02 / 0.87 / 0.89, S3 ADBC export 0.87.
-- Running: FRESH three-way on `413485ba80fd` (balanced vs speed vs fresh upstream), run 41604206524 since 08:33Z
-  (also the item 27 stand rerun the core lane asked for).
+- Newest report: `results/FRESH-25aa7eec0f0f.md` (run 41584018828, upstream `6e264c10f403`, unchanged): ours 22/22
+  everywhere; upstream native 0/22 ADBC, 1/22 JDBC, errors on small queries.
+- FRESH three-way on `413485ba80fd`: run 41604206524 **green**, report pending (README "In progress", 10:56Z).
+  The newest pre-release is now `00e3e896b31e`, so ALL DONE also waits on a FRESH run for the item 29 build.
 
 ## For the maintainer
 
-- New Open question (core, item 29): how to read non-local HDFS blocks under SASL - options (1) SASL-capable libhdfs3,
-  (2) Java read path as Arrow stream, (3) local copy/cache of non-local files (lane's suggestion), (4) operating advice:
-  replication = number of server nodes. Part 2 (routing to nodes with all blocks) proceeds without the answer.
-- marten raised its default `flight.pushdown.join_keys` 10000 -> 50000; heron switched `arrow-flight.split-count`
-  4 -> 1 earlier. Both connector default changes; review when back.
+- **service-cluster hdfs-ha loss failed on 00e3e896** (run 41614141178): q18 got a non-retryable error during the
+  NameNode failover (standby answered a file-info call, the HA client did not fail over). First failure of this cell;
+  could be the item 29 part 1 Java footer path or a timing flake. The core lane's next `package=true` service gate will
+  show whether it repeats; if it does, it is a core bug-first.
+- Item 30 decision (option 3, local copy) is recorded in STATUS; option (1) stays a long-term Open question.
+- Connector default changes to review when back: marten `flight.pushdown.join_keys` 10000 -> 50000; heron
+  `arrow-flight.split-count` 4 -> 1.
 
 ## History
 
+- 2026-11-03 10:57Z: core on ITEM 29 part 2 (routing, view binding per table, sasl-cluster cell; Dev CI 41620905057 green, service-hdfs running); service-cluster 41614141178 on 00e3e896 **red** (hdfs-ha loss q18 "READ not supported in state standby"); egret FRESH 413485ba run green, report pending; marten/heron idle; no stale locks.
 - 2026-11-03 09:57Z: core on bug-first ITEM 29 (part 1 done 75e63681/dcc8f919; Dev CI red on 75e63681 = SpotBugs, fixed by dcc8f919, green 41609483775); new Open question item 29 (non-local SASL reads); marten IMPROVEMENTS DONE; heron idle; egret FRESH 413485ba80fd still running; no stale locks.
 - 2026-11-03 08:57Z: ITEM 28 DONE (docs only); core idle; marten q19 step (join_keys 50000) in FE/BE CI; heron speed proof added; egret FRESH 413485ba80fd running (41604206524); no stale locks, Dev CI green.
 - 2026-11-03 08:00Z: ITEM 26 + 27 DONE (pre-release 413485ba80fd, service gate 4/4 green); core idle, no open item; heron IMPROVEMENTS DONE (session 98); marten join-key fix green, q19 + SF1 compare left; egret FRESH-25aa7eec0f0f done (not yet on 413485ba); no stale locks, no red Dev CI.
