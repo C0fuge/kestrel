@@ -44,6 +44,19 @@
 > (e) `package=true`. Longer term (write it as an Open question with options, do not build now): reading non-local
 > blocks under SASL (a SASL-capable libhdfs3 / hadoopfs, or a Java-client read path for remote blocks).
 > Then "ITEM 29 DONE".
+> **Maintainer, 2026-11-03 13:45 - stand finding on `00e3e896b31e` (item 29 part 1), must be fixed in part 2:** under
+> SASL with replication 2 (3 DataNodes, server on dn1, short-circuit) startup is fine now (all 10 tables described via
+> the Java client, no skipTable) but **0/22 still pass and even `count(*)` of fully local tables fails**: every query
+> runs `CREATE OR REPLACE VIEW tpch.<t> AS SELECT * FROM read_parquet([hdfs://...])` in DuckDB, binding reads the first
+> file's footer through hadoopfs, and the first non-local first file (alphabetical: `tpch/nation/data_0.parquet`) fails
+> the whole view setup -> `Failed to read from HDFS file ".../nation/data_0.parquet" at offset 0 ... no valid replica
+> ... Connection reset by peer`. With the first files of every table put on dn1, counts of local tables and q02/q11/q16
+> pass (same md5 as the all-local run), the rest fail on non-local data blocks (expected until item 30). Fix: the view
+> must not bind through hadoopfs for a non-local file (create it from the Java-read schema, e.g. typed columns / an
+> explicit `schema`/`columns` for read_parquet, or bind lazily per referenced table), and a failing CREATE VIEW must be
+> per-table like a failed describe (skip + reason), never failing other tables. Add this exact layout (non-local first
+> file of a table the query does not touch) to the sasl-cluster CI cell.
+
 > **Maintainer, 2026-11-03 13:15 - ITEM 30 right after item 29 part 2 (decision on the Open question "reading
 > non-local HDFS blocks under SASL"): option (3), a local copy.** When a file needed by a query has no node holding
 > all its blocks (SASL DataNodes, short-circuit only), the node that runs the query copies the file through the Java
