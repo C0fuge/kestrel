@@ -1,10 +1,12 @@
 # Orchestration status
 
-Status as of **2026-11-03 19:01 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 19:05 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - parts 1, 2a, 2b steps 1-2 and the
 footer-answered `count(*)` (copies nothing; 712047f8 + test fix 4c74c89f, Dev CI 41689345981 green) done; core session
-now on `hdfsLocalCopyDir` (842f4a88, 18:46Z, Dev CI 41696991827 running, service-hdfs 41696991867 green). Left: other
+and `hdfsLocalCopyDir` (842f4a88; Dev CI 41696991827, service-hdfs 41696991867 10/10, Catalogs CI all green) done.
+**New Open question** (core lane, needs the maintainer): joins / non-mergeable complete answers whose copies exceed
+the cache. Left: other
 shapes over the cache (LIMIT/HAVING/DISTINCT, joins, complete), copy-dir peak bound, `package=true`. egret has no FRESH
 report for the newest pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
 Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
@@ -14,7 +16,7 @@ and heron).
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (`hdfsLocalCopyDir`, then other shapes) | 842f4a88 18:46Z (15 min) | held 18:41Z (20 min, active session) | Dev CI 41696991827 (842f4a88) running; previous Dev CI 41689345981 (4c74c89f) green; service-hdfs 41696991867 (842f4a88) green; Catalogs CI 41696991767 green. |
+| core (`STATUS.md`) | ITEM 30 part 2b (other batchable aggregates next; joins wait on the Open question) | eb5a712b ~19:01Z (STATUS, unlock) | free (released) | Dev CI 41696991827 (842f4a88) green; service-hdfs 41696991867 (842f4a88) green; Catalogs CI 41696991767 green. |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
@@ -50,7 +52,12 @@ No stale locks (marten and heron free).
 
 ## For the maintainer
 
-- Nothing blocking. Item 30 continues (core session active). "ITEM 30 DONE" still needs the remaining shapes over the
+- **Decision wanted (new Open question, item 30):** joins / non-mergeable `complete` answers (TPC-H joins, windows,
+  HAVING / LIMIT over groups) hold all their copies at once, so the copy dir can grow to the query's input size.
+  Options: (1) refuse up front beyond `hdfsLocalCopyMaxBytes`; (2) new `hdfsLocalCopyHardMaxBytes` (e.g. 2x the cache
+  or a share of free disk), refuse beyond it, free-space check at copy time - core lane's suggestion; (3) keep today's
+  behaviour (disk-bounded) and document it. Core lane continues with batchable aggregates meanwhile.
+- Item 30 continues. "ITEM 30 DONE" still needs the remaining shapes over the
   copy cache, the copy-dir peak bound and `package=true`.
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (Dev CI 41644812393); no repeat seen.
@@ -59,7 +66,7 @@ No stale locks (marten and heron free).
 
 ## History
 
-- 2026-11-03 19:01Z: core footer-answered count(*) green (Dev CI 41689345981); `hdfsLocalCopyDir` 842f4a88 pushed (service-hdfs green, Dev CI running); core lock 18:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
+- 2026-11-03 19:05Z: core footer-answered count(*) and `hdfsLocalCopyDir` (842f4a88) green (Dev CI 41696991827, service-hdfs 41696991867); new Open question (joins over the copy cache); core lock released; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 18:05Z: core ITEM 30 part 2b step 2 green (Dev CI 41679739414); new footer-count commit 712047f8 red in Dev CI 41687057083 (its new unit test), lane's fix 4c74c89f running (41689345981); core lock 17:41Z; no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-03 16:57Z: core ITEM 30 part 2b step 1 green (Dev CI 41671843220, service-hdfs 41669461010); core lock retaken 16:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 15:57Z: core on ITEM 30 part 2b (part 2a green: Dev CI 41659194274, service-hdfs 41659194422; c00a0fba pushed 15:51Z, Dev CI / service-hdfs running; lock 15:41Z); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
