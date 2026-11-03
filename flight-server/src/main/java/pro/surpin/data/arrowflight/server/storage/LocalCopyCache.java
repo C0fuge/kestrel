@@ -157,7 +157,8 @@ public final class LocalCopyCache implements AutoCloseable {
      * @throws IOException when a file cannot be copied; no copy stays pinned then
      */
     public Lease acquire(List<DataFile> files) throws IOException {
-        long t = LogUtil.mark();
+        // Not LogUtil.mark(): that is -1 unless timing is logged, and this time is always logged.
+        long t = System.nanoTime();
         Lease lease = new Lease();
         List<Entry> made = new ArrayList<>();
         try {

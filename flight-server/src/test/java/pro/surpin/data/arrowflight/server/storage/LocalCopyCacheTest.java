@@ -104,6 +104,8 @@ class LocalCopyCacheTest {
                 assertArrayEquals(content(a), Files.readAllBytes(first));
                 assertEquals(1, lease.copied());
                 assertEquals(100, lease.copiedBytes());
+                // Measured from the call, also without DEBUG timing (CI logged the uptime).
+                assertTrue(lease.millis() >= 0 && lease.millis() < 60_000, "millis " + lease.millis());
             }
             try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
                 assertEquals(first, lease.localPath(a.relativePath()));
