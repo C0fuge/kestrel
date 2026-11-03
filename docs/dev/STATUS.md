@@ -121,19 +121,27 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > `read_parquet` over copies + files held whole, typed as the view; a reference the rewrite misses is refused naming
 > the files; log `hdfs=completeFromCopies`). sasl-cluster cell: TPC-H 22/22 over `spread` (replication 2) in complete
 > mode on all 3 nodes = 66/66 exact, `split.t` join in complete mode too (service-hdfs 41659194422 green 10/10; complete
-> answers from copies per node 20-21). **Still open (part 2b, next session):** (2) (c) cache smaller than a query's input: today the copies
+> answers from copies per node 20-21). **Part 2b step 1 (2026-11-03, d067e622, c00a0fba):** a partial-mode plain
+> scan (`ExecutionService.concatenatable`: no aggregate / ORDER BY / LIMIT / OFFSET / DISTINCT / window) whose copies
+> exceed `hdfsLocalCopyMaxBytes` is read in batches that fit (`copyBatches`: held files in the first batch, a file larger
+> than the limit alone), each batch's lease closed before the next is copied, all rows through one client stream
+> (`ConcatenatingStreamListener`: listener-owned root fed by `VectorUnloader`/`VectorLoader`; other columns or
+> dictionaries refused); log `hdfs=copyBatches`. sasl-cluster cell: schema `chunks` (all lineitem, 1 MiB blocks,
+> replication 1), full scan + GROUP BY in both modes on every node; `speed` sets the cache below the smallest file and
+> requires a `hdfs=copyBatches` line. **Still open (part 2b, next session):** (2) (c) cache smaller than a query's
+> input for the other shapes - aggregates (next: per batch the endpoint's part query, AverageMerge for avg, into a
+> DuckDB temp table, then `CompleteAnswerMerge.mergeSql` over it), joins and complete answers: today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled.
-> Note from part 2a: `DuckDbAdapter.streamPrepared` calls `listener.start(duckRoot)` with the reader's own root, so
-> batches cannot simply be streamed one after another to one listener (`startListener=false` would `putNext` a closed
-> root): the batched path needs a listener-owned root fed by `VectorUnloader`/`VectorLoader` per reader batch. Plain
-> scans (no aggregate / ORDER BY / LIMIT / DISTINCT) are exact when concatenated; complete non-mergeable answers over
+> (`ConcatenatingStreamListener` sends several DuckDB readers as one stream and can be reused for that.) Complete
+> non-mergeable answers over
 > more than the cache cannot be computed from copies at once (needs a decision: refuse clearly, or spill to the DuckDB
 > temp dir with its own bound);
-> (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: run the
-> checks in `ha-krb-sasl` too, 3 servers, TPC-H 22/22 + full scan + GROUP BY over a table with NO file held whole by
-> any node (e.g. all of lineitem with 1 MiB blocks, replication 1), cache smaller than the table, one file larger
-> than the cache, assert the `hdfs=reads` lines; (5) `package=true`, then "ITEM 30 DONE".
+> (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: the
+> sasl-cluster cell is the `ha-krb-sasl` topology with 3 DataNodes / 3 servers and now has TPC-H 22/22 (spread,
+> complete) + full scan + GROUP BY over `chunks` (no file held whole), and under `speed` a cache smaller than every
+> file (so smaller than the table and than `split.t`); left: assert the per-query `hdfs=reads` lines (counts of
+> shortCircuit vs localCopy) and a bound on the copy directory's peak size; (5) `package=true`, then "ITEM 30 DONE".
 
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
