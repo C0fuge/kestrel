@@ -171,6 +171,23 @@ public class HadoopArrowFlightServer {
         LOGGER.info("Storage: kind={} shared={} locality={}",
                 store.kind(), store.shared(), store.hasLocality());
         if ("hdfs".equals(store.kind())) {
+            HdfsShortCircuit.Settings shortCircuit = HdfsShortCircuit.resolve(
+                    config.duckDbHdfsShortcircuit(), config.duckDbHdfsDomainSocketPath(),
+                    libhdfs3Properties(System.getenv("LIBHDFS3_CONF")), hadoopConfig);
+            LOGGER.info("hdfs=shortCircuit {}", shortCircuit.describe());
+            java.util.Optional<String> unreadable = HdfsShortCircuit.unreadable(shortCircuit);
+            if (unreadable.isPresent()) {
+                // Every query would fail on its first block read: stop here, with the reason.
+                throw new IllegalStateException(unreadable.get());
+            }
+            if (shortCircuit.enabled() && !HdfsShortCircuit.socketPresent(shortCircuit.socketPath())) {
+                LOGGER.warn("hdfs=shortCircuitSocketMissing socket={}: DuckDB reads every block over TCP"
+                        + " on this node", shortCircuit.socketPath());
+            } else if (shortCircuit.transferProtection() != null) {
+                LOGGER.warn("hdfs=shortCircuitOnly transferProtection={}: DuckDB reads only blocks with a"
+                        + " replica on this node's DataNode; a query touching any other block fails",
+                        shortCircuit.transferProtection());
+            }
             LOGGER.info("HDFS DataNode timeouts set in DuckDB: connect={} read={} (0 = left to the"
                     + " hadoopfs extension / LIBHDFS3_CONF)", config.duckDbHdfsConnectTimeoutMs(),
                     config.duckDbHdfsReadTimeoutMs());
@@ -643,7 +660,7 @@ public class HadoopArrowFlightServer {
      * @param confPath the LIBHDFS3_CONF file, or null
      * @return the properties; empty when the path is unset or the file cannot be read
      */
-    private static java.util.Map<String, String> libhdfs3Properties(String confPath) {
+    static java.util.Map<String, String> libhdfs3Properties(String confPath) {
         java.util.Map<String, String> props = new java.util.HashMap<>();
         if (confPath != null && !confPath.isBlank()) {
             try {

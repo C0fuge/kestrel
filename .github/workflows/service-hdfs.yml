@@ -4,7 +4,9 @@
 # Cells: topology x resource profile. Topologies (tools/ci/service-hdfs-cell.sh): plain (one
 # NameNode), ha (HA nameservice ns1, nn1 standby / nn2 active: the client must fail over) and ha-krb
 # (ha + Kerberos with an MIT KDC container; the server logs in from its keytab with
-# hdfsKerberosPrincipal / hdfsKerberosKeytab, as the maintainer's production cluster runs);
+# hdfsKerberosPrincipal / hdfsKerberosKeytab, as the maintainer's production cluster runs) and
+# ha-krb-sasl (ha-krb with dfs.data.transfer.protection=authentication: TCP reads refused, so the
+# server must read short-circuit; STATUS item 26); every cell fails when a block goes over TCP;
 # short-circuit configured in each (the server runs in the DataNode's network namespace with its
 # domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02
 # bug). Profiles: balanced, speed. Each cell: TPC-H SF<sf> 22/22 answers compared with in-process
@@ -119,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        topology: [plain, ha, ha-krb]
+        topology: [plain, ha, ha-krb, ha-krb-sasl]
         profile: [balanced, speed]
     name: ${{ matrix.topology }} ${{ matrix.profile }}
     steps:

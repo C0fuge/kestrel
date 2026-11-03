@@ -101,7 +101,12 @@ public final class ServerModule {
         System.setProperty(
             org.apache.arrow.memory.DefaultAllocationManagerOption.ALLOCATION_MANAGER_TYPE_PROPERTY_NAME,
             org.apache.arrow.memory.DefaultAllocationManagerOption.AllocationManagerType.Netty.name());
-        return ConfigAdapter.getConfig();
+        AppConfig config = ConfigAdapter.getConfig();
+        // hadoopfs reads short-circuit only with its own two settings, whatever LIBHDFS3_CONF says.
+        return HdfsShortCircuit.resolve(config.duckDbHdfsShortcircuit(),
+                config.duckDbHdfsDomainSocketPath(),
+                HadoopArrowFlightServer.libhdfs3Properties(System.getenv("LIBHDFS3_CONF")),
+                hadoopConfig).applyTo(config);
     }
 
     /**

@@ -23,6 +23,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `duckDbThreads` (`arrowflight.duckdb.threads`) | unset/0 = cores / 4 between 4 and 16 per connection, above 4 at most one per GiB of the connection's `memory_limit` (startup lines `duckdb=threads`, `duckdb=sizing`) | fixed 4 |
 | `duckDbMemoryLimit` (`arrowflight.duckdb.memoryLimit`) | unset = per connection (memory - `-Xmx` - direct memory - 15 %) / `duckDbMemoryConnections`, at least 1 GiB, at most 80 % of memory; `none` = DuckDB's own; a size (e.g. `4GB`) wins | DuckDB's 80 % of RAM per instance |
 | `shutdownDrainSeconds` (`arrowflight.server.shutdownDrainSeconds`, `FLIGHT_SHUTDOWN_DRAIN_SECONDS`) | 20: a stopping node leaves the pool, refuses new calls `UNAVAILABLE`, lets running answers finish (`docker stop -t 25`) | did not exist; stop cut running answers (`INTERNAL`); `0` restores that |
+| `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath` (`HDFS_SHORTCIRCUIT` / `HDFS_DOMAIN_SOCKET_PATH`) | unset = `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` from the `LIBHDFS3_CONF` file, else from the server's Hadoop configuration (a socket path alone turns short-circuit on); startup line `hdfs=shortCircuit` | unset = hadoopfs's own defaults (off, no socket), so DuckDB read every HDFS block over TCP whatever `LIBHDFS3_CONF` said |
 
 **New server settings (opt-in or unchanged behaviour by default)**
 
@@ -91,6 +92,21 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Fixed - hadoopfs reads HDFS short-circuit (STATUS item 26)
+
+- The hadoopfs extension hands libhdfs3 its own `hdfs_shortcircuit` (default false) and `hdfs_domain_socket_path`
+  (default empty), which override `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` in `LIBHDFS3_CONF`; both
+  are needed. The server set them only from explicit `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath`, so every
+  block went over TCP (DataNode `BlocksRead` = blocks read). Unset, they now come from `LIBHDFS3_CONF`, then from the
+  Hadoop configuration (`HdfsShortCircuit`); explicit settings still win. A block without a local replica, or a node
+  without the socket, still falls back to TCP.
+- When the cluster sets `dfs.data.transfer.protection` (SASL data transfer, which libhdfs3 cannot speak) and the node
+  has short-circuit off or no domain socket, the server stops at start with the reason instead of failing every query;
+  with short-circuit on it logs `hdfs=shortCircuitOnly` (blocks without a replica on this node cannot be read).
+- `service-hdfs.yml`: new cell topology `ha-krb-sasl` (DataNode with `dfs.data.transfer.protection=authentication`; a
+  plain TCP read is refused, a SASL one passes, the server answers TPC-H 22/22 short-circuit only), and every cell with
+  short-circuit configured fails when the server reads a block over TCP or makes no short-circuit fd request.
 
 ### Added
 

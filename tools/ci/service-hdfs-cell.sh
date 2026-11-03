@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SERVICE MATRIX, HDFS part (core lane, STATUS item 25): one cell of service-hdfs.yml.
 #
-# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb> <balanced|speed> <input dir> <work dir> <server label>
+# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb|ha-krb-sasl> <balanced|speed> <input dir> <work dir> <server label>
 #
 # Topologies (apache/hadoop, one DataNode, replication 1, short-circuit configured when the image's
 # native Hadoop library loads):
@@ -13,6 +13,12 @@
 #           (hadoopfs has no SASL handshake; the stand runs privileged-port DataNodes, here
 #           ignore.secure.ports.for.testing). The server logs in itself (hdfsKerberosPrincipal +
 #           hdfsKerberosKeytab, no kinit) and writes the ticket cache the extension reads.
+#   ha-krb-sasl  ha-krb + dfs.data.transfer.protection=authentication: the DataNode refuses data
+#           transfer without SASL, which hadoopfs (libhdfs3) cannot speak, so only short-circuit reads
+#           work (the maintainer's production cluster; STATUS item 26). The cell first shows that a
+#           plain TCP read is refused and a SASL one passes.
+# With short-circuit configured every cell requires that the server read no block over TCP: DataNode
+# JMX BlocksRead stays 0 and the DataNode log shows REQUEST_SHORT_CIRCUIT_FDS (STATUS item 26).
 # The server runs in the DataNode's network namespace (the domain socket mounted), loads hadoopfs from
 # -Darrowflight.duckdb.extensionDir only, reads the client configuration from /conf (class path and
 # LIBHDFS3_CONF). Check: tools/ci/service-cluster-check.py check (22 TPC-H answers against the
@@ -30,9 +36,10 @@ finish() { # status, detail
   [ "$1" = pass ]; exit $?
 }
 
-case "$topo" in plain|ha|ha-krb) ;; *) finish fail "unknown topology $topo" ;; esac
+case "$topo" in plain|ha|ha-krb|ha-krb-sasl) ;; *) finish fail "unknown topology $topo" ;; esac
 case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) finish fail "unknown profile $profile" ;; esac
-krb=false; [ "$topo" = ha-krb ] && krb=true
+krb=false; [[ $topo == ha-krb* ]] && krb=true
+sasl=false; [ "$topo" = ha-krb-sasl ] && sasl=true
 ha=false; [ "$topo" != plain ] && ha=true
 
 docker network create --subnet 172.31.0.0/24 hd > /dev/null || finish fail "docker network not created"
@@ -42,6 +49,7 @@ conf="$work/conf"; mkdir -p "$conf"
 
 sc=off
 if docker run --rm "$image" hadoop checknative 2>&1 | grep -qE '^hadoop: +true'; then sc=on; fi
+$sasl && [ "$sc" != on ] && finish fail "ha-krb-sasl needs short-circuit, but the image's native Hadoop library does not load"
 
 # Properties: core (both files) and hdfs (hdfs-site.xml). The server's LIBHDFS3_CONF is hdfs-site.xml,
 # so it carries the core keys too (libhdfs3 reads one file).
@@ -74,6 +82,7 @@ if $krb; then
     dfs.datanode.kerberos.principal "$(principal dn)" dfs.datanode.keytab.file /hd/krb/hdfs.keytab
     dfs.web.authentication.kerberos.principal "$(principal HTTP)" dfs.web.authentication.kerberos.keytab /hd/krb/hdfs.keytab
     ignore.secure.ports.for.testing true)
+  $sasl && hdfs+=(dfs.data.transfer.protection authentication)
 fi
 xml() { # key value ...
   echo '<?xml version="1.0"?>'; echo '<configuration>'
@@ -173,6 +182,19 @@ fi
 docker cp "$in/data" "$admin:/tmp/upload" > /dev/null
 docker exec "${kenv[@]}" "$admin" bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || finish fail "HDFS upload failed"
 note "data: $(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data/tpch 2>/dev/null | awk '{print $2 " files, " $3 " bytes"}')"
+if $sasl; then
+  # The NameNode container is not on the DataNode's host: its reads go over TCP.
+  probe=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -ls -R /data/tpch 2>/dev/null | awk '$1 ~ /^-/ {print $NF}' | head -n 1)
+  if docker exec "${kenv[@]}" "$admin" hdfs dfs -Ddfs.data.transfer.protection= -cat "$probe" > /dev/null 2> "$work/probe-plain.log"; then
+    finish fail "the DataNode served a TCP read without SASL ($probe): data-transfer protection is not enforced"
+  fi
+  docker exec "${kenv[@]}" "$admin" hdfs dfs -cat "$probe" > /dev/null 2> "$work/probe-sasl.log" \
+    || finish fail "a SASL TCP read failed: $(grep -m 1 -E 'Exception|ERROR' "$work/probe-sasl.log" | cut -c1-200)"
+  note "SASL data transfer enforced: plain TCP read refused ($(grep -m 1 -oE '[A-Za-z.]*(Exception|Error)[^,]*' "$work/probe-plain.log" | cut -c1-150)), SASL read passes"
+fi
+blocksRead() { curl -fsS --max-time 5 "http://172.31.0.12:9864/jmx" 2>/dev/null | grep -m 1 -oE '"BlocksRead" : [0-9]+' | grep -oE '[0-9]+$'; }
+sleep 12 # DataNode JMX values are cached for ~10 s
+read0=$(blocksRead); fds0=$(docker logs dn1 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS')
 
 srvKrb=()
 if $krb; then
@@ -204,6 +226,7 @@ if ! docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started'; then
 fi
 note "$(docker logs srv 2>&1 | grep -m 1 -oE 'duckdb=hdfsExtensionLoaded.*' || echo 'no duckdb=hdfsExtensionLoaded line')"
 $krb && note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=kerberosTicketCache.*' || echo 'no hdfs=kerberosTicketCache line')"
+note "$(docker logs srv 2>&1 | grep -m 1 -oE 'hdfs=shortCircuit .*' || echo 'no hdfs=shortCircuit line')"
 sleep 3
 py="$RUNNER_TEMP/py/bin/python"
 export SC_DATANODES=172.31.0.12:9864
@@ -213,8 +236,17 @@ note "$(grep -m 1 '^reads total' "$work/client.log" || echo 'reads total: (none)
 jmx=$(curl -fsS --max-time 5 "http://172.31.0.12:9864/jmx" 2>/dev/null | grep -oE '"(BlocksRead|ReadBlockOpNumOps|ReadsFromLocalClient|ReadsFromRemoteClient)" : [0-9]+' | tr -d '" ' | sort -u | tr '\n' ' ')
 note "dn1 reads (TCP, from DataNode JMX): ${jmx:-(no JMX)}"
 note "srv: refused $(docker logs srv 2>&1 | grep -c 'query=refused')"
+sleep 12
+read1=$(blocksRead); fds1=$(docker logs dn1 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS')
+tcp=$(( ${read1:-0} - ${read0:-0} )) fds=$(( fds1 - fds0 ))
+note "dn1 during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
 result=$(grep -m 1 '^result ' "$work/client.log")
-if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then finish pass ""; fi
+if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
+  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -ne 0 ] || [ "$fds" -eq 0 ]; }; then
+    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP ($fds short-circuit fd requests)"
+  fi
+  finish pass ""
+fi
 detail=${result#result fail }
 [ -n "$result" ] || detail="client failed: $(grep -m 1 -E 'Error|Exception' "$work/client.log")"
 finish fail "$detail"

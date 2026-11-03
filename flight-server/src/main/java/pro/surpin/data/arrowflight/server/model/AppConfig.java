@@ -343,6 +343,30 @@ public record AppConfig(
     }
 
     /**
+     * Returns this configuration with other short-circuit settings of the hadoopfs extension.
+     *
+     * @param shortcircuit value of hdfs_shortcircuit, null = the extension's own
+     * @param domainSocketPath value of hdfs_domain_socket_path, null = the extension's own
+     * @return changed copy
+     */
+    public AppConfig withHdfsShortCircuit(String shortcircuit, String domainSocketPath) {
+        return new AppConfig(numServers, batchSize, ioParallelism, ioFileBufferSize,
+                duckDbWarmConnections, duckDbGroups, duckDbThreads, duckDbHdfsExtension,
+                duckDbAllowUnsignedExtensions, duckDbHdfsDefaultNamenode, duckDbHdfsHaNamenodes,
+                shortcircuit, domainSocketPath, duckDbMemoryLimit,
+                metricsEnabled, arrowAllocatorLimitBytes, grpcMaxInboundMessageSize,
+                flightBackpressureThresholdBytes, flightListenerReadyTimeoutMillis, dataDir,
+                localDataDir, port, hazelcastPort, hazelcastClusterJoinTimeoutSec,
+                clientMaxRetries, clientRetryBackoffMs, clientConnectTimeoutMs,
+                duckDbStreamResults, duckDbExternalFileCache, duckDbStatementCacheSize,
+                duckDbTempDirectory, authToken, resultMode, widenUnsignedTypes, duckDbLockdown,
+                endpointBackupLocations, metadataEndpointLocation, duckDbHdfsConnectTimeoutMs,
+                duckDbHdfsReadTimeoutMs, duckDbMaxTempSize,
+                duckDbPreserveInsertionOrder, duckDbStreamingBufferSize, endpointsPerServer,
+                flightOutboundBudgetBytes);
+    }
+
+    /**
      * Returns this configuration with another spill size cap per DuckDB connection.
      *
      * @param maxTempSize DuckDB size such as 20GiB, null or blank = DuckDB's own cap
