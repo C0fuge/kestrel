@@ -16,7 +16,9 @@ must match the local file in both modes, and in parts a join of it with ``spread
 lineitem row has its order) must count its rows, in both modes; never "Connection reset". Then the
 22 TPC-H queries over ``spread`` (``tpch.`` replaced by ``spread.``) in complete mode on every node
 must equal <dir>/expected/qNN.parquet: a non-mergeable answer is computed on the receiving node,
-which lacks some of spread's files and reads them from local copies (item 30 part 2). Prints ``ok``/``FAIL`` lines and a last line
+which lacks some of spread's files and reads them from local copies (item 30 part 2). Schema
+``chunks`` (every lineitem file, 1 MiB blocks, replication 1: no node holds a file whole): a full
+scan and a GROUP BY must match the local files in both modes on every node. Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
@@ -38,6 +40,9 @@ difference, load = _CLUSTER.difference, _CLUSTER.load
 
 SPREAD = "SELECT count(*) AS n, sum(l_quantity) AS q FROM spread.lineitem"
 SPLIT = "SELECT count(*) AS n, sum(l_quantity) AS q FROM split.t"
+CHUNKS_SCAN = "SELECT l_orderkey, l_quantity FROM chunks.lineitem"
+CHUNKS_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
+                " FROM chunks.lineitem GROUP BY l_returnflag, l_linestatus")
 SPLIT_JOIN = ("SELECT count(*) AS n, sum(s.l_quantity) AS q FROM split.t s"
               " JOIN spread.orders o ON s.l_orderkey = o.o_orderkey")
 
@@ -69,6 +74,35 @@ def totals(answer):
     n = sum(int(r["n"] or 0) for r in rows)
     q = sum(decimal.Decimal(str(r["q"])) for r in rows if r["q"] is not None)
     return n, q, len(rows)
+
+
+def groups(table):
+    """Adds up count/sum rows per (l_returnflag, l_linestatus), merging per-endpoint rows."""
+    out = {}
+    for r in table.to_pylist():
+        key = (r["l_returnflag"], r["l_linestatus"])
+        n, q = out.get(key, (0, decimal.Decimal(0)))
+        out[key] = (n + int(r["n"] or 0),
+                    q + (decimal.Decimal(str(r["q"])) if r["q"] is not None else 0))
+    return out
+
+
+def reference_groups(base):
+    """count(*) and sum(l_quantity) per (l_returnflag, l_linestatus) of the local lineitem files."""
+    table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                          columns=["l_returnflag", "l_linestatus", "l_quantity"])
+    agg = table.group_by(["l_returnflag", "l_linestatus"]).aggregate(
+        [("l_quantity", "count"), ("l_quantity", "sum")])
+    return {(r["l_returnflag"], r["l_linestatus"]):
+            (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])))
+            for r in agg.to_pylist()}
+
+
+def same_groups(got, want):
+    """Tells whether two per-group count/sum maps agree (sums to 1e-4)."""
+    return got.keys() == want.keys() and all(
+        got[k][0] == want[k][0] and abs(got[k][1] - want[k][1]) <= decimal.Decimal("0.0001")
+        for k in want)
 
 
 def first_line(error):
@@ -115,6 +149,31 @@ def main():
                 except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
                     print(f"error text: {e}", flush=True)
                     fail(f"{server} {mode} {name}: {first_line(e)}")
+    # chunks: every lineitem file with 1 MiB blocks and replication 1 (no node holds a file whole,
+    # every file is read from a local copy); under speed the copy cache is below one file (item 30
+    # part 2b: a scan is copied in batches, each deleted before the next).
+    want_groups = reference_groups(base)
+    for server in servers:
+        for mode in ("partial", "complete"):
+            try:
+                with connect(server, mode) as conn:
+                    scan = run(conn, CHUNKS_SCAN)
+                    n = scan.num_rows
+                    q = decimal.Decimal(str(pc.sum(scan.column("l_quantity")).as_py() or 0))
+                    got_groups = groups(run(conn, CHUNKS_GROUP))
+                if n != want_n or abs(q - want_q) > decimal.Decimal("0.0001"):
+                    fail(f"{server} {mode} chunks.lineitem full scan: rows {n} sum {q},"
+                         f" want {want_n} / {want_q}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem full scan ({n} rows)", flush=True)
+                if not same_groups(got_groups, want_groups):
+                    fail(f"{server} {mode} chunks.lineitem GROUP BY: {got_groups}, want {want_groups}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem GROUP BY ({len(got_groups)} groups)",
+                          flush=True)
+            except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                print(f"error text: {e}", flush=True)
+                fail(f"{server} {mode} chunks.lineitem: {first_line(e)}")
     queries = load(base)
     with_copies = 0
     for i, server in enumerate(servers):

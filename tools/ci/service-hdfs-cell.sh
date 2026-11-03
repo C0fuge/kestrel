@@ -21,7 +21,9 @@
 #           -DdistributedComplete=true; STATUS item 29): schemas tpch (replication 3: 22/22 on every
 #           node), spread (replication 2) and split (one lineitem file, 1 MiB blocks, replication 1, no
 #           DataNode holding all its blocks); tools/ci/service-hdfs-sasl-check.py: spread.lineitem
-#           exact in parts and complete on every node, split.t read from node-local copies (item 30).
+#           exact in parts and complete on every node, split.t read from node-local copies (item 30),
+#           chunks (all lineitem files, 1 MiB blocks, replication 1: no node holds a file whole) full scan
+#           and GROUP BY; under speed the copy cache is below one file, so scans go in batches (part 2b).
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
@@ -205,8 +207,9 @@ if [ "$n" -eq 1 ]; then
 else
   # tpch whole on every DataNode, spread whole on two of three, split's one file on no single one.
   splitFile=$(basename "$(ls "$in"/data/tpch/lineitem/*.parquet | head -n 1)")
-  docker exec "${kenv[@]}" "$admin" bash -c "hdfs dfs -mkdir -p /data/spread /data/split/t \
+  docker exec "${kenv[@]}" "$admin" bash -c "hdfs dfs -mkdir -p /data/spread /data/split/t /data/chunks \
     && hdfs dfs -D dfs.replication=3 -put /tmp/upload/tpch /data/ \
+    && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem /data/chunks/ \
     && hdfs dfs -D dfs.replication=2 -put /tmp/upload/tpch/* /data/spread/ \
     && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem/$splitFile /data/split/t/" \
     || finish fail "HDFS upload failed"
@@ -258,6 +261,12 @@ cpus=2 mem=6g xmx=2g
 if [ "$n" -gt 1 ]; then
   cpus=1 mem=3g xmx=1g
   opts="$opts -DdistributedComplete=true"
+  if [ "$profile" = speed ]; then
+    # Item 30 part 2b: a cache smaller than every lineitem file (so smaller than a node's share of
+    # chunks.lineitem, and than split.t): scans are copied in batches, every copy deleted after use.
+    smallest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | head -n 1)
+    opts="$opts -DhdfsLocalCopyMaxBytes=$(( smallest * 3 / 4 ))"
+  fi
 fi
 note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; $n node(s), $cpus CPU(s) / $mem each"
 for i in $(seq "$n"); do
@@ -304,6 +313,11 @@ if [ "$n" -gt 1 ]; then
   for i in $(seq "$n"); do
     note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), complete from copies $(docker logs "srv$i" 2>&1 | grep -c 'hdfs=completeFromCopies'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
   done
+  batched=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches' || true)
+  note "scans read in batches of copies: $batched; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=copyBatches .*' || echo 'no hdfs=copyBatches line')"
+  if [ "$profile" = speed ] && [ "$batched" -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    finish fail "the cache is smaller than chunks.lineitem, but no scan was read in batches of copies"
+  fi
   if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
   fi
