@@ -120,9 +120,16 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > (`ExecutionService.completeFromCopies`: tables named by `QueryTables`, schema-qualified references replaced by
 > `read_parquet` over copies + files held whole, typed as the view; a reference the rewrite misses is refused naming
 > the files; log `hdfs=completeFromCopies`). sasl-cluster cell: TPC-H 22/22 over `spread` (replication 2) in complete
-> mode on all 3 nodes = 66/66 exact, `split.t` join in complete mode too. **Still open (part 2b, next session):** (2) (c) cache smaller than a query's input: today the copies
+> mode on all 3 nodes = 66/66 exact, `split.t` join in complete mode too (service-hdfs 41659194422 green 10/10; complete
+> answers from copies per node 20-21). **Still open (part 2b, next session):** (2) (c) cache smaller than a query's input: today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
-> batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled;
+> batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled.
+> Note from part 2a: `DuckDbAdapter.streamPrepared` calls `listener.start(duckRoot)` with the reader's own root, so
+> batches cannot simply be streamed one after another to one listener (`startListener=false` would `putNext` a closed
+> root): the batched path needs a listener-owned root fed by `VectorUnloader`/`VectorLoader` per reader batch. Plain
+> scans (no aggregate / ORDER BY / LIMIT / DISTINCT) are exact when concatenated; complete non-mergeable answers over
+> more than the cache cannot be computed from copies at once (needs a decision: refuse clearly, or spill to the DuckDB
+> temp dir with its own bound);
 > (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: run the
 > checks in `ha-krb-sasl` too, 3 servers, TPC-H 22/22 + full scan + GROUP BY over a table with NO file held whole by
 > any node (e.g. all of lineitem with 1 MiB blocks, replication 1), cache smaller than the table, one file larger
@@ -2932,3 +2939,13 @@ S3 slowdown item below stays open for then).
   attempt 1: one flake, `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (load 1000, want 700; untouched code, green in the run before and 3/3 locally) - attempt 2 green.
   No `package=true` yet: item 30 is not done (part 2 list in Next steps). Lock released.
+- 2026-11-03 (core session): item 30 part 2a (690becd9, 0ebb0171): a complete answer computed on a node lacking
+  blocks of a table now reads that table from local copies (`ExecutionService.completeFromCopies`: tables named by
+  DuckDB's parse, schema-qualified references rewritten to `read_parquet` over copies + files held whole; a missed
+  reference refused naming the files) instead of being refused; additive (only where those queries failed before).
+  Test `ExecutionServiceTest.completeAnswerReadsTablesThisNodeLacksBlocksOfFromLocalCopies` (comma join + IN subquery,
+  answer checked in DuckDB; unchanged when every file is held or copies are off). sasl-cluster cell: TPC-H 22/22 over
+  `spread` in complete mode on all 3 nodes (66/66 exact) + `split.t` join in complete mode. Runs: Dev CI 41656768520
+  red (a producer test's mock returned null for the new call; stubbed), service-hdfs 41656768629 red only on the cell's
+  TCP-read bound (434 > 312: whole-table copies; bound now counts copied MiB); Dev CI 41659194274 and service-hdfs
+  41659194422 green. No `package=true` (item 30 not done: part 2b list in Next steps). Lock released.
