@@ -191,6 +191,67 @@ class CatalogViewsTest {
     }
 
     /**
+     * Verifies that with whole-file reads (SASL DataNodes) a view is bound on a file this node
+     * reads, and a table this node holds no file of whole gets a typed view that fails with the
+     * reason when read, instead of DuckDB failing every query on a remote footer (item 29).
+     */
+    @Test
+    void wholeFileReadsBindViewsOnReadableFilesOnly(@TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path parquetFile = dir.resolve("f.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT 1::INTEGER AS x) TO '" + parquetFile + "' (FORMAT parquet)");
+        }
+        long size = java.nio.file.Files.size(parquetFile);
+        DataFile remote = new DataFile("s/mixed/a.parquet", "hdfs://ns/data/s/mixed/a.parquet", size, 0,
+                java.util.Set.of("dn2"));
+        DataFile local = new DataFile("s/mixed/b.parquet", "hdfs://ns/data/s/mixed/b.parquet", size, 0,
+                java.util.Set.of("dn1"));
+        DataFile far = new DataFile("s/far/c.parquet", "hdfs://ns/data/s/far/c.parquet", size, 0,
+                java.util.Set.of("dn3"));
+        DataStore store = mock(DataStore.class);
+        when(store.kind()).thenReturn("hdfs");
+        when(store.wholeFileReadsOnly()).thenReturn(true);
+        when(store.readableHere(any(DataFile.class))).thenAnswer(inv -> inv.<DataFile>getArgument(0) == local);
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> inv.<DataFile>getArgument(0).location());
+        when(store.inputFile(any(DataFile.class))).thenReturn(new org.apache.parquet.io.LocalInputFile(parquetFile));
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("s", "/s"));
+        when(parquet.getTables(eq("s"), any())).thenReturn(Map.of("mixed", "/s/mixed", "far", "/s/far"));
+        when(parquet.tableFiles("s", "mixed")).thenReturn(List.of(remote, local));
+        when(parquet.tableFiles("s", "far")).thenReturn(List.of(far));
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            CatalogViews.Snapshot views = new CatalogViews(parquet, duck, true).current();
+
+            String data = views.dataStatements().toString();
+            assertTrue(data.contains("read_parquet(['hdfs://ns/data/s/mixed/b.parquet', "
+                    + "'hdfs://ns/data/s/mixed/a.parquet'])"), data);
+            String farView = views.dataStatements().stream()
+                    .filter(v -> v.startsWith("CREATE OR REPLACE VIEW \"s\".\"far\"")).findFirst().orElseThrow();
+            assertTrue(!farView.contains("read_parquet"), farView);
+            try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                    Statement s = conn.createStatement()) {
+                s.execute("CREATE SCHEMA s");
+                s.execute(farView);
+                java.sql.SQLException e = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.sql.SQLException.class, () -> s.executeQuery("SELECT count(*) FROM s.far").next());
+                assertTrue(e.getMessage().contains("SASL") && e.getMessage().contains("s/far/c.parquet"),
+                        e.getMessage());
+                try (Statement d = conn.createStatement();
+                        java.sql.ResultSet columns = d.executeQuery("DESCRIBE s.far")) {
+                    assertTrue(columns.next());
+                    assertEquals("x", columns.getString("column_name"));
+                    assertEquals("INTEGER", columns.getString("column_type"));
+                }
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Builds a server configuration for the test.
      *
      * @return configuration

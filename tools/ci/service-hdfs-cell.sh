@@ -24,7 +24,8 @@
 #           exact in parts and complete on every node, split.t refused naming the file.
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
-# own Java footer reads, two blocks per file (the Java client has no native Hadoop library in the
+# own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
+# stub of each table's first file since item 29; the Java client has no native Hadoop library in the
 # server image; its reads speak SASL). In ha-krb-sasl a TCP read by hadoopfs cannot succeed at all.
 # The server runs in the DataNode's network namespace (the domain socket mounted), loads hadoopfs from
 # -Darrowflight.duckdb.extensionDir only, reads the client configuration from /conf (class path and
@@ -317,8 +318,8 @@ tcp=$(( ${read1:-0} - ${read0:-0} )) fds=$(( fds1 - fds0 ))
 note "DataNodes during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
 result=$(grep -m 1 '^result ' "$work/client.log")
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
-  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 2 * n * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
-    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 2 * n * ${files:-0} )), $fds short-circuit fd requests)"
+  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 3 * n * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
+    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 3 * n * ${files:-0} )), $fds short-circuit fd requests)"
   fi
   finish pass ""
 fi

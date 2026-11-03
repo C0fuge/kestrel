@@ -354,10 +354,15 @@ public final class CatalogViews {
     private TableViews describe(String schema, String table, List<DataFile> files,
             String fingerprint) throws IOException, SQLException {
         DataStore store = parquetAdapter.dataStore();
-        List<String> paths = new ArrayList<>(files.size());
-        for (DataFile file : files) {
+        // DuckDB binds a view on its first file: with whole-file reads (SASL DataNodes) that file
+        // must be one this node reads short-circuit, or every query fails (item 29).
+        List<DataFile> bound = readableFirst(store, files);
+        List<String> paths = new ArrayList<>(bound.size());
+        for (DataFile file : bound) {
             paths.add(store.duckDbUri(file));
         }
+        boolean noneReadable = store != null && store.wholeFileReadsOnly()
+                && !store.readableHere(bound.get(0));
         String source = DuckDbAdapter.readParquetFromClause(paths);
         List<String> select = new ArrayList<>();
         List<String> typed = new ArrayList<>();
@@ -391,7 +396,48 @@ public final class CatalogViews {
                 + (widened ? String.join(", ", select) : "*") + " FROM " + source;
         String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
                 + String.join(", ", typed) + " WHERE false";
+        if (noneReadable) {
+            // Typed like the table, so that queries bind; reading it fails with the reason.
+            List<String> names = new ArrayList<>(files.size());
+            for (DataFile file : files) {
+                names.add(file.relativePath());
+            }
+            String reason = QueryPlanner.unreadableFilesMessage(names,
+                    "this node holds no file of " + schema + "." + table + " whole; its");
+            data = "CREATE OR REPLACE VIEW " + view + " AS SELECT " + String.join(", ", typed)
+                    + " WHERE error(" + DuckDbAdapter.sqlStringLiteral(reason) + ") IS NULL";
+            LOGGER.warn("node={} views=unreadableTable table={}.{} files={}: queries in parts read it"
+                    + " on the nodes holding its files; a complete answer here fails",
+                    LogUtil.node(), schema, table, files.size());
+        }
         return new TableViews(fingerprint, data, empty);
+    }
+
+    /**
+     * Orders a table's files so that one this node can read comes first, keeping the order of
+     * the others; unchanged when every file is readable here or none is.
+     *
+     * @param store data store, or null
+     * @param files the table's files, not empty
+     * @return files with a readable one first
+     */
+    static List<DataFile> readableFirst(DataStore store, List<DataFile> files) {
+        if (store == null || !store.wholeFileReadsOnly() || store.readableHere(files.get(0))) {
+            return files;
+        }
+        for (int i = 1; i < files.size(); i++) {
+            if (store.readableHere(files.get(i))) {
+                List<DataFile> result = new ArrayList<>(files.size());
+                result.add(files.get(i));
+                for (int j = 0; j < files.size(); j++) {
+                    if (j != i) {
+                        result.add(files.get(j));
+                    }
+                }
+                return result;
+            }
+        }
+        return files;
     }
 
     /**
