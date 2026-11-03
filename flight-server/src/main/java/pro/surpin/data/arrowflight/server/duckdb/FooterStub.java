@@ -62,11 +62,12 @@ public final class FooterStub implements AutoCloseable {
         byte[] bytes = stubBytes(source, location);
         Path directory = root.resolve(UUID.randomUUID().toString());
         Path file = directory.resolve(pathBelowAuthority(location)).normalize();
-        if (!file.startsWith(directory) || file.equals(directory)) {
+        Path parent = file.getParent();
+        if (parent == null || !file.startsWith(directory) || file.equals(directory)) {
             throw new IOException("Parquet file location cannot be mapped to a local path: "
                     + location);
         }
-        Files.createDirectories(file.getParent());
+        Files.createDirectories(parent);
         FooterStub stub = new FooterStub(directory, file);
         try {
             Files.write(file, bytes);
