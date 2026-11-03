@@ -136,8 +136,14 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > `hdfs=copyBatches ... merge=aggregate`, `hdfs=copyBatches merged parts= partBytes=`. sasl-cluster `speed` now
 > requires the chunks GROUP BY merged, no fallback (6 merged, 0 fallback). Part answers are held in JVM memory: a
 > GROUP BY with about as many groups as rows holds about its answer per node (not bounded yet).
+> **Part 2b step 3 (2026-11-03 evening, a4bbbab0):** also merged per batch of copies: an aggregate with LIMIT (batches
+> answer `CompleteAnswerMerge.partQuery` = without ORDER BY / LIMIT, ORDER BY + LIMIT applied to the merge,
+> `mergePartsSql`), and a scan with DISTINCT and/or LIMIT (optional ORDER BY of output columns; log `merge=rows`). A
+> merge SQL the ORDER BY cannot be applied to is detected before copying (`merge=fallback`, old path). sasl-cluster
+> checks chunks GROUP BY ORDER BY LIMIT 3, DISTINCT and a top-5 scan in both modes; `speed` requires `merge=rows`.
 > **Still open (part 2b, next session):** (2) (c) cache smaller than a query's
-> input for the other shapes - other aggregates (LIMIT / HAVING / DISTINCT / expressions), joins and complete answers
+> input for the other shapes - HAVING, aggregates over DISTINCT values / avg / expressions, a scan with ORDER BY and no
+> LIMIT (its parts would hold every row in memory), joins and complete answers
 > (the footer-answered `count(*)` no longer copies: done 2026-11-03 evening, 712047f8): today the copies
 > a query needs are all held at once (over the limit, deleted after use) - bound it (process a ticket's files in
 > batches that fit, valid for partial aggregates only if merged; or stream per file) so the disk is never filled.
@@ -3025,3 +3031,14 @@ S3 slowdown item below stays open for then).
   41696991767, all green. New Open question: joins / non-mergeable complete answers whose copies exceed the cache.
   No `package=true` (item 30 not done: other aggregates, joins / complete over the cache, copy-directory peak bound).
   Lock released.
+- 2026-11-03 (cloud session, core): item 30 part 2b step 3 (a4bbbab0): with copies over `hdfsLocalCopyMaxBytes`, an
+  aggregate with LIMIT (batches answer it without ORDER BY / LIMIT: `CompleteAnswerMerge.partQuery` /
+  `partsRefusal` / `mergePartsSql`; ORDER BY of output columns + LIMIT applied after the merge) and a scan with
+  DISTINCT and/or LIMIT (`merge=rows`) are answered per batch of copies and merged on the node, like the mergeable
+  aggregates. Tests: `CompleteAnswerMergeTest.aggregateWithLimitIsMergedFromUnlimitedPartAnswers`,
+  `ExecutionServiceTest.aggregateLargerThanTheCopyCacheIsMergedFromBatchesThatFit` (+4 shapes; a per-batch LIMIT makes
+  it fail: checked), `onlyMergeableQueriesAreAnsweredPerBatch`. sasl-cluster checks chunks GROUP BY ORDER BY LIMIT 3,
+  DISTINCT and top-5 in both modes; speed: 9 aggregates + 12 DISTINCT/LIMIT scans merged from batches, 0 fallback.
+  Runs on a4bbbab0: Dev CI 41707251465, service-hdfs 41707251290 (10/10), Catalogs CI 41707251341, all green. No
+  `package=true` (item 30 not done: HAVING / DISTINCT aggregates / expressions, ORDER BY-only scans, joins / complete
+  over the cache - Open question - and the copy-directory peak bound). Lock released.
