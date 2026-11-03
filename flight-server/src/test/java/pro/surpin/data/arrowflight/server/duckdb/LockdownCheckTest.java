@@ -136,6 +136,78 @@ class LockdownCheckTest {
     }
 
     /**
+     * Item 30, {@code hdfsLocalCopyDir}: a copy directory outside the spill directory is accepted
+     * only when the check is told about it, and a directory it was told about must be allowed.
+     */
+    @Test
+    void acceptsALocalCopyDirectoryOnlyWhenDeclared(@TempDir Path dir) throws Exception {
+        Path data = Files.createDirectories(dir.resolve("data"));
+        Path temp = Files.createDirectories(dir.resolve("tmp"));
+        Path copies = Files.createDirectories(dir.resolve("copies"));
+        try (Connection conn = lockedDown(data + "/", copies + "/", temp + "/")) {
+            LockdownCheck.verify(conn, List.of(data.toString()), temp, copies, List.of());
+            IllegalStateException undeclared = assertThrows(IllegalStateException.class,
+                    () -> LockdownCheck.verify(conn, List.of(data.toString()), temp, List.of()));
+            assertTrue(undeclared.getMessage().contains(copies.toString()), undeclared.getMessage());
+        }
+        try (Connection conn = lockedDown(data + "/", temp + "/")) {
+            IllegalStateException missing = assertThrows(IllegalStateException.class,
+                    () -> LockdownCheck.verify(conn, List.of(data.toString()), temp, copies,
+                            List.of()));
+            assertTrue(missing.getMessage().contains(copies.toString()), missing.getMessage());
+        }
+    }
+
+    /**
+     * Item 30, {@code hdfsLocalCopyDir}: the adapter copies below its own directory there, a
+     * locked-down connection reads a copy in it (and nothing next to it), the start removes the
+     * directory of a dead process, and closing the adapter removes its own.
+     */
+    @Test
+    void adapterReadsLocalCopiesFromACustomDirectory(@TempDir Path dir) throws Exception {
+        Path data = Files.createDirectories(dir.resolve("data"));
+        Path copies = Files.createDirectories(dir.resolve("copies"));
+        Path stale = Files.createDirectories(copies.resolve("duckdb-999999999-1"));
+        Path outside = Files.createDirectories(dir.resolve("outside"));
+        try (Connection plain = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = plain.createStatement()) {
+            s.execute("COPY (SELECT 7 AS x) TO '" + outside.resolve("x.parquet") + "' (FORMAT parquet)");
+        }
+        DuckDbSetupPlan plan = new DuckDbSetupValidator(name -> {
+            throw new IllegalArgumentException(name);
+        }).plan(new DuckDbSetupValidator.Contribution("local", java.util.Set.of("file"),
+                List.of(data.toString()), setup -> setup.set("parquet_metadata_cache", true)),
+                List.of(), List.of());
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(3, 100, 1, 131072, 0, 1, 1, null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null, 32010, 5701, 60, 3,
+                1000, 30000, true, false, 64, dir.resolve("spill").toString(), null, "complete",
+                true, true);
+        System.setProperty("hdfsLocalCopyDir", copies.toString());
+        Path root;
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool, plan)) {
+            root = adapter.localCopyRoot();
+            assertEquals(copies, root.getParent());
+            assertTrue(Files.isDirectory(root));
+            Files.copy(outside.resolve("x.parquet"), root.resolve("x.parquet"));
+            try (Statement s = adapter.connection().createStatement()) {
+                try (ResultSet rs = s.executeQuery("SELECT x FROM read_parquet('"
+                        + root.resolve("x.parquet") + "')")) {
+                    assertTrue(rs.next());
+                    assertEquals(7, rs.getInt(1));
+                }
+                assertThrows(SQLException.class, () -> s.executeQuery(
+                        "SELECT x FROM read_parquet('" + outside.resolve("x.parquet") + "')"));
+            }
+        } finally {
+            System.clearProperty("hdfsLocalCopyDir");
+            ioPool.shutdownNow();
+        }
+        assertTrue(Files.notExists(root), "own copy directory removed on close");
+        assertTrue(Files.notExists(stale), "a dead process's copy directory removed at start");
+    }
+
+    /**
      * Regression (HDFS on a real cluster, 2026-11-02): without the hadoopfs extension DuckDB 1.5.6
      * stores an hdfs:// root as {@code <cwd>/hdfs:/ns/...}; the check names the missing extension
      * and accepts the forms DuckDB keeps when a file system claims the scheme.

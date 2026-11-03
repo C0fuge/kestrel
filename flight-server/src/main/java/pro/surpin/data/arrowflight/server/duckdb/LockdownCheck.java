@@ -37,6 +37,23 @@ public final class LockdownCheck {
      */
     public static void verify(Connection conn, List<String> roots, Path tempRoot,
             List<DuckDbSetupPlan.DeclaredSecret> secrets) throws SQLException {
+        verify(conn, roots, tempRoot, null, secrets);
+    }
+
+    /**
+     * Checks a locked down connection whose allowed directories also hold a node-local copy
+     * directory outside the spill directory.
+     *
+     * @param conn connection after setup and lockdown
+     * @param roots readable roots of the plan
+     * @param tempRoot server's spill directory, readable by every connection
+     * @param localCopyRoot directory of node-local copies, or null when it lies below the spill directory
+     * @param secrets declared secrets, or null to leave the secrets unchecked
+     * @throws IllegalStateException naming the first difference
+     * @throws SQLException when the settings cannot be read
+     */
+    public static void verify(Connection conn, List<String> roots, Path tempRoot, Path localCopyRoot,
+            List<DuckDbSetupPlan.DeclaredSecret> secrets) throws SQLException {
         try (Statement s = conn.createStatement()) {
             Map<String, String> settings = new HashMap<>();
             try (ResultSet rs = s.executeQuery("SELECT name, value FROM duckdb_settings() WHERE name IN"
@@ -71,6 +88,9 @@ public final class LockdownCheck {
             }
             // DuckDB adds the connection's own temp_directory; it lies below the spill root.
             String spill = comparable(tempRoot.toString());
+            if (localCopyRoot != null) {
+                expected.add(comparable(localCopyRoot.toString()));
+            }
             String ownTemp = null;
             try (ResultSet rs = s.executeQuery("SELECT current_setting('temp_directory')")) {
                 if (rs.next() && rs.getString(1) != null) {

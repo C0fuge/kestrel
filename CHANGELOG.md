@@ -52,6 +52,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
 | `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
+| `hdfsLocalCopyDir` (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`) | unset = below the DuckDB temp root | absolute directory (another disk) for the node-local copies; the server copies into its own `duckdb-<pid>-*` subdirectory there, allowed to DuckDB, deleted when it stops |
 
 **New plugin settings (all off by default)**
 
@@ -95,6 +96,14 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Added - `hdfsLocalCopyDir`: node-local copies on a disk of their own (STATUS item 30, part 2b)
+
+- New setting `hdfsLocalCopyDir` (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`, absolute path): the
+  node-local copies of HDFS files (SASL DataNodes) go into a `duckdb-<pid>-*` subdirectory there instead of
+  `localcopy` below the DuckDB temp root, so they can use a disk other than DuckDB's spill. The locked-down DuckDB
+  may read that subdirectory (and the startup lockdown check expects it); it is deleted when the server stops, and
+  one left by a dead process is removed at the next start. Unset (default) or `hdfsLocalCopyMaxBytes=0`: unchanged.
 
 ### Changed - SASL HDFS clusters: a footer-answered `count(*)` copies nothing (STATUS item 30, part 2b)
 

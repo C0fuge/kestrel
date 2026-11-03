@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -378,6 +379,38 @@ public class ConfigAdapter {
                     + " or 0: " + value);
         }
         return bytes;
+    }
+
+    /**
+     * Returns hdfsLocalCopyDir from the system configuration.
+     *
+     * @return absolute directory for node-local copies, or null for the DuckDB temp root
+     */
+    public static Path hdfsLocalCopyDir() {
+        return hdfsLocalCopyDir(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code hdfsLocalCopyDir} ({@code HDFS_LOCAL_COPY_DIR}): the directory that holds
+     * the node-local copies of HDFS files (item 30), for a disk other than the DuckDB temp root's.
+     * The server copies into its own subdirectory there, which DuckDB is allowed to read and which
+     * is deleted when the server stops; unset keeps the copies below the DuckDB temp root.
+     *
+     * @param props configuration source
+     * @return absolute directory, or null when unset
+     * @throws IllegalArgumentException for a relative path
+     */
+    public static Path hdfsLocalCopyDir(ConfigSource props) {
+        String value = getStringWithEnv("hdfsLocalCopyDir", "arrowflight.hdfs.localCopyDir",
+                "HDFS_LOCAL_COPY_DIR", "", props).trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        Path dir = Path.of(value);
+        if (!dir.isAbsolute()) {
+            throw new IllegalArgumentException("hdfsLocalCopyDir must be an absolute path: " + value);
+        }
+        return dir.normalize();
     }
 
     /**

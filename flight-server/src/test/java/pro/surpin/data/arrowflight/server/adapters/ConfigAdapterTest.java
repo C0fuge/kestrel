@@ -293,6 +293,18 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void hdfsLocalCopyDirIsUnsetByDefaultAndMustBeAbsolute() throws IOException {
+        assertNull(ConfigAdapter.hdfsLocalCopyDir(source(Map.of(), Map.of())));
+        assertNull(ConfigAdapter.hdfsLocalCopyDir(source(Map.of("hdfsLocalCopyDir", " "), Map.of())));
+        assertEquals(java.nio.file.Path.of("/data/copies"), ConfigAdapter.hdfsLocalCopyDir(
+                source(Map.of("hdfsLocalCopyDir", "/data/copies/"), Map.of())));
+        assertEquals(java.nio.file.Path.of("/mnt/ssd"), ConfigAdapter.hdfsLocalCopyDir(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_DIR", "/mnt/ssd"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyDir(
+                source(Map.of("hdfsLocalCopyDir", "copies"), Map.of())));
+    }
+
+    @Test
     void plainFlightCommandsAreOffByDefaultAndRefuseOtherValues() throws IOException {
         assertFalse(ConfigAdapter.plainFlightCommands(source(Map.of(), Map.of())));
         assertTrue(ConfigAdapter.plainFlightCommands(

@@ -85,6 +85,8 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public static final String SESSION_CATALOG_PREFIX = "flight_session_";
     private final Path tempRoot;
+    /** Node-local copy directory outside the temp root ({@code hdfsLocalCopyDir}), or null. */
+    private final Path customLocalCopyRoot;
     private final AtomicInteger sessionIds = new AtomicInteger();
     /** Directories DuckDB may read when locked down (as DuckDB sees the paths). */
     private final List<String> readableRoots;
@@ -582,6 +584,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.duckDbGroups = appConfig.duckDbGroups();
 
         this.tempRoot = createTempRoot(appConfig.duckDbTempDirectory());
+        this.customLocalCopyRoot = createLocalCopyRoot(ConfigAdapter.hdfsLocalCopyDir(),
+                ConfigAdapter.hdfsLocalCopyMaxBytes());
         if (shared != null) {
             // Set up, checked and locked down once; a failure stops the server here.
             this.sharedRoot = openSharedRoot(true);
@@ -805,7 +809,8 @@ public final class DuckDbAdapter implements AutoCloseable {
                     appConfig.duckDbExternalFileCache());
             try {
                 if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
-                    LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
+                    LockdownCheck.verify(conn, readableRoots, tempRoot, customLocalCopyRoot,
+                            declaredSecrets);
                 }
             } catch (Exception e) {
                 spares.forEach(Session::closeQuietly);
@@ -969,7 +974,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private void verifyStorageSetup() {
         try (Connection conn = openConnection(true, appConfig.duckDbThreads())) {
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
-                LockdownCheck.verify(conn, readableRoots, tempRoot, declaredSecrets);
+                LockdownCheck.verify(conn, readableRoots, tempRoot, customLocalCopyRoot,
+                            declaredSecrets);
             }
             LOGGER.info("node={} duckdb=storageSetupVerified statements={} open={}", LogUtil.node(),
                     storageSetupStatements.size(), !conn.isClosed());
@@ -1072,6 +1078,9 @@ public final class DuckDbAdapter implements AutoCloseable {
                     allowed.add(sqlStringLiteral(root.endsWith("/") ? root : root + "/"));
                 }
                 allowed.add(sqlStringLiteral(tempRoot.toString() + "/"));
+                if (customLocalCopyRoot != null) {
+                    allowed.add(sqlStringLiteral(customLocalCopyRoot.toString() + "/"));
+                }
                 s.execute("SET allowed_directories = [" + String.join(", ", allowed) + "]");
                 restrictExtensions(s);
                 s.execute("SET enable_external_access = false");
@@ -1485,7 +1494,28 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @return local copy directory
      */
     public Path localCopyRoot() {
-        return tempRoot.resolve("localcopy");
+        return customLocalCopyRoot != null ? customLocalCopyRoot : tempRoot.resolve("localcopy");
+    }
+
+    /**
+     * Creates this process's directory for node-local copies below {@code hdfsLocalCopyDir}, named
+     * like the temp root so a later start removes it when this process died without cleaning up.
+     *
+     * @param configured {@code hdfsLocalCopyDir}, or null
+     * @param maxBytes {@code hdfsLocalCopyMaxBytes}; 0 = no local copies
+     * @return directory, or null when unset or local copies are off
+     * @throws IllegalStateException when the directory cannot be created
+     */
+    static Path createLocalCopyRoot(Path configured, long maxBytes) {
+        if (configured == null || maxBytes <= 0) {
+            return null;
+        }
+        try {
+            return createTempRoot(configured.toString());
+        } catch (IllegalStateException e) {
+            throw new IllegalStateException("Cannot create the hdfsLocalCopyDir directory in "
+                    + configured, e);
+        }
     }
 
     /**
@@ -3507,5 +3537,8 @@ public final class DuckDbAdapter implements AutoCloseable {
             Session.closeQuietly(describe);
         }
         deleteRecursively(tempRoot);
+        if (customLocalCopyRoot != null) {
+            deleteRecursively(customLocalCopyRoot);
+        }
     }
 }

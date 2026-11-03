@@ -268,12 +268,16 @@ if [ "$n" -gt 1 ]; then
     # One endpoint per node and query, so a node's share of chunks (4 files, 3 nodes: some node
     # gets 2 or more) is one ticket larger than the cache.
     opts="$opts -DhdfsLocalCopyMaxBytes=$(( smallest * 3 / 4 )) -DendpointsPerServer=1"
+  else
+    # Item 30 part 2b (3): copies in hdfsLocalCopyDir (its own mount), not below the DuckDB temp root.
+    opts="$opts -DhdfsLocalCopyDir=/copies"
   fi
 fi
+copyMount() { [ "$n" -gt 1 ] && [ "$profile" != speed ] || return 0; mkdir -p "$work/copies$1" && chmod 777 "$work/copies$1"; echo "-v $work/copies$1:/copies"; }
 note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; $n node(s), $cpus CPU(s) / $mem each"
 for i in $(seq "$n"); do
 # shellcheck disable=SC2086,SC2046
-docker run -d --name "$(srvName "$i")" --network "container:dn$i" $(sockOf "$i") "${srvKrb[@]}" "${native[@]}" --cpus=$cpus --memory=$mem \
+docker run -d --name "$(srvName "$i")" --network "container:dn$i" $(sockOf "$i") $(copyMount "$i") "${srvKrb[@]}" "${native[@]}" --cpus=$cpus --memory=$mem \
   -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
@@ -336,6 +340,14 @@ if [ "$n" -gt 1 ]; then
   if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] \
       && { [ "$aggMerged" -eq 0 ] || [ "$aggFallback" -ne 0 ]; }; then
     finish fail "the cache is smaller than chunks.lineitem, but the GROUP BY was not merged from batches of copies (merged $aggMerged, fallback $aggFallback)"
+  fi
+  if [ "$profile" != speed ]; then
+    # Every node copied into hdfsLocalCopyDir, and its directory there is gone once it stops.
+    customDirs=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1 | grep -m 1 -c 'hdfs=localCopyCache dir=/copies/duckdb-' || true; done | awk '{ s += $1 } END { print s + 0 }')
+    note "hdfsLocalCopyDir: $customDirs of $n node(s) copy into /copies; $(docker logs srv1 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || echo 'no hdfs=localCopyCache line')"
+    if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$customDirs" -ne "$n" ]; then
+      finish fail "hdfsLocalCopyDir=/copies set, but only $customDirs of $n node(s) copied there"
+    fi
   fi
   if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
