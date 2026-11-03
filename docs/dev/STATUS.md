@@ -1160,8 +1160,8 @@ S3 slowdown item below stays open for then).
   item 30; option 1, a SASL-capable libhdfs3 in hadoopfs, stays long term.)*
 - **service-cluster `hdfs-ha / loss` failed once on `00e3e896` (run 41614141178, seen by the orchestrator):** q18
   non-retryable during the NameNode failover, `Unable to get file info ... Operation category READ is not supported in
-  state standby` (11 other cells pass; 413485ba passed). Possibly the Java footer reads added by item 29 part 1 hitting
-  the standby, or a flake; the item 29 package gate reruns it (see Log). Lane 3 owns that workflow.
+  state standby` (11 other cells pass; 413485ba passed). Passed again on 5122cea1 (41628772790), so likely a flake of
+  the failover timing; watch for a repeat (lane 3 owns that workflow). No decision needed unless it recurs.
 - **Item 27 stand rerun (2026-11-03, core lane).** CI cannot reproduce the stand's S3 x1 0.80 / export 0.73: on a runner
   ours (speed) was already 1.05 x1 / 0.90 x4 of upstream before the fix and 1.25 / 1.02 after it; the export shape there is
   client-bound. Please rerun the three-way scan x1 / x4 / ADBC export with `server-1.0.0-413485ba80fd` (speed). If export
@@ -2877,4 +2877,10 @@ S3 slowdown item below stays open for then).
   `HadoopDataStoreTest` (intersection of block hosts, inventory), `CatalogViewsTest.wholeFileReadsBindViewsOnReadableFilesOnly`,
   `DuckDbAdapterTest.oneViewThatCannotBindLeavesTheOthers`, `ExecutionServiceTest.describeUsesAFooterStubForAFileThisNodeCannotRead`.
   Runs: service-hdfs 41618932346 / 41620914181 / 41623262313 red (view binding, footer bound, schema guess - all
-  fixed), 41624568709 green 10/10; Dev CI 41620905057, 41624564049 green; package=true 41626441364 running (gate pending).
+  fixed), 41624568709 green 10/10; Dev CI 41620905057, 41624564049 green; package=true 41626441364 -> pre-release `server-1.0.0-5122cea1f045`.
+  **Gate bug found and fixed (26f24f1e):** that run's gate reported service-cluster/-security/-stores as failed (no run
+  on 5122cea1: my STATUS push had moved `main`), yet exited 0 - `ok` was set inside the piped summary (a subshell), so
+  the gate never failed (also why part 1's red service-hdfs went unnoticed). The three were then run on `ci/core-29` =
+  5122cea1: service-cluster 41628772790 (incl. hdfs-ha / loss), -security 41628777405, -stores 41628781826, all green;
+  with service-hdfs 41624568709 the pre-release has passed the whole matrix. Lesson: while a package run waits, push
+  nothing to its branch (or dispatch it on a `ci/core-*` branch). Lock released.
