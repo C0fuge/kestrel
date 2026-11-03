@@ -8,7 +8,8 @@
 # ha-krb-sasl (ha-krb with dfs.data.transfer.protection=authentication: TCP reads refused, so the
 # server must read short-circuit; STATUS item 26) and sasl-cluster (ha-krb-sasl with 3 DataNodes and 3
 # servers, schemas with replication 3 / 2 / a file no DataNode holds whole; STATUS item 29, see
-# tools/ci/service-hdfs-sasl-check.py); every cell fails when a block goes over TCP;
+# tools/ci/service-hdfs-sasl-check.py; balanced ends with one server on a copy disk smaller than a
+# query's input, tools/ci/service-hdfs-smalldisk-check.py); every cell fails when a block goes over TCP;
 # short-circuit configured in each (the server runs in the DataNode's network namespace with its
 # domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02
 # bug). Profiles: balanced, speed. Each cell: TPC-H SF<sf> 22/22 answers compared with in-process
@@ -37,6 +38,7 @@ on:
       - .github/workflows/service-hdfs.yml
       - tools/ci/service-hdfs-cell.sh
       - tools/ci/service-hdfs-sasl-check.py
+      - tools/ci/service-hdfs-smalldisk-check.py
 
 permissions:
   contents: read

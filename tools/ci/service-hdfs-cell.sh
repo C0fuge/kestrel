@@ -24,6 +24,8 @@
 #           exact in parts and complete on every node, split.t read from node-local copies (item 30),
 #           chunks (all lineitem files, 1 MiB blocks, replication 1: no node holds a file whole) full scan
 #           and GROUP BY; under speed the copy cache is below one file, so scans go in batches (part 2b).
+#           Under balanced a last stage runs one server whose copy disk (a tmpfs) is smaller than
+#           chunks.lineitem: batches sized by the disk, a join needing every copy refused (part 2b).
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
@@ -42,7 +44,7 @@ mkdir -p "$work"; : > "$notes"
 note() { echo "$*" | tee -a "$notes"; }
 finish() { # status, detail
   printf '%s|%s|%s|%s\n' "$topo" "$profile" "$1" "$(echo "$2" | head -n 1 | tr '|' '/' | cut -c1-300)" > "$res"
-  for c in kdc nn1 nn2 dn1 dn2 dn3 srv srv1 srv2 srv3; do docker logs "$c" > "$work/$c.log" 2>&1 || rm -f "$work/$c.log"; done
+  for c in kdc nn1 nn2 dn1 dn2 dn3 srv srv1 srv2 srv3 srvd; do docker logs "$c" > "$work/$c.log" 2>&1 || rm -f "$work/$c.log"; done
   [ "$1" = pass ]; exit $?
 }
 
@@ -391,11 +393,68 @@ if [ "$n" -gt 1 ]; then
   [ "$copies" -eq 0 ] || copyBlocks=$(( copyBlocks + n * ${blocks:-0} + copies ))
   note "local copies: $copies file(s) (+$copyBlocks blocks allowed over TCP); $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=reads .*localCopy=[1-9].*' || echo 'no hdfs=reads line with a local copy')"
 fi
+# Item 30 part 2b (4): a copy disk smaller than a query's input. After the cluster checks (sasl-cluster,
+# balanced only), the three servers stop and one server (numServers=1) starts in dn1's network
+# namespace with hdfsLocalCopyDir on a host tmpfs of the largest lineitem file + minFreeBytes + 4 MiB,
+# so smaller than chunks.lineitem; the cache limit stays at its default, only the disk bounds the
+# copies. tools/ci/service-hdfs-smalldisk-check.py: scans and GROUP BY in parts go in batches sized by
+# the disk's room; a complete join needing every copy is answered or refused by the guard (never
+# "No space left"); the tmpfs is sampled and its peak use must stay below its size.
+smallDisk() {
+  local minFree=$(( 8 * 1048576 )) largest total size dir peak sampler rc3 refused noSpace batches i
+  largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
+  total=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | awk '{ s += $1 } END { print s + 0 }')
+  size=$(( (largest + minFree + 4 * 1048576 + 1048575) / 1048576 * 1048576 ))
+  [ "$(( size - minFree ))" -lt "$total" ] || { note "small disk: $size bytes hold every lineitem file ($total); skipped"; return 0; }
+  for i in $(seq "$n"); do docker stop -t 20 "srv$i" > /dev/null; done
+  dir="$work/smalldisk"; mkdir -p "$dir"
+  sudo mount -t tmpfs -o "size=$size,mode=1777" tmpfs "$dir" || finish fail "small disk: tmpfs not mounted"
+  note "small disk: tmpfs $size bytes for copies (largest lineitem file $largest, all $total, minFreeBytes $minFree)"
+  # shellcheck disable=SC2086,SC2046
+  docker run -d --name srvd --network container:dn1 $(sockOf 1) -v "$dir:/copies" "${srvKrb[@]}" "${native[@]}" --cpus=2 --memory=4g \
+    -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
+    -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
+    -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
+    sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+    --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+    -Dhazelcast.phone.home.enabled=false $opts -DnumServers=1 -DendpointsPerServer=1 \
+    -DhdfsLocalCopyMinFreeBytes=$minFree -Darrowflight.duckdb.extensionDir=/extdir \
+    -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
+    --data-dir "$dataDir" --localhost "$(dnIp 1)" --port 32010 --hazelcast-port 5701 \
+    --hosts "$(dnIp 1):5701" --metrics-enabled false > /dev/null
+  for _ in $(seq 180); do
+    docker logs srvd 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+    [ "$(docker inspect -f '{{.State.Running}}' srvd)" = true ] || break
+    sleep 1
+  done
+  docker logs srvd 2>&1 | grep -q 'Server Arrow Flight SQL started' \
+    || finish fail "small disk: server srvd did not start: $(docker logs srvd 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+  sleep 3
+  ( while :; do df -B1 --output=used "$dir" | tail -n 1; sleep 0.2; done ) > "$work/smalldisk-used.txt" 2>/dev/null &
+  sampler=$!
+  "$py" -I tools/ci/service-hdfs-smalldisk-check.py "$(dnIp 1):32010" "$in" > "$work/smalldisk-check.log" 2>&1; rc3=$?
+  kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
+  cat "$work/smalldisk-check.log"
+  peak=$(sort -n "$work/smalldisk-used.txt" | tail -n 1)
+  refused=$(grep -c '^join refused' "$work/smalldisk-check.log" || true)
+  noSpace=$(docker logs srvd 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true)
+  batches=$(docker logs srvd 2>&1 | grep -c 'hdfs=copyBatches' || true)
+  note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
+  sudo umount "$dir" || true
+  [ "$rc3" -eq 0 ] || finish fail "small disk: $(grep -m 1 '^result fail' "$work/smalldisk-check.log" | cut -c13- || echo 'client failed')"
+  [ -n "$peak" ] && [ "$peak" -lt "$size" ] || finish fail "small disk: copy disk peak use ${peak:-?} of $size bytes (filled)"
+  [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
+  [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
+  docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
+  return 0
+}
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
     finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
+  if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
   finish pass ""
 fi
 detail=${result#result fail }
