@@ -83,6 +83,7 @@ def main():
                 else:
                     print(f"ok {server} {mode} spread.lineitem ({rows} answer row(s))", flush=True)
             except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                print(f"error text: {e}", flush=True)
                 fail(f"{server} {mode} spread.lineitem: {first_line(e)}")
             try:
                 with connect(server, mode) as conn:
