@@ -1,13 +1,15 @@
 # Orchestration status
 
-Status as of **2026-11-03 20:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 21:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL). Done so far: parts 1, 2a, 2b steps 1-3
-(footer-answered `count(*)`, `hdfsLocalCopyDir`, LIMIT / DISTINCT over copy batches, all green), and now 336f9607
-(new optional `hdfsLocalCopyMinFreeBytes`, default 1 GiB: a query whose new copies would leave less free disk is
-refused before copying, naming the files; service-hdfs green, Dev CI running). Left: joins / complete over the cache
-(Open question below), `package=true`. egret has no FRESH report for the newest pre-release `5122cea1f045` (ALL DONE
-waits for item 30's pre-release and a FRESH run on it).
+Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL). Done so far: parts 1, 2a, 2b steps 1-3 and
+the copy-disk guard 336f9607 (`hdfsLocalCopyMinFreeBytes`; Dev CI 41715910689 green). New: 0418b441 (21:43Z) adds a
+small copy-disk stage to service-hdfs; Dev CI 41724478294 on it is green, but service-hdfs 41724478510 is **red in the
+new stage only** (cell sasl-cluster/balanced, "small disk": `chunks.lineitem` partial refused with
+`hdfs=localCopyNoSpace`, 13 MB free vs a 52 MB copy - the stage's expectations do not match its disk size yet). The
+core session holds the lock (21:41Z, active), so this is its own in-flight work; no bug-first note written. Left after
+that: joins / complete over the cache (Open question below), `package=true`. egret has no FRESH report for the newest
+pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
 Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
 and heron).
 
@@ -15,49 +17,48 @@ and heron).
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (disk free-space guard for copies pushed) | 336f9607 20:47Z (~10 min) | held 20:41Z (active) | Dev CI 41715910689 on 336f9607 running; service-hdfs 41715910681 pass; previous (a4bbbab0) green. |
+| core (`STATUS.md`) | ITEM 30 part 2b (small copy-disk CI stage) | 0418b441 21:43Z (~15 min) | held 21:41Z (active) | Dev CI 41724478294 green; service-hdfs 41724478510 red (new small-disk stage, sasl-cluster balanced; other 9 cells pass). |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | catalogs-ci 41715910716 pass |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
 
-No stale locks (marten held 19:43Z by an active session, last commit 20:34Z; heron free).
+No stale locks (marten and heron free).
 
 ## Service matrix
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41628772790 | 5122cea1 | pass |
-| service-hdfs.yml | 41715910681 (main) | 336f9607 | pass |
+| service-hdfs.yml | 41724478510 (main) | 0418b441 | **fail** (small-disk stage, sasl-cluster balanced) |
 | service-security.yml | 41628777405 | 5122cea1 | pass |
 | service-stores.yml | 41628781826 | 5122cea1 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-5122cea1f045` (2026-11-03 11:33Z): item 29 part 2 (SASL routing, clear errors, per-table views).
-- `server-1.0.0-413485ba80fd` (2026-11-03 07:10Z): item 27 (speed: `preserve_insertion_order=false`).
-- `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:59Z): item 26.
+- `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2 (SASL routing, clear errors, per-table views).
+- `server-1.0.0-00e3e896b31e` (2026-11-03 09:15Z): item 29 part 1.
+- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (10:00Z). Session active (lock 19:43Z): M4 reruns on server `0e457de30f25` - S3 1-9 /
-  iceberg 1,11,12 (57c6715), m4.py fix for checks 6,7 (ae95d29 20:09Z), lakeFS 1,3,4,10 dispatched (381154e 20:34Z).
-- heron: **IMPROVEMENTS DONE** (session 98); session 101 (16:51Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (10:00Z). Session 21:40-22:00Z: lakeFS M4 41713886604 on server `0e457de30f25` PASS,
+  full M4 suite green, `0e457de30f25` is now the M4 default. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 102: nothing open. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`, unchanged).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
   load 0.92-0.98; upstream native 0-1/22 on TPC-H, small-query errors. Ours 22/22, 0 errors.
-- README "In progress" (19:28Z): idle; newest tracked 413485ba80fd (no pre-release after 5122cea1).
+- README "In progress" (21:28Z): idle; newest tracked 413485ba80fd (no pre-release after 5122cea1).
 
 ## For the maintainer
 
 - **Decision wanted (Open question, item 30):** joins / non-mergeable `complete` answers (TPC-H joins, windows,
   HAVING / LIMIT over groups) hold all their copies at once, so the copy dir can grow to the query's input size.
   Options: (1) refuse up front beyond `hdfsLocalCopyMaxBytes`; (2) `hdfsLocalCopyHardMaxBytes` + free-space check;
-  (3) keep and document. Still unanswered. Note: 336f9607 already adds a free-space guard
-  (`hdfsLocalCopyMinFreeBytes`, refuse before copying), so the disk can no longer fill; the remaining choice is whether
-  such queries should run up to the disk or stop at a bound tied to the cache.
+  (3) keep and document. Still unanswered. The free-space guard (`hdfsLocalCopyMinFreeBytes`) already keeps the disk
+  from filling; the remaining choice is whether such queries should run up to the disk or stop at a cache-tied bound.
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (Dev CI 41644812393); no repeat seen.
 - Open question "item 27 stand rerun" is still listed (egret runner numbers: S3 export 0.92 of upstream).
@@ -65,6 +66,7 @@ No stale locks (marten held 19:43Z by an active session, last commit 20:34Z; her
 
 ## History
 
+- 2026-11-03 21:58Z: core lock 21:41Z, pushed 0418b441 (service-hdfs small copy-disk stage): Dev CI 41724478294 green, service-hdfs 41724478510 red only in the new small-disk stage (sasl-cluster balanced, `localCopyNoSpace`), lane active; 336f9607 Dev CI green; marten M4 default now server 0e457de30f25 (lakeFS 41713886604 pass); heron/egret idle; no stale locks.
 - 2026-11-03 20:58Z: core lock 20:41Z, pushed 336f9607 (item 30 part 2b: `hdfsLocalCopyMinFreeBytes`, copies never fill their disk; query refused with `hdfs=localCopyNoSpace`); a4bbbab0 green (Dev CI 41707251465, service-hdfs 41707251290); service-hdfs 41715910681 on 336f9607 green, Dev CI 41715910689 running; marten session active (lock 19:43Z, M4 checks 6,7 and lakeFS 1,3,4,10 dispatched); heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 19:58Z: core lock 19:41Z, pushed a4bbbab0 (item 30 part 2b: LIMIT aggregates, DISTINCT / LIMIT scans over copy batches), Dev CI 41707251465 / service-hdfs 41707251290 running; marten session active (lock 19:43Z, M4 S3/iceberg rerun dispatched on server 0e457de30f25); heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 19:05Z: core footer-answered count(*) and `hdfsLocalCopyDir` (842f4a88) green (Dev CI 41696991827, service-hdfs 41696991867); new Open question (joins over the copy cache); core lock released; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
