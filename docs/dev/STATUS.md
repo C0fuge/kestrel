@@ -35,6 +35,21 @@
 > `dfs.data.transfer.protection=authentication` (TCP reads must fail, short-circuit reads pass 22/22), with the
 > DataNode metrics showing short-circuit reads; (c) a clear startup/first-read error when a node can neither
 > short-circuit nor read over TCP.
+ITEM 26 DONE (2026-11-03, core session, e016818c / ad141bf5 / 78c7e875; CI: see Log). **(a) Cause:** the hadoopfs
+> extension hands libhdfs3 its own `hdfs_shortcircuit` (default false) and `hdfs_domain_socket_path` (default empty),
+> which override `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` in `LIBHDFS3_CONF`; libhdfs3 reads
+> short-circuit only with both set (reproduced locally against apache/hadoop 3.4.1: either one alone, or LIBHDFS3_CONF
+> alone, reads over TCP; both set -> `REQUEST_SHORT_CIRCUIT_FDS success`, no TCP block). The server set them only from
+> explicit `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath` (env `HDFS_SHORTCIRCUIT` / `HDFS_DOMAIN_SOCKET_PATH`
+> also work). Note: `ReadBlockOpNumOps` also counts short-circuit fd requests; the TCP measure is `BlocksRead`.
+> **Fix:** unset, both now come from LIBHDFS3_CONF, then the server's Hadoop configuration (`HdfsShortCircuit`; startup
+> line `hdfs=shortCircuit enabled=... source=...`); a missing socket or a non-local block still falls back to TCP
+> (checked). **(c)** with `dfs.data.transfer.protection` set and short-circuit off or no socket on the node, the start
+> stops with the reason; with it on, `hdfs=shortCircuitOnly` warns that blocks without a local replica cannot be read.
+> **(b)** `service-hdfs.yml` cell `ha-krb-sasl` (DataNode `dfs.data.transfer.protection=authentication`: plain TCP
+> read refused, SASL read passes) answers TPC-H 22/22 short-circuit (~930 fd requests); every cell checks short-circuit.
+> **Stand:** short-circuit now follows the LIBHDFS3_CONF / hdfs-site.xml values without extra settings; check the
+> `hdfs=shortCircuit enabled=true` line on every node.
 > **ITEM 27 - S3 single-stream scan and export vs upstream.** Fresh three-way run (upstream `6e264c10f403`): speed S3
 > scan x1 0.80 and ADBC export 0.73 of upstream (x4/x8 0.93-0.96); balanced lower still. Upstream lists with Hadoop s3a
 > and reads with httpfs. Profile one full `lineitem` read on S3 (CI fake S3), compare DuckDB httpfs settings
@@ -1033,11 +1048,10 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
-- **hadoopfs short-circuit reads (2026-11-02, core lane, FYI).** `service-hdfs.yml` (all 6 cells) confirms lane 3's
-  D13 finding: with `dfs.client.read.shortcircuit=true` + the DataNode's domain socket in `LIBHDFS3_CONF`, every block is
-  read over TCP (no correctness issue, speed only). The fix is in the hadoopfs extension / libhdfs3 build (separate repo,
-  outside this session's scope). Say whether the extension's short-circuit should be looked at, and where.
-
+- **Java client short-circuit (2026-11-03, core lane, FYI).** The server's own Java HDFS client (Parquet footers,
+  ~1 block per file) reads short-circuit only with the native Hadoop library (`-Djava.library.path` with libhadoop); without
+  it those few reads go over TCP and, on a SASL cluster, speak SASL (they work). hadoopfs (all data reads) is fixed (item
+  26). Say whether the release should bundle or document libhadoop for the server JVM.
 - **Item 23 `speed` details (2026-10-29, core lane, FYI - all opt-in).** (1) The note says "a larger backpressure
   threshold (16 MiB)", but the effective default is 256 MiB (bundled `arrowflight.properties`); `speed` uses 16 MiB, as
   TUNING.md measured it necessary with 4 endpoints per node. (2) `duckDbMemoryLimit` under `speed` is 75 % of memory
