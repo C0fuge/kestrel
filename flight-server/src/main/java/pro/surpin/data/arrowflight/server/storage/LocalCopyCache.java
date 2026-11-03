@@ -221,7 +221,11 @@ public final class LocalCopyCache implements AutoCloseable {
         Path partial = entry.path.resolveSibling(entry.path.getFileName() + ".part");
         try {
             long copied;
-            Files.createDirectories(partial.getParent());
+            Path parent = partial.getParent();
+            if (parent != null) {
+                // Always below the cache directory; the check is for SpotBugs.
+                Files.createDirectories(parent);
+            }
             try (InputStream in = copier.open(file);
                     OutputStream out = Files.newOutputStream(partial)) {
                 copied = transfer(in, out);
