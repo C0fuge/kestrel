@@ -121,7 +121,7 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > `read_parquet` over copies + files held whole, typed as the view; a reference the rewrite misses is refused naming
 > the files; log `hdfs=completeFromCopies`). sasl-cluster cell: TPC-H 22/22 over `spread` (replication 2) in complete
 > mode on all 3 nodes = 66/66 exact, `split.t` join in complete mode too (service-hdfs 41659194422 green 10/10; complete
-> answers from copies per node 20-21). **Part 2b step 1 (2026-11-03, d067e622, c00a0fba):** a partial-mode plain
+> answers from copies per node 20-21). **Part 2b step 1 (2026-11-03, d067e622, c00a0fba, 20392696, 94a45267):** a partial-mode plain
 > scan (`ExecutionService.concatenatable`: no aggregate / ORDER BY / LIMIT / OFFSET / DISTINCT / window) whose copies
 > exceed `hdfsLocalCopyMaxBytes` is read in batches that fit (`copyBatches`: held files in the first batch, a file larger
 > than the limit alone), each batch's lease closed before the next is copied, all rows through one client stream
@@ -2957,3 +2957,19 @@ S3 slowdown item below stays open for then).
   red (a producer test's mock returned null for the new call; stubbed), service-hdfs 41656768629 red only on the cell's
   TCP-read bound (434 > 312: whole-table copies; bound now counts copied MiB); Dev CI 41659194274 and service-hdfs
   41659194422 green. No `package=true` (item 30 not done: part 2b list in Next steps). Lock released.
+- 2026-11-03 (core session): item 30 part 2b step 1 (d067e622, c00a0fba, 20392696, 94a45267): a partial-mode plain
+  scan whose local copies exceed `hdfsLocalCopyMaxBytes` is read in batches that fit, each batch's copies released
+  before the next is copied, all rows through one stream (`ConcatenatingStreamListener`); log `hdfs=copyBatches`.
+  Disk use stays within the limit in a case where it used to grow past it; same rows. Other shapes unchanged. Tests:
+  `ExecutionServiceTest.scanLargerThanTheCopyCacheIsReadInBatchesThatFit` (3 batches, one copy on disk at a time, all
+  rows), `copyBatchesFitTheCacheLimit`, `onlyPlainScansAreConcatenatable`, `ConcatenatingStreamListenerTest`.
+  sasl-cluster cell: schema `chunks` (all lineitem, 1 MiB blocks, replication 1) full scan + GROUP BY on every node
+  in both modes; `speed` sets the cache to 3/4 of the smallest file + `endpointsPerServer=1` and requires
+  `hdfs=copyBatches`. Runs: Dev CI 41667843285 (d067e622) red on a Maven Central plugin download (infra), its rerun
+  cancelled by newer pushes; service-hdfs 41668129747 (c00a0fba) red only because no scan needed batches (each ticket
+  held one file -> `endpointsPerServer=1`); service-hdfs 41669461010 (20392696) green 10/10 (speed: 6 batched scans,
+  e.g. `batches=2 files=2 maxBytes=38839100`); Dev CI 41669461235 (20392696) red: `copyBatches` NPE with local copies
+  off broke every plain scan -> 94a45267 + regression assertions; Dev CI 41671843220 (94a45267) green. Service-hdfs was
+  not rerun on 94a45267: the fix only touches the copies-off path, and service-hdfs runs with copies on.
+  No `package=true` (item 30 not done: aggregates/joins/complete over the cache, `hdfsLocalCopyDir`, `hdfs=reads`
+  assertions left). Lock released.
