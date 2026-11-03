@@ -1180,6 +1180,9 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
+  failed once in Dev CI 41644812393 (load 1000, want 700); passed before and locally. Watch for a repeat (likely a
+  load-reservation timing race); no decision needed unless it recurs.
 - *(Answered 2026-11-03 13:15 by the maintainer: "reading non-local HDFS blocks under SASL" -> option 3, a local copy =
   item 30; option 1, a SASL-capable libhdfs3 in hadoopfs, stays long term.)*
 - **service-cluster `hdfs-ha / loss` failed once on `00e3e896` (run 41614141178, seen by the orchestrator):** q18
@@ -2921,5 +2924,8 @@ S3 slowdown item below stays open for then).
   refused on a one-endpoint plan; join schema guessed utf8 on 2 nodes - both fixed in 750fea75), 41640582266 red only
   on the cell's TCP-read bound (320 > 312: the copy of split's 50 blocks; bound widened in ffdadd8a), 41641719428
   green 10/10 (sasl-cluster: TPC-H 22/22, split.t from copies in both modes on all 3 nodes + join in parts). That run
-  logged copyMs = uptime (LogUtil.mark() is -1 without DEBUG): fixed in 59d8b2e5. Dev CI 41642899878 on 59d8b2e5:
-  see the next line. No `package=true` yet: item 30 is not done (part 2 list in Next steps). Lock released.
+  logged copyMs = uptime (LogUtil.mark() is -1 without DEBUG): fixed in 59d8b2e5. Dev CI 41642899878 (59d8b2e5): all
+  1112 server tests green, SpotBugs null-parent warning in `LocalCopyCache` -> 4df6f53c; Dev CI 41644812393 (4df6f53c)
+  attempt 1: one flake, `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
+  (load 1000, want 700; untouched code, green in the run before and 3/3 locally) - failed job rerun, result: RERUN.
+  No `package=true` yet: item 30 is not done (part 2 list in Next steps). Lock released.
