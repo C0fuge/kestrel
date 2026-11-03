@@ -162,11 +162,14 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > on the copies' disk, unused copies evicted for room first, else refused before copying, naming the files
 > (`hdfs=localCopyNoSpace`); copy batches sized by min(cache limit, disk room). So the disk is never filled; a join /
 > complete answer larger than the free disk now fails clearly. Still open: a bound below the disk for those shapes =
-> the Open question; a CI cell with a copy disk smaller than a query's input - e.g. a size-limited tmpfs `/copies`
-> on one node - is not built yet, the cell only checks the guard is on and never refuses on a runner); (5)
-> `package=true`, then "ITEM 30 DONE". **Next session:** the small-disk CI cell, then HAVING / avg / DISTINCT
-> aggregates over copy batches (single-node clusters and distributed complete parts), unless the Open question is
-> answered first.
+> the Open question. Small-disk CI stage done 2026-11-03 late (0418b441, 4a1d354f): sasl-cluster balanced ends with
+> one server (numServers=1) whose `/copies` is a host tmpfs of largest lineitem file + minFreeBytes (8 MiB) + 4 MiB,
+> below `chunks.lineitem`; scan + GROUP BY in parts answered in disk-sized batches before and after a complete chunks
+> join that is refused by the guard naming the files, tmpfs peak sampled below its size. It found a bug, fixed: SQL over
+> copies stayed in the per-session DuckDB statement cache, whose open statements keep the files open, so evicted
+> copies kept their disk space (2nd batch refused with 0 bytes in use); such SQL is now prepared per run and closed);
+> (5) `package=true`, then "ITEM 30 DONE". **Next session:** HAVING / avg / DISTINCT aggregates over copy batches
+> (single-node clusters and distributed complete parts), unless the Open question is answered first.
 
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
@@ -3064,3 +3067,14 @@ S3 slowdown item below stays open for then).
   `ConfigAdapterTest.hdfsLocalCopyMinFreeBytesDefaultsTo1GiBAndTakesSizes`; sasl-cluster cell requires the
   `minFreeBytes=` cache line and no `hdfs=localCopyNoSpace`. Runs on 336f9607: Dev CI 41715910689, service-hdfs
   41715910681 (10/10, both sasl-cluster cells), Catalogs CI 41715910716, all green. No `package=true` (item 30 not done). Lock released.
+- 2026-11-03 late (cloud session, core): item 30 part 2b, small copy-disk CI stage + fix. `service-hdfs-cell.sh`
+  sasl-cluster balanced ends with `smallDisk` (new `tools/ci/service-hdfs-smalldisk-check.py`): one server on dn1 with
+  `hdfsLocalCopyDir` on a 62 MiB tmpfs (chunks.lineitem 198 MiB), scans / GROUP BY in parts must match, a complete join
+  needing every copy must be answered or refused by the guard, tmpfs peak < size. First run (41724478510, 0418b441)
+  failed: 2nd copy batch refused, `inUseBytes=0` but 52 MB still used - DuckDB's cached prepared statements keep read
+  files open (reproduced with plain DuckDB JDBC 1.5.6), so evicted copies never freed their space. Fix 4a1d354f:
+  `DuckDbAdapter.readsLocalCopies` - SQL naming the copy directory is prepared per run and closed (streamSql /
+  streamComplete); regression test `DuckDbAdapterTest.streamSqlOverLocalCopiesKeepsNoFileOpen` (fails without the fix).
+  Runs on 4a1d354f: Dev CI 41726874635, service-hdfs 41726885857 (10/10; small disk: 6 copy batches, join refused,
+  peak 51941376 of 65011712 bytes), both green. No `package=true` (item 30 not done; local copies are in no pre-release
+  yet). Lock released.
