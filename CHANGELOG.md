@@ -96,6 +96,16 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Added - SASL HDFS clusters: complete answers over tables the node lacks blocks of (STATUS item 30, part 2)
+
+- A complete answer computed on the node that receives the query (non-mergeable shapes such as TPC-H joins, or
+  `distributedComplete=false`) was refused with "this node lacks blocks of ..." when a table it reads has files the
+  node does not hold whole. With local copies on (`hdfsLocalCopyMaxBytes` > 0) the node now copies those files to its
+  local cache and reads each schema-qualified reference to such a table as `read_parquet` over the copies and the
+  files it holds whole (same column types as the table's view); log line `hdfs=completeFromCopies` plus the per-query
+  `hdfs=reads` line. A reference the rewrite cannot replace is still refused naming the files; a table named without
+  its schema keeps the earlier check. With local copies off nothing changes.
+
 ### Added - SASL HDFS clusters: node-local copies of files no node holds whole (STATUS item 30, part 1)
 
 - On HDFS whose DataNodes require SASL data-transfer protection (DuckDB reads short-circuit only), a partial-mode
