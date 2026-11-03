@@ -44,6 +44,18 @@
 > (e) `package=true`. Longer term (write it as an Open question with options, do not build now): reading non-local
 > blocks under SASL (a SASL-capable libhdfs3 / hadoopfs, or a Java-client read path for remote blocks).
 > Then "ITEM 29 DONE".
+> **Maintainer, 2026-11-03 13:15 - ITEM 30 right after item 29 part 2 (decision on the Open question "reading
+> non-local HDFS blocks under SASL"): option (3), a local copy.** When a file needed by a query has no node holding
+> all its blocks (SASL DataNodes, short-circuit only), the node that runs the query copies the file through the Java
+> Hadoop client (SASL works) into a bounded node-local cache directory (setting `hdfsLocalCopyDir` +
+> `hdfsLocalCopyMaxBytes`, default under the DuckDB temp root, LRU eviction, keyed by path + length + modification
+> time so a changed file is copied again) and DuckDB reads the local copy with full Parquet pushdown. Copy whole files
+> (parallel per file, bounded concurrency), reuse copies across queries, log `hdfs=localCopy file=... bytes=... ms=...`.
+> Only for files that cannot be read short-circuit; local files keep the direct path. Tests: unit (cache keys,
+> eviction, concurrent copies of one file), CI cell (3 DataNodes, replication 2, SASL): every TPC-H file readable,
+> 22/22, plus a file whose blocks are spread so no node has all of them. Document the disk cost in START-NOTES.
+> `package=true`. Then "ITEM 30 DONE". Option (1) (SASL-capable libhdfs3 in hadoopfs) stays a long-term Open question.
+
 ITEM 29 IN PROGRESS (2026-11-03, core session). **Part 1 done (75e63681, dcc8f919):** (a) on HDFS the views take each
 > table's first footer through the Java Hadoop client (`FooterStub`: footer without row groups copied below the DuckDB
 > temp root, DuckDB describes that, removed at once; same types and hive partition columns, other stores unchanged); a
