@@ -78,6 +78,10 @@ public final class ExecutionService {
     private static final int SCHEMA_CACHE_CAPACITY = 1024;
     /** Schema name standing for a copied table in the check that every reference was replaced. */
     private static final String COPY_CHECK_SCHEMA = "__localcopy_check";
+    /** Name prefix of the Arrow views holding the part answers of batches of copies. */
+    private static final String PARTS_VIEW_PREFIX = "__kestrel_copy_parts_";
+    private static final java.util.concurrent.atomic.AtomicLong PARTS_VIEWS =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * A query's result schema with its refresh deadline.
@@ -719,12 +723,20 @@ public final class ExecutionService {
             return;
         }
         List<DataFile> unreadable = unreadableFiles(fileUris);
-        List<String[]> batches = startListener && unreadable != null && concatenatable(parsedQuery)
+        boolean concatenatable = concatenatable(parsedQuery);
+        List<String[]> batches = startListener && unreadable != null
+                && (concatenatable || mergeable(parsedQuery))
                 ? copyBatches(fileUris, unreadable, copyLimit(unreadable)) : List.of();
         if (batches.size() > 1) {
-            readInCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
-                    pathTracker);
-            return;
+            if (concatenatable) {
+                readInCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
+                        pathTracker);
+                return;
+            }
+            if (mergeCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
+                    pathTracker)) {
+                return;
+            }
         }
         try (LocalCopyCache.Lease copies = copies(unreadable, fileUris.length)) {
             readParquetFiles(allocator, query, parsedQuery, parquetFiles,
@@ -780,6 +792,97 @@ public final class ExecutionService {
                 }
             }
         }
+    }
+
+    /**
+     * Answers an aggregate whose local copies do not fit the cache at once (item 30): each batch
+     * of the ticket's files answers the query with its copies held, the copies are released
+     * before the next batch is copied, the part answers are kept in memory and merged into the
+     * ticket's answer as distributed complete mode merges endpoint answers (counts and sums
+     * summed, minima and maxima taken again, per group). The answer equals the one computed over
+     * all files at once.
+     *
+     * @param allocator   Arrow buffer allocator
+     * @param query       SQL query
+     * @param parsedQuery parsed query, an aggregate {@link #mergeable} accepts
+     * @param batches     the ticket's files in batches
+     * @param unreadable  files this node cannot read where they are
+     * @param listener    Flight stream listener, not started
+     * @param pathTracker runtime execution-path tracker
+     * @return true when the answer was streamed; false when nothing was sent and the caller
+     *         answers with every copy held at once
+     * @throws Exception on copy or execution failure, or a failure after the first batch
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    private boolean mergeCopyBatches(BufferAllocator allocator, String query,
+            ParquetQueryParser parsedQuery,
+            List<String[]> batches, List<DataFile> unreadable,
+            FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
+            throws Exception {
+        Schema expected = resultSchema(allocator, query);
+        Map<String, DataFile> byPath = new HashMap<>();
+        for (DataFile file : unreadable) {
+            byPath.put(file.relativePath(), file);
+        }
+        LOGGER.info("qid={} node={} hdfs=copyBatches batches={} files={} maxBytes={} merge=aggregate",
+                LogUtil.qid(), LogUtil.node(), batches.size(),
+                batches.stream().mapToInt(b -> b.length).sum(), localCopyCache().maxBytes());
+        try (CollectedAnswers parts = new CollectedAnswers(allocator, listener)) {
+            for (String[] batch : batches) {
+                List<DataFile> toCopy = new ArrayList<>();
+                for (String rel : batch) {
+                    DataFile file = byPath.get(rel);
+                    if (file != null) {
+                        toCopy.add(file);
+                    }
+                }
+                List<String> parquetFiles = resolveParquetFiles(batch);
+                if (parquetFiles.isEmpty()) {
+                    continue;
+                }
+                try (LocalCopyCache.Lease copies = copies(toCopy, batch.length)) {
+                    readParquetFiles(allocator, query, parsedQuery, parquetFiles,
+                            resolveUris(batch, copies), parts, true, pathTracker);
+                }
+                if (listener.isCancelled()) {
+                    return true;
+                }
+            }
+            if (parts.schema() == null) {
+                return false;
+            }
+            List<String> columns = parts.schema().getFields().stream().map(Field::getName).toList();
+            List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
+            String name = PARTS_VIEW_PREFIX + PARTS_VIEWS.incrementAndGet();
+            String sql = CompleteAnswerMerge.mergeSql(parsedQuery, name, columns, outputNames);
+            DistributedComplete.DeferredStart client = new DistributedComplete.DeferredStart(listener);
+            client.expect(expected);
+            try (org.apache.arrow.vector.ipc.ArrowReader reader = parts.reader()) {
+                readArrowParts(allocator, reader, name, sql, client);
+            } catch (Exception e) {
+                if (client.sentBatch() || listener.isCancelled()) {
+                    throw e;
+                }
+                LOGGER.warn("qid={} node={} hdfs=copyBatches merge=fallback reason='{}'",
+                        LogUtil.qid(), LogUtil.node(), e.getMessage());
+                return false;
+            }
+            client.flushStart();
+            LOGGER.info("qid={} node={} hdfs=copyBatches merged parts={} partBytes={}",
+                    LogUtil.qid(), LogUtil.node(), parts.batchCount(), parts.bytes());
+            return true;
+        }
+    }
+
+    /**
+     * Tells whether the answer of an aggregate for a set of files can be merged from its answers
+     * for parts of that set, as {@link CompleteAnswerMerge} merges endpoint answers.
+     *
+     * @param parsed parsed query
+     * @return true for an aggregate whose merge is its answer
+     */
+    static boolean mergeable(ParquetQueryParser parsed) {
+        return parsed.hasAggregation && !parsed.isJoin && CompleteAnswerMerge.refusal(parsed) == null;
     }
 
     /**

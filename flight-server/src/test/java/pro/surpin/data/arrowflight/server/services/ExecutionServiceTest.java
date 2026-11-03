@@ -718,6 +718,194 @@ class ExecutionServiceTest {
         assertEquals(List.of(1, 1, 1), copiesOnDisk);
     }
 
+    /**
+     * Item 30 part 2b: an aggregate whose local copies do not fit the cache is answered per
+     * batch of copies (one copy on disk at a time) and the part answers are merged into the
+     * answer computed over all files at once.
+     */
+    @Test
+    void aggregateLargerThanTheCopyCacheIsMergedFromBatchesThatFit(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path root = dir.resolve("localcopy");
+        String[] ticket = {"s/t/a.parquet", "s/t/b.parquet", "s/t/c.parquet", "s/t/d.parquet"};
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        List<DataFile> remote = new java.util.ArrayList<>();
+        List<String> all = new java.util.ArrayList<>();
+        long largest = 0;
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            for (int i = 0; i < ticket.length; i++) {
+                java.nio.file.Path file = dir.resolve("f" + i + ".parquet");
+                st.execute("COPY (SELECT range % 7 AS g, range AS v, CAST(range / 100 AS DECIMAL(15, 2))"
+                        + " AS d FROM range(" + i * 1000 + ", " + (i + 1) * 1000 + ")) TO '" + file
+                        + "' (FORMAT parquet)");
+                all.add("'" + file + "'");
+                DataFile data = new DataFile(ticket[i], "hdfs://ns/data/" + ticket[i],
+                        java.nio.file.Files.size(file), 1L, i == 3 ? Set.of("dn1") : Set.of());
+                when(store.readableHere(data)).thenReturn(i == 3);
+                when(store.inputFile(data)).thenReturn(new org.apache.parquet.io.LocalInputFile(file));
+                when(store.inputFile(ticket[i])).thenReturn(new org.apache.parquet.io.LocalInputFile(file));
+                when(store.duckDbUri(ticket[i])).thenReturn(file.toString());
+                when(store.duckDbUri(data)).thenReturn(file.toString());
+                if (i < 3) {
+                    remote.add(data);
+                    largest = Math.max(largest, data.size());
+                } else {
+                    when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(data));
+                }
+                when(store.file(ticket[i])).thenReturn(data);
+            }
+        }
+        when(store.parquetFiles("s/t")).thenReturn(new java.util.ArrayList<>(remote));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        java.util.concurrent.ExecutorService ioPool = java.util.concurrent.Executors.newCachedThreadPool();
+        DuckDbAdapter duckDb = org.mockito.Mockito.spy(new DuckDbAdapter(new pro.surpin.data.arrowflight
+                .server.model.AppConfig(3, 100, 1, 131072, 0, 1, 1, null, false, null, null, null, null,
+                null, false, 1048576, 67108864, 60000L, null, null, 32010, 5701, 60, 3, 1000, 30000, true,
+                false, 64, null, null, "complete", true, true), ioPool));
+        org.mockito.Mockito.doReturn(root).when(duckDb).localCopyRoot();
+        List<Integer> copiesOnDisk = new java.util.ArrayList<>();
+        org.mockito.Mockito.doAnswer(call -> {
+            assertInstanceOf(CollectedAnswers.class, call.getArgument(2));
+            try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(root)) {
+                copiesOnDisk.add((int) walk.filter(p -> p.toString().endsWith(".parquet")).count());
+            }
+            return call.callRealMethod();
+        }).when(duckDb).streamSql(any(), anyString(), any(CollectedAnswers.class),
+                org.mockito.ArgumentMatchers.eq(true));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, ioPool);
+        String source = "read_parquet([" + String.join(", ", all) + "])";
+        System.setProperty("hdfsLocalCopyMaxBytes", String.valueOf(largest));
+        try (BufferAllocator allocator = new RootAllocator()) {
+            for (String query : List.of(
+                    "SELECT g, count(*), sum(v), min(v), max(d), sum(d) FROM s.t WHERE v >= 10"
+                            + " GROUP BY g ORDER BY g",
+                    "SELECT g, min(d) AS lo, count(d) FROM s.t GROUP BY g ORDER BY g DESC",
+                    "SELECT sum(v) AS total, count(*) AS n, max(v) FROM s.t WHERE g = 3")) {
+                copiesOnDisk.clear();
+                List<String> expected = new java.util.ArrayList<>();
+                try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                        java.sql.Statement st = conn.createStatement();
+                        java.sql.ResultSet rs = st.executeQuery(query.replace("s.t", source))) {
+                    int columns = rs.getMetaData().getColumnCount();
+                    while (rs.next()) {
+                        StringBuilder row = new StringBuilder();
+                        for (int c = 1; c <= columns; c++) {
+                            row.append(c > 1 ? "|" : "").append(rs.getString(c));
+                        }
+                        expected.add(row.toString());
+                    }
+                }
+                TextRows listener = new TextRows();
+                service.readParquet(allocator, query, ticket, listener, true);
+                assertEquals(expected, listener.rows, query);
+                // Three batches of one copy each; the held file goes with the first.
+                assertEquals(List.of(1, 1, 1), copiesOnDisk, query);
+            }
+            // Merged from the part answers: no fallback that holds every copy at once.
+            verify(duckDb, org.mockito.Mockito.never()).streamSql(any(), anyString(),
+                    any(TextRows.class), org.mockito.ArgumentMatchers.anyBoolean());
+            assertEquals(0, allocator.getAllocatedMemory());
+        } finally {
+            System.clearProperty("hdfsLocalCopyMaxBytes");
+            duckDb.close();
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Item 30 part 2b: which aggregates are merged from batches of copies. */
+    @Test
+    void onlyMergeableAggregatesAreAnsweredPerBatch() {
+        for (String query : List.of("SELECT a, count(*) FROM s.t GROUP BY a",
+                "SELECT sum(b), min(c) FROM s.t WHERE a > 1",
+                "SELECT a, max(b) FROM s.t GROUP BY a ORDER BY a")) {
+            assertTrue(ExecutionService.mergeable(ParquetQueryParser.parse(query)), query);
+        }
+        for (String query : List.of("SELECT a FROM s.t", "SELECT a, count(*) FROM s.t GROUP BY a LIMIT 3",
+                "SELECT count(DISTINCT a) FROM s.t", "SELECT a, sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
+                "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(b) FROM s.t GROUP BY a",
+                "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a")) {
+            assertFalse(ExecutionService.mergeable(ParquetQueryParser.parse(query)), query);
+        }
+    }
+
+    /** Collects streamed rows as text, columns separated by |. */
+    private static final class TextRows implements
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener {
+        private final List<String> rows = new java.util.ArrayList<>();
+        private org.apache.arrow.vector.VectorSchemaRoot root;
+
+        @Override
+        public void start(org.apache.arrow.vector.VectorSchemaRoot r,
+                org.apache.arrow.vector.dictionary.DictionaryProvider p,
+                org.apache.arrow.vector.ipc.message.IpcOption o) {
+            root = r;
+        }
+
+        @Override
+        public void putNext() {
+            for (int row = 0; row < root.getRowCount(); row++) {
+                StringBuilder text = new StringBuilder();
+                for (int c = 0; c < root.getFieldVectors().size(); c++) {
+                    Object value = root.getFieldVectors().get(c).getObject(row);
+                    text.append(c > 0 ? "|" : "").append(value == null ? null
+                            : value instanceof BigDecimal d ? d.toPlainString() : value.toString());
+                }
+                rows.add(text.toString());
+            }
+        }
+
+        @Override
+        public void putNext(org.apache.arrow.memory.ArrowBuf metadata) {
+            putNext();
+        }
+
+        @Override
+        public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) {
+            // No rows.
+        }
+
+        @Override
+        public boolean isReady() {
+            return true;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return false;
+        }
+
+        @Override
+        public void setOnReadyHandler(Runnable handler) {
+            // Always ready.
+        }
+
+        @Override
+        public void setOnCancelHandler(Runnable handler) {
+            // Never cancelled.
+        }
+
+        @Override
+        public void setUseZeroCopy(boolean enabled) {
+            // Not needed.
+        }
+
+        @Override
+        public void error(Throwable cause) {
+            throw new AssertionError(cause);
+        }
+
+        @Override
+        public void completed() {
+            // The caller completes.
+        }
+    }
+
     /** Item 30 part 2b: copies that fit the cache stay one batch; others are cut to fit. */
     @Test
     void copyBatchesFitTheCacheLimit() {
