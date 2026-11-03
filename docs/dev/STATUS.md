@@ -49,7 +49,9 @@ ITEM 29 IN PROGRESS (2026-11-03, core session). **Part 1 done (75e63681, dcc8f91
 > temp root, DuckDB describes that, removed at once; same types and hive partition columns, other stores unchanged); a
 > table whose first file cannot be described (any store) is skipped with `views=skipTable ... reason=describe` and a
 > query naming it gets that reason instead of failing every query. (c) the `hdfs=shortCircuitOnly` warning says schemas
-> go through the Java client and DuckDB reads only files with every block on the node. No pre-release yet.
+> go through the Java client and DuckDB reads only files with every block on the node. Pre-release
+> `server-1.0.0-00e3e896b31e` (dev CI 41609483775, package 41612114451 with service gate green): on the stand `select 1`
+> and queries over tables whose files are all local should work again; other files still fail until part 2.
 > **Next (part 2):** (b) planner: on a short-circuit-only node a file is readable only where *every* block has a
 > replica (`HadoopDataStore` gives `DataFile.hosts()` as the *union* of block hosts - add the intersection, e.g.
 > `fullHosts`, for SASL clusters); partial / distributedComplete send each file only to such a node; a `complete`
@@ -2819,3 +2821,12 @@ S3 slowdown item below stays open for then).
   and row order under `speed` (profile table + paragraph), CHANGELOG entry; Open question "Java client short-circuit"
   removed (answered). No code change, so no CI run and no pre-release (as the maintainer asked); dev CI on main last
   green 41589351305 (413485ba).
+- 2026-11-03 (core session): item 29 part 1 (75e63681, dcc8f919): HDFS view setup reads first footers through the Java
+  Hadoop client (`FooterStub`, local footer copy below the DuckDB temp root, described by DuckDB); a table that cannot
+  be described is skipped with its reason instead of failing every query; `hdfs=shortCircuitOnly` warning reworded.
+  Tests: `FooterStubTest` (types incl. decimal/timestamptz/nested/uuid/hive partitions identical to the file; bad,
+  tiny, encrypted, escaping paths), `CatalogViewsTest` (hdfs store described from Java footers, bad table skipped,
+  reason returned), `DuckDbAdapterTest.lockdownReadsFooterStubs`. Dev CI 41607831372/41607831413 red (SpotBugs
+  NP on `getParent()`, fixed), 41609483775 green; package 41612114451 green (service gate) -> pre-release
+  `server-1.0.0-00e3e896b31e`. Open question added: non-local block reads under SASL (options). Next: item 29 part 2
+  (planner routing to nodes holding every block, CI SASL cluster cell).
