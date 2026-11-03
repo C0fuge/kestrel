@@ -854,13 +854,14 @@ class ExecutionServiceTest {
         when(parquet.localCopies()).thenReturn(true);
         when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
         java.util.concurrent.ExecutorService ioPool = java.util.concurrent.Executors.newCachedThreadPool();
-        DuckDbAdapter duckDb = org.mockito.Mockito.spy(new DuckDbAdapter(new pro.surpin.data.arrowflight
+        pro.surpin.data.arrowflight.server.model.AppConfig config = new pro.surpin.data.arrowflight
                 .server.model.AppConfig(3, 100, 1, 131072, 0, 1, 1, null, false, null, null, null, null,
                 null, false, 1048576, 67108864, 60000L, null, null, 32010, 5701, 60, 3, 1000, 30000, true,
-                false, 64, null, null, "complete", true, true), ioPool));
+                false, 64, null, null, "complete", true, true);
+        DuckDbAdapter duckDb = org.mockito.Mockito.spy(new DuckDbAdapter(config, ioPool));
         org.mockito.Mockito.doReturn(root).when(duckDb).localCopyRoot();
         ExecutionService service = new ExecutionService(parquet, duckDb,
-                mock(MetadataService.class), null, ioPool);
+                mock(MetadataService.class), config, ioPool);
         pro.surpin.data.arrowflight.server.model.ExecutionPathTracker path =
                 new pro.surpin.data.arrowflight.server.model.ExecutionPathTracker();
         try (BufferAllocator allocator = new RootAllocator()) {
