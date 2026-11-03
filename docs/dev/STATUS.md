@@ -145,7 +145,9 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > non-mergeable answers over
 > more than the cache cannot be computed from copies at once (needs a decision: refuse clearly, or spill to the DuckDB
 > temp dir with its own bound);
-> (3) `hdfsLocalCopyDir` (custom directory: needs DuckDB `allowed_directories` + `LockdownCheck`); (4) CI: the
+> (3) ~~`hdfsLocalCopyDir`~~ done 2026-11-03 evening (842f4a88): copies go to a per-process `duckdb-<pid>-*`
+> subdirectory there, allow-listed and checked by `LockdownCheck`; the sasl-cluster balanced cell copies into `/copies`;
+> (4) CI: the
 > sasl-cluster cell is the `ha-krb-sasl` topology with 3 DataNodes / 3 servers and now has TPC-H 22/22 (spread,
 > complete) + full scan + GROUP BY over `chunks` (no file held whole), and under `speed` a cache smaller than every
 > file (so smaller than the table and than `split.t`); the cell now requires `hdfs=reads` lines with local copies and
@@ -1205,6 +1207,17 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 30: complete (non-mergeable) answers and joins whose copies exceed `hdfsLocalCopyMaxBytes` (2026-11-03, core
+  lane, decision needed).** Scans and mergeable aggregates are now processed in batches that fit the cache; a join or a
+  non-mergeable `complete` answer (TPC-H joins, window functions, HAVING / LIMIT over groups) needs all its input at
+  once, so today its copies are all held during the query (beyond the limit deleted when it ends) and the copy
+  directory can grow to that query's input size. Options: (1) refuse such a query up front when its copies would
+  exceed the limit, naming the files and the limit (disk never filled; the query fails); (2) a second bound
+  `hdfsLocalCopyHardMaxBytes` (default e.g. 2x the cache or a share of the disk's free space): run while the
+  copies fit it, refuse beyond it; (3) keep today's behaviour (bounded only by the disk) and document it. Core lane's
+  suggestion: (2), with the free-space check at copy time so a query fails with a clear message instead of filling the
+  disk. Until answered, the core lane continues with the remaining shapes that can be batched (other aggregates).
 
 - **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   failed once in Dev CI 41644812393 (load 1000, want 700); passed before and locally. Watch for a repeat (likely a
@@ -3000,3 +3013,15 @@ S3 slowdown item below stays open for then).
   red (new test built the service without its AppConfig; test fixed in 4c74c89f), Dev CI 41689345981 green. No
   `package=true` (item 30 not done: other aggregates / joins / complete answers over the cache, `hdfsLocalCopyDir`,
   copy-directory peak bound left). Lock released.
+- 2026-11-03 (cloud session, core): item 30 part 2b (3) `hdfsLocalCopyDir` (842f4a88): new optional setting
+  (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`, absolute path) puts the node-local copies in a per-process
+  `duckdb-<pid>-*` subdirectory there (same naming / dead-process cleanup as the DuckDB temp root), allow-listed in the
+  DuckDB lockdown and expected by `LockdownCheck.verify(..., localCopyRoot, ...)`, deleted on close; unset or copies
+  off = unchanged (additive). Tests: `LockdownCheckTest.acceptsALocalCopyDirectoryOnlyWhenDeclared`,
+  `.adapterReadsLocalCopiesFromACustomDirectory` (locked-down read of a copy there, nothing next to it, stale dir
+  removed at start, own dir removed on close), `ConfigAdapterTest.hdfsLocalCopyDirIsUnsetByDefaultAndMustBeAbsolute`.
+  sasl-cluster balanced cell runs with `-DhdfsLocalCopyDir=/copies` (own mount per node) and fails unless every node
+  copies there (3 of 3). Runs on 842f4a88: Dev CI 41696991827, service-hdfs 41696991867 (10/10), Catalogs CI
+  41696991767, all green. New Open question: joins / non-mergeable complete answers whose copies exceed the cache.
+  No `package=true` (item 30 not done: other aggregates, joins / complete over the cache, copy-directory peak bound).
+  Lock released.
