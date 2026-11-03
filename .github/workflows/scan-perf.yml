@@ -163,8 +163,10 @@ jobs:
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
           measure() { # label, jars, extra server options
-            local label=$1 jars=$2 opts=$3 storeArgs i
+            local label=$1 jars=$2 opts=$3 storeArgs i dataDir=s3://lake/data
             if [ "$jars" = up ]; then
+              # Upstream lists the data directory with Hadoop's s3a (no s3:// file system) and reads with httpfs.
+              dataDir=s3a://lake/data
               storeArgs=(-e FLIGHT_S3_ENDPOINT=http://127.0.0.1:9000 -e FLIGHT_S3_PATH_STYLE=true)
             else
               storeArgs=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro"
@@ -180,7 +182,7 @@ jobs:
               --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
               -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
-              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir s3://lake/data --localhost 127.0.0.1 \
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$dataDir" --localhost 127.0.0.1 \
               --port 32010 --hosts 127.0.0.1 > /dev/null
             for i in $(seq 180); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
             if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
