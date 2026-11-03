@@ -50,6 +50,8 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
 | `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
+| `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
+| `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
 
 **New plugin settings (all off by default)**
 
@@ -93,6 +95,25 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Added - SASL HDFS clusters: node-local copies of files no node holds whole (STATUS item 30, part 1)
+
+- On HDFS whose DataNodes require SASL data-transfer protection (DuckDB reads short-circuit only), a partial-mode
+  endpoint or join that needs a file this node does not hold every block of now copies it through the Java Hadoop
+  client (SASL works) into a bounded cache below the DuckDB temp root (`<duckDbTempDirectory>/.../localcopy`) and
+  DuckDB reads the copy with full Parquet pushdown; files held whole keep the direct short-circuit path. Before,
+  such files were refused ("no live Flight node runs on a DataNode that holds every block of ...").
+- The planner treats such files as readable by any live node: files held whole still go to their holders, the others
+  to the least loaded node; a join runs on the node with the most local input and copies the rest.
+- Copies are keyed by path, length and modification time (a rewritten file is copied again), reused across queries,
+  made in parallel (`hdfsLocalCopyThreads`, one copy per file however many queries wait for it) and evicted least
+  recently used beyond `hdfsLocalCopyMaxBytes` (default 32 GiB; 0 = off, item 29 behaviour). Copies a running query
+  uses are never evicted; when they exceed the limit (a query needing more than the cache, or one file larger than
+  it) the extra copies are deleted as soon as the query ends. Copies are deleted when the server stops.
+- Logs: `hdfs=localCopy file=... bytes=... ms=... MBps=...` per copy and `hdfs=reads files=N shortCircuit=N
+  localCopy=N copied=N reused=N copiedBytes=N copyMs=N copyMBps=N` per query on a node that copies.
+- Not yet (part 2): a `complete` answer on a node lacking blocks is still refused (use partial results or
+  `distributedComplete=true`); the disk the copies take for one query is not yet bounded below its input size.
 
 ### Fixed - SASL HDFS clusters: files go only to nodes holding every block (STATUS item 29, part 2)
 

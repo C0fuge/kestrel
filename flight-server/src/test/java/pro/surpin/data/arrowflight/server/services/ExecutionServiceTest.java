@@ -386,11 +386,11 @@ class ExecutionServiceTest {
         String[] ticket = {"@c1/tpch/nation/data_1.parquet", "@c1/tpch/region/data_0.parquet",
             "@c1/tpch/nation_x/data_0.parquet"};
         assertEquals(List.of("s3://lake/c1/tpch/region/data_0.parquet"),
-                ExecutionService.plannedTableFiles(store, "tpch.region", ticket));
+                ExecutionService.plannedTableFiles(store, "tpch.region", ticket, null));
         assertEquals(List.of("s3://lake/c1/tpch/nation/data_1.parquet"),
-                ExecutionService.plannedTableFiles(store, "tpch.nation", ticket));
-        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.orders", ticket).isEmpty());
-        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.region", null).isEmpty());
+                ExecutionService.plannedTableFiles(store, "tpch.nation", ticket, null));
+        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.orders", ticket, null).isEmpty());
+        assertTrue(ExecutionService.plannedTableFiles(store, "tpch.region", null, null).isEmpty());
     }
 
     /** Verifies a result schema is cached for a short query and looked up again for a long one. */
@@ -521,5 +521,70 @@ class ExecutionServiceTest {
         try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.walk(stubs)) {
             assertEquals(0, left.filter(java.nio.file.Files::isRegularFile).count(), "stub removed");
         }
+    }
+
+    /**
+     * Item 30: with whole-file reads (SASL DataNodes) a ticket file this node lacks blocks of is
+     * copied through the store's Java client to the node-local cache, and DuckDB reads the copy;
+     * a file the node holds whole keeps its direct path.
+     */
+    @Test
+    void ticketFilesThisNodeCannotReadAreReadFromALocalCopy(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path source = dir.resolve("a.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT range AS v FROM range(1000)) TO '" + source + "' (FORMAT parquet)");
+        }
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        long size = java.nio.file.Files.size(source);
+        DataFile remote = new DataFile("s/t/k=x y/a.parquet", "hdfs://ns/data/s/t/k=x y/a.parquet",
+                size, 1L, Set.of());
+        DataFile held = new DataFile("s/t/k=x y/b.parquet", "hdfs://ns/data/s/t/k=x y/b.parquet",
+                size, 1L, Set.of("dn1"));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(store.parquetFiles("s/t")).thenReturn(List.of(remote, held));
+        when(store.readableHere(remote)).thenReturn(false);
+        when(store.readableHere(held)).thenReturn(true);
+        when(store.inputFile(remote)).thenReturn(new org.apache.parquet.io.LocalInputFile(source));
+        when(store.duckDbUri(anyString())).thenAnswer(inv -> "hdfs://ns/data/" + inv.getArgument(0));
+        when(duckDb.localCopyRoot()).thenReturn(dir.resolve("localcopy"));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+        String[] ticket = {remote.relativePath(), held.relativePath()};
+
+        try (pro.surpin.data.arrowflight.server.storage.LocalCopyCache.Lease lease =
+                service.localCopies(ticket)) {
+            String copy = ExecutionService.duckDbUri(store, remote.relativePath(), lease);
+            assertTrue(copy.startsWith(dir.resolve("localcopy").toString()), copy);
+            assertTrue(copy.endsWith("/s/t/k=x y/a.parquet"), "hive directories kept: " + copy);
+            assertEquals("hdfs://ns/data/s/t/k=x y/b.parquet",
+                    ExecutionService.duckDbUri(store, held.relativePath(), lease));
+            try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                    java.sql.Statement st = conn.createStatement();
+                    java.sql.ResultSet rs = st.executeQuery("SELECT count(*), sum(v) FROM read_parquet('"
+                            + copy.replace("'", "''") + "')")) {
+                assertTrue(rs.next());
+                assertEquals(1000, rs.getLong(1));
+                assertEquals(499_500, rs.getLong(2));
+            }
+        }
+        // Every file held whole: nothing to copy.
+        assertEquals(null, service.localCopies(new String[] {held.relativePath()}));
+        when(parquet.localCopies()).thenReturn(false);
+        assertEquals(null, service.localCopies(ticket));
+    }
+
+    /** The table directory of a ticket file is its first two segments. */
+    @Test
+    void tableDirectoryOfATicketFile() {
+        assertEquals("s/t", ExecutionService.tableDirectory("s/t/k=1/a.parquet"));
+        assertEquals("s/t", ExecutionService.tableDirectory("s/t/a.parquet"));
+        assertEquals("t", ExecutionService.tableDirectory("t/a.parquet"));
+        assertEquals("", ExecutionService.tableDirectory("a.parquet"));
     }
 }

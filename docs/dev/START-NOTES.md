@@ -98,6 +98,15 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   Take libhadoop from a Hadoop 3.x install for the same CPU and glibc (CI runs the 3.4.1 one with the server's 3.5.0
   jars). Without it Hadoop logs `NativeCodeLoader: Unable to load native-hadoop library` once at start; that WARN is
   harmless.
+- HDFS with SASL DataNodes (`dfs.data.transfer.protection`, startup line `hdfs=shortCircuitOnly`): DuckDB reads only
+  files whose every block is on the node's own DataNode. A partial endpoint or join that needs another file copies it
+  whole through the Java Hadoop client into `localcopy` below the DuckDB temp directory (`duckDbTempDirectory`) and
+  reads the copy (log `hdfs=localCopy`, per query `hdfs=reads ... shortCircuit=N localCopy=N`). **Disk cost:** up to
+  `hdfsLocalCopyMaxBytes` (default 32 GiB) of unused copies per node, kept for reuse and evicted least recently used,
+  plus whatever the running queries need at once (a query's copies are never evicted while it runs; beyond the limit
+  they are deleted when it ends). Put the temp directory on a disk with that much room; `hdfsLocalCopyMaxBytes=0`
+  turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted
+  when the server stops.
 - S3: DuckDB keeps its S3 connections and reads later ranges and queries over them
   (`arrowflight.s3.connectionCaching`, default true; startup line `s3=open ... connectionCaching=true`). Only with
   `connectionCaching=false` set `net.ipv4.tcp_tw_reuse=1` in the server's network namespace (container: `--sysctl

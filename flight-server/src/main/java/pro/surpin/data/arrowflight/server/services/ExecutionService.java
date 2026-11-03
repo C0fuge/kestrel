@@ -29,6 +29,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.List;
@@ -38,6 +39,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import pro.surpin.data.arrowflight.server.adapters.ConfigAdapter;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
 import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
@@ -58,6 +60,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableFile;
 import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
+import pro.surpin.data.arrowflight.server.storage.LocalCopyCache;
 
 import java.math.BigDecimal;
 
@@ -93,6 +96,8 @@ public final class ExecutionService {
     private final CatalogViews catalogViews;
     /** Whether unsigned integer columns are read as wider signed types, in both result modes. */
     private final boolean widenUnsigned;
+    /** Node-local copies of files only whole-file holders read; made on first use. */
+    private LocalCopyCache localCopyCache;
 
     /**
      * Creates ExecutionService.
@@ -530,7 +535,7 @@ public final class ExecutionService {
             Connection conn = duckDbAdapter.connection();
             List<String> aliases = new ArrayList<>();
             try {
-                createJoinViews(conn, pq, aliases, true, null);
+                createJoinViews(conn, pq, aliases, true, null, null);
                 return duckDbAdapter.describeSql(allocator, pq.duckDbSql);
             } finally {
                 dropJoinViews(conn, aliases);
@@ -678,7 +683,9 @@ public final class ExecutionService {
 
         if (parsedQuery.isJoin) {
             pathTracker.select(ExecutionPath.DUCKDB_JOIN);
-            executeJoin(allocator, parsedQuery, fileUris, listener, startListener);
+            try (LocalCopyCache.Lease copies = localCopies(fileUris)) {
+                executeJoin(allocator, parsedQuery, fileUris, copies, listener, startListener);
+            }
             return;
         }
 
@@ -700,10 +707,30 @@ public final class ExecutionService {
             LOGGER.warn("No Parquet files to read for query: {}", query);
             return;
         }
+        try (LocalCopyCache.Lease copies = localCopies(fileUris)) {
+            readParquetFiles(allocator, query, parsedQuery, parquetFiles,
+                    resolveUris(fileUris, copies), listener, startListener, pathTracker);
+        }
+    }
 
-        long tResolve = LogUtil.mark();
-        List<String> resolvedUris = resolveUris(fileUris);
-        LogUtil.logTiming(tResolve, "files.resolveUris", FILES_TIMING_PREFIX + resolvedUris.size());
+    /**
+     * Reads a query's Parquet files of one table, by aggregation or scan.
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param query         SQL query
+     * @param parsedQuery   parsed query
+     * @param parquetFiles  relative file paths
+     * @param resolvedUris  file paths as DuckDB reads them
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @param pathTracker   runtime execution-path tracker
+     * @throws Exception on execution failure
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    private void readParquetFiles(BufferAllocator allocator, String query,
+            ParquetQueryParser parsedQuery, List<String> parquetFiles, List<String> resolvedUris,
+            FlightProducer.ServerStreamListener listener, boolean startListener,
+            ExecutionPathTracker pathTracker) throws Exception {
 
         if (parsedQuery.hasAggregation) {
             LOGGER.debug("qid={} node={} execution=engine engine=DuckDB(aggregation) hasGroupBy={} files={}",
@@ -1097,13 +1124,14 @@ public final class ExecutionService {
      * @throws Exception on execution failure
      */
     private void executeJoin(BufferAllocator allocator, ParquetQueryParser pq,
-            String[] fileUris, FlightProducer.ServerStreamListener listener,
+            String[] fileUris, LocalCopyCache.Lease copies,
+            FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
         long t = LogUtil.mark();
         Connection conn = duckDbAdapter.connection();
         List<String> registeredAliases = new ArrayList<>();
         try {
-            createJoinViews(conn, pq, registeredAliases, false, fileUris);
+            createJoinViews(conn, pq, registeredAliases, false, fileUris, copies);
             duckDbAdapter.streamSql(allocator, pq.duckDbSql, listener, startListener);
         } finally {
             dropJoinViews(conn, registeredAliases);
@@ -1121,8 +1149,8 @@ public final class ExecutionService {
      * @throws Exception on file listing or DuckDB failure
      */
     private void createJoinViews(Connection conn, ParquetQueryParser pq,
-            List<String> registeredAliases, boolean empty, String[] ticketFiles)
-            throws Exception {
+            List<String> registeredAliases, boolean empty, String[] ticketFiles,
+            LocalCopyCache.Lease copies) throws Exception {
         Map<String, List<String>> tableFiles = new LinkedHashMap<>();
         DataStore store = parquetAdapter.dataStore();
         // The ticket names every file of every joined table as planned (a join has one
@@ -1135,7 +1163,7 @@ public final class ExecutionService {
                 String key = (jt.schema() != null ? jt.schema() + "." : "") + jt.table();
                 tableFiles.computeIfAbsent(key, k -> {
                     try {
-                        List<String> planned = plannedTableFiles(store, k, ticketFiles);
+                        List<String> planned = plannedTableFiles(store, k, ticketFiles, copies);
                         return planned.isEmpty() ? resolveTableFiles(k) : planned;
                     } catch (IOException e) {
                         throw new RuntimeException(e);
@@ -1232,20 +1260,133 @@ public final class ExecutionService {
     }
 
     /**
-     * Names relative files the way DuckDB reads them.
+     * Names relative files the way DuckDB reads them: a local copy where there is one.
      *
      * @param fileUris relative file paths
+     * @param copies local copies of the files this node cannot read where they are, or null
      * @return DuckDB file paths
      */
-    private List<String> resolveUris(String[] fileUris) {
+    private List<String> resolveUris(String[] fileUris, LocalCopyCache.Lease copies) {
         long t = LogUtil.mark();
         DataStore store = parquetAdapter.dataStore();
         List<String> uris = new ArrayList<>(fileUris.length);
         for (String rel : fileUris) {
-            uris.add(store.duckDbUri(rel));
+            uris.add(duckDbUri(store, rel, copies));
         }
         LogUtil.logTiming(t, "files.resolveUris", FILES_TIMING_PREFIX + uris.size());
         return uris;
+    }
+
+    /**
+     * Names one relative file the way DuckDB reads it: its local copy where there is one.
+     *
+     * @param store data store
+     * @param relativePath relative file path
+     * @param copies local copies, or null
+     * @return DuckDB file path
+     */
+    static String duckDbUri(DataStore store, String relativePath, LocalCopyCache.Lease copies) {
+        java.nio.file.Path local = copies == null ? null : copies.localPath(relativePath);
+        return local == null ? store.duckDbUri(relativePath) : local.toString();
+    }
+
+    /**
+     * Copies the files of a ticket that this node cannot read where they are (HDFS read
+     * short-circuit only: files without every block on this node's DataNode) to the node-local
+     * cache, and logs how the query's files are read (item 30).
+     *
+     * @param fileUris relative paths of the ticket, or null
+     * @return lease of the copies, or null when every file is read where it is
+     * @throws IOException when the files cannot be listed or copied
+     */
+    LocalCopyCache.Lease localCopies(String[] fileUris) throws IOException {
+        if (fileUris == null || fileUris.length == 0 || !parquetAdapter.localCopies()) {
+            return null;
+        }
+        DataStore store = parquetAdapter.dataStore();
+        List<DataFile> unreadable = filesToCopy(store, fileUris);
+        if (unreadable.isEmpty()) {
+            LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy=0",
+                    LogUtil.qid(), LogUtil.node(), fileUris.length, fileUris.length);
+            return null;
+        }
+        LocalCopyCache.Lease lease = localCopyCache().acquire(unreadable);
+        long ms = Math.max(1L, lease.millis());
+        LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy={} copied={}"
+                + " reused={} copiedBytes={} copyMs={} copyMBps={}", LogUtil.qid(), LogUtil.node(),
+                fileUris.length, fileUris.length - unreadable.size(), unreadable.size(),
+                lease.copied(), lease.reused(), lease.copiedBytes(), lease.millis(),
+                lease.copiedBytes() * 1000L / ms / (1024 * 1024));
+        return lease;
+    }
+
+    /**
+     * Picks the files of a ticket this node cannot read where they are, listing each table
+     * directory once for the block hosts.
+     *
+     * @param store data store
+     * @param fileUris relative paths of the ticket
+     * @return files to copy, in ticket order
+     * @throws IOException when a directory or file cannot be listed
+     */
+    static List<DataFile> filesToCopy(DataStore store, String[] fileUris) throws IOException {
+        Map<String, Map<String, DataFile>> listings = new HashMap<>();
+        List<DataFile> result = new ArrayList<>();
+        for (String rel : fileUris) {
+            String directory = tableDirectory(rel);
+            Map<String, DataFile> listed = listings.get(directory);
+            if (listed == null) {
+                listed = new HashMap<>();
+                for (DataFile file : store.parquetFiles(directory)) {
+                    listed.put(file.relativePath(), file);
+                }
+                listings.put(directory, listed);
+            }
+            DataFile file = listed.get(rel);
+            if (file == null) {
+                // Not a Parquet file of that directory: without hosts it counts as not readable.
+                file = store.file(rel);
+            }
+            if (!store.readableHere(file)) {
+                result.add(file);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Returns the table directory of a relative file path: its first two segments
+     * ({@code schema/table}), or its parent for a shorter path.
+     *
+     * @param relativePath relative file path
+     * @return directory relative to the data directory, empty for the data directory
+     */
+    static String tableDirectory(String relativePath) {
+        int first = relativePath.indexOf('/');
+        int second = first < 0 ? -1 : relativePath.indexOf('/', first + 1);
+        if (second > 0) {
+            return relativePath.substring(0, second);
+        }
+        return first < 0 ? "" : relativePath.substring(0, first);
+    }
+
+    /**
+     * Returns the node-local copy cache, made on first use below the DuckDB temp root.
+     *
+     * @return cache
+     * @throws IOException when its directory cannot be created
+     */
+    private synchronized LocalCopyCache localCopyCache() throws IOException {
+        if (localCopyCache == null) {
+            DataStore store = parquetAdapter.dataStore();
+            long maxBytes = ConfigAdapter.hdfsLocalCopyMaxBytes();
+            int threads = ConfigAdapter.hdfsLocalCopyThreads();
+            localCopyCache = new LocalCopyCache(duckDbAdapter.localCopyRoot(), maxBytes, threads,
+                    file -> store.inputFile(file).newStream());
+            LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={}", LogUtil.node(),
+                    localCopyCache.directory(), maxBytes, threads);
+        }
+        return localCopyCache;
     }
 
     /**
@@ -1271,9 +1412,11 @@ public final class ExecutionService {
      * @param store data store
      * @param key {@code schema.table} or {@code table}
      * @param ticketFiles relative paths of the ticket, null when there is no ticket
+     * @param copies local copies of the files this node cannot read where they are, or null
      * @return DuckDB paths of the table's files in the ticket, empty when it names none
      */
-    static List<String> plannedTableFiles(DataStore store, String key, String[] ticketFiles) {
+    static List<String> plannedTableFiles(DataStore store, String key, String[] ticketFiles,
+            LocalCopyCache.Lease copies) {
         if (store == null || ticketFiles == null) {
             return List.of();
         }
@@ -1282,7 +1425,7 @@ public final class ExecutionService {
         for (String file : ticketFiles) {
             String plain = store.unversionedPath(file);
             if (plain != null && plain.startsWith(directory)) {
-                uris.add(store.duckDbUri(file));
+                uris.add(duckDbUri(store, file, copies));
             }
         }
         return uris;

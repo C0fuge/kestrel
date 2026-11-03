@@ -1479,6 +1479,16 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the directory of node-local copies of HDFS files, below the temp root every
+     * DuckDB may read (item 30).
+     *
+     * @return local copy directory
+     */
+    public Path localCopyRoot() {
+        return tempRoot.resolve("localcopy");
+    }
+
+    /**
      * Returns this thread's DuckDB connection.
      *
      * @return JDBC connection

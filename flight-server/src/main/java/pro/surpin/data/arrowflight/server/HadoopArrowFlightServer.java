@@ -192,9 +192,15 @@ public class HadoopArrowFlightServer {
                         + " footers) are read through the Java Hadoop client, which speaks SASL; DuckDB"
                         + " (hadoopfs) reads data only short-circuit, so this node reads only files"
                         + " that have every block on its own DataNode. Queries in parts send each file"
-                        + " to a node holding all its blocks; a file no live node holds whole, or a"
-                        + " complete answer on a node missing some of its files, fails naming the"
-                        + " files", shortCircuit.transferProtection());
+                        + " to a node holding all its blocks; {}; a complete answer on a node missing"
+                        + " some of its files fails naming the files", shortCircuit.transferProtection(),
+                        pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.hdfsLocalCopyMaxBytes() > 0
+                                ? "a file no live node holds whole is copied whole through the Java"
+                                        + " client to a node-local cache (hdfsLocalCopyMaxBytes="
+                                        + pro.surpin.data.arrowflight.server.adapters.ConfigAdapter
+                                                .hdfsLocalCopyMaxBytes() + ") and read there"
+                                : "a file no live node holds whole fails naming it"
+                                        + " (hdfsLocalCopyMaxBytes=0)");
             }
             LOGGER.info("HDFS DataNode timeouts set in DuckDB: connect={} read={} (0 = left to the"
                     + " hadoopfs extension / LIBHDFS3_CONF)", config.duckDbHdfsConnectTimeoutMs(),

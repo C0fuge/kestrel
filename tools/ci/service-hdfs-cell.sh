@@ -21,7 +21,7 @@
 #           -DdistributedComplete=true; STATUS item 29): schemas tpch (replication 3: 22/22 on every
 #           node), spread (replication 2) and split (one lineitem file, 1 MiB blocks, replication 1, no
 #           DataNode holding all its blocks); tools/ci/service-hdfs-sasl-check.py: spread.lineitem
-#           exact in parts and complete on every node, split.t refused naming the file.
+#           exact in parts and complete on every node, split.t read from node-local copies (item 30).
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
@@ -317,9 +317,20 @@ read1=$(blocksRead); fds1=$(fdRequests)
 tcp=$(( ${read1:-0} - ${read0:-0} )) fds=$(( fds1 - fds0 ))
 note "DataNodes during the check: blocks read over TCP $tcp (JMX BlocksRead ${read0:-?} -> ${read1:-?}), short-circuit fd requests $fds"
 result=$(grep -m 1 '^result ' "$work/client.log")
+# Item 30: files a node lacks blocks of are copied through the Java client, over TCP (SASL).
+copies=0; copyBlocks=0
+if [ "$n" -gt 1 ]; then
+  for i in $(seq "$n"); do
+    c=$(docker logs "srv$i" 2>&1 | grep -c 'hdfs=localCopy ')
+    copies=$(( copies + c ))
+    [ "$c" -gt 0 ] && copyBlocks=$(( copyBlocks + ${blocks:-0} + c ))
+  done
+  note "local copies: $copies file(s) (+$copyBlocks blocks allowed over TCP); $(docker logs srv1 2>&1 | grep -m 1 -oE 'hdfs=reads .*' || echo 'srv1: no hdfs=reads line')"
+fi
+bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
-  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt $(( 3 * n * ${files:-0} )) ] || [ "$fds" -eq 0 ]; }; then
-    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer bound $(( 3 * n * ${files:-0} )), $fds short-circuit fd requests)"
+  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
+    finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
   finish pass ""
 fi

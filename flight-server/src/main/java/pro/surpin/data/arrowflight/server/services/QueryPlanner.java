@@ -618,7 +618,7 @@ public final class QueryPlanner {
         }
         try {
             validatePathLocations(pathLocations, parsed, allServerUris,
-                    parquetAdapter.sharedStorage(), parquetAdapter.wholeFileReadsOnly());
+                    parquetAdapter.sharedStorage(), onlyWholeFileHoldersRead());
         } catch (IOException e) {
             if (!reusedCache) {
                 throw e;
@@ -626,7 +626,7 @@ public final class QueryPlanner {
             filePlanCache.remove(cacheKey, cached);
             pathLocations = loadFilePlan(parsed, cacheKey, System.nanoTime());
             validatePathLocations(pathLocations, parsed, allServerUris,
-                    parquetAdapter.sharedStorage(), parquetAdapter.wholeFileReadsOnly());
+                    parquetAdapter.sharedStorage(), onlyWholeFileHoldersRead());
         }
         return pathLocations;
     }
@@ -785,12 +785,22 @@ public final class QueryPlanner {
 
     /**
      * Tells whether any live node can read any file: shared storage that every node reads
-     * remotely, not HDFS read only short-circuit.
+     * remotely, or HDFS read short-circuit with node-local copies of the other files.
      *
      * @return true when a file may go to a node that does not hold it
      */
     private boolean anyNodeReadsAnyFile() {
-        return parquetAdapter.sharedStorage() && !parquetAdapter.wholeFileReadsOnly();
+        return parquetAdapter.sharedStorage() && !onlyWholeFileHoldersRead();
+    }
+
+    /**
+     * Tells whether a file may go only to a node holding every block of it: HDFS read
+     * short-circuit only, without node-local copies of the other files (item 30).
+     *
+     * @return true when no other node can read a file
+     */
+    private boolean onlyWholeFileHoldersRead() {
+        return parquetAdapter.wholeFileReadsOnly() && !parquetAdapter.localCopies();
     }
 
     /**
@@ -820,7 +830,7 @@ public final class QueryPlanner {
             // Every node can read every file: run the join where most of its input is local.
             allFilesServer = serverWithMostLocalBytes(pathLocations, allServerUris);
         }
-        if (allFilesServer == null && parquetAdapter.wholeFileReadsOnly()) {
+        if (allFilesServer == null && onlyWholeFileHoldersRead()) {
             throw new IOException(unreadableFilesMessage(new ArrayList<>(pathLocations.keySet()),
                     "a join runs on one node, and no live node holds every block of all"));
         }

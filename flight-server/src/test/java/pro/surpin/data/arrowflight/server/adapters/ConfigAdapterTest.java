@@ -273,6 +273,26 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
+        assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));
+        assertEquals(500_000_000L, ConfigAdapter.hdfsLocalCopyMaxBytes(
+                source(Map.of("hdfsLocalCopyMaxBytes", "500MB"), Map.of())));
+        assertEquals(2L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_MAX_BYTES", " 2GiB "))));
+        assertEquals(0L, ConfigAdapter.hdfsLocalCopyMaxBytes(
+                source(Map.of("hdfsLocalCopyMaxBytes", "0"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyMaxBytes(
+                source(Map.of("hdfsLocalCopyMaxBytes", "lots"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyMaxBytes(
+                source(Map.of("hdfsLocalCopyMaxBytes", "50%"), Map.of())));
+        assertEquals(4, ConfigAdapter.hdfsLocalCopyThreads(source(Map.of(), Map.of())));
+        assertEquals(8, ConfigAdapter.hdfsLocalCopyThreads(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_THREADS", "8"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyThreads(
+                source(Map.of("hdfsLocalCopyThreads", "0"), Map.of())));
+    }
+
+    @Test
     void plainFlightCommandsAreOffByDefaultAndRefuseOtherValues() throws IOException {
         assertFalse(ConfigAdapter.plainFlightCommands(source(Map.of(), Map.of())));
         assertTrue(ConfigAdapter.plainFlightCommands(

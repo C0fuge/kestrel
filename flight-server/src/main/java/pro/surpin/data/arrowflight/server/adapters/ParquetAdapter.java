@@ -39,6 +39,8 @@ public class ParquetAdapter {
     private static final long METADATA_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private final DataStore store;
+    /** Bound of the node-local copies of files only whole-file holders read; 0 = none. */
+    private final long localCopyMaxBytes = ConfigAdapter.hdfsLocalCopyMaxBytes();
     private final String dataDirectory;
     private final String localhost;
     private final CatalogTables catalogTables;
@@ -760,6 +762,16 @@ public class ParquetAdapter {
      */
     public boolean wholeFileReadsOnly() {
         return store.wholeFileReadsOnly();
+    }
+
+    /**
+     * Tells whether a node copies the files it cannot read where they are (only whole-file
+     * holders read them) to a node-local cache, so that any node can read any file (item 30).
+     *
+     * @return true with whole-file reads and {@code hdfsLocalCopyMaxBytes} above 0
+     */
+    public boolean localCopies() {
+        return store.wholeFileReadsOnly() && localCopyMaxBytes > 0;
     }
 
     /**

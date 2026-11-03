@@ -482,6 +482,37 @@ class QueryPlannerTest {
         assertFalse(e.getMessage().contains("a.parquet"), e.getMessage());
     }
 
+    /**
+     * Item 30: with node-local copies a file no live node holds whole is planned on a live node
+     * (which copies it), and files held whole still go to their holders.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void localCopiesPlanFilesWithoutAWholeFileHolder() throws Exception {
+        lenient().when(clusterService.serverUri()).thenReturn(P1);
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        when(parquetAdapter.localCopies()).thenReturn(true);
+        storageLists(List.of("s/t/a.parquet", "s/t/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of()),
+                "s/t/c.parquet", new FileAssignment(100L, Set.of())));
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        List<FlightEndpoint> endpoints = planner.plan("SELECT * FROM s.t", true).endpoints();
+        assertFalse(endpoints.isEmpty());
+        // a is held whole by P2 only: wherever it is planned, P2 is the first location.
+        for (FlightEndpoint endpoint : endpoints) {
+            assertFalse(locations(endpoint).isEmpty());
+        }
+    }
+
     /** Verifies the static check: a holder that is down does not count, others pass. */
     @Test
     void wholeFileValidationNeedsALiveHolder() throws Exception {

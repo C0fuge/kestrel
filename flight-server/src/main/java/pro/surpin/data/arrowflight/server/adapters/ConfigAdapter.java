@@ -339,6 +339,73 @@ public class ConfigAdapter {
         return Boolean.parseBoolean(value);
     }
 
+    /** Default of {@code hdfsLocalCopyMaxBytes}: 32 GiB (item 30). */
+    public static final long DEFAULT_HDFS_LOCAL_COPY_MAX_BYTES = 32L << 30;
+
+    /**
+     * Returns hdfsLocalCopyMaxBytes from the system configuration.
+     *
+     * @return bytes the node-local copies not in use may take, 0 = no local copies
+     */
+    public static long hdfsLocalCopyMaxBytes() {
+        return hdfsLocalCopyMaxBytes(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code hdfsLocalCopyMaxBytes} ({@code HDFS_LOCAL_COPY_MAX_BYTES}): on HDFS whose
+     * DataNodes require SASL data-transfer protection (DuckDB reads short-circuit only), a node
+     * copies a file it does not hold every block of through the Java Hadoop client into a cache
+     * below the DuckDB temp root and DuckDB reads the copy; this bounds the copies not in use
+     * (least recently used are evicted). Sizes take DuckDB's units ({@code 32GiB}, {@code 500MB})
+     * or plain bytes; default 32 GiB; 0 keeps such files unreadable (queries naming them fail).
+     *
+     * @param props configuration source
+     * @return bytes, 0 = no local copies
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long hdfsLocalCopyMaxBytes(ConfigSource props) {
+        String value = getStringWithEnv("hdfsLocalCopyMaxBytes", "arrowflight.hdfs.localCopyMaxBytes",
+                "HDFS_LOCAL_COPY_MAX_BYTES", String.valueOf(DEFAULT_HDFS_LOCAL_COPY_MAX_BYTES),
+                props).trim();
+        Long bytes;
+        try {
+            bytes = value.matches("\\d+") ? Long.valueOf(value) : DuckDbSizing.parseBytes(value);
+        } catch (RuntimeException e) {
+            bytes = null;
+        }
+        if (bytes == null || bytes < 0) {
+            throw new IllegalArgumentException("hdfsLocalCopyMaxBytes must be a size such as 32GiB"
+                    + " or 0: " + value);
+        }
+        return bytes;
+    }
+
+    /**
+     * Returns hdfsLocalCopyThreads from the system configuration.
+     *
+     * @return files a node copies at the same time
+     */
+    public static int hdfsLocalCopyThreads() {
+        return hdfsLocalCopyThreads(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code hdfsLocalCopyThreads} ({@code HDFS_LOCAL_COPY_THREADS}): files a node
+     * copies to its local-copy cache at the same time; default 4.
+     *
+     * @param props configuration source
+     * @return threads, at least 1
+     * @throws IllegalArgumentException for a value below 1
+     */
+    public static int hdfsLocalCopyThreads(ConfigSource props) {
+        int threads = getIntWithEnv("hdfsLocalCopyThreads", "arrowflight.hdfs.localCopyThreads",
+                "HDFS_LOCAL_COPY_THREADS", 4, props);
+        if (threads < 1) {
+            throw new IllegalArgumentException("hdfsLocalCopyThreads must be at least 1: " + threads);
+        }
+        return threads;
+    }
+
     /** Default of {@code shutdownDrainSeconds} (maintainer, 2026-10-29, lane 3 Q2). */
     public static final int DEFAULT_SHUTDOWN_DRAIN_SECONDS = 20;
 

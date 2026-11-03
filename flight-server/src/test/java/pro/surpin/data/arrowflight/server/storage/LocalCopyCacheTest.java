@@ -1,0 +1,276 @@
+package pro.surpin.data.arrowflight.server.storage;
+
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import pro.surpin.data.arrowflight.spi.storage.DataFile;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Tests the node-local copy cache of HDFS files (item 30).
+ */
+@Tag("unit")
+class LocalCopyCacheTest {
+
+    @TempDir
+    Path dir;
+
+    /** Opens of each file location, to count copies. */
+    private final Map<String, AtomicInteger> opens = new ConcurrentHashMap<>();
+
+    /**
+     * Describes a file of a given length whose bytes are its length repeated.
+     *
+     * @param path relative path
+     * @param size length
+     * @param modified modification time
+     * @return data file
+     */
+    private static DataFile file(String path, int size, long modified) {
+        return new DataFile(path, "hdfs://ns/data/" + path, size, modified, Set.of());
+    }
+
+    /**
+     * Returns the bytes the test copier serves for a file.
+     *
+     * @param file data file
+     * @return content
+     */
+    private static byte[] content(DataFile file) {
+        byte[] bytes = new byte[(int) file.size()];
+        java.util.Arrays.fill(bytes, (byte) (file.size() + file.modificationTime()));
+        return bytes;
+    }
+
+    /**
+     * Returns a copier that serves {@link #content(DataFile)} and counts opens.
+     *
+     * @return copier
+     */
+    private LocalCopyCache.Copier copier() {
+        return f -> {
+            opens.computeIfAbsent(f.location(), k -> new AtomicInteger()).incrementAndGet();
+            return new ByteArrayInputStream(content(f));
+        };
+    }
+
+    @Test
+    void keyChangesWithLengthAndModificationTime() {
+        String key = LocalCopyCache.key(file("t/a.parquet", 10, 1));
+        assertEquals(key, LocalCopyCache.key(file("t/a.parquet", 10, 1)));
+        assertNotEquals(key, LocalCopyCache.key(file("t/a.parquet", 11, 1)));
+        assertNotEquals(key, LocalCopyCache.key(file("t/a.parquet", 10, 2)));
+        assertNotEquals(key, LocalCopyCache.key(file("t/b.parquet", 10, 1)));
+    }
+
+    @Test
+    void copyKeepsTheRelativePathForHivePartitions() {
+        String path = LocalCopyCache.copyPath("k", "s/t/k=REG AIR/part-0.parquet");
+        assertTrue(path.endsWith("/s/t/k=REG AIR/part-0.parquet"), path);
+        assertFalse(LocalCopyCache.copyPath("k", "../../etc/passwd").contains(".."));
+    }
+
+    @Test
+    void copiesOnceAndReusesAcrossQueries() throws IOException {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier())) {
+            Path first;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                first = lease.localPath(a.relativePath());
+                assertArrayEquals(content(a), Files.readAllBytes(first));
+                assertEquals(1, lease.copied());
+                assertEquals(100, lease.copiedBytes());
+            }
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                assertEquals(first, lease.localPath(a.relativePath()));
+                assertEquals(0, lease.copied());
+                assertEquals(1, lease.reused());
+                assertNull(lease.localPath("s/t/other.parquet"));
+            }
+            assertEquals(1, opens.get(a.location()).get());
+        }
+    }
+
+    @Test
+    void rewrittenFileIsCopiedAgain() throws IOException {
+        DataFile old = file("s/t/a.parquet", 100, 1);
+        DataFile rewritten = file("s/t/a.parquet", 100, 2);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier())) {
+            cache.acquire(List.of(old)).close();
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(rewritten))) {
+                assertEquals(1, lease.copied());
+                assertArrayEquals(content(rewritten),
+                        Files.readAllBytes(lease.localPath(rewritten.relativePath())));
+            }
+            assertEquals(2, opens.get(old.location()).get());
+        }
+    }
+
+    @Test
+    void evictsLeastRecentlyUsedCopiesNotInUse() throws IOException {
+        DataFile a = file("s/t/a.parquet", 400, 1);
+        DataFile b = file("s/t/b.parquet", 400, 1);
+        DataFile c = file("s/t/c.parquet", 400, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier())) {
+            Path pathA;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                pathA = lease.localPath(a.relativePath());
+            }
+            cache.acquire(List.of(b)).close();
+            // a is the least recently used: c takes its place.
+            cache.acquire(List.of(c)).close();
+            assertFalse(Files.exists(pathA));
+            assertEquals(2, cache.size());
+            assertEquals(800, cache.cachedBytes());
+            cache.acquire(List.of(b)).close();
+            assertEquals(1, opens.get(b.location()).get());
+        }
+    }
+
+    @Test
+    void copiesInUseAreKeptOverTheLimitAndDeletedAfterUse() throws IOException {
+        DataFile a = file("s/t/a.parquet", 600, 1);
+        DataFile b = file("s/t/b.parquet", 600, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier())) {
+            Path pathA;
+            Path pathB;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a, b))) {
+                pathA = lease.localPath(a.relativePath());
+                pathB = lease.localPath(b.relativePath());
+                // A query needs both: both stay while it runs, over the limit.
+                assertArrayEquals(content(a), Files.readAllBytes(pathA));
+                assertArrayEquals(content(b), Files.readAllBytes(pathB));
+                assertEquals(1200, cache.cachedBytes());
+            }
+            assertTrue(cache.cachedBytes() <= 1000, "after use the cache is back under its limit");
+            assertFalse(Files.exists(pathA) && Files.exists(pathB));
+        }
+    }
+
+    @Test
+    void fileLargerThanTheLimitIsCopiedAndDeletedAfterUse() throws IOException {
+        DataFile big = file("s/t/big.parquet", 2000, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier())) {
+            Path path;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(big))) {
+                path = lease.localPath(big.relativePath());
+                assertEquals(2000, Files.size(path));
+            }
+            assertFalse(Files.exists(path));
+            assertEquals(0, cache.cachedBytes());
+            assertEquals(0, cache.size());
+        }
+    }
+
+    @Test
+    void concurrentQueriesCopyOneFileOnce() throws Exception {
+        DataFile a = file("s/t/a.parquet", 5000, 1);
+        CountDownLatch release = new CountDownLatch(1);
+        LocalCopyCache.Copier slow = f -> {
+            opens.computeIfAbsent(f.location(), k -> new AtomicInteger()).incrementAndGet();
+            try {
+                assertTrue(release.await(10, TimeUnit.SECONDS));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new ByteArrayInputStream(content(f));
+        };
+        ExecutorService queries = Executors.newFixedThreadPool(4);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 100_000, 4, slow)) {
+            List<Future<Path>> results = new java.util.ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                results.add(queries.submit(() -> {
+                    try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                        return lease.localPath(a.relativePath());
+                    }
+                }));
+            }
+            Thread.sleep(200);
+            release.countDown();
+            Path first = results.get(0).get(10, TimeUnit.SECONDS);
+            for (Future<Path> result : results) {
+                assertEquals(first, result.get(10, TimeUnit.SECONDS));
+            }
+            assertEquals(1, opens.get(a.location()).get());
+            assertArrayEquals(content(a), Files.readAllBytes(first));
+        } finally {
+            queries.shutdownNow();
+        }
+    }
+
+    @Test
+    void failedCopyLeavesNothingAndIsRetried() throws IOException {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        AtomicInteger calls = new AtomicInteger();
+        LocalCopyCache.Copier flaky = f -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new IOException("Connection reset by peer");
+            }
+            return new ByteArrayInputStream(content(f));
+        };
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, flaky)) {
+            IOException e = assertThrows(IOException.class, () -> cache.acquire(List.of(a)));
+            assertTrue(e.getMessage().contains("s/t/a.parquet"), e.getMessage());
+            assertEquals(0, cache.cachedBytes());
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                assertArrayEquals(content(a), Files.readAllBytes(lease.localPath(a.relativePath())));
+            }
+        }
+    }
+
+    @Test
+    void truncatedCopyIsRefused() throws IOException {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        LocalCopyCache.Copier shortRead = f -> new ByteArrayInputStream(new byte[10]);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, shortRead)) {
+            IOException e = assertThrows(IOException.class, () -> cache.acquire(List.of(a)));
+            assertTrue(e.getMessage().contains("changed while it was copied"), e.getMessage());
+            try (java.util.stream.Stream<Path> left = Files.walk(dir.resolve("c"))) {
+                assertEquals(1, left.count(), "only the cache directory is left");
+            }
+        }
+    }
+
+    @Test
+    void closeDeletesEveryCopy() throws IOException {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 1000, 2, copier());
+        Path path;
+        try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+            path = lease.localPath(a.relativePath());
+        }
+        cache.close();
+        assertFalse(Files.exists(path));
+    }
+
+    @Test
+    void refusesANonPositiveLimit() {
+        InputStream unused = InputStream.nullInputStream();
+        assertThrows(IllegalArgumentException.class,
+                () -> new LocalCopyCache(dir, 0, 1, f -> unused));
+    }
+}
