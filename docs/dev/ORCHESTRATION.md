@@ -1,60 +1,62 @@
 # Orchestration status
 
-Status as of **2026-11-03 05:00 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 06:00 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 27 DONE** (core, S3 single-stream scan/export; not started), **IMPROVEMENTS DONE** in marten (step 3
-running) and heron (fix pending), and an egret FRESH result for the newest pre-release (the item 26 pre-release is still
-being packaged). **ITEM 26 DONE** is written (2026-11-03, e016818c / ad141bf5 / 78c7e875).
+Not ready yet: **ITEM 27 DONE** (core, S3 single-stream scan/export; in progress), **IMPROVEMENTS DONE** in marten (item 2
+needs one fix: q12/q14 regressed) and heron (fix pending), and an egret FRESH result for the newest pre-release
+(`server-1.0.0-25aa7eec0f0f`, run 41584018828 in progress). **ITEM 26 DONE** is written (pre-release `server-1.0.0-25aa7eec0f0f`).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 26 done, `package=true` pending; ITEM 27 next | 04:21Z (25aa7eec) | taken 03:41Z (valid, 79 min) | Dev CI 41577631438 (main 25aa7eec) green; package run 41577668888 (`ci/core-sc`) in progress |
-| plugins (`PLUGINS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:23Z (cdc4c5df) | free | Dev CI green |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 16:18Z | free | Catalogs CI 41577070039 green |
-| lane 3 (`LANE3-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:39Z (fbfced79) | free | - |
+| core (`STATUS.md`) | ITEM 27 (S3 scan/export vs upstream): new `scan-perf.yml` (92c83c8d, 6d694810) | 05:45Z (6d694810, 10 min) | taken 05:40Z (valid, 15 min) | Dev CI 41577631438 (main 25aa7eec) green; Scan perf 41585602654 failed (first try of the new workflow, fixed by 6d694810), 41585815577 in progress |
+| plugins (`PLUGINS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:23Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 16:18Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:39Z | free | - |
 
-No stale locks (kestrel, marten 04:40Z, heron 04:51Z). Dev CI on main: newest run green, nothing to rerun. Item 26's
-service-hdfs pushes 41575245509 / 41576424084 / 41577070056 failed while the lane iterated; fixed by 25aa7eec (41577631525 green).
+No stale locks (kestrel core 05:40Z; marten free; heron 04:51Z, 65 min). Dev CI on main: newest run green, nothing to rerun.
 
 ## Service matrix (newest runs)
 
 | Workflow | Run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 41579846717 | 25aa7eec (`ci/core-sc`) | pass |
-| service-hdfs.yml | 41577631525 | 25aa7eec (main) | pass (8 cells incl. `ha-krb-sasl`) |
-| service-security.yml | 41579850394 | 25aa7eec (`ci/core-sc`) | in progress |
-| service-stores.yml | 41579854352 | 25aa7eec (`ci/core-sc`) | pass |
+| service-cluster.yml | 41579846717 | 25aa7eec | pass |
+| service-hdfs.yml | 41577631525 | 25aa7eec | pass (8 cells incl. `ha-krb-sasl`) |
+| service-security.yml | 41579850394 | 25aa7eec | pass |
+| service-stores.yml | 41579854352 | 25aa7eec | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-57e054887f7a` (2026-11-02 18:12Z): item 25 core part, first through the service gate.
-- `server-1.0.0-f8ba588a8295` (2026-11-02 17:24Z): HDFS fix + ranger table check fix.
-- `server-1.0.0-c4cd985f37e3` (2026-11-02 15:51Z): first with the HDFS fix.
-- Expected next: `server-1.0.0-25aa7eec...` (item 26) from run 41577668888.
+- `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:59Z): item 26 (hadoopfs short-circuit from LIBHDFS3_CONF / hdfs-site.xml).
+- `server-1.0.0-f8ba588a8295` (2026-11-02 17:43Z): HDFS fix + ranger table check fix.
+- `server-1.0.0-c4cd985f37e3` (2026-11-02 16:11Z): first with the HDFS fix.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: steps 1 (`avg()` pushdown) and 2 (join-key pushdown, IS NOT NULL fix 17b6cc9) green (fe 41578204766, be
-  41579557200); step 3 under way: m4 41580199568 and compare 41580201961 (SF1 ours/up) dispatched 04:48Z. Not DONE.
-- heron: cause found - the 4 key-range statements per big scan (`split-count=4`); `split_count=1` 80.0 s vs ours 115.3 vs
-  upstream 91.9 (SF10, 5 join queries). Next: full compare run 41579205198, then switch the default to 1 unless the
-  maintainer answers the split_count Open question otherwise. Not DONE.
+- marten: items 1 (`avg()` pushdown) and 3 (compare "after") done; item 2 (join-key pushdown) needs one fix. BE
+  41579557200, m4 41580199568 S3 checks 1-9 PASS; compare SF1 41580201961, SF10 41582285095: q01 6.08 -> 2.69 s (up 2.60),
+  q17 3.19 -> 1.03 s (up 1.06) closed; q12 1.88 -> 4.15 s and q14 1.28 -> 2.44 s regressed (lineitem as key source, >10k
+  keys); SF10 default common-20 ours 68.3 vs up 56.2 s, speed 52.7 vs 53.3 s. Not DONE.
+- heron: session 96 found the cause (4 key-range splits per scan; `split_count=1` 80.0 s vs 115.3 default vs 91.9
+  upstream, SF10 join queries); full compare 41579205198 green (1h19m), lane locked 04:51Z, next step switch the default
+  unless the maintainer answers the split_count Open question. Not DONE.
 
 ## egret
 
-- Newest fresh-upstream waves: `fresh-up-f06b5834e76e` (41437099791) and `fresh-up-fc-f06b5834e76e` (41437982824); no
-  `results/FRESH-*.md` file yet. Item 27 numbers (upstream 6e264c10f403): S3 scan x1 0.80, ADBC export 0.73 of upstream.
-- README 'In progress': idle 03:26Z, "no kestrel pre-release newer than 57e054887f7a"; waits for the item 26 pre-release.
+- Fresh three-way on `25aa7eec0f0f` running: run 41584018828, wave `fresh-up-25aa7eec0f0f` (A balanced, B speed, C upstream
+  native `6e264c10f403`), started 05:27Z. No `results/FRESH-*.md` yet; previous waves `fresh-up-f06b5834e76e` (41437099791).
+  Item 27 baseline (upstream 6e264c10f403): S3 scan x1 0.80, ADBC export 0.73 of upstream.
 
 ## For the maintainer
 
 - heron: changing the Trino connector default `arrow-flight.split-count` 4 -> 1 is a default change; the lane will do it
-  after the full compare unless you answer its split_count Open question otherwise.
+  unless you answer its split_count Open question otherwise.
 - Nothing else blocking.
 
 ## History
+
+- 2026-11-03 06:00Z: core on ITEM 27 (locked 05:40Z, scan-perf workflow added); pre-release 25aa7eec0f0f out, service matrix 4/4 green; egret fresh run 41584018828 on it; marten q01/q17 closed but q12/q14 regressed (item 2 fix pending); heron full compare green, lane working; no stale locks, no red Dev CI.
 
 - 2026-11-03 05:00Z: ITEM 26 DONE written (package run 41577668888 on `ci/core-sc` with service gate in progress); service-hdfs 8/8 green on main; marten improvements steps 1-2 green, step 3 compare dispatched; heron found cause (split-count), waits on full compare / split_count question; no stale locks, no red CI.
 - 2026-11-03 04:00Z: core on ITEM 26 (locked 03:41Z); marten improvements steps 1-2 pushed, heron started; all CI green; newest pre-release 57e054887f7a; no stale locks.
