@@ -2826,7 +2826,7 @@ S3 slowdown item below stays open for then).
   be described is skipped with its reason instead of failing every query; `hdfs=shortCircuitOnly` warning reworded.
   Tests: `FooterStubTest` (types incl. decimal/timestamptz/nested/uuid/hive partitions identical to the file; bad,
   tiny, encrypted, escaping paths), `CatalogViewsTest` (hdfs store described from Java footers, bad table skipped,
-  reason returned), `DuckDbAdapterTest.lockdownReadsFooterStubs`. Dev CI 41607831372/41607831413 red (SpotBugs
+  reason returned), `DuckDbAdapterTest.lockdownReadsFooterStubs`. Dev CI 41607831413 red (SpotBugs
   NP on `getParent()`, fixed), 41609483775 green; package 41612114451 green (service gate) -> pre-release
   `server-1.0.0-00e3e896b31e`. Open question added: non-local block reads under SASL (options). Next: item 29 part 2
   (planner routing to nodes holding every block, CI SASL cluster cell).
