@@ -612,13 +612,22 @@ public final class ExecutionService {
         DataFile sample = parquetAdapter.sampleFile(pq.schema, pq.table)
                 .orElseThrow(() -> new IOException(
                         "No Parquet files for table " + pq.schema + "." + pq.table));
-        String from = "(SELECT * FROM " + tableSource(pq.schema, pq.table, List.of(
-                parquetAdapter.dataStore().duckDbUri(sample)))
-                + " LIMIT 0)";
-        String duckSql = pq.hasAggregation
-                ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
-                : DuckDbAdapter.buildSelectSql(pq, from);
-        return duckDbAdapter.describeSql(allocator, duckSql);
+        pro.surpin.data.arrowflight.server.storage.DataStore store = parquetAdapter.dataStore();
+        String location = store.duckDbUri(sample);
+        // HDFS under SASL: a file without every block here cannot be read by DuckDB; describe
+        // its footer, read through the Java client, instead (item 29).
+        try (pro.surpin.data.arrowflight.server.duckdb.FooterStub stub = store.wholeFileReadsOnly()
+                && !store.readableHere(sample)
+                ? pro.surpin.data.arrowflight.server.duckdb.FooterStub.write(store.inputFile(sample),
+                        duckDbAdapter.footerStubRoot(), location) : null) {
+            String from = "(SELECT * FROM " + tableSource(pq.schema, pq.table, List.of(
+                    stub == null ? location : stub.file().toString()))
+                    + " LIMIT 0)";
+            String duckSql = pq.hasAggregation
+                    ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
+                    : DuckDbAdapter.buildSelectSql(pq, from);
+            return duckDbAdapter.describeSql(allocator, duckSql);
+        }
     }
 
     /**

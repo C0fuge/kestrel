@@ -331,8 +331,9 @@ public class ParquetAdapter {
      *
      * @param schema schema name
      * @param table  table name
-     * @return first Parquet file in path order (remembered for the metadata TTL), or empty when
-     *         the table has none
+     * @return first Parquet file in path order that this node can read (HDFS under SASL: one
+     *         with every block here; the first file when none is), remembered for the metadata
+     *         TTL, or empty when the table has none
      * @throws IOException on storage access failure
      */
     public java.util.Optional<DataFile> sampleFile(String schema, String table) throws IOException {
@@ -347,7 +348,8 @@ public class ParquetAdapter {
             sampleFileCache.remove(key);
             return java.util.Optional.empty();
         }
-        DataFile first = files.get(0);
+        DataFile first = files.stream().filter(store::readableHere).findFirst()
+                .orElse(files.get(0));
         sampleFileCache.put(key, new CachedSampleFile(first, now + METADATA_TTL_NANOS));
         return java.util.Optional.of(first);
     }

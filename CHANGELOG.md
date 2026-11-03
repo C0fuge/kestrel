@@ -111,6 +111,9 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   a file the node holds whole; a table the node holds no file of gets a typed view that fails with the reason when
   read (queries in parts still read it on the nodes holding its files). A view DuckDB still cannot create is logged
   (`views=createFailed`) and skipped alone instead of failing every other table's view.
+- A query in parts no longer announces a guessed result schema on such clusters (e.g. `sum` of a decimal as double
+  while the endpoints send decimal: ADBC "endpoint returned inconsistent schema"): the schema is described on a
+  sample file this node holds whole, else on its footer read through the Java client.
 - CI: `service-hdfs.yml` cell `sasl-cluster` (3 DataNodes, 3 servers, Kerberos + SASL; schemas with replication
   3 / 2 and a file no DataNode holds whole).
 
