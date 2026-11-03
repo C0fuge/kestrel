@@ -1,61 +1,60 @@
 # Orchestration status
 
-Status as of **2026-11-02 18:00 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 04:00 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 25 DONE** (core: `service-hdfs.yml` + pre-release gate; not started, workflow does not exist)
-and **SERVICE MATRIX plugins DONE** (tag-policy fix 3f71355e + cell change 201df3b2 pushed, service-security run
-41494830118 in progress) are still missing.
+Not ready yet: **ITEM 26 DONE** (core, hadoopfs short-circuit; session started 03:41Z), **ITEM 27 DONE** (core, S3
+single-stream scan/export), **IMPROVEMENTS DONE** in marten (step 2 of 3) and heron (investigation started), and an
+egret FRESH result for the newest pre-release `server-1.0.0-57e054887f7a` (newest fresh-upstream wave is for
+`f06b5834e76e`).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | RANGER TABLE CHECK FIX DONE, pre-release f8ba588a8295; next: ITEM 25 core part (`service-hdfs.yml`: plain + HA + Kerberos + short-circuit, and the `package=true` gate) | 17:44Z (695f4b1e) | free | Dev CI 41491152401 (`ci/core-authz-fix` = f8ba588a) and 41490875833 (main f8ba588a) green; later main push runs cancelled by newer pushes; 41495736054 (29903c01) running |
-| plugins (`PLUGINS-STATUS.md`) | bug first: `ranger-hive` tag policies (fix 3f71355e: restrictive tag policies refuse only tagged tables; 201df3b2: cell creates the `EXPIRES_ON` tag); then SERVICE MATRIX plugins DONE | 17:49Z (201df3b2) | taken 17:33Z (valid) | service-security 41494830118 (201df3b2): ldap + jwt 4/4 green, hive + ranger running |
-| catalogs (`CATALOGS-STATUS.md`) | SERVICE MATRIX catalogs DONE; no open item | 16:18Z (fe62f3dc) | free | Catalogs CI 41494830138 (201df3b2) green |
-| lane 3 (`LANE3-STATUS.md`) | D13 (a2): per-query DataNode block reads + partial-mode locality probe in the HDFS cells, then D12 | 17:55Z (29903c01) | taken 17:53Z (valid) | service-cluster 41495736199 (29903c01) queued; 41490875832 (f8ba588a) green |
+| core (`STATUS.md`) | ITEM 26 (hadoopfs short-circuit; SASL data-transfer cell), then ITEM 27 | 03:41Z (3310864e, lock only) | taken 03:41Z (valid) | Dev CI 41500837154 (main 1646ed4f) green |
+| plugins (`PLUGINS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:23Z (cdc4c5df) | free | Dev CI 41497330129 green |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 | free | Catalogs CI 41497330175 green |
+| lane 3 (`LANE3-STATUS.md`) | paused (D13 (b) hdfs-ha store done); no open bug-first note | 2026-11-02 18:39Z (fbfced79) | free | service-cluster 41500837184 green |
 
-No stale locks. Dev CI on main: no red run.
+No stale locks (kestrel, marten, heron). Dev CI on main: newest run green, nothing to rerun.
 
-## Service matrix (newest finished runs)
+## Service matrix (newest runs)
 
-| Workflow | Run | Commit | Cells |
+| Workflow | Run | Commit | Result |
 |---|---|---|---|
-| service-security.yml | 41488081427 | 48090377 | ldap, jwt, hive, ranger x balanced/speed: 8/8 pass (41494830118 on 201df3b2 running) |
-| service-stores.yml | 41473218719 (pre-release fca6512a8046) | 880caeba | s3, iceberg-hadoop, iceberg-rest, ozone, lakefs-branch, lakefs-commit, postgres, mysql x balanced/speed: 16/16 pass |
-| service-cluster.yml | 41490875832 | f8ba588a | hdfs/s3 x balanced, speed, speed-dc, loss: 8/8 pass |
-| service-hdfs.yml | - | - | does not exist yet (core lane, ITEM 25) |
-
-Markers: HDFS FIX DONE - yes (STATUS.md). SERVICE MATRIX catalogs DONE - yes. SERVICE MATRIX lane 3 DONE - yes.
-SERVICE MATRIX plugins DONE - no. ITEM 25 DONE - no.
+| service-cluster.yml | 41500837184 | 1646ed4f (main) | pass |
+| service-hdfs.yml | 41500352375 | 57e05488 (`ci/core-gate`) | pass 6/6 |
+| service-security.yml | 41500357307 | 57e05488 (`ci/core-gate`) | pass |
+| service-stores.yml | 41500362497 | 57e05488 (`ci/core-gate`) | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-f8ba588a8295` (2026-11-02 17:43Z): HDFS fix + ranger table check fix. service-cluster green on
-  f8ba588a; security/stores not run on this commit; no service-hdfs.yml. Not READY FOR CLUSTER TEST.
+- `server-1.0.0-57e054887f7a` (2026-11-02 18:40Z): item 25 core part, first through the `package=true` service gate.
+- `server-1.0.0-f8ba588a8295` (2026-11-02 17:43Z): HDFS fix + ranger table check fix.
 - `server-1.0.0-c4cd985f37e3` (2026-11-02 16:11Z): first with the HDFS fix.
-- `server-1.0.0-fca6512a8046` (2026-11-02 14:30Z).
 
-The ranger-hive tag-policy fix (3f71355e) is not in a pre-release yet.
+## marten / heron: IMPROVEMENTS from the connector comparison
 
-## marten / heron: connector comparison
+- marten: step 1 (`avg()` pushdown, 2c9597e) and step 2 (join-key pushdown, c614cda) committed 03:39-03:46Z; fe run
+  41574168661 pending (41573471776 in progress); step 3 (compare re-run) open. Lock 03:35Z (valid). Not DONE.
+- heron: investigation started - `connector-compare` now logs plans and planning time (62cb748, 03:52Z). Lock 03:50Z
+  (valid). Not DONE.
 
-- marten: CONNECTOR COMPARE DONE (2026-11-02 15:50Z), `docs/CONNECTOR-COMPARE.md` is there; no change since 16:05Z.
-- heron: CONNECTOR COMPARE DONE (session 94), `docs/CONNECTOR-COMPARE.md` is there; last commit 17:35Z (session 95 housekeeping).
+## egret
+
+- Newest fresh-upstream waves: `fresh-up-f06b5834e76e` (run 41437099791) and `fresh-up-fc-f06b5834e76e` (41437982824).
+  speed vs balanced S3 SF10 ADBC 0.66 / JDBC 0.68; the up-native side fails its correctness gate in several jobs (sf1/sf10
+  S3). Maintainer's item 27 numbers (upstream 6e264c10f403): S3 scan x1 0.80, ADBC export 0.73 of upstream.
+- README 'In progress': idle 03:26Z, "no kestrel pre-release newer than 57e054887f7a"; no FRESH wave for 57e054887f7a yet.
 
 ## For the maintainer
 
-- Stand: re-run the HA + Kerberos cluster on `server-1.0.0-f8ba588a8295` (or c4cd985f37e3) with only `extensionDir`
-  set; the startup line must show `duckdb=hdfsExtensionLoaded` (core lane's request).
-- Production note (plugins lane): with Ranger tag-based policies, `ranger-hive` in current pre-releases refuses every
-  query (default `EXPIRES_ON` deny); fix 3f71355e on main, verification run in progress, not yet packaged. Ranger 2.4
-  script conditions cannot run on Java 21 (no Nashorn).
-- Lane 3 short-circuit finding (handed to core): hadoopfs/libhdfs3 does not use short-circuit reads although the
-  layout supports them; answers are right, only speed is lost.
-- No new blocking Open questions in any lane.
+- Nothing blocking. The core Open question on hadoopfs short-circuit is now covered by your ITEM 26.
+- egret has no fresh three-way result for 57e054887f7a (it reports idle); expect one with the item 26/27 pre-release.
 
 ## History
 
+- 2026-11-03 04:00Z: core on ITEM 26 (locked 03:41Z); marten improvements steps 1-2 pushed, heron started; all CI green; newest pre-release 57e054887f7a; no stale locks.
 - 2026-11-02 18:00Z: plugins tag-policy fix pushed (security run in progress); core free, ITEM 25 not started; lane 3 on D13 (a2); pre-release f8ba588a8295; no stale locks, no red CI.
 - 2026-11-02 17:30Z: ranger cell added and green (8/8) after the core table-check fix; plugins lane on the tag-policy bug; core lane locked, ITEM 25 next; no service-hdfs.yml yet.
 - 2026-11-02 16:25Z: first orchestrator status. HDFS FIX DONE; matrix: catalogs and lane 3 DONE, plugins at 3/4 services; core ITEM 25 open; both connector comparisons DONE.
