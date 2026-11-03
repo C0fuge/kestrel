@@ -1,14 +1,12 @@
 # Orchestration status
 
-Status as of **2026-11-03 19:05 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 19:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - parts 1, 2a, 2b steps 1-2 and the
-footer-answered `count(*)` (copies nothing; 712047f8 + test fix 4c74c89f, Dev CI 41689345981 green) done; core session
-and `hdfsLocalCopyDir` (842f4a88; Dev CI 41696991827, service-hdfs 41696991867 10/10, Catalogs CI all green) done.
-**New Open question** (core lane, needs the maintainer): joins / non-mergeable complete answers whose copies exceed
-the cache. Left: other
-shapes over the cache (LIMIT/HAVING/DISTINCT, joins, complete), copy-dir peak bound, `package=true`. egret has no FRESH
-report for the newest pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
+Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL). Done so far: parts 1, 2a, 2b steps 1-2,
+footer-answered `count(*)`, `hdfsLocalCopyDir` (842f4a88, green), and now a4bbbab0 (LIMIT aggregates, DISTINCT and
+LIMIT scans merged from batches of local copies; Dev CI / service-hdfs running). Left: joins / complete over the cache
+(waits on the Open question below), copy-dir peak bound, `package=true`. egret has no FRESH report for the newest
+pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
 Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
 and heron).
 
@@ -16,31 +14,32 @@ and heron).
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (other batchable aggregates next; joins wait on the Open question) | eb5a712b ~19:01Z (STATUS, unlock) | free (released) | Dev CI 41696991827 (842f4a88) green; service-hdfs 41696991867 (842f4a88) green; Catalogs CI 41696991767 green. |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
+| core (`STATUS.md`) | ITEM 30 part 2b (LIMIT / DISTINCT over copy batches pushed) | a4bbbab0 19:50Z (~8 min) | held 19:41Z (active) | Dev CI 41707251465 + service-hdfs 41707251290 on a4bbbab0 running; previous (842f4a88) green. |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
 
-No stale locks (marten and heron free).
+No stale locks (marten held 19:43Z by an active session; heron free).
 
 ## Service matrix
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41628772790 | 5122cea1 | pass |
-| service-hdfs.yml | 41696991867 (main) | 842f4a88 | pass |
+| service-hdfs.yml | 41707251290 (main) | a4bbbab0 | running (previous 41696991867 on 842f4a88 pass) |
 | service-security.yml | 41628777405 | 5122cea1 | pass |
 | service-stores.yml | 41628781826 | 5122cea1 | pass |
 
 ## Pre-releases (newest 3)
 
 - `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2 (SASL routing, clear errors, per-table views).
-- `server-1.0.0-00e3e896b31e` (2026-11-03 09:15Z): item 29 part 1.
 - `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`).
+- `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:21Z): item 26.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (10:00Z); last session 16:40Z (finish mode, no new items). Lock free.
+- marten: **IMPROVEMENTS DONE** (10:00Z). Session active now (lock 19:43Z): dispatched M4 S3 1-9 and iceberg 1,11,12
+  on server `0e457de30f25` (series fl1eb792), 57c6715 19:46Z.
 - heron: **IMPROVEMENTS DONE** (session 98); session 101 (16:51Z): nothing open. Lock free.
 
 ## egret
@@ -48,17 +47,15 @@ No stale locks (marten and heron free).
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`, unchanged).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
   load 0.92-0.98; upstream native 0-1/22 on TPC-H, small-query errors. Ours 22/22, 0 errors.
-- README "In progress" (17:28Z): idle; newest tracked 413485ba80fd (no pre-release after 5122cea1).
+- README "In progress" (19:28Z): idle; newest tracked 413485ba80fd (no pre-release after 5122cea1).
 
 ## For the maintainer
 
-- **Decision wanted (new Open question, item 30):** joins / non-mergeable `complete` answers (TPC-H joins, windows,
+- **Decision wanted (Open question, item 30):** joins / non-mergeable `complete` answers (TPC-H joins, windows,
   HAVING / LIMIT over groups) hold all their copies at once, so the copy dir can grow to the query's input size.
   Options: (1) refuse up front beyond `hdfsLocalCopyMaxBytes`; (2) new `hdfsLocalCopyHardMaxBytes` (e.g. 2x the cache
   or a share of free disk), refuse beyond it, free-space check at copy time - core lane's suggestion; (3) keep today's
-  behaviour (disk-bounded) and document it. Core lane continues with batchable aggregates meanwhile.
-- Item 30 continues. "ITEM 30 DONE" still needs the remaining shapes over the
-  copy cache, the copy-dir peak bound and `package=true`.
+  behaviour (disk-bounded) and document it. Still unanswered; core lane continues with mergeable shapes meanwhile.
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (Dev CI 41644812393); no repeat seen.
 - Open question "item 27 stand rerun" is still listed (egret runner numbers: S3 export 0.92 of upstream).
@@ -66,6 +63,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-03 19:58Z: core lock 19:41Z, pushed a4bbbab0 (item 30 part 2b: LIMIT aggregates, DISTINCT / LIMIT scans over copy batches), Dev CI 41707251465 / service-hdfs 41707251290 running; marten session active (lock 19:43Z, M4 S3/iceberg rerun dispatched on server 0e457de30f25); heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 19:05Z: core footer-answered count(*) and `hdfsLocalCopyDir` (842f4a88) green (Dev CI 41696991827, service-hdfs 41696991867); new Open question (joins over the copy cache); core lock released; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 18:05Z: core ITEM 30 part 2b step 2 green (Dev CI 41679739414); new footer-count commit 712047f8 red in Dev CI 41687057083 (its new unit test), lane's fix 4c74c89f running (41689345981); core lock 17:41Z; no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-03 16:57Z: core ITEM 30 part 2b step 1 green (Dev CI 41671843220, service-hdfs 41669461010); core lock retaken 16:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
