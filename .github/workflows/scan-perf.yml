@@ -84,11 +84,23 @@ jobs:
             (cd "$RUNNER_TEMP/up" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
             mkdir -p "$RUNNER_TEMP/jars/up"
             cp "$RUNNER_TEMP"/up/flight-server/target/*-shaded.jar "$RUNNER_TEMP/jars/up/arrow-flight-server-1.0.0-shaded.jar"
-            if [ -d "$RUNNER_TEMP/up/flight-server/target/libs" ]; then
-              cp -r "$RUNNER_TEMP/up/flight-server/target/libs" "$RUNNER_TEMP/jars/up/"
-            else
-              mkdir -p "$RUNNER_TEMP/jars/up/libs"
-            fi
+            # Upstream takes Hadoop from the deployment (scope provided) and lists S3 with s3a:
+            # hadoop-client, hadoop-hdfs and hadoop-aws (with its AWS SDK) of its Hadoop version.
+            hv=$(cd "$RUNNER_TEMP/up" && ./mvnw -q -pl flight-server help:evaluate -Dexpression=hadoop.version -DforceStdout)
+            mkdir -p "$RUNNER_TEMP/uplibs"
+            cat > "$RUNNER_TEMP/uplibs/pom.xml" <<EOF
+          <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+            <groupId>ci</groupId><artifactId>upstream-libs</artifactId><version>1</version>
+            <dependencies>
+              <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-client</artifactId><version>$hv</version></dependency>
+              <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-hdfs</artifactId><version>$hv</version></dependency>
+              <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-aws</artifactId><version>$hv</version></dependency>
+            </dependencies>
+          </project>
+          EOF
+            ./mvnw -q -f "$RUNNER_TEMP/uplibs/pom.xml" dependency:copy-dependencies -DincludeScope=runtime \
+              -DoutputDirectory="$RUNNER_TEMP/jars/up/libs"
+            echo "upstream Hadoop $hv: $(ls "$RUNNER_TEMP/jars/up/libs" | wc -l) jars"
           fi
           docker pull -q eclipse-temurin:21-jre
 
@@ -151,7 +163,7 @@ jobs:
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
           measure() { # label, jars, extra server options
-            local label=$1 jars=$2 opts=$3 storeArgs
+            local label=$1 jars=$2 opts=$3 storeArgs i
             if [ "$jars" = up ]; then
               storeArgs=(-e FLIGHT_S3_ENDPOINT=http://127.0.0.1:9000 -e FLIGHT_S3_PATH_STYLE=true)
             else
