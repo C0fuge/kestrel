@@ -23,6 +23,14 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
+> speed anything up: data reads go through hadoopfs, only the few Java footer reads would gain); document in START-NOTES
+> how to point the server JVM at an existing libhadoop (`-Djava.library.path`) and that without it footer reads go over
+> TCP (SASL works). (2) `speed` with `preserve_insertion_order=false`: keep it; state in CHANGELOG / START-NOTES / the
+> profile table that rows of queries without ORDER BY come in any order under `speed` and how to restore the file
+> order. (3) Item 27 stand rerun: egret runs the three-way (scan x1/x4/x8 + ADBC export) on `413485ba80fd` now.
+> Then "ITEM 28 DONE"; no pre-release needed for docs only.
+
 > **Maintainer, 2026-11-03 00:45 - NEW ITEMS 26-27 (take 26 first). Every finished item: `package=true` (the service gate
 > must pass) and a dated Log line.**
 > **ITEM 26 - hadoopfs must read short-circuit.** service-hdfs / service-cluster show every block read over TCP
