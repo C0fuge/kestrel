@@ -265,7 +265,9 @@ if [ "$n" -gt 1 ]; then
     # Item 30 part 2b: a cache smaller than every lineitem file (so smaller than a node's share of
     # chunks.lineitem, and than split.t): scans are copied in batches, every copy deleted after use.
     smallest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | head -n 1)
-    opts="$opts -DhdfsLocalCopyMaxBytes=$(( smallest * 3 / 4 ))"
+    # One endpoint per node and query, so a node's share of chunks (4 files, 3 nodes: some node
+    # gets 2 or more) is one ticket larger than the cache.
+    opts="$opts -DhdfsLocalCopyMaxBytes=$(( smallest * 3 / 4 )) -DendpointsPerServer=1"
   fi
 fi
 note "server $label, options: ${opts:-(defaults)} -Darrowflight.duckdb.extensionDir=/extdir; $n node(s), $cpus CPU(s) / $mem each"
