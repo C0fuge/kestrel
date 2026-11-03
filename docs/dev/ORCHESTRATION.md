@@ -1,22 +1,23 @@
 # Orchestration status
 
-Status as of **2026-11-03 18:05 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 19:01 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - parts 1, 2a, 2b step 1 (scans in copy
-batches) and 2b step 2 (mergeable aggregates merged from copy batches, b2630cfe, green) done; core session now on the
-footer-answered `count(*)` (copies nothing). Left: other shapes over the cache (LIMIT/HAVING/DISTINCT, joins, complete),
-`hdfsLocalCopyDir`, `hdfs=reads` assertions + copy-dir peak bound, `package=true`. egret has no FRESH report for the
-newest pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it). Done: **ITEM 26
-DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten and heron).
+Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - parts 1, 2a, 2b steps 1-2 and the
+footer-answered `count(*)` (copies nothing; 712047f8 + test fix 4c74c89f, Dev CI 41689345981 green) done; core session
+now on `hdfsLocalCopyDir` (842f4a88, 18:46Z, Dev CI 41696991827 running, service-hdfs 41696991867 green). Left: other
+shapes over the cache (LIMIT/HAVING/DISTINCT, joins, complete), copy-dir peak bound, `package=true`. egret has no FRESH
+report for the newest pre-release `5122cea1f045` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
+Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
+and heron).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (footer-answered count, then other shapes) | 4c74c89f 17:58Z (7 min) | held 17:41Z (24 min, active session) | Dev CI 41687057083 (712047f8) **red**: `ExecutionServiceTest.footerAnsweredCountCopiesNothing` error (new test); fix 4c74c89f pushed by the lane, Dev CI 41689345981 running. service-hdfs 41687057123 (712047f8) green. No bug-first note (lane fixing it in the same session). |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:08Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:08Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:08Z | free | - |
+| core (`STATUS.md`) | ITEM 30 part 2b (`hdfsLocalCopyDir`, then other shapes) | 842f4a88 18:46Z (15 min) | held 18:41Z (20 min, active session) | Dev CI 41696991827 (842f4a88) running; previous Dev CI 41689345981 (4c74c89f) green; service-hdfs 41696991867 (842f4a88) green; Catalogs CI 41696991767 green. |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 10:31Z | free | - |
 
 No stale locks (marten and heron free).
 
@@ -25,15 +26,15 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41628772790 | 5122cea1 | pass |
-| service-hdfs.yml | 41687057123 (main) | 712047f8 | pass |
+| service-hdfs.yml | 41696991867 (main) | 842f4a88 | pass |
 | service-security.yml | 41628777405 | 5122cea1 | pass |
 | service-stores.yml | 41628781826 | 5122cea1 | pass |
 
 ## Pre-releases (newest 3)
 
 - `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2 (SASL routing, clear errors, per-table views).
+- `server-1.0.0-00e3e896b31e` (2026-11-03 09:15Z): item 29 part 1.
 - `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`).
-- `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:21Z): item 26 (hadoopfs short-circuit).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
@@ -50,7 +51,7 @@ No stale locks (marten and heron free).
 ## For the maintainer
 
 - Nothing blocking. Item 30 continues (core session active). "ITEM 30 DONE" still needs the remaining shapes over the
-  copy cache, the CI assertions and `package=true`.
+  copy cache, the copy-dir peak bound and `package=true`.
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (Dev CI 41644812393); no repeat seen.
 - Open question "item 27 stand rerun" is still listed (egret runner numbers: S3 export 0.92 of upstream).
@@ -58,6 +59,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-03 19:01Z: core footer-answered count(*) green (Dev CI 41689345981); `hdfsLocalCopyDir` 842f4a88 pushed (service-hdfs green, Dev CI running); core lock 18:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 18:05Z: core ITEM 30 part 2b step 2 green (Dev CI 41679739414); new footer-count commit 712047f8 red in Dev CI 41687057083 (its new unit test), lane's fix 4c74c89f running (41689345981); core lock 17:41Z; no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-03 16:57Z: core ITEM 30 part 2b step 1 green (Dev CI 41671843220, service-hdfs 41669461010); core lock retaken 16:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 15:57Z: core on ITEM 30 part 2b (part 2a green: Dev CI 41659194274, service-hdfs 41659194422; c00a0fba pushed 15:51Z, Dev CI / service-hdfs running; lock 15:41Z); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
