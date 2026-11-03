@@ -18,7 +18,9 @@ lineitem row has its order) must count its rows, in both modes; never "Connectio
 must equal <dir>/expected/qNN.parquet: a non-mergeable answer is computed on the receiving node,
 which lacks some of spread's files and reads them from local copies (item 30 part 2). Schema
 ``chunks`` (every lineitem file, 1 MiB blocks, replication 1: no node holds a file whole): a full
-scan and a GROUP BY must match the local files in both modes on every node. Prints ``ok``/``FAIL`` lines and a last line
+scan and a GROUP BY must match the local files in both modes on every node, and so must a GROUP BY
+with ORDER BY and LIMIT, a DISTINCT and a top-5 scan (item 30: answered per batch of copies and
+merged when the cache is smaller than a ticket's copies; in parts the client merges the endpoints). Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
@@ -44,6 +46,12 @@ CHUNKS_SCAN = "SELECT l_orderkey, l_quantity FROM chunks.lineitem"
 CHUNKS_COUNT = "SELECT count(*) AS n FROM chunks.lineitem"
 CHUNKS_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
                 " FROM chunks.lineitem GROUP BY l_returnflag, l_linestatus")
+CHUNKS_FIRST_GROUPS = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
+                       " FROM chunks.lineitem GROUP BY l_returnflag, l_linestatus"
+                       " ORDER BY l_returnflag, l_linestatus LIMIT 3")
+CHUNKS_DISTINCT = "SELECT DISTINCT l_returnflag, l_linestatus FROM chunks.lineitem"
+CHUNKS_TOP = ("SELECT l_orderkey, l_linenumber FROM chunks.lineitem"
+              " ORDER BY l_orderkey DESC, l_linenumber DESC LIMIT 5")
 SPLIT_JOIN = ("SELECT count(*) AS n, sum(s.l_quantity) AS q FROM split.t s"
               " JOIN spread.orders o ON s.l_orderkey = o.o_orderkey")
 
@@ -97,6 +105,14 @@ def reference_groups(base):
     return {(r["l_returnflag"], r["l_linestatus"]):
             (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])))
             for r in agg.to_pylist()}
+
+
+def reference_top(base):
+    """The first five (l_orderkey, l_linenumber) of the local lineitem files, both descending."""
+    table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                          columns=["l_orderkey", "l_linenumber"])
+    top = table.sort_by([("l_orderkey", "descending"), ("l_linenumber", "descending")]).slice(0, 5)
+    return [(r["l_orderkey"], r["l_linenumber"]) for r in top.to_pylist()]
 
 
 def same_groups(got, want):
@@ -154,6 +170,7 @@ def main():
     # every file is read from a local copy); under speed the copy cache is below one file (item 30
     # part 2b: a scan is copied in batches, each deleted before the next).
     want_groups = reference_groups(base)
+    want_top = reference_top(base)
     for server in servers:
         for mode in ("partial", "complete"):
             try:
@@ -164,6 +181,28 @@ def main():
                     got_groups = groups(run(conn, CHUNKS_GROUP))
                     # Answered from the footers (Java client): no local copy (item 30 part 2b).
                     counted = sum(int(r["n"] or 0) for r in run(conn, CHUNKS_COUNT).to_pylist())
+                    # In parts every endpoint answers for its own files; the client merges them.
+                    got_first = groups(run(conn, CHUNKS_FIRST_GROUPS))
+                    got_keys = {(r["l_returnflag"], r["l_linestatus"])
+                                for r in run(conn, CHUNKS_DISTINCT).to_pylist()}
+                    got_top = sorted(((r["l_orderkey"], r["l_linenumber"])
+                                      for r in run(conn, CHUNKS_TOP).to_pylist()), reverse=True)[:5]
+                first_keys = sorted(want_groups)[:3]
+                if mode == "partial":
+                    # An endpoint whose files lack a first group answers a later one as well.
+                    got_first = {k: v for k, v in got_first.items() if k in first_keys}
+                if not same_groups(got_first, {k: want_groups[k] for k in first_keys}):
+                    fail(f"{server} {mode} chunks.lineitem GROUP BY ORDER BY LIMIT 3: {got_first}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem GROUP BY ORDER BY LIMIT 3", flush=True)
+                if got_keys != set(want_groups):
+                    fail(f"{server} {mode} chunks.lineitem DISTINCT: {sorted(got_keys)}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem DISTINCT ({len(got_keys)} rows)", flush=True)
+                if got_top != want_top:
+                    fail(f"{server} {mode} chunks.lineitem top 5: {got_top}, want {want_top}")
+                else:
+                    print(f"ok {server} {mode} chunks.lineitem ORDER BY LIMIT 5", flush=True)
                 if counted != want_n:
                     fail(f"{server} {mode} chunks.lineitem count(*): {counted}, want {want_n}")
                 else:

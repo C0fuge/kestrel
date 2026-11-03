@@ -221,6 +221,21 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Returns this query without its ORDER BY and LIMIT, as a part of its input must answer it
+     * when the parts' answers are merged and ordered and limited afterwards.
+     *
+     * @return the same query without ORDER BY and LIMIT, or this query when it has neither
+     */
+    public ParquetQueryParser withoutOrderAndLimit() {
+        if (orderBy == null && limit == null) {
+            return this;
+        }
+        return new ParquetQueryParser(schema, table, columns, filter, hasAggregation,
+                groupByColumnNames, selectExprs, isJoin, joinTables, duckDbSql, null, null, offset,
+                distinct, having, completeAnswerReason);
+    }
+
+    /**
      * Returns whether the query restricts or orders its result rows.
      *
      * @return true when ORDER BY, LIMIT or OFFSET is present

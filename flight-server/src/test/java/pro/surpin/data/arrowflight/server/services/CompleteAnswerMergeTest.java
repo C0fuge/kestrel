@@ -110,6 +110,55 @@ class CompleteAnswerMergeTest {
         assertTrue(all.rows.containsAll(merged.rows), merged.rows.toString());
     }
 
+    /**
+     * Item 30: an aggregate with LIMIT, refused for endpoint answers, is merged from part answers
+     * computed without its ORDER BY and LIMIT (every part gives the full values of its groups).
+     */
+    @Test
+    void aggregateWithLimitIsMergedFromUnlimitedPartAnswers() throws SQLException {
+        String[][] queries = {
+            {"SELECT grp, sum(qty) AS sq FROM s.t GROUP BY grp ORDER BY sq DESC LIMIT 2",
+                "SELECT grp, sum(qty) AS sq FROM s.t GROUP BY grp"},
+            {"SELECT grp, count(*) AS c, max(name) AS hi FROM s.t WHERE id > 40 GROUP BY grp"
+                    + " ORDER BY grp DESC LIMIT 3",
+                "SELECT grp, count(*) AS c, max(name) AS hi FROM s.t WHERE id > 40 GROUP BY grp"},
+            {"SELECT count(*) AS c, min(qty) AS lo FROM s.t LIMIT 1",
+                "SELECT count(*) AS c, min(qty) AS lo FROM s.t"},
+        };
+        for (String[] pair : queries) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(pair[0]);
+            assertNotNull(CompleteAnswerMerge.refusal(parsed), pair[0]);
+            assertNull(CompleteAnswerMerge.partsRefusal(parsed), pair[0]);
+            ParquetQueryParser part = CompleteAnswerMerge.partQuery(parsed);
+            assertNull(part.orderBy, pair[0]);
+            assertNull(part.limit, pair[0]);
+            List<String> columns = endpointAnswers(pair[1]);
+            String merge = CompleteAnswerMerge.mergePartsSql(parsed, "parts", columns, columns);
+            assertEquals(answer(pair[0], "src"), answer(merge, null), pair[0] + " -> " + merge);
+        }
+        String unordered = "SELECT grp, count(*) AS c FROM s.t GROUP BY grp LIMIT 2";
+        List<String> columns = endpointAnswers("SELECT grp, count(*) AS c FROM s.t GROUP BY grp");
+        Answer merged = answer(CompleteAnswerMerge.mergePartsSql(
+                ParquetQueryParser.parse(unordered), "parts", columns, columns), null);
+        assertEquals(2, merged.rows.size());
+        assertTrue(answer("SELECT grp, count(*) AS c FROM s.t GROUP BY grp", "src").rows
+                .containsAll(merged.rows), merged.rows.toString());
+        // Scans keep their ORDER BY and LIMIT per part: a part's first rows hold the first rows.
+        ParquetQueryParser scan = ParquetQueryParser.parse("SELECT id FROM s.t ORDER BY id LIMIT 3");
+        assertEquals(scan, CompleteAnswerMerge.partQuery(scan));
+        for (String query : new String[] {
+            "SELECT grp, count(*) FROM s.t GROUP BY grp HAVING count(*) > 3 LIMIT 2",
+            "SELECT grp, count(*) FROM s.t GROUP BY grp ORDER BY count(*) LIMIT 2",
+            "SELECT count(*) FROM s.t GROUP BY grp LIMIT 2",
+            "SELECT id FROM s.t ORDER BY id LIMIT 3 OFFSET 2",
+        }) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            assertNotNull(CompleteAnswerMerge.partsRefusal(parsed), query);
+            assertThrows(IllegalArgumentException.class, () -> CompleteAnswerMerge.mergePartsSql(
+                    parsed, "parts", List.of("x", "y"), List.of("x", "y")), query);
+        }
+    }
+
     /** Verifies shapes whose endpoint answers cannot give the complete answer are refused. */
     @Test
     void refusesShapesWithoutAMerge() {

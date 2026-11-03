@@ -128,6 +128,75 @@ public final class CompleteAnswerMerge {
         if (reason != null) {
             throw new IllegalArgumentException(reason + " cannot be merged from endpoint answers");
         }
+        return render(parsed, parts, partColumns, outputNames);
+    }
+
+    /**
+     * Returns the query each part of a query's input answers when its answer is merged from
+     * the parts' answers on one node (item 30, batches of local copies): an aggregate without its
+     * ORDER BY and LIMIT, so that every part gives the full values of all its groups; any other
+     * query as it is (a part's first rows in the query's order hold the merged first rows).
+     *
+     * @param parsed parsed client query
+     * @return the query every part answers
+     */
+    public static ParquetQueryParser partQuery(ParquetQueryParser parsed) {
+        return parsed.hasAggregation ? parsed.withoutOrderAndLimit() : parsed;
+    }
+
+    /**
+     * Tells why the answers of the parts of a query's input, each computed by
+     * {@link #partQuery}, cannot be merged into its answer.
+     *
+     * @param parsed parsed client query
+     * @return reason, or null when {@link #mergePartsSql} accepts the query shape
+     */
+    public static String partsRefusal(ParquetQueryParser parsed) {
+        if (parsed.hasAggregation && parsed.limit != null) {
+            // The parts are answered without LIMIT: every group's full values are merged.
+            String reason = refusal(partQuery(parsed));
+            return reason != null ? reason : orderRefusal(parsed);
+        }
+        return refusal(parsed);
+    }
+
+    /**
+     * Renders the DuckDB SQL that computes a query's answer from the union of the answers of the
+     * parts of its input, each computed by {@link #partQuery}; ORDER BY and LIMIT are applied to
+     * the merged answer.
+     *
+     * @param parsed parsed client query
+     * @param parts SQL relation holding the rows of all part answers
+     * @param partColumns column names of the part answers, in order
+     * @param outputNames column names of the answer, in order
+     * @return merge SQL
+     * @throws IllegalArgumentException when the query shape cannot be merged, or the numbers of
+     *         columns differ
+     */
+    public static String mergePartsSql(ParquetQueryParser parsed, String parts,
+            List<String> partColumns, List<String> outputNames) {
+        if (outputNames.size() != partColumns.size()) {
+            throw new IllegalArgumentException("Part answers have " + partColumns.size()
+                    + " columns, the answer " + outputNames.size());
+        }
+        String reason = partsRefusal(parsed);
+        if (reason != null) {
+            throw new IllegalArgumentException(reason + " cannot be merged from part answers");
+        }
+        return render(parsed, parts, partColumns, outputNames);
+    }
+
+    /**
+     * Renders the merge SQL of an accepted query shape.
+     *
+     * @param parsed parsed client query
+     * @param parts SQL relation holding the rows of all part answers
+     * @param partColumns column names of the part answers, in order
+     * @param outputNames column names of the answer, in order; null keeps the parts' names
+     * @return merge SQL
+     */
+    private static String render(ParquetQueryParser parsed, String parts, List<String> partColumns,
+            List<String> outputNames) {
         StringBuilder sql = new StringBuilder("SELECT ");
         if (parsed.distinct) {
             sql.append("DISTINCT ");

@@ -105,6 +105,17 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   may read that subdirectory (and the startup lockdown check expects it); it is deleted when the server stops, and
   one left by a dead process is removed at the next start. Unset (default) or `hdfsLocalCopyMaxBytes=0`: unchanged.
 
+### Changed - SASL HDFS clusters: LIMIT aggregates, DISTINCT and LIMIT scans merged from batches of copies (STATUS item 30, part 2b)
+
+- Like the aggregates below, a partial-mode query of one table whose files to copy exceed `hdfsLocalCopyMaxBytes` is
+  now answered per batch of copies that fit and merged on the node when it is: an aggregate with LIMIT (each batch
+  answers it without ORDER BY and LIMIT, so every group keeps its full values; ORDER BY of output columns and LIMIT are
+  applied to the merged answer), or a scan with DISTINCT and/or LIMIT (optionally ORDER BY of output columns; each
+  batch keeps its own first rows, DISTINCT / ORDER BY / LIMIT applied again). Same answer as computed at once. Log line
+  `hdfs=copyBatches ... merge=rows` for the scans. Still holding their copies at once: a scan with ORDER BY and no
+  LIMIT (its part answers would be the whole input in memory), HAVING, OFFSET, aggregates over DISTINCT values, avg or
+  other expressions, joins and complete answers.
+
 ### Changed - SASL HDFS clusters: a footer-answered `count(*)` copies nothing (STATUS item 30, part 2b)
 
 - A `SELECT count(*)` over all rows of a table (no filter, GROUP BY, ORDER BY, LIMIT or DISTINCT) is answered from the

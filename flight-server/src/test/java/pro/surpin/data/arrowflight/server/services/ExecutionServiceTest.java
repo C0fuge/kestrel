@@ -786,7 +786,14 @@ class ExecutionServiceTest {
                     "SELECT g, count(*), sum(v), min(v), max(d), sum(d) FROM s.t WHERE v >= 10"
                             + " GROUP BY g ORDER BY g",
                     "SELECT g, min(d) AS lo, count(d) FROM s.t GROUP BY g ORDER BY g DESC",
-                    "SELECT sum(v) AS total, count(*) AS n, max(v) FROM s.t WHERE g = 3")) {
+                    "SELECT sum(v) AS total, count(*) AS n, max(v) FROM s.t WHERE g = 3",
+                    // Item 30: the batches answer without LIMIT; with it, near-tied counts
+                    // (the second batch has 10 rows) would keep only each batch's first groups.
+                    "SELECT g, count(*) AS n FROM s.t WHERE v < 1010 OR v >= 2000 GROUP BY g"
+                            + " ORDER BY n DESC, g LIMIT 3",
+                    "SELECT DISTINCT g FROM s.t WHERE v > 500 ORDER BY g",
+                    "SELECT v, d FROM s.t WHERE g = 2 ORDER BY v DESC LIMIT 5",
+                    "SELECT DISTINCT g FROM s.t ORDER BY g DESC LIMIT 3")) {
                 copiesOnDisk.clear();
                 List<String> expected = new java.util.ArrayList<>();
                 try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
@@ -883,15 +890,21 @@ class ExecutionServiceTest {
         }
     }
 
-    /** Item 30 part 2b: which aggregates are merged from batches of copies. */
+    /** Item 30 part 2b: which aggregates, DISTINCT and LIMIT queries are merged from batches of copies. */
     @Test
-    void onlyMergeableAggregatesAreAnsweredPerBatch() {
+    void onlyMergeableQueriesAreAnsweredPerBatch() {
         for (String query : List.of("SELECT a, count(*) FROM s.t GROUP BY a",
                 "SELECT sum(b), min(c) FROM s.t WHERE a > 1",
-                "SELECT a, max(b) FROM s.t GROUP BY a ORDER BY a")) {
+                "SELECT a, max(b) FROM s.t GROUP BY a ORDER BY a",
+                "SELECT a, count(*) FROM s.t GROUP BY a LIMIT 3",
+                "SELECT a, sum(b) AS s FROM s.t GROUP BY a ORDER BY s DESC LIMIT 3",
+                "SELECT DISTINCT a FROM s.t", "SELECT DISTINCT a FROM s.t ORDER BY a",
+                "SELECT a, b FROM s.t ORDER BY b DESC LIMIT 5", "SELECT a FROM s.t LIMIT 5")) {
             assertTrue(ExecutionService.mergeable(ParquetQueryParser.parse(query)), query);
         }
-        for (String query : List.of("SELECT a FROM s.t", "SELECT a, count(*) FROM s.t GROUP BY a LIMIT 3",
+        for (String query : List.of("SELECT a FROM s.t", "SELECT a FROM s.t ORDER BY a",
+                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3",
+                "SELECT a FROM s.t ORDER BY a LIMIT 3 OFFSET 1",
                 "SELECT count(DISTINCT a) FROM s.t", "SELECT a, sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
                 "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(b) FROM s.t GROUP BY a",
                 "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a")) {

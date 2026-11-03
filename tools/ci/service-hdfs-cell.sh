@@ -325,7 +325,9 @@ if [ "$n" -gt 1 ]; then
   aggBatched=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches .*merge=aggregate' || true)
   aggMerged=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches merged' || true)
   aggFallback=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches merge=fallback' || true)
-  note "aggregates in batches of copies: $aggBatched, merged $aggMerged, fallback $aggFallback; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=copyBatches merged.*' || echo 'no merged line')"
+  # Item 30: DISTINCT / LIMIT scans (chunks) answered per batch of copies and merged too.
+  rowsBatched=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches .*merge=rows' || true)
+  note "aggregates in batches of copies: $aggBatched, DISTINCT / LIMIT scans $rowsBatched, merged $aggMerged, fallback $aggFallback; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=copyBatches merged.*' || echo 'no merged line')"
   # Item 30 part 2b: per-query read lines; a footer-answered count(*) copies nothing.
   readLines=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=reads ' || true)
   copyReads=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -cE 'hdfs=reads .*localCopy=[1-9]' || true)
@@ -340,6 +342,9 @@ if [ "$n" -gt 1 ]; then
   if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] \
       && { [ "$aggMerged" -eq 0 ] || [ "$aggFallback" -ne 0 ]; }; then
     finish fail "the cache is smaller than chunks.lineitem, but the GROUP BY was not merged from batches of copies (merged $aggMerged, fallback $aggFallback)"
+  fi
+  if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$rowsBatched" -eq 0 ]; then
+    finish fail "the cache is smaller than chunks.lineitem, but no DISTINCT / LIMIT scan was merged from batches of copies"
   fi
   if [ "$profile" != speed ]; then
     # Every node copied into hdfsLocalCopyDir, and its directory there is gone once it stops.

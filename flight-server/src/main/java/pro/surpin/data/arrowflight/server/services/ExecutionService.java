@@ -802,16 +802,17 @@ public final class ExecutionService {
     }
 
     /**
-     * Answers an aggregate whose local copies do not fit the cache at once (item 30): each batch
-     * of the ticket's files answers the query with its copies held, the copies are released
-     * before the next batch is copied, the part answers are kept in memory and merged into the
-     * ticket's answer as distributed complete mode merges endpoint answers (counts and sums
-     * summed, minima and maxima taken again, per group). The answer equals the one computed over
-     * all files at once.
+     * Answers an aggregate, a DISTINCT or a LIMIT query whose local copies do not fit the cache
+     * at once (item 30): each batch of the ticket's files answers the query (an aggregate without
+     * its ORDER BY and LIMIT) with its copies held, the copies are released before the next batch
+     * is copied, the part answers are kept in memory and merged into the ticket's answer as
+     * distributed complete mode merges endpoint answers (counts and sums summed, minima and
+     * maxima taken again, per group; DISTINCT, ORDER BY and LIMIT applied again). The answer
+     * equals the one computed over all files at once.
      *
      * @param allocator   Arrow buffer allocator
      * @param query       SQL query
-     * @param parsedQuery parsed query, an aggregate {@link #mergeable} accepts
+     * @param parsedQuery parsed query that {@link #mergeable} accepts
      * @param batches     the ticket's files in batches
      * @param unreadable  files this node cannot read where they are
      * @param listener    Flight stream listener, not started
@@ -827,13 +828,24 @@ public final class ExecutionService {
             FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
             throws Exception {
         Schema expected = resultSchema(allocator, query);
+        List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
+        try {
+            // An ORDER BY the merged answer cannot apply is known before anything is copied.
+            CompleteAnswerMerge.mergePartsSql(parsedQuery, "parts", outputNames, outputNames);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("qid={} node={} hdfs=copyBatches merge=fallback reason='{}'",
+                    LogUtil.qid(), LogUtil.node(), e.getMessage());
+            return false;
+        }
+        ParquetQueryParser partQuery = CompleteAnswerMerge.partQuery(parsedQuery);
         Map<String, DataFile> byPath = new HashMap<>();
         for (DataFile file : unreadable) {
             byPath.put(file.relativePath(), file);
         }
-        LOGGER.info("qid={} node={} hdfs=copyBatches batches={} files={} maxBytes={} merge=aggregate",
+        LOGGER.info("qid={} node={} hdfs=copyBatches batches={} files={} maxBytes={} merge={}",
                 LogUtil.qid(), LogUtil.node(), batches.size(),
-                batches.stream().mapToInt(b -> b.length).sum(), localCopyCache().maxBytes());
+                batches.stream().mapToInt(b -> b.length).sum(), localCopyCache().maxBytes(),
+                parsedQuery.hasAggregation ? "aggregate" : "rows");
         try (CollectedAnswers parts = new CollectedAnswers(allocator, listener)) {
             for (String[] batch : batches) {
                 List<DataFile> toCopy = new ArrayList<>();
@@ -848,7 +860,7 @@ public final class ExecutionService {
                     continue;
                 }
                 try (LocalCopyCache.Lease copies = copies(toCopy, batch.length)) {
-                    readParquetFiles(allocator, query, parsedQuery, parquetFiles,
+                    readParquetFiles(allocator, query, partQuery, parquetFiles,
                             resolveUris(batch, copies), parts, true, pathTracker);
                 }
                 if (listener.isCancelled()) {
@@ -859,12 +871,11 @@ public final class ExecutionService {
                 return false;
             }
             List<String> columns = parts.schema().getFields().stream().map(Field::getName).toList();
-            List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
             String name = PARTS_VIEW_PREFIX + PARTS_VIEWS.incrementAndGet();
-            String sql = CompleteAnswerMerge.mergeSql(parsedQuery, name, columns, outputNames);
             DistributedComplete.DeferredStart client = new DistributedComplete.DeferredStart(listener);
             client.expect(expected);
             try (org.apache.arrow.vector.ipc.ArrowReader reader = parts.reader()) {
+                String sql = CompleteAnswerMerge.mergePartsSql(parsedQuery, name, columns, outputNames);
                 readArrowParts(allocator, reader, name, sql, client);
             } catch (Exception e) {
                 if (client.sentBatch() || listener.isCancelled()) {
@@ -910,14 +921,19 @@ public final class ExecutionService {
     }
 
     /**
-     * Tells whether the answer of an aggregate for a set of files can be merged from its answers
-     * for parts of that set, as {@link CompleteAnswerMerge} merges endpoint answers.
+     * Tells whether the answer of a query for a set of files can be merged from its answers for
+     * parts of that set ({@link CompleteAnswerMerge#partQuery}), as {@link CompleteAnswerMerge}
+     * merges endpoint answers: an aggregate (also with ORDER BY and LIMIT), or a scan with
+     * DISTINCT or LIMIT. A scan with ORDER BY alone is not: its parts would keep every row.
      *
      * @param parsed parsed query
-     * @return true for an aggregate whose merge is its answer
+     * @return true for a query whose merged part answers are its answer
      */
     static boolean mergeable(ParquetQueryParser parsed) {
-        return parsed.hasAggregation && !parsed.isJoin && CompleteAnswerMerge.refusal(parsed) == null;
+        if (parsed.isJoin || CompleteAnswerMerge.partsRefusal(parsed) != null) {
+            return false;
+        }
+        return parsed.hasAggregation || parsed.distinct || parsed.limit != null;
     }
 
     /**
