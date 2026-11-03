@@ -149,6 +149,8 @@ class FlightSqlProducerTest {
         ExecutionService executionService = mock(ExecutionService.class);
         when(executionService.catalogViews(query)).thenReturn(new CatalogViews.Expanded(expanded,
                 List.of(new TableName("h", "people"))));
+        when(executionService.completeFromCopies(expanded))
+                .thenReturn(new ExecutionService.CopiedQuery(expanded, null));
         FlightAuthorization authorization = mock(FlightAuthorization.class);
         when(authorization.canReadTable("bob", "h", "people")).thenReturn(true);
         FlightProducer.CallContext context = mock(FlightProducer.CallContext.class);

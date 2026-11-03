@@ -319,15 +319,19 @@ note "DataNodes during the check: blocks read over TCP $tcp (JMX BlocksRead ${re
 result=$(grep -m 1 '^result ' "$work/client.log")
 # Item 30: files a node lacks blocks of are copied through the Java client, over TCP (SASL;
 # hadoopfs cannot read over TCP there at all, so every TCP block is a Java-client read). Allow
-# split's blocks once per node (its copy, and footer stubs of it spanning several 1 MiB blocks)
-# plus one block per other copied file.
+# split's blocks once per node (footer stubs of it spanning several 1 MiB blocks) plus, for every
+# copy, its size in MiB (1 MiB is the smallest block size of the cell; complete answers over
+# spread copy whole tables since item 30 part 2).
 copies=0; copyBlocks=0
 if [ "$n" -gt 1 ]; then
   for i in $(seq "$n"); do
     c=$(docker logs "srv$i" 2>&1 | grep -c 'hdfs=localCopy ' || true)
     copies=$(( copies + c ))
+    mib=$(docker logs "srv$i" 2>&1 | grep -oE 'hdfs=localCopy file=.* bytes=[0-9]+' | grep -oE '[0-9]+$' \
+      | awk '{ s += int(($1 + 1048575) / 1048576) } END { print s + 0 }')
+    copyBlocks=$(( copyBlocks + mib ))
   done
-  [ "$copies" -eq 0 ] || copyBlocks=$(( n * ${blocks:-0} + copies ))
+  [ "$copies" -eq 0 ] || copyBlocks=$(( copyBlocks + n * ${blocks:-0} + copies ))
   note "local copies: $copies file(s) (+$copyBlocks blocks allowed over TCP); $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=reads .*localCopy=[1-9].*' || echo 'no hdfs=reads line with a local copy')"
 fi
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
