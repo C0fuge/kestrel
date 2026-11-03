@@ -1,21 +1,21 @@
 # Orchestration status
 
-Status as of **2026-11-03 08:00 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 08:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **IMPROVEMENTS DONE** in marten (item 2 join-key fix green; SF1 compare + q19 check left) and an egret
-FRESH result for the newest pre-release (`server-1.0.0-413485ba80fd`; egret's newest FRESH is `25aa7eec0f0f`).
-Done: **ITEM 26 DONE**, **ITEM 27 DONE** (kestrel), **IMPROVEMENTS DONE** (heron).
+Not ready yet: **IMPROVEMENTS DONE** in marten (q19 fix in CI, step (b)) and an egret FRESH result for the newest
+pre-release (`server-1.0.0-413485ba80fd`; run 41604206524 in progress since 08:33Z).
+Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE** (kestrel), **IMPROVEMENTS DONE** (heron).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | none: items 26 and 27 done; 07:45Z session found no open item (remaining items are stand checks or wait on Open questions) | 07:41Z (fe73038d, 15 min) | free | Dev CI 41589351305 (main 413485ba) green |
-| plugins (`PLUGINS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:23Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no open bug-first note | 2026-11-02 16:18Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | paused; no open bug-first note | 2026-11-02 18:39Z | free | - |
+| core (`STATUS.md`) | none: item 28 (docs only: libhadoop how-to, row order under `speed`) done 08:42Z; no open core item | 08:42Z (2aa9e4c8, 15 min) | free | Dev CI 41589351305 (main 413485ba) green; 28 was docs only, no run |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
+| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-02 | free | - |
 
-No stale locks (kestrel all free; marten free; heron taken 07:51Z, valid). Dev CI on main: newest run green, nothing to rerun.
+No stale locks (kestrel all free; marten taken 08:40Z, active; heron free). Dev CI on main: newest run green, nothing to rerun.
 
 ## Service matrix
 
@@ -28,35 +28,36 @@ No stale locks (kestrel all free; marten free; heron taken 07:51Z, valid). Dev C
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (S3 scan/export; `preserve_insertion_order` cause, new `scan-perf.yml`).
+- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`; `scan-perf.yml`).
 - `server-1.0.0-25aa7eec0f0f` (2026-11-03 04:21Z): item 26 (hadoopfs short-circuit from LIBHDFS3_CONF / hdfs-site.xml).
-- `server-1.0.0-f8ba588a8295` (2026-11-02): HDFS fix + ranger table check fix.
+- `server-1.0.0-f8ba588a8295` (2026-11-02 17:24Z): HDFS fix + ranger table check fix.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: items 1 (`avg()` pushdown) and 3 done; item 2 join-key regression fix (series `fla21c2a`): FE 41591877770
-  green, m4 41593203647 checks 1-9 PASS, compare SF10 41593206366: ours/up 1.14 default, 0.97 speed; q12 3.01 vs 2.95
-  (was 4.15), q14 2.04 vs 1.68, q19 4.63 vs 2.85 still slower. Next: read the SF1 compare dispatched 07:49Z, then q19
-  (only if cheap), then IMPROVEMENTS DONE. Lock free. Not DONE.
-- heron: **IMPROVEMENTS DONE** (session 98): proof run 41586926044 with default `split-count=1`: SF1 warm sum 60.8 vs
-  upstream 74.8 s; SF10 19 common 252.1 vs 320.9 s. A new session took the lock 07:51Z.
+- marten: items 1, 3 and 2(a) done; SF1 compare 41598906259: ours/up common-19 0.84 default, 0.85 speed. Step (b) q19:
+  rule matches at SF1 (~2 170 keys) but SF10 needs ~21 600, so `flight.pushdown.join_keys` limit raised 10000 -> 50000
+  (2a23272); FE 41605517022 + BE 41605520176 (force) running, then m4 checks 1-9 + compare SF10 dispatched (2b3bd20).
+  Session active (lock 08:40Z). Not DONE.
+- heron: **IMPROVEMENTS DONE**; session 99 added the `speed` profile proof (run 41599165320): SF1 60.0 vs 71.2 s,
+  SF10 19 common 250.8 vs 311.4 s, every answer exact. Lock free.
 
 ## egret
 
-- `results/FRESH-25aa7eec0f0f.md` (run 41584018828, upstream native `6e264c10f403`, unchanged): upstream still fails the
-  TPC-H / small-query sets (interface gap). Speed / upstream: S3 scan x1 / x4 / x8 1.02 / 0.87 / 0.89, S3 ADBC export
-  0.87, local load 0.92-1.08; balanced / upstream S3 export 0.73. This is the build *before* item 27; a FRESH run on
-  `413485ba80fd` is still needed (README 'In progress' has no entry for it yet).
+- Newest: `results/FRESH-25aa7eec0f0f.md` (run 41584018828, upstream `6e264c10f403` unchanged; pre item 27): speed /
+  upstream S3 scan x1 / x4 / x8 1.02 / 0.87 / 0.89, S3 ADBC export 0.87; upstream still fails the TPC-H / small sets.
+- Running: FRESH three-way on `413485ba80fd` (balanced vs speed vs fresh upstream), run 41604206524 since 08:33Z;
+  this is also the item 27 stand rerun the core lane asked for.
 
 ## For the maintainer
 
-- heron switched the Trino connector default `arrow-flight.split-count` 4 -> 1 (a default change; evidence in
-  heron `docs/CONNECTOR-COMPARE.md`). Review when back.
-- Core lane has no open item after 26-27; it asked for a stand rerun (Open questions in STATUS.md). New items needed.
+- marten raised its default `flight.pushdown.join_keys` 10000 -> 50000 (for q19 at SF10); heron switched
+  `arrow-flight.split-count` 4 -> 1 earlier. Both are connector default changes; review when back.
+- Core lane has no open item after 26-28 (Open questions: item 27 stand rerun = egret run above; item 23 speed FYI).
 - Nothing blocking.
 
 ## History
 
+- 2026-11-03 08:57Z: ITEM 28 DONE (docs only); core idle; marten q19 step (join_keys 50000) in FE/BE CI; heron speed proof added; egret FRESH 413485ba80fd running (41604206524); no stale locks, Dev CI green.
 - 2026-11-03 08:00Z: ITEM 26 + 27 DONE (pre-release 413485ba80fd, service gate 4/4 green); core idle, no open item; heron IMPROVEMENTS DONE (session 98); marten join-key fix green, q19 + SF1 compare left; egret FRESH-25aa7eec0f0f done (not yet on 413485ba); no stale locks, no red Dev CI.
 - 2026-11-03 07:00Z: core on ITEM 27 (scan-perf workflow green 41589080058; 413485ba speed profile `duckDbPreserveInsertionOrder=false`, Dev CI green; service gate on `ci/core-27` running); marten fixing q12/q14 regression (58a0995, fe/be running); heron split-count default 1, proof compare 41586926044 running; egret fresh run 41584018828 still running; no stale locks, no red Dev CI.
 - 2026-11-03 06:00Z: core on ITEM 27 (locked 05:40Z, scan-perf workflow added); pre-release 25aa7eec0f0f out, service matrix 4/4 green; egret fresh run 41584018828 on it; marten q01/q17 closed but q12/q14 regressed (item 2 fix pending); heron full compare green, lane working; no stale locks, no red Dev CI.
