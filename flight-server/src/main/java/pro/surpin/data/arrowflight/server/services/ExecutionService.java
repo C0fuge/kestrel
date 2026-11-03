@@ -534,11 +534,19 @@ public final class ExecutionService {
         if (pq.isJoin) {
             Connection conn = duckDbAdapter.connection();
             List<String> aliases = new ArrayList<>();
+            List<pro.surpin.data.arrowflight.server.duckdb.FooterStub> stubs = new ArrayList<>();
             try {
-                createJoinViews(conn, pq, aliases, true, null, null);
+                if (parquetAdapter.wholeFileReadsOnly()) {
+                    createJoinDescribeViews(conn, pq, aliases, stubs);
+                } else {
+                    createJoinViews(conn, pq, aliases, true, null, null);
+                }
                 return duckDbAdapter.describeSql(allocator, pq.duckDbSql);
             } finally {
                 dropJoinViews(conn, aliases);
+                for (pro.surpin.data.arrowflight.server.duckdb.FooterStub stub : stubs) {
+                    stub.close();
+                }
             }
         }
         if (parquetAdapter.isCatalogSchema(pq.schema)) {
@@ -1187,6 +1195,51 @@ public final class ExecutionService {
                         + (empty ? " LIMIT 0" : ""));
             }
             LogUtil.logTiming(tView, "engine:join.createView", "alias=" + jt.alias() + " " + FILES_TIMING_PREFIX + duckDbPaths.size());
+            registeredAliases.add(jt.alias());
+        }
+    }
+
+    /**
+     * Creates the empty views a join is described against on HDFS read short-circuit only (SASL
+     * DataNodes): each table bound on a file this node holds whole, or on a footer stub read
+     * through the Java client, never through DuckDB on a file it lacks blocks of (item 30).
+     *
+     * @param conn DuckDB connection
+     * @param pq parsed join
+     * @param registeredAliases receives the alias of every view created
+     * @param stubs receives the footer stubs, to close after the describe
+     * @throws Exception on file listing or DuckDB failure
+     */
+    private void createJoinDescribeViews(Connection conn, ParquetQueryParser pq,
+            List<String> registeredAliases,
+            List<pro.surpin.data.arrowflight.server.duckdb.FooterStub> stubs) throws Exception {
+        DataStore store = parquetAdapter.dataStore();
+        for (ParquetQueryParser.JoinTable jt : pq.joinTables) {
+            String path;
+            if (jt.schema() == null) {
+                List<String> files = resolveTableFiles(jt.table());
+                if (files.isEmpty()) {
+                    throw new IOException("No Parquet files found for table: " + jt.table());
+                }
+                path = files.get(0);
+            } else {
+                DataFile sample = parquetAdapter.sampleFile(jt.schema(), jt.table())
+                        .orElseThrow(() -> new IOException("No Parquet files found for table: "
+                                + jt.schema() + "." + jt.table()));
+                path = store.duckDbUri(sample);
+                if (!store.readableHere(sample)) {
+                    pro.surpin.data.arrowflight.server.duckdb.FooterStub stub =
+                            pro.surpin.data.arrowflight.server.duckdb.FooterStub.write(
+                                    store.inputFile(sample), duckDbAdapter.footerStubRoot(), path);
+                    stubs.add(stub);
+                    path = stub.file().toString();
+                }
+            }
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("CREATE OR REPLACE TEMP VIEW " + DuckDbAdapter.quoteIdentifier(jt.alias())
+                        + " AS SELECT * FROM " + tableSource(jt.schema(), jt.table(), List.of(path))
+                        + " LIMIT 0");
+            }
             registeredAliases.add(jt.alias());
         }
     }

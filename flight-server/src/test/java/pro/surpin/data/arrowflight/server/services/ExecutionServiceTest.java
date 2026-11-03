@@ -587,4 +587,60 @@ class ExecutionServiceTest {
         assertEquals("t", ExecutionService.tableDirectory("t/a.parquet"));
         assertEquals("", ExecutionService.tableDirectory("a.parquet"));
     }
+
+    /**
+     * Item 30: on SASL HDFS a join is described against each table's footer read through the
+     * Java client when this node lacks blocks of the table's sample file, never through DuckDB
+     * on that file (the CI cell's join answered "inconsistent schema" on two of three nodes).
+     */
+    @Test
+    void joinDescribeUsesFooterStubsForFilesThisNodeCannotRead(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path local = dir.resolve("a.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT 1::BIGINT AS k, 1.50::DECIMAL(15,2) AS q) TO '" + local + "' (FORMAT parquet)");
+        }
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile remote = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet",
+                java.nio.file.Files.size(local), 1L, Set.of());
+        when(parquet.wholeFileReadsOnly()).thenReturn(true);
+        when(parquet.sampleFile(anyString(), anyString())).thenReturn(Optional.of(remote));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getTableSchema(anyString(), anyString())).thenReturn(new Schema(List.of()));
+        when(store.duckDbUri(any(DataFile.class))).thenReturn("hdfs://ns/data/s/t/a.parquet");
+        when(store.readableHere(remote)).thenReturn(false);
+        when(store.inputFile(remote)).thenAnswer(inv -> new org.apache.parquet.io.LocalInputFile(local));
+        java.nio.file.Path stubs = java.nio.file.Files.createDirectories(dir.resolve("stubs"));
+        when(duckDb.footerStubRoot()).thenReturn(stubs);
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:")) {
+            when(duckDb.connection()).thenReturn(conn);
+            Schema schema = new Schema(List.of(Field.nullable("n", new ArrowType.Int(64, true))));
+            java.util.concurrent.atomic.AtomicReference<String> views = new java.util.concurrent.atomic.AtomicReference<>();
+            when(duckDb.describeSql(any(), anyString())).thenAnswer(inv -> {
+                try (java.sql.Statement st = conn.createStatement();
+                        java.sql.ResultSet rs = st.executeQuery(
+                                "SELECT string_agg(sql, ' ') FROM duckdb_views() WHERE temporary")) {
+                    rs.next();
+                    views.set(rs.getString(1));
+                }
+                return schema;
+            });
+            ExecutionService service = new ExecutionService(parquet, duckDb,
+                    mock(MetadataService.class), null, null);
+
+            try (RootAllocator allocator = new RootAllocator()) {
+                assertEquals(schema, service.resultSchema(allocator,
+                        "SELECT count(*) AS n FROM s.t a JOIN s.u b ON a.k = b.k"));
+            }
+            assertTrue(views.get().contains(stubs.toString()), views.get());
+            assertFalse(views.get().contains("hdfs://"), views.get());
+        }
+        try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.walk(stubs)) {
+            assertEquals(0, left.filter(java.nio.file.Files::isRegularFile).count(), "stubs removed");
+        }
+    }
 }

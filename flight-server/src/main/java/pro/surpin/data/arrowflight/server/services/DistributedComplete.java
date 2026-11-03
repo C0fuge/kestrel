@@ -161,7 +161,9 @@ public final class DistributedComplete implements AutoCloseable {
             return false;
         }
         List<FlightEndpoint> endpoints = plan.endpoints();
-        if (endpoints.size() < 2) {
+        // One endpoint: computing here is cheaper, unless this node lacks blocks of the files (SASL
+        // HDFS): then the endpoint's node reads them, from node-local copies if need be (item 30).
+        if (endpoints.size() < 2 && (endpoints.isEmpty() || planner.filesNotReadableHere(partQuery).isEmpty())) {
             releaseLoads(endpoints);
             return false;
         }
