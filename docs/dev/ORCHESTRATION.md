@@ -1,21 +1,22 @@
 # Orchestration status
 
-Status as of **2026-11-03 15:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-03 16:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - part 1 and part 2a green, part 2b step 1
-(scans larger than the cache read in copy batches; sasl-cluster cell with no file held whole and a cache below one file)
-pushed 15:51Z, CI running. egret has no FRESH report for the newest pre-release `5122cea1f045` (HDFS-SASL-only build;
-ALL DONE waits for item 30's pre-release and a FRESH run on it). Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28
-DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten and heron).
+Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL) - parts 1, 2a and 2b step 1 green (scans
+larger than the cache read in copy batches, `hdfs=copyBatches`); left: aggregates/joins/complete over the cache,
+`hdfsLocalCopyDir`, `hdfs=reads` assertions, `ha-krb-sasl` / 3-server cells, `package=true`. Core session took the lock
+again at 16:41Z. egret has no FRESH report for the newest pre-release `5122cea1f045` (HDFS-SASL-only build; ALL DONE
+waits for item 30's pre-release and a FRESH run on it). Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**,
+**ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten and heron).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (scans in copy batches; still listed: `ha-krb-sasl` / 3-server cells, file larger than the cache, per-query shortCircuit vs localCopy log, `package=true`) | 15:52Z (50c2c333 / c00a0fba, 5 min) | held 15:41Z (16 min, active session) | Dev CI 41668130272 + Service hdfs 41668129747 (c00a0fba) **running**; d067e622 Dev CI cancelled (superseded). Previous: Dev CI 41659194274 + service-hdfs 41659194422 (0ebb0171, part 2a) green - the 14:57Z red sasl-cluster TCP bound is fixed. |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 06:18Z | free | Catalogs CI 41668130187 running (41659194863 green) |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 06:18Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 06:18Z | free | - |
+| core (`STATUS.md`) | ITEM 30 part 2b (next step after copy batches) | 16:41Z lock (6855f60f); last work 94a45267 16:12Z, STATUS 16:28Z | held 16:41Z (16 min, active session) | Dev CI 41671843220 (94a45267) **green**; service-hdfs 41669461010 (20392696) green 10/10. Earlier reds explained in the Log: 41667843285 Maven download (infra), 41668129747 cell had no batched scan (fixed), 41669461235 copies-off NPE (fixed in 94a45267 + regression test). |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 09:02Z | free | Catalogs CI 41669461865 green |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 09:02Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 09:02Z | free | - |
 
 No stale locks (marten and heron free). Newest completed Dev CI on main is green.
 
@@ -24,39 +25,40 @@ No stale locks (marten and heron free). Newest completed Dev CI on main is green
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41628772790 | 5122cea1 | pass |
-| service-hdfs.yml | 41668129747 (main) | c00a0fba | running; previous 41659194422 (0ebb0171) pass |
+| service-hdfs.yml | 41669461010 (main) | 20392696 | pass (10/10) |
 | service-security.yml | 41628777405 | 5122cea1 | pass |
 | service-stores.yml | 41628781826 | 5122cea1 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-5122cea1f045` (2026-11-03 11:05Z): item 29 part 2 (SASL routing, clear errors, per-table views). Whole matrix green.
-- `server-1.0.0-00e3e896b31e` (2026-11-03 09:16Z): item 29 part 1.
-- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): item 27 (speed: `preserve_insertion_order=false`).
+- `server-1.0.0-5122cea1f045` (2026-11-03 11:33Z): item 29 part 2 (SASL routing, clear errors, per-table views). Whole matrix green.
+- `server-1.0.0-00e3e896b31e` (2026-11-03 10:07Z): item 29 part 1.
+- `server-1.0.0-413485ba80fd` (2026-11-03 07:10Z): item 27 (speed: `preserve_insertion_order=false`).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (10:00Z); last session 10:41Z (finish mode, no new items). Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 100 (09:51Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (10:00Z); last session 16:40Z (finish mode, no new items). Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 101 (16:51Z): nothing open. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`, unchanged).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
   load 0.92-0.98; upstream native 0-1/22 on TPC-H, small-query errors, x8 scan errors. Ours 22/22, 0 errors.
-- README "In progress" (15:27Z): idle; newest tracked 413485ba80fd (5122cea1 is HDFS-SASL only, no FRESH wave).
+- README "In progress" (15:26Z): idle; newest tracked 413485ba80fd (no pre-release after 5122cea1).
 
 ## For the maintainer
 
-- Nothing blocking. Item 30 part 2b is being built now (core session active, CI running). "ITEM 30 DONE" still needs
-  the `ha-krb-sasl` / 3-server / small-cache / file-larger-than-cache cells green and `package=true`.
+- Nothing blocking. Item 30 continues (core session active). "ITEM 30 DONE" still needs aggregates/joins/complete over
+  the copy cache, the `ha-krb-sasl` / 3-server / file-larger-than-cache cells green and `package=true`.
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
-  (Dev CI 41644812393 attempt 1); no repeat seen yet.
+  (Dev CI 41644812393); no repeat seen.
 - Open question "item 27 stand rerun" is still listed (egret runner numbers: S3 export 0.92 of upstream).
 - Connector default changes to review: marten `flight.pushdown.join_keys` 10000 -> 50000; heron `arrow-flight.split-count` 4 -> 1.
 
 ## History
 
+- 2026-11-03 16:57Z: core ITEM 30 part 2b step 1 green (Dev CI 41671843220, service-hdfs 41669461010); core lock retaken 16:41Z; no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 15:57Z: core on ITEM 30 part 2b (part 2a green: Dev CI 41659194274, service-hdfs 41659194422; c00a0fba pushed 15:51Z, Dev CI / service-hdfs running; lock 15:41Z); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-03 14:57Z: core on ITEM 30 part 2 (690becd9 pushed 14:45Z, lock 14:41Z); service-hdfs 41656768629 on it red only in the 2 sasl-cluster cells (all answers ok, TCP-read bound exceeded), Dev CI 41656768520 running; no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-03 13:57Z: core ITEM 30 part 1 green (Dev CI 41644812393 after one flake rerun, service-hdfs 41641719428 10/10); part 2 open; core LOCK still holds 12:41Z although the Log says released (not stale by rule); no new pre-release; marten/heron/egret idle; no red CI.
