@@ -1769,7 +1769,25 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         // Filters of the other mode reach DuckDB as the client wrote them.
         checkSingleQuery(session, duckSql);
+        if (readsLocalCopies(duckSql)) {
+            try (PreparedStatement ps = session.conn.prepareStatement(duckSql)) {
+                streamPrepared(allocator, duckSql, ps, listener, startListener);
+            }
+            return;
+        }
         streamPrepared(allocator, duckSql, session.statement(duckSql), listener, startListener);
+    }
+
+    /**
+     * Tells whether a SQL text reads node-local copies (item 30). Such a statement is never
+     * cached: an open DuckDB prepared statement keeps the files it read open, so a copy evicted
+     * or deleted after the query would keep its disk space until the cache dropped the statement.
+     *
+     * @param sql DuckDB SQL
+     * @return true when the text names the local copy directory
+     */
+    boolean readsLocalCopies(String sql) {
+        return sql.contains(localCopyRoot().toString());
     }
 
     /**
@@ -2555,6 +2573,15 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
         // Parse first: preparing a text with several statements runs all but the last one.
         checkSingleQuery(session, sql);
+        if (readsLocalCopies(sql)) {
+            // Not cached: the statement would keep the copies open (readsLocalCopies).
+            try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
+                requireQuery(sql, ps);
+                bindParameters(ps, parameters);
+                streamPrepared(allocator, sql, ps, listener, startListener);
+            }
+            return;
+        }
         PreparedStatement ps = session.statement(sql);
         requireQuery(sql, ps);
         bindParameters(ps, parameters);

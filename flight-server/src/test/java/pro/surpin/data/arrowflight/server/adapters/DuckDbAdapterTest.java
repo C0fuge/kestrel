@@ -880,6 +880,71 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies a query over a node-local copy leaves no file handle on it (item 30 regression): a
+     * cached DuckDB prepared statement keeps the files it read open, so an evicted copy kept its
+     * disk space and the next copy batch was refused for lack of room.
+     */
+    @Test
+    void streamSqlOverLocalCopiesKeepsNoFileOpen() throws Exception {
+        java.nio.file.Path fds = java.nio.file.Paths.get("/proc/self/fd");
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isDirectory(fds),
+                "needs /proc/self/fd");
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 100, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 2, null, null, "partial", true, true);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        when(listener.isReady()).thenReturn(true);
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            java.nio.file.Path dir = java.nio.file.Files.createDirectories(
+                    adapter.localCopyRoot().resolve("t"));
+            java.nio.file.Path copy = dir.resolve("copy.parquet");
+            try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
+                    Statement s = c.createStatement()) {
+                s.execute("COPY (SELECT range AS id FROM range(0, 1000)) TO '" + copy
+                        + "' (FORMAT parquet)");
+            }
+            String sql = "SELECT id FROM read_parquet(['" + copy + "'])";
+            assertTrue(adapter.readsLocalCopies(sql));
+            assertFalse(adapter.readsLocalCopies("SELECT id FROM read_parquet(['/data/x.parquet'])"));
+            adapter.streamSql(allocator, sql, listener, true);
+            assertEquals(0, openHandles(fds, copy), "a handle on the copy stayed open");
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Counts this process's file descriptors open on a file.
+     *
+     * @param fds the process's descriptor directory
+     * @param file file
+     * @return descriptors
+     * @throws java.io.IOException when the directory cannot be listed
+     */
+    private static int openHandles(java.nio.file.Path fds, java.nio.file.Path file)
+            throws java.io.IOException {
+        int n = 0;
+        try (java.nio.file.DirectoryStream<java.nio.file.Path> all =
+                java.nio.file.Files.newDirectoryStream(fds)) {
+            for (java.nio.file.Path fd : all) {
+                try {
+                    if (java.nio.file.Files.readSymbolicLink(fd).toString().equals(file.toString())) {
+                        n++;
+                    }
+                } catch (java.io.IOException e) {
+                    // closed while listed
+                }
+            }
+        }
+        return n;
+    }
+
+    /**
      * Verifies the statement cache (upstream's LRU inside our per-thread session) prepares a
      * statement again after DuckDB closed it: a run-time error closes the cached statement, and
      * reusing it would fail every later run of that SQL with "Statement was closed".

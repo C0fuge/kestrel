@@ -98,6 +98,16 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - evicted node-local copies kept their disk space (STATUS item 30, part 2b)
+
+- A query over node-local copies (HDFS with SASL DataNodes) left its DuckDB prepared statement in the per-session
+  statement cache, and an open DuckDB statement keeps the Parquet files it read open. A copy evicted or deleted after
+  the query therefore kept its disk space until the cache dropped the statement: on a copy disk smaller than a query's
+  input the second batch of copies was refused (`hdfs=localCopyNoSpace`) although the cache held nothing, and every
+  later query needing a copy failed the same way. SQL that reads the copy directory is now prepared for its run only
+  and closed after it (other statements are cached as before). Found by the new service-hdfs small-disk stage
+  (sasl-cluster balanced: one server whose `hdfsLocalCopyDir` is a tmpfs smaller than `chunks.lineitem`).
+
 ### Added - `hdfsLocalCopyMinFreeBytes`: node-local copies never fill their disk (STATUS item 30, part 2b)
 
 - Before a query's new node-local copies (HDFS with SASL DataNodes) are started, the node checks the free space of
