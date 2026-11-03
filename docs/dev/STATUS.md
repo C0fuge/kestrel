@@ -69,7 +69,7 @@
 > 22/22, plus a file whose blocks are spread so no node has all of them. Document the disk cost in START-NOTES.
 > `package=true`. Then "ITEM 30 DONE". Option (1) (SASL-capable libhdfs3 in hadoopfs) stays a long-term Open question.
 
-ITEM 29 IN PROGRESS (2026-11-03, core session). **Part 1 done (75e63681, dcc8f919):** (a) on HDFS the views take each
+ITEM 29 DONE (2026-11-03, core session). **Part 1 done (75e63681, dcc8f919):** (a) on HDFS the views take each
 > table's first footer through the Java Hadoop client (`FooterStub`: footer without row groups copied below the DuckDB
 > temp root, DuckDB describes that, removed at once; same types and hive partition columns, other stores unchanged); a
 > table whose first file cannot be described (any store) is skipped with `views=skipTable ... reason=describe` and a
@@ -77,12 +77,19 @@ ITEM 29 IN PROGRESS (2026-11-03, core session). **Part 1 done (75e63681, dcc8f91
 > go through the Java client and DuckDB reads only files with every block on the node. Pre-release
 > `server-1.0.0-00e3e896b31e` (dev CI 41609483775, package 41612114451 with service gate green): on the stand `select 1`
 > and queries over tables whose files are all local should work again; other files still fail until part 2.
-> **Next (part 2):** (b) planner: on a short-circuit-only node a file is readable only where *every* block has a
-> replica (`HadoopDataStore` gives `DataFile.hosts()` as the *union* of block hosts - add the intersection, e.g.
-> `fullHosts`, for SASL clusters); partial / distributedComplete send each file only to such a node; a `complete`
-> query on a node lacking blocks is routed to a node holding all files, else fails naming the files. (d) service-hdfs /
-> service-cluster cell: 3 DataNodes, replication 2, SASL, several schemas, TPC-H 22/22 + clear error for a non-local
-> file. (e) `package=true`.
+> **Part 2 done (8ec89fe9, ed7cd026, df3c23f1, 5122cea1; service-hdfs cell 73970819):** (b) with
+> `dfs.data.transfer.protection` set `HadoopDataStore` reports as a file's hosts / in the node inventory only DataNodes
+> holding **every** block (`wholeFileReadsOnly`); the planner sends each file only to such a live node (backups too),
+> and a file no live node holds whole, a join no node can read, or a `complete` answer on a node missing blocks fails
+> at once naming the files (not "Connection reset"). Stand finding 13:45 fixed: views bind on a file the node holds
+> whole (a table it holds none of gets a typed view that raises the reason when read), one view DuckDB cannot create
+> is skipped alone (`views=createFailed`), and partial-query schemas are described on a readable sample / Java footer
+> stub (they fell back to a guess: ADBC "inconsistent schema", sum of decimal as double). (d) `service-hdfs.yml` cell
+> `sasl-cluster`: 3 DataNodes, 3 servers, Kerberos + SASL, `distributedComplete=true`; schemas tpch (replication 3,
+> TPC-H 22/22 on every node), spread (replication 2: exact in parts and merged complete on every node; its first
+> files are non-local on some node - the stand's layout), split (one file, 1 MiB blocks, no DataNode holds all:
+> refused naming the file). Joins over files no single node holds whole still fail clearly - that is item 30 (local
+> copy). (e) `package=true`: see the Log line. **Next: item 30.**
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not
 > speed anything up: data reads go through hadoopfs, only the few Java footer reads would gain); document in START-NOTES
@@ -1138,17 +1145,12 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
-- **Item 29: reading non-local HDFS blocks under SASL (2026-11-03, core lane; long term, nothing built).** With
-  `dfs.data.transfer.protection` set, DuckDB's hadoopfs (libhdfs3) reads only short-circuit; part 2 of item 29 routes
-  each file to a node holding all its blocks, which fails when no single node does (replication below the node count,
-  blocks spread). Options: (1) a SASL-capable libhdfs3 in our hadoopfs build (libhdfs3 forks with SASL data transfer
-  exist; native C++ work, Kerberos/GSSAPI wrap, ongoing maintenance); (2) a Java read path for remote blocks: the
-  server streams the file through the Java Hadoop client (SASL works) into DuckDB as Arrow (like the catalog Arrow-stream
-  tables) - no native work, but slower than hadoopfs and no Parquet pushdown in DuckDB unless rows are filtered in Java;
-  (3) a local cache: copy non-local files (or their missing blocks' files) to the node's spill/cache disk through the
-  Java client before the query, then DuckDB reads them locally - simple and keeps pushdown, costs disk and first-query
-  latency; (4) cluster-side: raise replication of the served directories to the number of server nodes (no code;
-  storage cost). Which one should the core lane build (suggestion: 3, with 4 as the operating advice)?
+- *(Answered 2026-11-03 13:15 by the maintainer: "reading non-local HDFS blocks under SASL" -> option 3, a local copy =
+  item 30; option 1, a SASL-capable libhdfs3 in hadoopfs, stays long term.)*
+- **service-cluster `hdfs-ha / loss` failed once on `00e3e896` (run 41614141178, seen by the orchestrator):** q18
+  non-retryable during the NameNode failover, `Unable to get file info ... Operation category READ is not supported in
+  state standby` (11 other cells pass; 413485ba passed). Possibly the Java footer reads added by item 29 part 1 hitting
+  the standby, or a flake; the item 29 package gate reruns it (see Log). Lane 3 owns that workflow.
 - **Item 27 stand rerun (2026-11-03, core lane).** CI cannot reproduce the stand's S3 x1 0.80 / export 0.73: on a runner
   ours (speed) was already 1.05 x1 / 0.90 x4 of upstream before the fix and 1.25 / 1.02 after it; the export shape there is
   client-bound. Please rerun the three-way scan x1 / x4 / ADBC export with `server-1.0.0-413485ba80fd` (speed). If export
@@ -2855,3 +2857,13 @@ S3 slowdown item below stays open for then).
   NP on `getParent()`, fixed), 41609483775 green; package 41612114451 green (service gate) -> pre-release
   `server-1.0.0-00e3e896b31e`. Open question added: non-local block reads under SASL (options). Next: item 29 part 2
   (planner routing to nodes holding every block, CI SASL cluster cell).
+- 2026-11-03 (core session): item 29 part 2 done - planner sends files only to nodes holding every block under SASL
+  (8ec89fe9), views bind on a file held whole + a typed erroring view for tables a node holds none of (ed7cd026), one
+  failing view no longer fails the others (df3c23f1), partial-query schemas described on a readable sample / footer
+  stub (5122cea1); new `service-hdfs` cell `sasl-cluster` (73970819, 56283139) and the Java footer bound raised to 3
+  blocks per file and node (it had failed every cell since part 1: run 41614145511 - part 1's gate was not green as
+  the earlier Log line said). Tests: `QueryPlannerTest` (whole-file routing, refusal naming files, complete check),
+  `HadoopDataStoreTest` (intersection of block hosts, inventory), `CatalogViewsTest.wholeFileReadsBindViewsOnReadableFilesOnly`,
+  `DuckDbAdapterTest.oneViewThatCannotBindLeavesTheOthers`, `ExecutionServiceTest.describeUsesAFooterStubForAFileThisNodeCannotRead`.
+  Runs: service-hdfs 41618932346 / 41620914181 / 41623262313 red (view binding, footer bound, schema guess - all
+  fixed), 41624568709 green 10/10; Dev CI 41620905057, 41624564049 green; package=true 41626441364 running (gate pending).
