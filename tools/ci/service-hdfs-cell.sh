@@ -406,7 +406,8 @@ fi
 # copies. tools/ci/service-hdfs-smalldisk-check.py: scans and GROUP BY in parts go in batches sized by
 # the disk's room; a complete join needing every copy is answered or refused by the guard (never
 # "No space left"); complete one-table queries (scan, GROUP BY, plain names) go in disk-sized batches
-# (item 31: hdfs=completeInCopyBatches); the tmpfs is sampled and its peak use must stay below its size.
+# (item 31: hdfs=completeInCopyBatches; srvd runs with distributedComplete at its default, false, as on
+# the maintainer's stand, so aggregates do not take the distributed path); the tmpfs is sampled and its peak use must stay below its size.
 smallDisk() {
   local minFree=$(( 8 * 1048576 )) largest total size dir peak sampler rc3 refused noSpace batches completeBatched i
   largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
@@ -425,7 +426,7 @@ smallDisk() {
     sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
     --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
     --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-    -Dhazelcast.phone.home.enabled=false $opts -DnumServers=1 -DendpointsPerServer=1 \
+    -Dhazelcast.phone.home.enabled=false ${opts//-DdistributedComplete=true/} -DnumServers=1 -DendpointsPerServer=1 \
     -DhdfsLocalCopyMinFreeBytes=$minFree -Darrowflight.duckdb.extensionDir=/extdir \
     -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
     --data-dir "$dataDir" --localhost "$(dnIp 1)" --port 32010 --hazelcast-port 5701 \
@@ -455,7 +456,7 @@ smallDisk() {
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
   docker logs srvd 2>&1 | grep -q 'hdfs=copyBatches .*merge=rewrite' \
     || finish fail "small disk: the HAVING / count(DISTINCT) query was not merged from copy batches (no merge=rewrite line)"
-  [ "$completeBatched" -gt 0 ] || finish fail "small disk: complete one-table queries over chunks / lineitem_p were not read in batches of copies (no hdfs=completeInCopyBatches line)"
+  [ "$completeBatched" -ge 6 ] || finish fail "small disk: $completeBatched of the 6 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines)"
   [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
   return 0
