@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-04 06:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 07:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not written: **ALL DONE.** Every lane condition is met except one: egret has no FRESH report for the newest
 pre-release `server-1.0.0-d2313a9eb651` (item 30). egret skips it on purpose: the maintainer's 2026-11-03 note in
@@ -15,7 +15,7 @@ Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE**, **
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | 1e39546d 05:41Z (~75 min, unlock) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
+| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | 1e39546d 05:41Z (~135 min, unlock) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -42,14 +42,14 @@ No stale locks (marten and heron free).
 
 - marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 03:40-03:41Z: no new server jar, no
   maintainer items. M4 default server `0e457de30f25`. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 104 (06:52Z): nothing open, no new server build. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 105 (07:51Z): nothing open, no new server build. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
   load 0.92-0.98; upstream native 0-1/22 on TPC-H, small-query errors. Ours 22/22, 0 errors.
-- README "In progress" (05:30Z): idle; newest tracked 413485ba80fd; no FRESH wave for d2313a9eb651 (items 29/30 only).
+- README "In progress" (07:27Z): idle; newest tracked 413485ba80fd; no FRESH wave for d2313a9eb651 (items 29/30 only).
 
 ## For the maintainer
 
@@ -64,6 +64,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 07:57Z: no change: core idle (lock free), Dev CI on main green (41770973165), service gate 4/4 green on d2313a9e; marten/heron (session 105)/egret idle; no stale locks; ALL DONE still waits on the maintainer (FRESH for d2313a9eb651 or accept FRESH-413485ba80fd).
 - 2026-11-04 06:57Z: no change: core idle (lock free), Dev CI on main green (41770973165), service gate 4/4 green on d2313a9e; marten/heron (session 104)/egret idle; no stale locks; ALL DONE still waits on the maintainer (FRESH for d2313a9eb651 or accept FRESH-413485ba80fd).
 - 2026-11-04 05:57Z: ITEM 30 DONE (pre-release d2313a9eb651, Dev CI package=true 41774819696, service gate 4/4 green on d2313a9e); core idle (no open item, lock free); Dev CI on main green (41770973165); egret skips FRESH for d2313a9eb651 per the maintainer's 2026-11-03 note, so ALL DONE waits on the maintainer; no stale locks.
 - 2026-11-04 04:57Z: core lock 04:41Z (active), closing ITEM 30 with known limits (d2313a9e docs: START-NOTES/CHANGELOG; "ITEM 30 DONE" and `package=true` not yet written); e9cdd42a/5253945e green (Dev CI 41770973165, service-hdfs 41769492301, Catalogs 41769492328); marten/heron/egret idle; no stale locks.
