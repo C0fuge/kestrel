@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Item 31 progress (2026-11-04, core lane, part 1 in `fa7f901a`):** done - (1) the silent 0 rows: the view of a
+> table a node holds no file of whole had typed NULL columns, and DuckDB folded joins on them to an empty result
+> without evaluating the error (reproduced on DuckDB 1.4.4); every column is now the error itself; (2) plain names: on
+> SASL short-circuit-only stores every plain name DuckDB resolves (the one schema with that table, as the `main.*` alias
+> views) is qualified before planning (`FlightSqlProducer.flightInfoForQuery` / `schemaForQuery`, and again in
+> `completeFromCopies`), so the refusal (a) and the hadoopfs read (b) are gone for unique names; (3) copy-disk refusal
+> = RESOURCE_EXHAUSTED; (4) `localCopyOverLimit` once per query; CI sasl-cluster: schema `plain` (`<table>_p`, lineitem
+> and orders with 1 MiB blocks, replication 1), TPC-H 22/22 plain names complete on every node, plain comma join,
+> count/sum both modes. **Still open in item 31 (next session, in this order):** (5) complete mode batches copies for
+> single-table aggregates / scans like partial mode (count / GROUP BY / scans over a 64 MiB copy dir refused);
+> (6) partial mode batches GROUP BY (incl. `count(*)` per group) - check against START-NOTES; (7) the direct-memory
+> OOM of `distributedComplete=true` + speed full scans (size scan buffers from MaxDirectMemorySize or back off);
+> (8) CI: the small copy-dir stage in complete mode; then `package=true` and "ITEM 31 DONE".
+
 > **Maintainer, 2026-11-04 20:55 - BUG FIRST, ITEM 31: item 30 works only for schema-qualified table names; wrong
 > answers with plain names.** Stand: HA + Kerberos (Flight Kerberos + TLS), 3 DataNodes with
 > `dfs.data.transfer.protection=authentication`, short-circuit, one server per DataNode (1 and 3 servers, default and
@@ -1274,6 +1288,13 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 31: plain names in several schemas (2026-11-04, core lane).** A plain name is resolved like DuckDB resolves
+  it: through the `main.*` alias view, which exists only when exactly one schema has a table of that name. The Flight
+  `SCHEMA` call header the Java client sends for its default schema is ignored by the server today, so `lineitem` with
+  default schema `spread` fails ("Catalog Error") when `tpch.lineitem` also exists. Option: honour the header (or a
+  session option) as the first schema to resolve plain names in - new optional behaviour, but it changes which table a
+  plain name reads for clients that already send it. Should it be built, and on by default?
 
 - **Item 30: complete (non-mergeable) answers and joins whose copies exceed `hdfsLocalCopyMaxBytes` (2026-11-03, core
   lane, decision needed).** Scans and mergeable aggregates are now processed in batches that fit the cache; a join or a
@@ -3148,3 +3169,12 @@ S3 slowdown item below stays open for then).
   (service-cluster 41776324282, -hdfs 41776328578, -security 41776332023, -stores 41776335441, all green) and package
   green; pre-release `server-1.0.0-d2313a9eb651`. Open question on item 30 kept (a hard bound below the free disk). Lock
   released.
+- 2026-11-04 (cloud session, core): ITEM 31 PART 1 (`fa7f901a`). Silent 0-row joins fixed (unreadable-table view
+  columns are the error itself; DuckDB folded joins on typed NULLs to empty), plain table names qualified with their
+  one schema on SASL short-circuit-only stores before planning and in `completeFromCopies`, copy-disk refusal =
+  RESOURCE_EXHAUSTED, `localCopyOverLimit` once per query. Tests: `TableReferencesTest` (+2: qualification, CTE /
+  unknown / qualified names untouched), `CatalogViewsTest` (+1: 8 join/semi-join/count shapes fail instead of 0 rows),
+  `LocalCopyCacheTest` (NoRoomException). CI on `fa7f901a`: Dev CI 41883760528 green, Service hdfs 41883760502 green
+  (sasl-cluster balanced + speed: plain-name TPC-H 66/66 exact on 3 nodes, plain comma join 1500000 on every node,
+  plain lineitem_p count/sum both modes), Catalogs CI 41883760547 green. No `package=true` (item 31 not done: (5)-(8)
+  in Next steps). Open question added: honour the client's `SCHEMA` header for names in several schemas. Lock released.
