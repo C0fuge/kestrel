@@ -1,15 +1,13 @@
 # Orchestration status
 
-Status as of **2026-11-04 03:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 04:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL). The small copy-disk stage that was red at
-21:58Z was fixed by 4a1d354f (evicted copies stayed open through the DuckDB statement cache; Dev CI 41726874635 and
-service-hdfs 41726885857 green). New: e9cdd42a (03:49Z) merges HAVING and count/sum(DISTINCT) aggregates from copy
-batches; Dev CI 41769492302 and service-hdfs 41769492301 on it are running. The core session holds the lock (03:40Z,
-active). Its proposal for the next session: unless the maintainer answers the Open question, treat the free-disk guard
-as the bound, run `package=true` and write "ITEM 30 DONE" with two known limits (complete answers / joins over more than
-the copy room; scans with ORDER BY and no LIMIT). egret has no FRESH report for the newest pre-release `5122cea1f045`
-(ALL DONE waits for item 30's pre-release and a FRESH run on it).
+Not ready yet: **ITEM 30** (local copy of non-local HDFS files under SASL). The core session (lock 04:41Z, active) is
+closing it as it proposed: d2313a9e (04:42Z) documents the two known limits in START-NOTES / CHANGELOG (joins,
+non-mergeable `complete` answers and ORDER BY-only scans need all copies at once; refused before copying beyond the free
+disk, `hdfs=localCopyNoSpace`). "ITEM 30 DONE" and the `package=true` pre-release are not written yet. All CI on main
+green: Dev CI 41770973165 (5253945e), service-hdfs 41769492301 and Catalogs CI 41769492328 (e9cdd42a). egret has no
+FRESH report for a pre-release newer than `413485ba80fd` (ALL DONE waits for item 30's pre-release and a FRESH run on it).
 Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE** (kestrel), **IMPROVEMENTS DONE** (marten
 and heron).
 
@@ -17,7 +15,7 @@ and heron).
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 30 part 2b (HAVING / DISTINCT over copy batches) | 87b33772 03:50Z (~7 min) | held 03:40Z (active) | 4a1d354f green (Dev CI 41726874635, service-hdfs 41726885857); e9cdd42a Dev CI 41769492302 + service-hdfs 41769492301 running; Catalogs CI 41769492328 green. |
+| core (`STATUS.md`) | ITEM 30 closing (known limits documented) | d2313a9e 04:42Z (~15 min) | held 04:41Z (active) | green: Dev CI 41770973165 (5253945e), service-hdfs 41769492301, Catalogs CI 41769492328 (e9cdd42a); d2313a9e docs only (no run). |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | 2026-11-03 11:04Z | free | - |
@@ -29,7 +27,7 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41628772790 | 5122cea1 | pass |
-| service-hdfs.yml | 41769492301 (main) | e9cdd42a | running (previous 41726885857 on 4a1d354f: pass) |
+| service-hdfs.yml | 41769492301 | e9cdd42a | pass |
 | service-security.yml | 41628777405 | 5122cea1 | pass |
 | service-stores.yml | 41628781826 | 5122cea1 | pass |
 
@@ -41,9 +39,9 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; session 03:40-03:41Z: no new server jar, no
+- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 03:40-03:41Z: no new server jar, no
   maintainer items. M4 default server `0e457de30f25`. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 102: nothing open. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 103 (04:51Z): nothing open, no new server build. Lock free.
 
 ## egret
 
@@ -54,11 +52,9 @@ No stale locks (marten and heron free).
 
 ## For the maintainer
 
-- **Decision wanted (Open question, item 30):** joins / non-mergeable `complete` answers hold all their copies at once,
-  so the copy dir can grow to the query's input size. Options: (1) refuse up front beyond `hdfsLocalCopyMaxBytes`;
-  (2) `hdfsLocalCopyHardMaxBytes` + free-space check; (3) keep and document. Still unanswered. The core lane now
-  proposes to close item 30 with the free-disk guard (`hdfsLocalCopyMinFreeBytes`) as the bound and both limits
-  documented, unless you answer first.
+- **Item 30 Open question (copies of joins / non-mergeable answers):** still unanswered; the core lane is closing item
+  30 with the free-disk guard (`hdfsLocalCopyMinFreeBytes`) as the bound and both limits documented. Answer the Open
+  question if you want an earlier refusal (option 1 or a hard bound).
 - Open question (core lane, FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   (Dev CI 41644812393); no repeat seen.
 - Open question "item 27 stand rerun" is still listed (egret runner numbers: S3 export 0.92 of upstream).
@@ -66,6 +62,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 04:57Z: core lock 04:41Z (active), closing ITEM 30 with known limits (d2313a9e docs: START-NOTES/CHANGELOG; "ITEM 30 DONE" and `package=true` not yet written); e9cdd42a/5253945e green (Dev CI 41770973165, service-hdfs 41769492301, Catalogs 41769492328); marten/heron/egret idle; no stale locks.
 - 2026-11-04 03:57Z: core lock 03:40Z (active), pushed e9cdd42a (item 30 part 2b: HAVING / DISTINCT aggregates merged from copy batches), Dev CI 41769492302 / service-hdfs 41769492301 running; 4a1d354f green (Dev CI 41726874635, service-hdfs 41726885857: small-disk stage fixed); lane proposes ITEM 30 DONE with the copy-join limit unless the maintainer answers; marten finish-mode session 03:40Z (nothing to do); heron/egret idle; no stale locks.
 - 2026-11-03 21:58Z: core lock 21:41Z, pushed 0418b441 (service-hdfs small copy-disk stage): Dev CI 41724478294 green, service-hdfs 41724478510 red only in the new small-disk stage (sasl-cluster balanced, `localCopyNoSpace`), lane active; 336f9607 Dev CI green; marten M4 default now server 0e457de30f25 (lakeFS 41713886604 pass); heron/egret idle; no stale locks.
 - 2026-11-03 20:58Z: core lock 20:41Z, pushed 336f9607 (item 30 part 2b: `hdfsLocalCopyMinFreeBytes`, copies never fill their disk; query refused with `hdfs=localCopyNoSpace`); a4bbbab0 green (Dev CI 41707251465, service-hdfs 41707251290); service-hdfs 41715910681 on 336f9607 green, Dev CI 41715910689 running; marten session active (lock 19:43Z, M4 checks 6,7 and lakeFS 1,3,4,10 dispatched); heron/egret idle; no stale locks, no red CI.
