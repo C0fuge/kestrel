@@ -168,8 +168,15 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > join that is refused by the guard naming the files, tmpfs peak sampled below its size. It found a bug, fixed: SQL over
 > copies stayed in the per-session DuckDB statement cache, whose open statements keep the files open, so evicted
 > copies kept their disk space (2nd batch refused with 0 bytes in use); such SQL is now prepared per run and closed);
-> (5) `package=true`, then "ITEM 30 DONE". **Next session:** HAVING / avg / DISTINCT aggregates over copy batches
-> (single-node clusters and distributed complete parts), unless the Open question is answered first.
+> (5) `package=true`, then "ITEM 30 DONE". **HAVING / DISTINCT aggregates done 2026-11-04 (e9cdd42a):**
+> `CopyBatchMerge` merges batch answers of an aggregate with HAVING (plain count/sum/min/max, selected group columns,
+> literals, AND/OR/NOT, comparisons, `+ - *`) and of count/sum over DISTINCT values of one plain column (single-server
+> partial mode; distributed tickets never carry these shapes: refused with several servers); log `merge=rewrite`;
+> small-disk stage checks HAVING + count(DISTINCT) over chunks. avg is never on this path (routed to complete mode).
+> **Next session:** what remains of item 30 is complete answers / joins over more than the copy room (Open question,
+> waits on the maintainer) and a scan with ORDER BY and no LIMIT (would need a sorted merge / spill). Proposal: unless
+> the maintainer answers, treat the free-disk guard as the bound, run `package=true` and write "ITEM 30 DONE" with
+> those two listed as known limits.
 
 
 > **Maintainer, 2026-11-03 11:45 - answers + ITEM 28 (small, docs).** (1) libhadoop: do **not** bundle it (it does not

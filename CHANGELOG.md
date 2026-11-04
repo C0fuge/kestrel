@@ -128,6 +128,17 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   may read that subdirectory (and the startup lockdown check expects it); it is deleted when the server stops, and
   one left by a dead process is removed at the next start. Unset (default) or `hdfsLocalCopyMaxBytes=0`: unchanged.
 
+### Changed - SASL HDFS clusters: HAVING and DISTINCT aggregates merged from batches of copies (STATUS item 30, part 2b)
+
+- On a single-server cluster (where partial mode accepts these shapes), a query of one table whose files to copy
+  exceed the cache / disk room is now answered per batch of copies and merged on the node also when it is an
+  aggregate with HAVING (the condition may use plain count/sum/min/max, selected GROUP BY columns, literals, AND / OR /
+  NOT, comparisons and `+ - *`; each batch answers the query without HAVING plus the aggregates the condition reads,
+  the condition is applied to the merged groups) or uses count / sum over DISTINCT values of one plain column (each
+  batch also groups by that column; part answers then hold one row per group and distinct value, in memory). Log
+  line `hdfs=copyBatches ... merge=rewrite`. Other HAVING forms (IS NULL, functions, avg, DISTINCT inside HAVING),
+  DISTINCT over two columns or expressions keep holding their copies at once, as before.
+
 ### Changed - SASL HDFS clusters: LIMIT aggregates, DISTINCT and LIMIT scans merged from batches of copies (STATUS item 30, part 2b)
 
 - Like the aggregates below, a partial-mode query of one table whose files to copy exceed `hdfsLocalCopyMaxBytes` is
