@@ -3,11 +3,14 @@ package pro.surpin.data.arrowflight.server.services;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 
+import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 import pro.surpin.data.arrowflight.server.services.TimeTravelClause.Kind;
 import pro.surpin.data.arrowflight.server.services.TimeTravelClause.Token;
 
@@ -131,6 +134,126 @@ final class TableReferences {
                     reference.table(), reference.aliased(), whole));
         }
         return withRows;
+    }
+
+    /**
+     * Prefixes the table names a query writes without a schema ({@code FROM lineitem},
+     * {@code JOIN orders o}, after a comma of a FROM list) with the schema a resolver names, so
+     * that every later step (planning, locality checks, local copies) sees the table it reads.
+     * DuckDB binds {@code tpch.lineitem} under the name {@code lineitem}, so column qualifiers
+     * keep working. A name defined by the query itself (a CTE or a named window) is never
+     * prefixed; a reference the finder misses keeps its plain name, so callers must not assume
+     * every plain name is gone.
+     *
+     * @param sql client SQL
+     * @param schemaOf takes a plain table name as written (unquoted) and returns the schema to
+     *        prefix it with, or null to leave it alone
+     * @return the SQL with the found names prefixed, the same instance when nothing changed
+     */
+    static String qualifyPlainNames(String sql, Function<String, String> schemaOf) {
+        if (sql == null) {
+            return null;
+        }
+        List<Token> tokens = TimeTravelClause.tokens(sql);
+        Set<String> defined = definedNames(tokens);
+        StringBuilder out = null;
+        int at = 0;
+        Deque<Boolean> outer = new ArrayDeque<>();
+        boolean from = false;
+        for (int i = 0; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.kind() == Kind.OTHER && token.text().equals("(")) {
+                outer.push(from);
+                from = false;
+                continue;
+            }
+            if (token.kind() == Kind.OTHER && token.text().equals(")")) {
+                from = !outer.isEmpty() && outer.pop();
+                continue;
+            }
+            if (token.kind() == Kind.WORD) {
+                String upper = token.text().toUpperCase(Locale.ROOT);
+                if (upper.equals("FROM") || upper.equals("JOIN")) {
+                    from = true;
+                    continue;
+                } else if (END_FROM.contains(upper)) {
+                    from = false;
+                }
+            }
+            boolean starts = i > 0 && (TimeTravelClause.word(tokens.get(i - 1), "FROM")
+                    || TimeTravelClause.word(tokens.get(i - 1), "JOIN")
+                    || (from && tokens.get(i - 1).kind() == Kind.OTHER
+                    && tokens.get(i - 1).text().equals(",")));
+            if (!starts || !TimeTravelClause.identifier(token)) {
+                continue;
+            }
+            Token after = i + 1 < tokens.size() ? tokens.get(i + 1) : null;
+            if (after != null && (after.kind() == Kind.DOT
+                    || (after.kind() == Kind.OTHER && after.text().equals("(")))) {
+                continue;   // a qualified name or a table function
+            }
+            String name = TimeTravelClause.unquote(token);
+            if (defined.contains(name.toLowerCase(Locale.ROOT))) {
+                continue;
+            }
+            String schema = schemaOf.apply(name);
+            if (schema == null) {
+                continue;
+            }
+            if (out == null) {
+                out = new StringBuilder(sql.length() + 64);
+            }
+            out.append(sql, at, token.start()).append(DuckDbAdapter.quoteIdentifier(schema)).append('.');
+            at = token.start();
+        }
+        return out == null ? sql : out.append(sql, at, sql.length()).toString();
+    }
+
+    /**
+     * Names the query defines itself: CTEs ({@code name AS (}, {@code name AS [NOT]
+     * MATERIALIZED (}, {@code name(columns) AS (}) and named windows, in lower case. Any
+     * identifier written that way counts, which may leave a real table unqualified but never
+     * qualifies a name the query defines.
+     *
+     * @param tokens tokens of the SQL
+     * @return names in lower case
+     */
+    private static Set<String> definedNames(List<Token> tokens) {
+        Set<String> names = new HashSet<>();
+        for (int i = 0; i + 1 < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (!TimeTravelClause.identifier(token)) {
+                continue;
+            }
+            int next = i + 1;
+            if (tokens.get(next).kind() == Kind.OTHER && tokens.get(next).text().equals("(")) {
+                int depth = 0;
+                for (; next < tokens.size(); next++) {
+                    Token t = tokens.get(next);
+                    if (t.kind() == Kind.OTHER && t.text().equals("(")) {
+                        depth++;
+                    } else if (t.kind() == Kind.OTHER && t.text().equals(")") && --depth == 0) {
+                        break;
+                    }
+                }
+                next++;
+            }
+            if (next >= tokens.size() || !TimeTravelClause.word(tokens.get(next), "AS")) {
+                continue;
+            }
+            int body = next + 1;
+            if (body < tokens.size() && TimeTravelClause.word(tokens.get(body), "NOT")) {
+                body++;
+            }
+            if (body < tokens.size() && TimeTravelClause.word(tokens.get(body), "MATERIALIZED")) {
+                body++;
+            }
+            if (body < tokens.size() && tokens.get(body).kind() == Kind.OTHER
+                    && tokens.get(body).text().equals("(")) {
+                names.add(TimeTravelClause.unquote(token).toLowerCase(Locale.ROOT));
+            }
+        }
+        return names;
     }
 
     /** Words that start a query right after an opening parenthesis (a subquery). */

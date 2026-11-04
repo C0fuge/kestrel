@@ -20,7 +20,9 @@
 #   sasl-cluster  ha-krb-sasl with 3 DataNodes and 3 servers (one in each DataNode's network namespace,
 #           -DdistributedComplete=true; STATUS item 29): schemas tpch (replication 3: 22/22 on every
 #           node), spread (replication 2) and split (one lineitem file, 1 MiB blocks, replication 1, no
-#           DataNode holding all its blocks); tools/ci/service-hdfs-sasl-check.py: spread.lineitem
+#           DataNode holding all its blocks), plain (every tpch table renamed <name>_p, so that its plain
+#           name is unique; lineitem_p / orders_p with 1 MiB blocks and replication 1, the rest replication
+#           2: item 31, queries with plain names); tools/ci/service-hdfs-sasl-check.py: spread.lineitem
 #           exact in parts and complete on every node, split.t read from node-local copies (item 30),
 #           chunks (all lineitem files, 1 MiB blocks, replication 1: no node holds a file whole) full scan
 #           and GROUP BY; under speed the copy cache is below one file, so scans go in batches (part 2b).
@@ -213,7 +215,11 @@ else
     && hdfs dfs -D dfs.replication=3 -put /tmp/upload/tpch /data/ \
     && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem /data/chunks/ \
     && hdfs dfs -D dfs.replication=2 -put /tmp/upload/tpch/* /data/spread/ \
-    && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem/$splitFile /data/split/t/" \
+    && hdfs dfs -D dfs.replication=1 -D dfs.blocksize=1048576 -put /tmp/upload/tpch/lineitem/$splitFile /data/split/t/ \
+    && hdfs dfs -mkdir -p /data/plain \
+    && for t in \$(ls /tmp/upload/tpch); do \
+         case \$t in lineitem|orders) o='-D dfs.replication=1 -D dfs.blocksize=1048576' ;; *) o='-D dfs.replication=2' ;; esac; \
+         hdfs dfs \$o -put /tmp/upload/tpch/\$t /data/plain/\${t}_p || exit 1; done" \
     || finish fail "HDFS upload failed"
   docker exec "${kenv[@]}" "$admin" hdfs fsck "/data/split/t/$splitFile" -files -blocks -locations > "$work/fsck-split.log" 2>&1
   blocks=$(grep -cE '^[0-9]+\. BP-' "$work/fsck-split.log")

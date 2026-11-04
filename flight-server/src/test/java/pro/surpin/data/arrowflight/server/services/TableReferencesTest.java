@@ -78,4 +78,52 @@ class TableReferencesTest {
         assertFalse(TableReferences.singleSelect("FROM hive.orders"));
         assertTrue(TableReferences.singleSelect("SELECT 'select from' FROM hive.orders"));
     }
+
+    private static String qualify(String sql) {
+        return TableReferences.qualifyPlainNames(sql, name -> switch (name.toLowerCase(java.util.Locale.ROOT)) {
+            case "lineitem", "orders", "customer" -> "tpch";
+            case "orders_sp" -> "spread";
+            default -> null;
+        });
+    }
+
+    /** Item 31: plain names get the one schema that has them, everywhere a table is read. */
+    @Test
+    void plainTableNamesGetTheirSchema() {
+        assertEquals("SELECT count(*) FROM \"tpch\".lineitem", qualify("SELECT count(*) FROM lineitem"));
+        assertEquals("SELECT count(*) FROM \"spread\".orders_sp o, \"tpch\".customer c"
+                + " WHERE o.o_custkey = c.c_custkey",
+                qualify("SELECT count(*) FROM orders_sp o, customer c WHERE o.o_custkey = c.c_custkey"));
+        assertEquals("SELECT * FROM \"tpch\".\"Orders\" AS x JOIN \"tpch\".lineitem l ON x.a = l.b",
+                qualify("SELECT * FROM \"Orders\" AS x JOIN lineitem l ON x.a = l.b"));
+        assertEquals("SELECT lineitem.l_orderkey FROM \"tpch\".lineitem WHERE l_orderkey IN"
+                + " (SELECT o_orderkey FROM \"tpch\".orders)",
+                qualify("SELECT lineitem.l_orderkey FROM lineitem WHERE l_orderkey IN"
+                        + " (SELECT o_orderkey FROM orders)"));
+        assertEquals("FROM \"tpch\".lineitem SELECT 1", qualify("FROM lineitem SELECT 1"));
+        assertEquals("SELECT 1 FROM (SELECT * FROM \"tpch\".orders) o, \"tpch\".customer",
+                qualify("SELECT 1 FROM (SELECT * FROM orders) o, customer"));
+    }
+
+    @Test
+    void qualifiedDefinedAndUnknownNamesStayAsWritten() {
+        for (String sql : List.of(
+                "SELECT * FROM tpch.lineitem",
+                "SELECT * FROM other.lineitem l",
+                "SELECT * FROM cat.tpch.lineitem",
+                "SELECT * FROM read_parquet('lineitem')",
+                "SELECT * FROM range(3) lineitem",
+                "SELECT * FROM unknown_table",
+                "SELECT 'FROM lineitem' AS x FROM unknown_table",
+                "SELECT 1 FROM unknown_table -- FROM lineitem",
+                "SELECT lineitem FROM unknown_table",
+                "SELECT a, orders FROM unknown_table GROUP BY a, orders",
+                "WITH lineitem AS (SELECT 1 AS a) SELECT * FROM lineitem",
+                "WITH x AS (SELECT 1), orders(a) AS (SELECT 2) SELECT * FROM x, orders",
+                "WITH orders AS MATERIALIZED (SELECT 2) SELECT * FROM orders")) {
+            assertEquals(sql, qualify(sql), sql);
+        }
+        assertEquals("WITH c AS (SELECT * FROM \"tpch\".orders) SELECT * FROM c, \"tpch\".lineitem",
+                qualify("WITH c AS (SELECT * FROM orders) SELECT * FROM c, lineitem"));
+    }
 }

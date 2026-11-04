@@ -764,6 +764,13 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             } else if (e instanceof IllegalArgumentException) {
                 listener.error(CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage())
                         .withCause(e).toRuntimeException());
+            } else if (pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
+                    .in(e) != null) {
+                // The node's copy disk is full for now: a resource limit, not a server fault.
+                listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(
+                        pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
+                                .in(e).getMessage())
+                        .withCause(e).toRuntimeException());
             } else {
                 listener.error(CallStatus.INTERNAL
                         .withDescription(failure)
@@ -1038,6 +1045,24 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
+     * Writes the schema in front of the plain table names of a query on HDFS read short-circuit
+     * only ({@link ExecutionService#qualifyPlainNames(String)}).
+     *
+     * @param query client SQL
+     * @return the qualified query, or the query itself
+     * @throws FlightRuntimeException UNAVAILABLE when the schemas cannot be listed
+     */
+    private String qualifiedPlainNames(String query) {
+        try {
+            String qualified = executionService.qualifyPlainNames(query);
+            return qualified == null ? query : qualified;
+        } catch (java.io.UncheckedIOException e) {
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
+        }
+    }
+
+    /**
      * Plans a query with parameter values in the given result mode and describes its result.
      *
      * @param query SQL query
@@ -1047,8 +1072,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      * @param complete true for the complete answer, false for partial answers per endpoint
      * @return result schema with the endpoints to read it from
      */
-    private FlightInfo flightInfoForQuery(String query, byte[] parameters,
+    private FlightInfo flightInfoForQuery(String clientQuery, byte[] parameters,
             FlightDescriptor descriptor, FlightProducer.CallContext context, boolean complete) {
+        // On SASL DataNodes plain table names get their schema before anything is planned, so
+        // that tickets, locality checks and local copies name the tables read (item 31).
+        String query = qualifiedPlainNames(clientQuery);
         if (complete) {
             Schema schema = completeSchemaFor(query, parameters);
             try {
@@ -1181,7 +1209,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      * @throws FlightRuntimeException INVALID_ARGUMENT for SQL the server cannot run, NOT_FOUND
      *         for an unknown table
      */
-    private Schema schemaForQuery(String query) {
+    private Schema schemaForQuery(String clientQuery) {
+        String query = qualifiedPlainNames(clientQuery);
         if (pro.surpin.data.arrowflight.server.services.TimeTravelClause.present(query)) {
             // Read in parts: describe as the endpoints stream it, with the earlier snapshot's
             // columns; otherwise planned as a complete answer.

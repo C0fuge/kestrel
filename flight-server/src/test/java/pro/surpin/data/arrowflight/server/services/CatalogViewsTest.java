@@ -263,4 +263,46 @@ class CatalogViewsTest {
                 null, null, null, false, 1048576, 67108864, 60000L, null, null,
                 32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
     }
+
+    /**
+     * Item 31: the view of a table this node cannot read fails every query that reads it. With
+     * typed NULL columns DuckDB folded a join on them to an empty result and answered 0 rows.
+     */
+    @Test
+    void unreadableTableViewFailsJoinsInsteadOfAnsweringNoRows() throws Exception {
+        String view = CatalogViews.unreadableView("\"spread\".\"orders_sp\"",
+                List.of("\"o_custkey\"", "\"o_comment\""), List.of("BIGINT", "VARCHAR"),
+                "UNREADABLE-HERE");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement st = conn.createStatement()) {
+            st.execute("CREATE SCHEMA spread");
+            st.execute(view);
+            st.execute("CREATE TABLE customer AS SELECT range AS c_custkey, 'x' AS n FROM range(100)");
+            try (java.sql.ResultSet rs = st.executeQuery("DESCRIBE SELECT * FROM spread.orders_sp")) {
+                assertTrue(rs.next());
+                assertEquals("BIGINT", rs.getString("column_type"));
+                assertTrue(rs.next());
+                assertEquals("VARCHAR", rs.getString("column_type"));
+            }
+            for (String query : List.of(
+                    "SELECT count(*) FROM spread.orders_sp",
+                    "SELECT count(o_comment) FROM spread.orders_sp",
+                    "SELECT count(*) FROM spread.orders_sp o, customer c WHERE o.o_custkey = c.c_custkey",
+                    "SELECT count(*) FROM spread.orders_sp JOIN customer ON o_custkey = c_custkey"
+                            + " WHERE c_custkey > 5",
+                    "SELECT count(*) FROM customer LEFT JOIN spread.orders_sp ON o_custkey = c_custkey",
+                    "SELECT count(*) FROM customer WHERE EXISTS (SELECT 1 FROM spread.orders_sp"
+                            + " WHERE o_comment = n)",
+                    "SELECT count(*) FROM customer WHERE c_custkey NOT IN (SELECT o_custkey FROM"
+                            + " spread.orders_sp)",
+                    "SELECT count(*) FROM (SELECT o_comment FROM spread.orders_sp) t, customer"
+                            + " WHERE t.o_comment = customer.n")) {
+                try (Statement each = conn.createStatement()) {
+                    java.sql.SQLException e = org.junit.jupiter.api.Assertions.assertThrows(
+                            java.sql.SQLException.class, () -> each.executeQuery(query).next(), query);
+                    assertTrue(e.getMessage().contains("UNREADABLE-HERE"), query + ": " + e.getMessage());
+                }
+            }
+        }
+    }
 }

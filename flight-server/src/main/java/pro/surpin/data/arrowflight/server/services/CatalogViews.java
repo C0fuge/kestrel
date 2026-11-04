@@ -149,6 +149,11 @@ public final class CatalogViews {
     private volatile Map<String, String> failedTables = Map.of();
     /** Catalog tables read as Arrow streams: lower-case "schema\0table" to the stored names. */
     private volatile Map<String, List<String>> streamTables = Map.of();
+    /**
+     * Table name in lower case -> the one schema that has it, for the names {@code main} has an
+     * alias view of (a name in several schemas has none and must be written with its schema).
+     */
+    private volatile Map<String, String> plainOwners = Map.of();
     private Snapshot snapshot;
     private long refreshedAtNanos;
     /** Data version of the store the snapshot was built from (null when unknown). */
@@ -166,6 +171,20 @@ public final class CatalogViews {
         this.parquetAdapter = parquetAdapter;
         this.duckDbAdapter = duckDbAdapter;
         this.widenUnsigned = widenUnsigned;
+    }
+
+    /**
+     * Names the schema a table name written without one reads: the one schema that has a table
+     * of that name (in any case), as DuckDB resolves it through the alias views of {@code main}.
+     *
+     * @param table table name as written, unquoted
+     * @return schema name, or null when no schema or several have such a table
+     * @throws IOException when the table files cannot be listed
+     * @throws SQLException when DuckDB cannot read a table's column types
+     */
+    public String plainOwner(String table) throws IOException, SQLException {
+        current();
+        return table == null ? null : plainOwners.get(table.toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -314,10 +333,12 @@ public final class CatalogViews {
                 spelling.put(lower, table);
             }
         }
+        Map<String, String> unique = new HashMap<>();
         for (Map.Entry<String, List<String>> owner : owners.entrySet()) {
             if (owner.getValue().size() != 1) {
                 continue;   // ambiguous: the schema has to be named
             }
+            unique.put(owner.getKey(), owner.getValue().get(0));
             String table = DuckDbAdapter.quoteIdentifier(spelling.get(owner.getKey()));
             String alias = "CREATE OR REPLACE VIEW main." + table + " AS SELECT * FROM "
                     + DuckDbAdapter.quoteIdentifier(owner.getValue().get(0)) + "." + table;
@@ -328,6 +349,7 @@ public final class CatalogViews {
         tables.clear();
         tables.putAll(seen);
         failedTables = Map.copyOf(undescribed);
+        plainOwners = Map.copyOf(unique);
         streamTables = Map.copyOf(streams);
         long version = (data.hashCode() * 31L) + empty.hashCode();
         if (snapshot == null || snapshot.version() != version) {
@@ -366,6 +388,8 @@ public final class CatalogViews {
         String source = DuckDbAdapter.readParquetFromClause(paths);
         List<String> select = new ArrayList<>();
         List<String> typed = new ArrayList<>();
+        List<String> types = new ArrayList<>();
+        List<String> names = new ArrayList<>();
         boolean widened = false;
         Connection conn = duckDbAdapter.connection();
         // On HDFS the footer is read through the Java Hadoop client (it speaks SASL data-transfer
@@ -389,6 +413,8 @@ public final class CatalogViews {
                     select.add(name);
                 }
                 typed.add("CAST(NULL AS " + type + ") AS " + name);
+                types.add(type);
+                names.add(name);
             }
         }
         String view = DuckDbAdapter.quoteIdentifier(schema) + "." + DuckDbAdapter.quoteIdentifier(table);
@@ -397,20 +423,42 @@ public final class CatalogViews {
         String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
                 + String.join(", ", typed) + " WHERE false";
         if (noneReadable) {
-            // Typed like the table, so that queries bind; reading it fails with the reason.
-            List<String> names = new ArrayList<>(files.size());
+            List<String> unreadableFiles = new ArrayList<>(files.size());
             for (DataFile file : files) {
-                names.add(file.relativePath());
+                unreadableFiles.add(file.relativePath());
             }
-            String reason = QueryPlanner.unreadableFilesMessage(names,
+            String reason = QueryPlanner.unreadableFilesMessage(unreadableFiles,
                     "this node holds no file of " + schema + "." + table + " whole; its");
-            data = "CREATE OR REPLACE VIEW " + view + " AS SELECT " + String.join(", ", typed)
-                    + " WHERE error(" + DuckDbAdapter.sqlStringLiteral(reason) + ") IS NULL";
+            data = unreadableView(view, names, types, reason);
             LOGGER.warn("node={} views=unreadableTable table={}.{} files={}: queries in parts read it"
                     + " on the nodes holding its files; a complete answer here fails",
                     LogUtil.node(), schema, table, files.size());
         }
         return new TableViews(fingerprint, data, empty);
+    }
+
+    /**
+     * Defines the view of a table this node cannot read: typed like the table, so that queries
+     * bind, and failing with the reason whenever a query reads it. Every column is the error
+     * itself, not a typed NULL: DuckDB folds a join or a filter on columns it knows to be NULL to
+     * an empty result without reading the view, and a query must fail, never answer 0 rows (item
+     * 31). The filter also fails a query that reads no column ({@code count(*)}).
+     *
+     * @param view quoted schema and table name
+     * @param names quoted column names
+     * @param types column types, in the same order
+     * @param reason error text
+     * @return CREATE VIEW statement
+     */
+    static String unreadableView(String view, List<String> names, List<String> types,
+            String reason) {
+        String error = "error(" + DuckDbAdapter.sqlStringLiteral(reason) + ")";
+        List<String> columns = new ArrayList<>(names.size());
+        for (int i = 0; i < names.size(); i++) {
+            columns.add("CAST(" + error + " AS " + types.get(i) + ") AS " + names.get(i));
+        }
+        return "CREATE OR REPLACE VIEW " + view + " AS SELECT " + String.join(", ", columns)
+                + " WHERE " + error + " IS NULL";
     }
 
     /**

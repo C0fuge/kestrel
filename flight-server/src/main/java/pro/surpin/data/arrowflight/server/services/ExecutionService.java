@@ -292,6 +292,38 @@ public final class ExecutionService {
     }
 
     /**
+     * Writes the schema in front of the table names a query gives without one, on HDFS read
+     * short-circuit only (SASL DataNodes, item 31): there every step that decides where a file
+     * is read and what is copied (planning, the readable-here check, local copies, join views)
+     * works on {@code schema.table}, and a plain name such as {@code lineitem} must reach them as
+     * the table DuckDB reads for it ({@code main.lineitem} is an alias of the one schema with
+     * that table). Names in several schemas, unknown names and names the query defines itself
+     * stay as written. Elsewhere the query is returned unchanged.
+     *
+     * @param query client SQL
+     * @return the query with its plain table names qualified, or the query itself
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public String qualifyPlainNames(String query) {
+        if (query == null || !parquetAdapter.wholeFileReadsOnly()) {
+            return query;
+        }
+        String qualified = TableReferences.qualifyPlainNames(query, name -> {
+            try {
+                return catalogViews.plainOwner(name);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            } catch (java.sql.SQLException e) {
+                throw new java.io.UncheckedIOException(new IOException(e.getMessage(), e));
+            }
+        });
+        if (!qualified.equals(query)) {
+            LOGGER.debug("node={} query=qualifiedPlainNames query='{}'", LogUtil.node(), qualified);
+        }
+        return qualified;
+    }
+
+    /**
      * Describes the columns of one table as the complete-answer DuckDB reads it, with the type
      * its catalog declares when it comes from one.
      *
@@ -1725,17 +1757,24 @@ public final class ExecutionService {
      * to the node-local cache and replaces each reference to such a table (named with its
      * schema) by {@code read_parquet} over the files as they are read here, local copies for the
      * missing ones, typed as the table's view. SQL is returned unchanged when local copies are
-     * off, when every file is readable here, or when DuckDB cannot name the query's tables.
+     * off, when every file is readable here, or when DuckDB cannot name the query's tables;
+     * table names written without a schema are qualified first ({@link #qualifyPlainNames}).
      *
-     * @param sql SQL of the complete answer (restrictions already applied)
+     * @param clientSql SQL of the complete answer (restrictions already applied)
      * @return SQL to run and the copies it reads; close it after streaming
      * @throws IOException when a file cannot be listed or copied
      * @throws IllegalArgumentException when a table whose files are copied is also read in a way
      *         the rewrite cannot replace (e.g. without its schema), naming its files
      */
-    public CopiedQuery completeFromCopies(String sql) throws IOException {
-        if (!parquetAdapter.localCopies() || TimeTravelClause.present(sql)) {
-            return new CopiedQuery(sql, null);
+    public CopiedQuery completeFromCopies(String clientSql) throws IOException {
+        if (!parquetAdapter.localCopies() || TimeTravelClause.present(clientSql)) {
+            return new CopiedQuery(clientSql, null);
+        }
+        String sql;
+        try {
+            sql = qualifyPlainNames(clientSql);
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
         }
         List<ParquetQueryParser.JoinTable> tables;
         try {
@@ -1748,14 +1787,15 @@ public final class ExecutionService {
         List<DataFile> unreadable = new ArrayList<>();
         int files = 0;
         for (ParquetQueryParser.JoinTable table : tables) {
-            String key = copyKey(table.schema(), table.table());
-            if (table.schema() == null || copied.containsKey(key)
-                    || parquetAdapter.isCatalogSchema(table.schema())) {
+            String schema = schemaRead(table);
+            String key = copyKey(schema, table.table());
+            if (schema == null || copied.containsKey(key)
+                    || parquetAdapter.isCatalogSchema(schema)) {
                 continue;
             }
             List<DataFile> listed;
             try {
-                listed = parquetAdapter.tableFiles(table.schema(), table.table());
+                listed = parquetAdapter.tableFiles(schema, table.table());
             } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
                 continue;   // not a table of the data store: DuckDB reports it
             }
@@ -1784,13 +1824,16 @@ public final class ExecutionService {
         }
         for (ParquetQueryParser.JoinTable table : QueryTables.of(
                 TableReferences.rewrite(sql, references, checks))) {
-            if (copied.containsKey(copyKey(table.schema(), table.table()))) {
+            // A name written without its schema that the rewrite cannot replace reads the
+            // table through DuckDB's alias view, from files this node lacks blocks of.
+            if (copied.containsKey(copyKey(schemaRead(table), table.table()))) {
                 List<String> names = new ArrayList<>();
                 for (DataFile file : unreadable) {
                     names.add(file.relativePath());
                 }
                 throw new IllegalArgumentException(QueryPlanner.unreadableFilesMessage(names,
-                        "a reference to " + table.schema() + "." + table.table()
+                        "a reference to " + (table.schema() == null ? "" : table.schema() + ".")
+                        + table.table()
                         + " cannot be read from local copies; this node lacks blocks of"));
             }
         }
@@ -1815,6 +1858,25 @@ public final class ExecutionService {
         } catch (RuntimeException e) {
             lease.close();
             throw e;
+        }
+    }
+
+    /**
+     * Names the schema a table of a query is read from: its own, or for a name without one the
+     * one schema DuckDB resolves it to through the alias views of {@code main}.
+     *
+     * @param table table as the query names it
+     * @return schema name, or null when the name is in no schema or in several
+     * @throws IOException when the schemas cannot be listed or described
+     */
+    private String schemaRead(ParquetQueryParser.JoinTable table) throws IOException {
+        if (table.schema() != null) {
+            return table.schema();
+        }
+        try {
+            return catalogViews.plainOwner(table.table());
+        } catch (java.sql.SQLException e) {
+            throw new IOException(e.getMessage(), e);
         }
     }
 

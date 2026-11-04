@@ -76,6 +76,41 @@ public final class LocalCopyCache implements AutoCloseable {
     public static final FreeSpace FILE_STORE = d -> Files.getFileStore(d).getUsableSpace();
 
     /**
+     * Thrown when the disk of the cache directory has no room for a query's copies: a resource
+     * limit of the node (clients get RESOURCE_EXHAUSTED and may retry), not a server fault.
+     */
+    public static final class NoRoomException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Creates the exception.
+         *
+         * @param message what did not fit and why
+         */
+        public NoRoomException(String message) {
+            super(message);
+        }
+
+        /**
+         * Finds a refusal for lack of copy room in a failure or its causes.
+         *
+         * @param failure failure, or null
+         * @return the refusal, or null when there is none
+         */
+        public static NoRoomException in(Throwable failure) {
+            for (Throwable t = failure; t != null; t = t.getCause()) {
+                if (t instanceof NoRoomException noRoom) {
+                    return noRoom;
+                }
+                if (t.getCause() == t) {
+                    break;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
      * One cached copy.
      */
     private static final class Entry {
@@ -111,6 +146,8 @@ public final class LocalCopyCache implements AutoCloseable {
     private long cachedBytes;
     /** Bytes of the entries being made, not yet complete on disk; guarded by this. */
     private long pendingBytes;
+    /** Query that was last warned about the limit (evictFor runs once per copy batch); guarded by this. */
+    private String overLimitQid;
 
     /**
      * Creates a cache.
@@ -359,9 +396,18 @@ public final class LocalCopyCache implements AutoCloseable {
             }
         }
         if (cachedBytes + bytes > maxBytes) {
-            LOGGER.warn("node={} hdfs=localCopyOverLimit cachedBytes={} newBytes={} maxBytes={}:"
-                    + " copies in use are kept, the extra ones are deleted after use",
-                    LogUtil.node(), cachedBytes, bytes, maxBytes);
+            // A query copying in batches comes here once per batch: warn once per query.
+            String qid = LogUtil.qid();
+            if (qid == null || !qid.equals(overLimitQid)) {
+                overLimitQid = qid;
+                LOGGER.warn("qid={} node={} hdfs=localCopyOverLimit cachedBytes={} newBytes={}"
+                        + " maxBytes={}: copies in use are kept, the extra ones are deleted after"
+                        + " use (logged once per query)", qid, LogUtil.node(), cachedBytes, bytes,
+                        maxBytes);
+            } else {
+                LOGGER.debug("qid={} node={} hdfs=localCopyOverLimit cachedBytes={} newBytes={}"
+                        + " maxBytes={}", qid, LogUtil.node(), cachedBytes, bytes, maxBytes);
+            }
         }
     }
 
@@ -393,7 +439,7 @@ public final class LocalCopyCache implements AutoCloseable {
         LOGGER.warn("node={} hdfs=localCopyNoSpace dir={} files={} neededBytes={} freeBytes={}"
                 + " minFreeBytes={} inUseBytes={}", LogUtil.node(), directory, toCopy.size(), needed,
                 free, minFreeBytes, inUse);
-        throw new IOException("No room on the disk of the node-local copy cache " + directory
+        throw new NoRoomException("No room on the disk of the node-local copy cache " + directory
                 + " for this query's " + toCopy.size() + " file copies (" + needed + " bytes, e.g. "
                 + toCopy.get(0).relativePath() + "): " + Math.max(0, free) + " bytes are free and "
                 + minFreeBytes + " must stay free (hdfsLocalCopyMinFreeBytes); copies in use by"

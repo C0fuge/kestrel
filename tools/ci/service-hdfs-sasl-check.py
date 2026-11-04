@@ -20,13 +20,20 @@ which lacks some of spread's files and reads them from local copies (item 30 par
 ``chunks`` (every lineitem file, 1 MiB blocks, replication 1: no node holds a file whole): a full
 scan and a GROUP BY must match the local files in both modes on every node, and so must a GROUP BY
 with ORDER BY and LIMIT, a DISTINCT and a top-5 scan (item 30: answered per batch of copies and
-merged when the cache is smaller than a ticket's copies; in parts the client merges the endpoints). Prints ``ok``/``FAIL`` lines and a last line
+merged when the cache is smaller than a ticket's copies; in parts the client merges the endpoints).
+Schema ``plain`` (item 31): every tpch table as ``<name>_p``, so its plain name is unique and DuckDB
+resolves it; lineitem_p and orders_p with 1 MiB blocks and replication 1 (no node holds a file
+whole). With PLAIN names, as benchmark clients write them: the 22 TPC-H queries complete on every
+node must equal the expected answers, a comma join of orders_p and customer_p must count every
+order (it gave 0 rows silently before item 31), and count/sum over lineitem_p must be exact in
+both modes. Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
 import glob
 import importlib.util
 import os
+import re
 import sys
 
 import adbc_driver_flightsql.dbapi as flightsql
@@ -52,6 +59,9 @@ CHUNKS_FIRST_GROUPS = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_
 CHUNKS_DISTINCT = "SELECT DISTINCT l_returnflag, l_linestatus FROM chunks.lineitem"
 CHUNKS_TOP = ("SELECT l_orderkey, l_linenumber FROM chunks.lineitem"
               " ORDER BY l_orderkey DESC, l_linenumber DESC LIMIT 5")
+PLAIN_LINEITEM = "SELECT count(*) AS n, sum(l_quantity) AS q FROM lineitem_p"
+PLAIN_COMMA_JOIN = ("SELECT count(*) AS n FROM orders_p o, customer_p c"
+                    " WHERE o.o_custkey = c.c_custkey")
 SPLIT_JOIN = ("SELECT count(*) AS n, sum(s.l_quantity) AS q FROM split.t s"
               " JOIN spread.orders o ON s.l_orderkey = o.o_orderkey")
 
@@ -237,6 +247,48 @@ def main():
                 else:
                     with_copies += 1
     print(f"ok complete spread TPC-H: {with_copies} of {len(queries) * len(servers)} answers exact",
+          flush=True)
+    # Item 31: plain table names (no schema), resolved by the server to schema plain.
+    want_orders = sum(pq.read_metadata(f).num_rows
+                      for f in glob.glob(os.path.join(base, "data/tpch/orders", "*.parquet")))
+    plain_exact = 0
+    for server in servers:
+        for mode in ("partial", "complete"):
+            try:
+                with connect(server, mode) as conn:
+                    n, q, rows = totals(run(conn, PLAIN_LINEITEM))
+                if n != want_n or abs(q - want_q) > decimal.Decimal("0.0001"):
+                    fail(f"{server} {mode} plain lineitem_p: rows {n} sum {q} in {rows} row(s),"
+                         f" want {want_n} / {want_q}")
+                else:
+                    print(f"ok {server} {mode} plain lineitem_p ({rows} answer row(s))", flush=True)
+            except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                print(f"error text: {e}", flush=True)
+                fail(f"{server} {mode} plain lineitem_p: {first_line(e)}")
+        with connect(server, "complete") as conn:
+            try:
+                joined = sum(int(r["n"] or 0) for r in run(conn, PLAIN_COMMA_JOIN).to_pylist())
+                if joined != want_orders:
+                    fail(f"{server} complete plain comma join: {joined} rows, want {want_orders}")
+                else:
+                    print(f"ok {server} complete plain comma join ({joined})", flush=True)
+            except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                print(f"error text: {e}", flush=True)
+                fail(f"{server} complete plain comma join: {first_line(e)}")
+            for name, sql, want in queries:
+                plain_sql = re.sub(r"\btpch\.(\w+)", r"\1_p", sql)
+                try:
+                    got = run(conn, plain_sql)
+                except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                    print(f"error text: {e}", flush=True)
+                    fail(f"{server} complete plain {name}: {first_line(e)}")
+                    continue
+                diff = difference(got, want)
+                if diff:
+                    fail(f"{server} complete plain {name}: wrong answer: {diff}")
+                else:
+                    plain_exact += 1
+    print(f"ok complete plain-name TPC-H: {plain_exact} of {len(queries) * len(servers)} answers exact",
           flush=True)
     print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
     return 1 if failures else 0

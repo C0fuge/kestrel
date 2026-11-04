@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -292,6 +293,10 @@ class LocalCopyCacheTest {
                 200, disk(1000))) {
             // 900 bytes would leave 100 free, 200 must stay free: neither copy is started.
             IOException e = assertThrows(IOException.class, () -> cache.acquire(List.of(a, b)));
+            // A resource limit the server answers with RESOURCE_EXHAUSTED, not INTERNAL (item 31).
+            assertTrue(e instanceof LocalCopyCache.NoRoomException, e.toString());
+            assertSame(e, LocalCopyCache.NoRoomException.in(new RuntimeException(new IOException(e))));
+            assertNull(LocalCopyCache.NoRoomException.in(new IOException("other")));
             assertTrue(e.getMessage().contains("s/t/a.parquet"), e.getMessage());
             assertTrue(e.getMessage().contains("900 bytes"), e.getMessage());
             assertTrue(e.getMessage().contains("hdfsLocalCopyMinFreeBytes"), e.getMessage());

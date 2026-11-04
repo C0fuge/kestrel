@@ -98,6 +98,24 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters: plain table names and silent 0-row joins (STATUS item 31, part 1)
+
+- **Wrong answers:** the view of a table a node holds no file of whole returned typed NULL columns behind an error
+  filter; DuckDB folded a join on such columns to an empty result without evaluating the error, so a comma join with
+  that table answered 0 rows instead of failing (`SELECT count(*) FROM orders_sp o, customer c WHERE ...` gave 0).
+  Every column of that view is now the error itself, so any query reading it fails with the files it lacks.
+- Plain table names (`FROM lineitem`, as clients with a default schema write them) only worked for tables a node held
+  whole: planning, the readable-here check, local copies and join views looked for the name without its schema, so a
+  complete answer was refused ("this node lacks blocks of ...") or DuckDB read a non-local file ("Connection reset").
+  On HDFS read short-circuit only, every plain name that DuckDB resolves (the one schema with a table of that name)
+  now gets its schema before the query is planned (`node=... query=qualifiedPlainNames` at debug); names in several
+  schemas, unknown names and CTE names stay as written. Other storage is unchanged.
+- A query refused because the copy disk has no room (`hdfs=localCopyNoSpace`) now fails `RESOURCE_EXHAUSTED`, not
+  `INTERNAL`; `hdfs=localCopyOverLimit` is logged once per query instead of once per copy batch.
+- CI: service-hdfs sasl-cluster uploads schema `plain` (every tpch table as `<name>_p`, lineitem/orders with 1 MiB
+  blocks and replication 1) and runs the 22 TPC-H queries with plain names complete on every node, a plain comma
+  join, and count/sum in both modes, answers checked against the expected ones.
+
 ### Fixed - evicted node-local copies kept their disk space (STATUS item 30, part 2b)
 
 - A query over node-local copies (HDFS with SASL DataNodes) left its DuckDB prepared statement in the per-session
