@@ -3183,3 +3183,15 @@ S3 slowdown item below stays open for then).
   (sasl-cluster balanced + speed: plain-name TPC-H 66/66 exact on 3 nodes, plain comma join 1500000 on every node,
   plain lineitem_p count/sum both modes), Catalogs CI 41883760547 green. No `package=true` (item 31 not done: (5)-(8)
   in Next steps). Open question added: honour the client's `SCHEMA` header for names in several schemas. Lock released.
+- 2026-11-04 (cloud session, core): ITEM 31 PART 2 (`37cbf500`, CI stage `ea0f1d73`). (5) complete one-table queries
+  whose copies do not fit are read as one partial-path ticket over all the table's files, copies in batches
+  (`completeInCopyBatches`; only when the partial path describes the same columns; joins unchanged). (6) partial
+  GROUP BY batching checked on the small copy disk with plain and qualified names - exact, stand refusal not
+  reproduced. (8) small-disk stage: srvd now runs with `distributedComplete` at its default (false) and 6 complete
+  queries (chunks scan / GROUP BY, `lineitem_p` count/sum, filtered count, GROUP BY, GROUP BY ORDER BY LIMIT, plain
+  names) must log `hdfs=completeInCopyBatches` and be exact. Tests: `ExecutionServiceTest` +2 (`batchableComplete`,
+  `sameColumns`). CI on `ea0f1d73`: Dev CI 41893438040, Service hdfs 41893438019 (small disk: complete in batches 6,
+  peak 51.9 of 65.0 MB), Catalogs CI 41893438065 green; on `37cbf500`: Dev CI 41890561380, Service hdfs 41890561200.
+  Package dispatch 41895426530 on `ea0f1d73` stopped at the service gate (main had moved, other service-*.yml not
+  run on that sha); `package=true` re-dispatched on the commit carrying this line (find it under Dev CI
+  workflow_dispatch runs; the gate dispatches the service matrix itself). Next: item 31 (7). Lock released.
