@@ -98,6 +98,15 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters: complete one-table queries read their copies in batches (STATUS item 31, part 2)
+
+- In `complete` mode a query of one table (scan, aggregate, GROUP BY, DISTINCT, LIMIT; plain or qualified names)
+  whose local copies do not fit the copy cache or the copy disk at once is answered like a partial-mode ticket over
+  all the table's files: the copies go in batches that fit and the batches' answers are concatenated or merged
+  (log `hdfs=completeInCopyBatches`, then `hdfs=copyBatches`). Before, such queries failed with "No room on the disk
+  of the node-local copy cache". Joins and shapes the batches cannot merge keep the single-copy path (refused with
+  `RESOURCE_EXHAUSTED` when the copies do not fit).
+
 ### Fixed - SASL HDFS clusters: plain table names and silent 0-row joins (STATUS item 31, part 1)
 
 - **Wrong answers:** the view of a table a node holds no file of whole returned typed NULL columns behind an error

@@ -18,7 +18,12 @@ disk), so only the free-space guard bounds the copies:
   "Connection reset";
 * afterwards the GROUP BY in parts must still be answered (a refusal leaves nothing reserved);
 * in parts, a GROUP BY with HAVING and a count over DISTINCT values (shapes only one server
-  answers) must match the local files: merged from the disk-sized batches (``merge=rewrite``).
+  answers) must match the local files: merged from the disk-sized batches (``merge=rewrite``);
+* item 31 (5), (6), (8): in complete mode a full scan and a GROUP BY over ``chunks.lineitem``, and
+  with PLAIN names a count/sum, a filtered count and a GROUP BY (also with ORDER BY and LIMIT) over
+  ``lineitem_p`` (schema ``plain``, also never held whole by a node) must match the local files:
+  the one table's copies go in disk-sized batches (``hdfs=completeInCopyBatches``) instead of
+  being refused; the plain GROUP BY in parts must match too.
 
 Prints ``ok``/``FAIL`` lines, ``join refused`` or ``join answered`` and a last line ``result pass``
 or ``result fail <first error>``; exits non-zero on a failure.
@@ -59,6 +64,21 @@ def reference_having(base):
     # Between the smallest and the largest group sum: some groups pass, some do not.
     bound = (sums[0] + sums[-1]) / 2
     return bound, {k: v for k, v in rows.items() if v[1] > bound}
+
+
+PLAIN_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
+               " FROM lineitem_p GROUP BY l_returnflag, l_linestatus")
+PLAIN_FIRST_GROUPS = PLAIN_GROUP + " ORDER BY l_returnflag, l_linestatus LIMIT 3"
+PLAIN_FILTERED = "SELECT count(*) AS n, sum(l_quantity) AS q FROM lineitem_p WHERE l_quantity > {bound}"
+
+
+def reference_filtered(base, bound):
+    """Row count and sum(l_quantity) of the local lineitem rows with l_quantity above a bound."""
+    table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                          columns=["l_quantity"])
+    kept = [decimal.Decimal(str(v)) for v in table.column("l_quantity").to_pylist()
+            if v is not None and decimal.Decimal(str(v)) > bound]
+    return len(kept), sum(kept, decimal.Decimal(0))
 
 
 def main():
@@ -124,6 +144,44 @@ def main():
     except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
         print(f"error text: {e}", flush=True)
         fail(f"partial chunks.lineitem HAVING / count(DISTINCT): {_SASL.first_line(e)}")
+    # Item 31 (5), (6), (8): one-table queries in complete mode read their copies in batches.
+    first_groups = dict(sorted(want_groups.items())[:3])
+    bound = decimal.Decimal(25)
+    want_fn, want_fq = reference_filtered(base, bound)
+    checks = [
+        ("complete", "chunks.lineitem full scan", _SASL.CHUNKS_SCAN, "scan", None),
+        ("complete", "chunks.lineitem GROUP BY", _SASL.CHUNKS_GROUP, "groups", want_groups),
+        ("complete", "plain lineitem_p count/sum", _SASL.PLAIN_LINEITEM, "totals", (want_n, want_q)),
+        ("complete", "plain lineitem_p filtered count/sum", PLAIN_FILTERED.format(bound=bound),
+         "totals", (want_fn, want_fq)),
+        ("complete", "plain lineitem_p GROUP BY", PLAIN_GROUP, "groups", want_groups),
+        ("complete", "plain lineitem_p GROUP BY ORDER BY LIMIT", PLAIN_FIRST_GROUPS, "groups",
+         first_groups),
+        ("partial", "plain lineitem_p GROUP BY", PLAIN_GROUP, "groups", want_groups),
+    ]
+    for mode, what, sql, kind, want in checks:
+        try:
+            with _SASL.connect(server, mode) as conn:
+                answer = _SASL.run(conn, sql)
+            if kind == "scan":
+                q = decimal.Decimal(str(pc.sum(answer.column("l_quantity")).as_py() or 0))
+                good = answer.num_rows == want_n and abs(q - want_q) <= decimal.Decimal("0.0001")
+                got = (answer.num_rows, q)
+                want = (want_n, want_q)
+            elif kind == "totals":
+                n, q, _ = _SASL.totals(answer)
+                got = (n, q)
+                good = n == want[0] and abs(q - want[1]) <= decimal.Decimal("0.0001")
+            else:
+                got = _SASL.groups(answer)
+                good = _SASL.same_groups(got, want)
+            if good:
+                print(f"ok {mode} {what} ({answer.num_rows} rows)", flush=True)
+            else:
+                fail(f"{mode} {what}: {got}, want {want}")
+        except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+            print(f"error text: {e}", flush=True)
+            fail(f"{mode} {what}: {_SASL.first_line(e)}")
     print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
     return 1 if failures else 0
 

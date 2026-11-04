@@ -717,8 +717,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);
                 DistributedComplete distributed = distributedComplete;
                 // A query of catalog views runs as checked: its views replaced by their queries.
-                if (distributed == null || state.parameters() != null || !expanded.equals(query)
-                        || !distributed.stream(query, user, listener)) {
+                if ((distributed == null || state.parameters() != null || !expanded.equals(query)
+                        || !distributed.stream(query, user, listener))
+                        && (state.parameters() != null || !executionService.completeInCopyBatches(
+                                allocator, expanded, listener, pathTracker))) {
                     try (ExecutionService.CopiedQuery copied =
                             executionService.completeFromCopies(expanded)) {
                         if (!copied.copied()) {

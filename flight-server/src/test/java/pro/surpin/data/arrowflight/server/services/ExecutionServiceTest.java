@@ -1032,6 +1032,48 @@ class ExecutionServiceTest {
         }
     }
 
+    /**
+     * Item 31 (5): complete-mode queries of one table that batches of copies answer exactly go
+     * the batched path; joins, subqueries of other tables and unmergeable shapes do not.
+     */
+    @Test
+    void completeQueriesOfOneTableAreBatchable() {
+        for (String sql : List.of("SELECT a, b FROM s.t WHERE a > 1",
+                "SELECT count(*) AS n FROM s.t WHERE a > 1",
+                "SELECT a, count(*) AS n, sum(b) AS q FROM s.t GROUP BY a",
+                "SELECT a, count(*) AS n FROM s.t GROUP BY a ORDER BY a LIMIT 3",
+                "SELECT DISTINCT a FROM s.t")) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(sql);
+            assertTrue(ExecutionService.batchableComplete(sql, parsed,
+                    List.of(new ParquetQueryParser.JoinTable("s", "t", null))), sql);
+            assertFalse(ExecutionService.batchableComplete(sql, parsed,
+                    List.of(new ParquetQueryParser.JoinTable("s", "t", null),
+                            new ParquetQueryParser.JoinTable("s", "u", null))), sql);
+            assertFalse(ExecutionService.batchableComplete(sql, parsed,
+                    List.of(new ParquetQueryParser.JoinTable(null, "t", null))), sql);
+        }
+        String join = "SELECT count(*) FROM s.t x JOIN s.u y ON x.a = y.a";
+        assertFalse(ExecutionService.batchableComplete(join, ParquetQueryParser.parse(join),
+                List.of(new ParquetQueryParser.JoinTable("s", "t", null),
+                        new ParquetQueryParser.JoinTable("s", "u", null))));
+        String ordered = "SELECT a FROM s.t ORDER BY a";
+        assertFalse(ExecutionService.batchableComplete(ordered, ParquetQueryParser.parse(ordered),
+                List.of(new ParquetQueryParser.JoinTable("s", "t", null))));
+    }
+
+    /** Item 31 (5): the batched complete path is taken only when it describes the same columns. */
+    @Test
+    void sameColumnsIgnoresNullabilityOnly() {
+        Schema a = new Schema(List.of(Field.nullable("n", new ArrowType.Int(64, true))));
+        Schema b = new Schema(List.of(Field.notNullable("n", new ArrowType.Int(64, true))));
+        Schema c = new Schema(List.of(Field.nullable("n", new ArrowType.Decimal(38, 0, 128))));
+        Schema d = new Schema(List.of(Field.nullable("m", new ArrowType.Int(64, true))));
+        assertTrue(ExecutionService.sameColumns(a, b));
+        assertFalse(ExecutionService.sameColumns(a, c));
+        assertFalse(ExecutionService.sameColumns(a, d));
+        assertFalse(ExecutionService.sameColumns(a, new Schema(List.of())));
+    }
+
     /** The table directory of a ticket file is its first two segments. */
     @Test
     void tableDirectoryOfATicketFile() {

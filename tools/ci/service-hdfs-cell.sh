@@ -405,9 +405,10 @@ fi
 # so smaller than chunks.lineitem; the cache limit stays at its default, only the disk bounds the
 # copies. tools/ci/service-hdfs-smalldisk-check.py: scans and GROUP BY in parts go in batches sized by
 # the disk's room; a complete join needing every copy is answered or refused by the guard (never
-# "No space left"); the tmpfs is sampled and its peak use must stay below its size.
+# "No space left"); complete one-table queries (scan, GROUP BY, plain names) go in disk-sized batches
+# (item 31: hdfs=completeInCopyBatches); the tmpfs is sampled and its peak use must stay below its size.
 smallDisk() {
-  local minFree=$(( 8 * 1048576 )) largest total size dir peak sampler rc3 refused noSpace batches i
+  local minFree=$(( 8 * 1048576 )) largest total size dir peak sampler rc3 refused noSpace batches completeBatched i
   largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
   total=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | awk '{ s += $1 } END { print s + 0 }')
   size=$(( (largest + minFree + 4 * 1048576 + 1048575) / 1048576 * 1048576 ))
@@ -446,13 +447,15 @@ smallDisk() {
   refused=$(grep -c '^join refused' "$work/smalldisk-check.log" || true)
   noSpace=$(docker logs srvd 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true)
   batches=$(docker logs srvd 2>&1 | grep -c 'hdfs=copyBatches' || true)
-  note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
+  completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches' || true)
+  note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, complete in batches $completeBatched, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
   sudo umount "$dir" || true
   [ "$rc3" -eq 0 ] || finish fail "small disk: $(grep -m 1 '^result fail' "$work/smalldisk-check.log" | cut -c13- || echo 'client failed')"
   [ -n "$peak" ] && [ "$peak" -lt "$size" ] || finish fail "small disk: copy disk peak use ${peak:-?} of $size bytes (filled)"
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
   docker logs srvd 2>&1 | grep -q 'hdfs=copyBatches .*merge=rewrite' \
     || finish fail "small disk: the HAVING / count(DISTINCT) query was not merged from copy batches (no merge=rewrite line)"
+  [ "$completeBatched" -gt 0 ] || finish fail "small disk: complete one-table queries over chunks / lineitem_p were not read in batches of copies (no hdfs=completeInCopyBatches line)"
   [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
   return 0

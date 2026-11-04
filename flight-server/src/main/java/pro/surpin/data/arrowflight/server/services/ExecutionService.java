@@ -1728,6 +1728,127 @@ public final class ExecutionService {
     }
 
     /**
+     * Answers a complete-mode query of one table whose local copies do not fit the copy cache
+     * at once (HDFS read short-circuit only, item 31): the table's files are read as one ticket
+     * of the partial path, whose copies go in batches that fit (a scan's rows concatenated, an
+     * aggregate, DISTINCT or LIMIT merged from the batches' answers), so the answer equals the
+     * one computed over all files at once. Nothing is sent and false is returned when local
+     * copies are off, the copies fit, the query reads more than one table or a shape the batches
+     * cannot answer, or the partial path would describe its answer differently.
+     *
+     * @param allocator   Arrow buffer allocator
+     * @param clientSql   SQL of the complete answer (restrictions already applied)
+     * @param listener    Flight stream listener, not started
+     * @param pathTracker runtime execution-path tracker
+     * @return true when the answer was streamed
+     * @throws Exception on copy or execution failure
+     */
+    public boolean completeInCopyBatches(BufferAllocator allocator, String clientSql,
+            FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
+            throws Exception {
+        if (!parquetAdapter.localCopies() || TimeTravelClause.present(clientSql)) {
+            return false;
+        }
+        String sql;
+        ParquetQueryParser parsed;
+        List<ParquetQueryParser.JoinTable> tables;
+        try {
+            sql = qualifyPlainNames(clientSql);
+            parsed = ParquetQueryParser.parse(sql);
+            tables = QueryTables.of(sql);
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
+        } catch (RuntimeException e) {
+            return false;   // the complete path reports what is wrong with the SQL
+        }
+        if (!batchableComplete(sql, parsed, tables)
+                || parquetAdapter.isCatalogSchema(parsed.schema)) {
+            return false;
+        }
+        List<DataFile> listed;
+        try {
+            listed = parquetAdapter.tableFiles(parsed.schema, parsed.table);
+        } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
+            return false;
+        }
+        DataStore store = parquetAdapter.dataStore();
+        List<DataFile> unreadable = new ArrayList<>();
+        String[] fileUris = new String[listed.size()];
+        for (int i = 0; i < fileUris.length; i++) {
+            DataFile file = listed.get(i);
+            fileUris[i] = file.relativePath();
+            if (!store.readableHere(file)) {
+                unreadable.add(file);
+            }
+        }
+        if (copyBatches(fileUris, unreadable, copyLimit(unreadable)).size() < 2
+                || !sameColumns(completeSchema(allocator, sql), resultSchema(allocator, sql))) {
+            return false;
+        }
+        LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}",
+                LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table, fileUris.length,
+                unreadable.size());
+        readParquet(allocator, sql, fileUris, listener, true, pathTracker);
+        return true;
+    }
+
+    /**
+     * Tells whether a complete-mode query can be answered by the partial path over all files of
+     * its one table read in batches of copies: it reads exactly that table (no join, subquery
+     * of another table or CTE) and its answer is the concatenation or the merge of the batches'
+     * answers.
+     *
+     * @param sql SQL with plain names qualified
+     * @param parsed the parsed SQL
+     * @param tables the tables the SQL reads ({@link QueryTables#of})
+     * @return true for such a query
+     */
+    static boolean batchableComplete(String sql, ParquetQueryParser parsed,
+            List<ParquetQueryParser.JoinTable> tables) {
+        if (parsed.isJoin || parsed.schema == null || parsed.table == null || tables.size() != 1
+                || tables.get(0).schema() == null
+                || !tables.get(0).schema().equalsIgnoreCase(parsed.schema)
+                || !tables.get(0).table().equalsIgnoreCase(parsed.table)) {
+            return false;
+        }
+        return concatenatable(parsed) || CopyBatchMerge.of(sql, parsed) != null;
+    }
+
+    /**
+     * Tells whether two schemas have the same column names and types, nullability and metadata
+     * aside.
+     *
+     * @param a first schema
+     * @param b second schema
+     * @return true when the columns agree
+     */
+    static boolean sameColumns(Schema a, Schema b) {
+        return sameFields(a.getFields(), b.getFields());
+    }
+
+    /**
+     * Tells whether two field lists agree in names, types and children.
+     *
+     * @param a first fields
+     * @param b second fields
+     * @return true when they agree
+     */
+    private static boolean sameFields(List<Field> a, List<Field> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            Field x = a.get(i);
+            Field y = b.get(i);
+            if (!x.getName().equals(y.getName()) || !x.getType().equals(y.getType())
+                    || !sameFields(x.getChildren(), y.getChildren())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * A complete answer's SQL with the tables this node lacks blocks of read from local copies.
      *
      * @param sql SQL to run, unchanged when nothing is copied
