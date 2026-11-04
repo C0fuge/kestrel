@@ -39,8 +39,16 @@
 > reproduced (most likely the plain-name resolution fixed in part 1 - the stand should re-check); (8) done - the
 > small-disk stage (one server, `distributedComplete` default false) runs complete scan / GROUP BY over chunks and
 > count/sum, filtered count, GROUP BY (+ ORDER BY LIMIT) over `lineitem_p` with plain names, all 6 batched and exact.
-> **Still open in item 31 (next session):** (7) the direct-memory OOM of `distributedComplete=true` + speed full scans
-> (size scan buffers from MaxDirectMemorySize or back off); then `package=true` and "ITEM 31 DONE".
+> **Part 3 (2026-11-04 evening, `1f3866d2`):** (7) done - the direct-memory OOM of `distributedComplete=true` + speed
+> full scans: the merging node opened every endpoint stream at once and read them one after another, and each stream
+> not yet read held up to 5 batches (Flight's client read-ahead; 12 streams x 5 x ~11 MiB lineitem batches > 512 MiB).
+> `PeerReadGate` (per-stream gRPC call option) lets an idle stream receive only its schema until the merge reaches it
+> (cancel releases it, else `FlightStream.close()` hung - caught by `DistributedCompleteCutAfterFirstBatchTest`).
+> sasl-cluster `speed` stage "low direct memory": 3 servers restarted with `-XX:MaxDirectMemorySize=512m`, speed
+> defaults, 4 complete `SELECT * FROM tpch.lineitem` in a row, exact (6001215 rows), no OOM. Caveat: CI lineitem has
+> 4 files, so 4 endpoints, not the stand's 12 - the stage did not reproduce the OOM on the old build; the stand
+> should re-check. **Remaining:** `package=true` pre-release (dispatched on the unlock commit), then the stand
+> re-checks the whole item 31 and "ITEM 31 DONE".
 
 > **Maintainer, 2026-11-04 20:55 - BUG FIRST, ITEM 31: item 30 works only for schema-qualified table names; wrong
 > answers with plain names.** Stand: HA + Kerberos (Flight Kerberos + TLS), 3 DataNodes with
@@ -3195,3 +3203,9 @@ S3 slowdown item below stays open for then).
   Package dispatch 41895426530 on `ea0f1d73` stopped at the service gate (main had moved, other service-*.yml not
   run on that sha); `package=true` re-dispatched on the commit carrying this line (find it under Dev CI
   workflow_dispatch runs; the gate dispatches the service matrix itself). Next: item 31 (7). Lock released.
+- 2026-11-04 evening (core session): item 31 (7) done (`1f3866d2`): distributed complete endpoint streams read ahead
+  only once the merge reads them (`PeerReadGate`), fixing the stand's direct-memory OOM of full scans with
+  `distributedComplete=true` + speed. CI green: Dev CI 41902472862, Service hdfs 41902472585 (10/10; new sasl-cluster
+  speed stage "low direct memory": 4 complete full scans of lineitem with 512 MiB direct, exact, no OOM; only 4
+  endpoints in CI). The earlier package dispatch 41897670516 failed only at the service gate because this session's
+  lock commit moved main. `package=true` dispatched on the unlock commit (Dev CI workflow_dispatch runs). Lock released.
