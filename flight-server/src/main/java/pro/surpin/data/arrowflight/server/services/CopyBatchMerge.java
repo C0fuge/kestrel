@@ -1,6 +1,5 @@
 package pro.surpin.data.arrowflight.server.services;
 
-import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.GroupField;
 import org.jooq.Query;
