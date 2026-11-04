@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-04 20:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 21:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) has its fixed pre-release
 `server-1.0.0-8060179bce0c`; it waits for the maintainer's stand re-check before "ITEM 31 DONE".
@@ -9,7 +9,7 @@ Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copi
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 31: parts 1-3 done (fa7f901a, 37cbf500/ea0f1d73, 1f3866d2 = (7) direct-memory OOM: `PeerReadGate`, idle endpoint streams read ahead only when the merge reaches them); pre-release built; remaining: stand re-check, then ITEM 31 DONE | c8ca27d8 unlock 20:48Z (~10 min) | free | Dev CI on main green: 41902472862 (push, 1f3866d2) and 41905031992 (`package=true`, service gate green) |
+| core (`STATUS.md`) | ITEM 31: parts 1-3 done (fa7f901a, 37cbf500/ea0f1d73, 1f3866d2 = (7) direct-memory OOM: `PeerReadGate`, idle endpoint streams read ahead only when the merge reaches them); pre-release built; remaining: stand re-check, then ITEM 31 DONE | 940405f8 unlock 21:41Z (session found nothing open; waits for stand re-check) | free | Dev CI on main green: 41902472862 (push, 1f3866d2) and 41905031992 (`package=true`, service gate green) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -34,14 +34,14 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 18:40Z: no new server jar. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 112 (20:51Z): nothing open, no new server build in `e2e-assets`. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 21:40Z: no new server jar. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 113 (21:51Z): nothing open, no new server build in `e2e-assets`. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`; scans 1.00-1.04 x upstream native, S3
   ADBC export 0.92, load 0.92-0.98), accepted by the maintainer as final for item 30. README "In progress" idle
-  (19:26Z); no FRESH run for `8060179bce0c` yet.
+  (21:27Z); no FRESH run for `8060179bce0c` yet.
 
 ## For the maintainer
 
@@ -55,6 +55,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 21:57Z: no change: core session 21:41Z found nothing open (ITEM 31 waits for the stand re-check of `server-1.0.0-8060179bce0c`); CI and service matrix green on 8060179b; marten/heron (session 113)/egret idle; no stale locks.
 - 2026-11-04 20:57Z: core ITEM 31 (7) done (1f3866d2, Dev CI 41902472862 green); `package=true` Dev CI 41905031992 green with service gate 4/4 green -> pre-release `server-1.0.0-8060179bce0c`; waits for the stand re-check, then ITEM 31 DONE; core lock released 20:48Z; marten/heron (session 112)/egret idle (egret has no FRESH for 8060179bce0c yet); no stale locks.
 - 2026-11-04 19:57Z: core on ITEM 31: part 2 (ea0f1d73) green (Dev CI 41893438040, service-hdfs 41893438019, Catalogs 41893438065); two `package=true` dispatches (41895426530 on ea0f1d73, 41897670516 on d7e84969) red only in `service-gate` (main moved by later [skip ci] commits, service matrix not run on that sha; build green) - process, not a test failure, no bug-first note; core lock 19:41Z (active), (7) direct-memory OOM next; marten/heron (session 111)/egret idle; no stale locks.
 - 2026-11-04 18:56Z: core on ITEM 31: part 1 fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); part 2 37cbf500 (complete one-table queries batched over copies) pushed 18:47Z, Dev CI 41890561380 / service-hdfs 41890561200 running, Catalogs 41890561182 green; new Open question (client SCHEMA header for plain names); lock 18:41Z active; marten/heron (session 110)/egret idle; no stale locks.
@@ -94,4 +95,3 @@ No stale locks (marten and heron free).
 - 2026-11-03 04:00Z: core on ITEM 26 (locked 03:41Z); marten improvements steps 1-2 pushed, heron started; all CI green; newest pre-release 57e054887f7a; no stale locks.
 - 2026-11-02 18:00Z: plugins tag-policy fix pushed (security run in progress); core free, ITEM 25 not started; lane 3 on D13 (a2); pre-release f8ba588a8295; no stale locks, no red CI.
 - 2026-11-02 17:30Z: ranger cell added and green (8/8) after the core table-check fix; plugins lane on the tag-policy bug; core lane locked, ITEM 25 next; no service-hdfs.yml yet.
-- 2026-11-02 16:25Z: first orchestrator status. HDFS FIX DONE; matrix: catalogs and lane 3 DONE, plugins at 3/4 services; core ITEM 25 open; both connector comparisons DONE.
