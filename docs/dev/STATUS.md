@@ -31,11 +31,16 @@
 > `completeFromCopies`), so the refusal (a) and the hadoopfs read (b) are gone for unique names; (3) copy-disk refusal
 > = RESOURCE_EXHAUSTED; (4) `localCopyOverLimit` once per query; CI sasl-cluster: schema `plain` (`<table>_p`, lineitem
 > and orders with 1 MiB blocks, replication 1), TPC-H 22/22 plain names complete on every node, plain comma join,
-> count/sum both modes. **Still open in item 31 (next session, in this order):** (5) complete mode batches copies for
-> single-table aggregates / scans like partial mode (count / GROUP BY / scans over a 64 MiB copy dir refused);
-> (6) partial mode batches GROUP BY (incl. `count(*)` per group) - check against START-NOTES; (7) the direct-memory
-> OOM of `distributedComplete=true` + speed full scans (size scan buffers from MaxDirectMemorySize or back off);
-> (8) CI: the small copy-dir stage in complete mode; then `package=true` and "ITEM 31 DONE".
+> count/sum both modes. **Part 2 (2026-11-04, `37cbf500`, `ea0f1d73`):** (5) done - a complete query of one table
+> whose copies do not fit is read as one partial-path ticket over all its files, copies in batches
+> (`ExecutionService.completeInCopyBatches`, log `hdfs=completeInCopyBatches`; only when the partial path describes
+> the same columns, joins keep the single-copy path); (6) checked - partial GROUP BY with plain names (and qualified,
+> with ORDER BY/LIMIT, HAVING, count DISTINCT) is batched and exact on the small copy disk; the stand's refusal was not
+> reproduced (most likely the plain-name resolution fixed in part 1 - the stand should re-check); (8) done - the
+> small-disk stage (one server, `distributedComplete` default false) runs complete scan / GROUP BY over chunks and
+> count/sum, filtered count, GROUP BY (+ ORDER BY LIMIT) over `lineitem_p` with plain names, all 6 batched and exact.
+> **Still open in item 31 (next session):** (7) the direct-memory OOM of `distributedComplete=true` + speed full scans
+> (size scan buffers from MaxDirectMemorySize or back off); then `package=true` and "ITEM 31 DONE".
 
 > **Maintainer, 2026-11-04 20:55 - BUG FIRST, ITEM 31: item 30 works only for schema-qualified table names; wrong
 > answers with plain names.** Stand: HA + Kerberos (Flight Kerberos + TLS), 3 DataNodes with
