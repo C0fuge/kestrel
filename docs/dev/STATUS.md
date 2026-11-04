@@ -3085,3 +3085,16 @@ S3 slowdown item below stays open for then).
   Runs on 4a1d354f: Dev CI 41726874635, service-hdfs 41726885857 (10/10; small disk: 6 copy batches, join refused,
   peak 51941376 of 65011712 bytes), both green. No `package=true` (item 30 not done; local copies are in no pre-release
   yet). Lock released.
+- 2026-11-04 (cloud session, core): item 30 part 2b, HAVING and DISTINCT aggregates over copy batches (e9cdd42a,
+  5253945e). New `CopyBatchMerge` (server `services`): with copies over the cache / disk room, an aggregate with
+  HAVING (plain count/sum/min/max, selected group columns, literals, AND/OR/NOT, comparisons, `+ - *`; batches answer
+  without HAVING plus one extra column per aggregate the condition reads, the condition applied to the merged groups)
+  and count/sum over DISTINCT values of one plain column (batches also group by it) are answered per batch and merged
+  on the node; log `hdfs=copyBatches ... merge=rewrite`; other forms keep the old path. These shapes reach partial mode
+  only on single-server clusters; avg is routed to complete mode and never takes this path. Tests:
+  `CopyBatchMergeTest` (merge = direct DuckDB answer incl. types; refusals), `ExecutionServiceTest` batch test +3
+  queries (per-batch HAVING would give no rows: checked by the bound), `onlyMergeableQueriesAreAnsweredPerBatch`.
+  Small-disk stage checks HAVING + count(DISTINCT l_shipmode) over chunks.lineitem and requires `merge=rewrite`.
+  Runs on e9cdd42a: service-hdfs 41769492301 green, Catalogs CI 41769492328 green, Dev CI 41769492302 red (one
+  unused import, Checkstyle; tests green); Dev CI 41770973165 green on 5253945e. No `package=true` (item 30 not done:
+  complete answers / joins over the copy room = Open question, ORDER BY-only scans). Lock released.
