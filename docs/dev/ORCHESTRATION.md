@@ -1,20 +1,16 @@
 # Orchestration status
 
-Status as of **2026-11-04 17:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 18:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-**ALL DONE withdrawn:** the maintainer opened bug-first **ITEM 31** (STATUS.md, commit 75edc566, 17:52Z): item 30
-SASL copies work only with schema-qualified names; with plain names queries are refused, read non-local files, or
-return **wrong answers (0 rows) on comma joins**; plus complete-mode copy batching, partial GROUP BY batching,
-RESOURCE_EXHAUSTED instead of INTERNAL, once-per-query `localCopyOverLimit` log, direct-memory OOM with
-`distributedComplete=true` + speed. The core session took the lock at 17:52Z and is working on it.
+Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) is in progress in the core lane.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 31 (bug first, started) | f0211b50 17:52Z (lock) | held 17:52Z (active) | green: Dev CI 41770973165 (5253945e); no item-31 code pushed yet |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
+| core (`STATUS.md`) | ITEM 31: part 1 done (fa7f901a: plain names qualified, no silent 0-row joins, RESOURCE_EXHAUSTED, once-per-query log); part 2 (5) pushed 37cbf500 (complete one-table queries batched over copies); open: (6) partial GROUP BY batching, (7) direct-memory OOM with `distributedComplete=true`+speed, (8) CI small copy-dir stage in complete mode, `package=true` | bf927893 18:47Z (~9 min) | held 18:41Z (active) | fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); 37cbf500: Dev CI 41890561380 and service-hdfs 41890561200 running, Catalogs 41890561182 green |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
 No stale locks (marten and heron free).
@@ -24,44 +20,41 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41776324282 | d2313a9e | pass |
-| service-hdfs.yml | 41776328578 | d2313a9e | pass |
+| service-hdfs.yml | 41890561200 | 37cbf500 | running (previous 41883760502 on fa7f901a: pass) |
 | service-security.yml | 41776332023 | d2313a9e | pass |
 | service-stores.yml | 41776335441 | d2313a9e | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z): ITEM 30 (SASL node-local copies); item 31 found its plain-name
-  bugs - a fixed build will follow item 31.
-- `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2 (SASL routing, clear errors, per-table views).
-- `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): newest with a FRESH report (egret).
+- `server-1.0.0-d2313a9eb651` (2026-11-04 05:15Z): ITEM 30; has the item-31 plain-name bugs - fixed build follows item 31.
+- `server-1.0.0-5122cea1f045` (2026-11-03 11:33Z): item 29 part 2.
+- `server-1.0.0-413485ba80fd` (2026-11-03 07:10Z): newest with a FRESH report (egret).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 17:40Z (newest): no new server jar, no
-  maintainer items. M4 default server `0e457de30f25`. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 109 (12:52Z, newest): nothing open, no new server build. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 18:40Z: no new server jar, no
+  maintainer items. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 110 (18:51Z): nothing open, no new server build. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
-  load 0.92-0.98; upstream native 0-1/22 on TPC-H, small-query errors. Ours 22/22, 0 errors.
-- 2026-11-04 16:10Z: maintainer accepted FRESH-413485ba80fd as final for item 30 (d2313a9eb651); README "In progress" idle.
+  load 0.92-0.98; upstream native 0-1/22 on TPC-H. Maintainer accepted it as final for item 30; README "In progress"
+  idle (17:27Z).
 
 ## For the maintainer
 
-- **ITEM 31 open (your bug-first note):** ALL DONE needs ITEM 31 DONE plus a decision on egret FRESH for its
-  pre-release (FRESH for the new build, or accept FRESH-413485ba80fd again).
-- **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; item 30 closed with the free-disk
-  guard (`hdfsLocalCopyMinFreeBytes`) as the bound. An answer (option 1 or a hard bound) would be a follow-up item.
-- Core lane idles: remaining numbered items are stand checks (2, 13, 15, 27 rerun) or wait on you (0 S7/S8, 8, 9,
-  1b libs pruning, libhadoop for the Java client).
-- Open question (FYI): flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
-  (Dev CI 41644812393); no repeat seen.
+- **New Open question (item 31, core lane):** plain names that exist in several schemas - should the server honour
+  the client's Flight `SCHEMA` header (default schema) as the first schema to resolve plain names, and on by default?
+  Today `lineitem` with default schema `spread` fails ("Catalog Error") when `tpch.lineitem` also exists.
+- **ITEM 31 open:** ALL DONE needs ITEM 31 DONE plus a decision on egret FRESH for its pre-release.
+- **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
 - Connector default changes to review: marten `flight.pushdown.join_keys` 10000 -> 50000; heron `arrow-flight.split-count` 4 -> 1.
 
 ## History
 
+- 2026-11-04 18:56Z: core on ITEM 31: part 1 fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); part 2 37cbf500 (complete one-table queries batched over copies) pushed 18:47Z, Dev CI 41890561380 / service-hdfs 41890561200 running, Catalogs 41890561182 green; new Open question (client SCHEMA header for plain names); lock 18:41Z active; marten/heron (session 110)/egret idle; no stale locks.
 - 2026-11-04 17:57Z: ALL DONE withdrawn: maintainer opened bug-first ITEM 31 (75edc566, plain-name SASL copies, wrong 0-row join answers); core lock 17:52Z, working; Dev CI on main green, service gate 4/4 green; marten 17:40Z/heron/egret idle; no stale locks.
 - 2026-11-04 16:56Z: ALL DONE written: maintainer accepted FRESH-413485ba80fd as final in egret (dac5040); core session 16:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten 16:41Z/heron session 109 idle.
 - 2026-11-04 15:57Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (15:40Z)/heron (session 109)/egret (15:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
