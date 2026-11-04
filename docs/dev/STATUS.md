@@ -173,6 +173,13 @@ ITEM 30 PART 1 (2026-11-03, core session, a523356e; not yet "DONE"). `LocalCopyC
 > literals, AND/OR/NOT, comparisons, `+ - *`) and of count/sum over DISTINCT values of one plain column (single-server
 > partial mode; distributed tickets never carry these shapes: refused with several servers); log `merge=rewrite`;
 > small-disk stage checks HAVING + count(DISTINCT) over chunks. avg is never on this path (routed to complete mode).
+ITEM 30 DONE (2026-11-04, core session, d2313a9e; pre-release `server-1.0.0-d2313a9eb651`, Dev CI `package=true`
+> 41774819696 with the service gate: service-cluster 41776324282, -hdfs 41776328578, -security 41776332023, -stores
+> 41776335441 all green on d2313a9e). Closed as proposed (no maintainer answer to the Open question): the free-disk
+> guard (`hdfsLocalCopyMinFreeBytes`) is the bound. **Known limits** (START-NOTES, CHANGELOG): a join, a non-mergeable
+> `complete` answer and a scan with ORDER BY and no LIMIT hold all their copies at once; beyond the copies' free disk
+> they are refused before copying, naming the files. **Next:** no open core item; stand rerun of item 30 on
+> `d2313a9eb651` (SASL HA cluster, 3 servers) is with the maintainer / egret.
 > **Next session:** what remains of item 30 is complete answers / joins over more than the copy room (Open question,
 > waits on the maintainer) and a scan with ORDER BY and no LIMIT (would need a sorted merge / spill). Proposal: unless
 > the maintainer answers, treat the free-disk guard as the bound, run `package=true` and write "ITEM 30 DONE" with
@@ -1246,6 +1253,8 @@ S3 slowdown item below stays open for then).
   2026-11-03 night (336f9607):* the free-space check part of (2) is in (`hdfsLocalCopyMinFreeBytes`, default 1 GiB:
   such a query is refused before copying when its copies would leave less free on the copies' disk), so the disk is
   no longer filled; the question left is whether to refuse earlier (a hard bound below the free disk, or option 1).
+  *2026-11-04:* item 30 closed with the free-disk guard as the bound (pre-release `server-1.0.0-d2313a9eb651`); an
+  answer here would be a follow-up item.
 
 - **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   failed once in Dev CI 41644812393 (load 1000, want 700); passed before and locally. Watch for a repeat (likely a
@@ -3098,3 +3107,9 @@ S3 slowdown item below stays open for then).
   Runs on e9cdd42a: service-hdfs 41769492301 green, Catalogs CI 41769492328 green, Dev CI 41769492302 red (one
   unused import, Checkstyle; tests green); Dev CI 41770973165 green on 5253945e. No `package=true` (item 30 not done:
   complete answers / joins over the copy room = Open question, ORDER BY-only scans). Lock released.
+- 2026-11-04 (cloud session, core): ITEM 30 DONE. START-NOTES / CHANGELOG list the shapes batched over copies and the
+  two known limits (joins / non-mergeable complete answers and ORDER BY-only scans need all copies at once, bounded by
+  the free-disk guard). Dev CI `package=true` 41774819696 on `ci/core-item30` (= main d2313a9e): build, service gate
+  (service-cluster 41776324282, -hdfs 41776328578, -security 41776332023, -stores 41776335441, all green) and package
+  green; pre-release `server-1.0.0-d2313a9eb651`. Open question on item 30 kept (a hard bound below the free disk). Lock
+  released.
