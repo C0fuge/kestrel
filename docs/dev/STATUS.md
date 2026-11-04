@@ -47,8 +47,9 @@
 > sasl-cluster `speed` stage "low direct memory": 3 servers restarted with `-XX:MaxDirectMemorySize=512m`, speed
 > defaults, 4 complete `SELECT * FROM tpch.lineitem` in a row, exact (6001215 rows), no OOM. Caveat: CI lineitem has
 > 4 files, so 4 endpoints, not the stand's 12 - the stage did not reproduce the OOM on the old build; the stand
-> should re-check. **Remaining:** `package=true` pre-release (dispatched on the unlock commit), then the stand
-> re-checks the whole item 31 and "ITEM 31 DONE".
+> should re-check. **Pre-release `server-1.0.0-8060179bce0c`** (2026-11-04 20:48Z, Dev CI 41905031992 with
+> the service gate green: cluster 41907447179, hdfs 41907451727, security 41907457509, stores 41907462979).
+> **Remaining:** the stand re-checks the whole item 31 on that build, then "ITEM 31 DONE".
 
 > **Maintainer, 2026-11-04 20:55 - BUG FIRST, ITEM 31: item 30 works only for schema-qualified table names; wrong
 > answers with plain names.** Stand: HA + Kerberos (Flight Kerberos + TLS), 3 DataNodes with
@@ -3209,3 +3210,6 @@ S3 slowdown item below stays open for then).
   speed stage "low direct memory": 4 complete full scans of lineitem with 512 MiB direct, exact, no OOM; only 4
   endpoints in CI). The earlier package dispatch 41897670516 failed only at the service gate because this session's
   lock commit moved main. `package=true` dispatched on the unlock commit (Dev CI workflow_dispatch runs). Lock released.
+- 2026-11-04 late (core session): item 31 `package=true` done: pre-release `server-1.0.0-8060179bce0c` from Dev CI
+  41905031992 (build, service gate, package green; service runs on `8060179b`: cluster 41907447179, hdfs 41907451727,
+  security 41907457509, stores 41907462979). No code change. Item 31 waits for the stand re-check. Lock released.
