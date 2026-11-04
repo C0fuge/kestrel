@@ -1,19 +1,18 @@
 # Orchestration status
 
-**ALL DONE 2026-11-04T16:56Z**
+Status as of **2026-11-04 17:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Status as of **2026-11-04 16:56 UTC** (hourly orchestrator; it only watches, it does not change code).
-
-All conditions met: **ITEM 26 DONE**, **ITEM 27 DONE** (also 28, 29, 30) in kestrel; **IMPROVEMENTS DONE** in marten
-and heron; egret: the maintainer accepted `FRESH-413485ba80fd` as the final FRESH result for item 30 /
-`server-1.0.0-d2313a9eb651` (egret `ci/BUILD-TRACK-TASK.md`, commit dac5040, 2026-11-04 16:10Z).
-Later sessions only refresh the time and stop.
+**ALL DONE withdrawn:** the maintainer opened bug-first **ITEM 31** (STATUS.md, commit 75edc566, 17:52Z): item 30
+SASL copies work only with schema-qualified names; with plain names queries are refused, read non-local files, or
+return **wrong answers (0 rows) on comma joins**; plus complete-mode copy batching, partial GROUP BY batching,
+RESOURCE_EXHAUSTED instead of INTERNAL, once-per-query `localCopyOverLimit` log, direct-memory OOM with
+`distributedComplete=true` + speed. The core session took the lock at 17:52Z and is working on it.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | none open | ff4132dc 16:42Z (lock/unlock, no open item) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e). Later main commits `[skip ci]` only. |
+| core (`STATUS.md`) | ITEM 31 (bug first, started) | f0211b50 17:52Z (lock) | held 17:52Z (active) | green: Dev CI 41770973165 (5253945e); no item-31 code pushed yet |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -31,14 +30,14 @@ No stale locks (marten and heron free).
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z): ITEM 30 (SASL node-local copies of non-local HDFS files; known
-  limits in START-NOTES: joins / non-mergeable complete answers / ORDER BY-only scans bounded by the free-disk guard).
+- `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z): ITEM 30 (SASL node-local copies); item 31 found its plain-name
+  bugs - a fixed build will follow item 31.
 - `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2 (SASL routing, clear errors, per-table views).
 - `server-1.0.0-413485ba80fd` (2026-11-03 06:21Z): newest with a FRESH report (egret).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 16:41Z (newest): no new server jar, no
+- marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 17:40Z (newest): no new server jar, no
   maintainer items. M4 default server `0e457de30f25`. Lock free.
 - heron: **IMPROVEMENTS DONE** (session 98); session 109 (12:52Z, newest): nothing open, no new server build. Lock free.
 
@@ -51,6 +50,8 @@ No stale locks (marten and heron free).
 
 ## For the maintainer
 
+- **ITEM 31 open (your bug-first note):** ALL DONE needs ITEM 31 DONE plus a decision on egret FRESH for its
+  pre-release (FRESH for the new build, or accept FRESH-413485ba80fd again).
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; item 30 closed with the free-disk
   guard (`hdfsLocalCopyMinFreeBytes`) as the bound. An answer (option 1 or a hard bound) would be a follow-up item.
 - Core lane idles: remaining numbered items are stand checks (2, 13, 15, 27 rerun) or wait on you (0 S7/S8, 8, 9,
@@ -61,6 +62,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 17:57Z: ALL DONE withdrawn: maintainer opened bug-first ITEM 31 (75edc566, plain-name SASL copies, wrong 0-row join answers); core lock 17:52Z, working; Dev CI on main green, service gate 4/4 green; marten 17:40Z/heron/egret idle; no stale locks.
 - 2026-11-04 16:56Z: ALL DONE written: maintainer accepted FRESH-413485ba80fd as final in egret (dac5040); core session 16:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten 16:41Z/heron session 109 idle.
 - 2026-11-04 15:57Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (15:40Z)/heron (session 109)/egret (15:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 14:58Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (12:41Z)/heron (session 109)/egret (13:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
