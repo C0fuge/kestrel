@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-04 09:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 10:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not written: **ALL DONE.** Every lane condition is met except one: egret has no FRESH report for the newest
 pre-release `server-1.0.0-d2313a9eb651` (item 30). egret skips it on purpose: the maintainer's 2026-11-03 note in
@@ -15,7 +15,7 @@ Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE**, **
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | ccead9d1 09:42Z (~16 min, lock/unlock, no open item) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
+| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | ccead9d1 09:42Z (~76 min, lock/unlock, no open item) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -42,7 +42,7 @@ No stale locks (marten and heron free).
 
 - marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 03:40-03:41Z: no new server jar, no
   maintainer items. M4 default server `0e457de30f25`. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 106 (09:51Z, newest): nothing open, no new server build. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 107 (10:51Z, newest): nothing open, no new server build. Lock free.
 
 ## egret
 
@@ -64,6 +64,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 10:58Z: no change: no core session since 09:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten/heron (session 107)/egret idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 09:58Z: no change: core session 09:41-09:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten/heron (session 106)/egret idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 08:58Z: no change since 07:57Z; all lanes idle, locks free, CI/services green; ALL DONE still waits on the maintainer's FRESH decision (d2313a9eb651).
 - 2026-11-04 07:57Z: no change: core idle (lock free), Dev CI on main green (41770973165), service gate 4/4 green on d2313a9e; marten/heron (session 105)/egret idle; no stale locks; ALL DONE still waits on the maintainer (FRESH for d2313a9eb651 or accept FRESH-413485ba80fd).
