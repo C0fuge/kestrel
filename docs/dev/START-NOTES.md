@@ -106,7 +106,12 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   plus whatever the running queries need at once (a query's copies are never evicted while it runs; beyond the limit
   they are deleted when it ends). A plain scan of one table (no aggregate, ORDER BY, LIMIT, DISTINCT) whose copies
   do not fit the limit is read in batches that fit, each batch's copies deleted before the next is copied (log
-  `hdfs=copyBatches`); other query shapes still hold all their copies at once. Put the temp directory on a disk with that much room, or give the copies a disk of their own with
+  `hdfs=copyBatches`). So are, with each batch's answer merged on the node, aggregates of count/sum/min/max per
+  selected group (also with ORDER BY / LIMIT, with HAVING, and count/sum over DISTINCT values of one column) and
+  scans with DISTINCT and/or LIMIT (log `merge=aggregate` / `merge=rows` / `merge=rewrite`). **Known limits:** a
+  join, a `complete` answer that cannot be merged (window functions, avg routed to complete mode, most TPC-H joins)
+  and a scan with ORDER BY and no LIMIT need all their copies at once; they run while those copies fit the free disk
+  (below), beyond it they are refused naming the files. Put the temp directory on a disk with that much room, or give the copies a disk of their own with
   `hdfsLocalCopyDir=<absolute path>` (the server copies into a `duckdb-<pid>-*` subdirectory there, startup line
   `hdfs=localCopyCache dir=...` at the first copy). A query's new copies must leave `hdfsLocalCopyMinFreeBytes`
   (default 1 GiB) free on that disk (unused copies are evicted for room first, batches shrink to the room left);

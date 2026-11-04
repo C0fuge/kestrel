@@ -128,6 +128,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   may read that subdirectory (and the startup lockdown check expects it); it is deleted when the server stops, and
   one left by a dead process is removed at the next start. Unset (default) or `hdfsLocalCopyMaxBytes=0`: unchanged.
 
+### Documentation - SASL HDFS clusters: known limits of node-local copies (STATUS item 30 done)
+
+- Item 30 (node-local copies of HDFS files a SASL cluster's node does not hold every block of) is complete with two
+  known limits, written into START-NOTES: a join, a `complete` answer that cannot be merged and a scan with ORDER BY
+  and no LIMIT need all their copies at once. They run while those copies fit the copies' free disk
+  (`hdfsLocalCopyMinFreeBytes` kept free); beyond it they are refused before copying, naming the files
+  (`hdfs=localCopyNoSpace`). The disk is never filled. Scans and mergeable aggregates are processed in batches.
+
 ### Changed - SASL HDFS clusters: HAVING and DISTINCT aggregates merged from batches of copies (STATUS item 30, part 2b)
 
 - On a single-server cluster (where partial mode accepts these shapes), a query of one table whose files to copy
