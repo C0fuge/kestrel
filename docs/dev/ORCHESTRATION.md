@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-04 13:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 14:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not written: **ALL DONE.** Every lane condition is met except one: egret has no FRESH report for the newest
 pre-release `server-1.0.0-d2313a9eb651` (item 30). egret skips it on purpose: the maintainer's 2026-11-03 note in
@@ -15,7 +15,7 @@ Done: **ITEM 26 DONE**, **ITEM 27 DONE**, **ITEM 28 DONE**, **ITEM 29 DONE**, **
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | ce6c56e1 13:42Z (~15 min, lock/unlock, no open item) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
+| core (`STATUS.md`) | none open (idles until the maintainer adds an item / answers) | ce6c56e1 13:42Z (~75 min, lock/unlock, no open item) | free | green: Dev CI 41770973165 (5253945e); package=true 41774819696 (d2313a9e on `ci/core-item30`). Later main commits `[skip ci]` only. |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 14:59Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -64,6 +64,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 14:58Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (12:41Z)/heron (session 109)/egret (13:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 13:57Z: no change: core session 13:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (12:41Z)/heron (session 109)/egret (13:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 12:57Z: no change: no core session since 09:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (12:41Z)/heron (session 109)/egret idle; ALL DONE still waits on the maintainer's FRESH decision.
 - 2026-11-04 11:57Z: no change: no core session since 09:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (11:40Z)/heron (session 108)/egret idle; ALL DONE still waits on the maintainer's FRESH decision.
