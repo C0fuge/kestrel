@@ -108,7 +108,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   do not fit the limit is read in batches that fit, each batch's copies deleted before the next is copied (log
   `hdfs=copyBatches`). So are, with each batch's answer merged on the node, aggregates of count/sum/min/max per
   selected group (also with ORDER BY / LIMIT, with HAVING, and count/sum over DISTINCT values of one column) and
-  scans with DISTINCT and/or LIMIT (log `merge=aggregate` / `merge=rows` / `merge=rewrite`). **Known limits:** a
+  scans with DISTINCT and/or LIMIT (log `merge=aggregate` / `merge=rows` / `merge=rewrite`), in both result
+  modes: a `complete` query of one table with such a shape is read the same way over all the table's files (log
+  `hdfs=completeInCopyBatches`). **Known limits:** a
   join, a `complete` answer that cannot be merged (window functions, avg routed to complete mode, most TPC-H joins)
   and a scan with ORDER BY and no LIMIT need all their copies at once; they run while those copies fit the free disk
   (below), beyond it they are refused naming the files. Put the temp directory on a disk with that much room, or give the copies a disk of their own with
