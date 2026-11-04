@@ -170,13 +170,16 @@ public final class DistributedComplete implements AutoCloseable {
         long start = System.nanoTime();
         DeferredStart client = new DeferredStart(listener);
         List<FlightStream> streams = new ArrayList<>(endpoints.size());
+        List<PeerReadGate> gates = new ArrayList<>(endpoints.size());
         EndpointAnswers answers = null;
         try {
             CallOption identity = identityOption(user);
             for (FlightEndpoint endpoint : endpoints) {
-                streams.add(client(endpoint, 0).getStream(endpoint.getTicket(), identity));
+                PeerReadGate gate = new PeerReadGate();
+                gates.add(gate);
+                streams.add(client(endpoint, 0).getStream(endpoint.getTicket(), identity, gate));
             }
-            failOver(endpoints, streams, identity);
+            failOver(endpoints, streams, gates, identity);
             Schema schema = commonSchema(streams);
             // The answer the client was promised: names and types of the single-node path.
             Schema expected = execution.completeSchema(allocator, query);
@@ -187,7 +190,7 @@ public final class DistributedComplete implements AutoCloseable {
             String sql = averages == null
                     ? CompleteAnswerMerge.mergeSql(parsed, name, columns, outputNames)
                     : averages.mergeSql(parsed, name, columns, sumScales(schema), outputNames);
-            answers = new EndpointAnswers(allocator, streams, schema);
+            answers = new EndpointAnswers(allocator, streams, gates, schema);
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
             } finally {
@@ -384,10 +387,12 @@ public final class DistributedComplete implements AutoCloseable {
      *
      * @param endpoints planned endpoints
      * @param streams their streams, in the same order; failed ones are replaced
+     * @param gates the streams' read gates, in the same order; replaced with their streams
      * @param identity the client's signed identity
      * @throws FlightRuntimeException when an endpoint failed at all its locations
      */
-    private void failOver(List<FlightEndpoint> endpoints, List<FlightStream> streams, CallOption identity) {
+    private void failOver(List<FlightEndpoint> endpoints, List<FlightStream> streams, List<PeerReadGate> gates,
+            CallOption identity) {
         for (int i = 0; i < endpoints.size(); i++) {
             FlightEndpoint endpoint = endpoints.get(i);
             for (int location = 0; ; location++) {
@@ -402,7 +407,9 @@ public final class DistributedComplete implements AutoCloseable {
                             endpoint.getLocations().get(location).getUri(),
                             endpoint.getLocations().get(location + 1).getUri(), e.getMessage());
                     closeAll(List.of(streams.get(i)));
-                    streams.set(i, client(endpoint, location + 1).getStream(endpoint.getTicket(), identity));
+                    PeerReadGate gate = new PeerReadGate();
+                    gates.set(i, gate);
+                    streams.set(i, client(endpoint, location + 1).getStream(endpoint.getTicket(), identity, gate));
                     failovers.incrementAndGet();
                 }
             }
@@ -506,11 +513,13 @@ public final class DistributedComplete implements AutoCloseable {
 
     /**
      * Reads the batches of all endpoint answers one stream after the other, as one Arrow stream
-     * DuckDB can scan. The streams themselves are closed by {@link DistributedComplete}.
+     * DuckDB can scan; a stream reads ahead only once it is the one being read
+     * ({@link PeerReadGate}). The streams themselves are closed by {@link DistributedComplete}.
      */
     static final class EndpointAnswers extends ArrowReader {
 
         private final List<FlightStream> streams;
+        private final List<PeerReadGate> gates;
         private final Schema schema;
         private int current;
         /** Read by the caller after DuckDB's scan thread wrote them. */
@@ -524,11 +533,17 @@ public final class DistributedComplete implements AutoCloseable {
          *
          * @param allocator allocator of the reader's batch
          * @param streams endpoint streams
+         * @param gates their read gates, in the same order
          * @param schema their common schema
          */
-        EndpointAnswers(BufferAllocator allocator, List<FlightStream> streams, Schema schema) {
+        EndpointAnswers(BufferAllocator allocator, List<FlightStream> streams, List<PeerReadGate> gates,
+                Schema schema) {
             super(allocator);
+            if (gates.size() != streams.size()) {
+                throw new IllegalArgumentException("One read gate per endpoint stream");
+            }
             this.streams = List.copyOf(streams);
+            this.gates = List.copyOf(gates);
             this.schema = schema;
         }
 
@@ -537,6 +552,7 @@ public final class DistributedComplete implements AutoCloseable {
             prepareLoadNextBatch();
             while (current < streams.size()) {
                 FlightStream stream = streams.get(current);
+                gates.get(current).activate();
                 long waitStart = System.nanoTime();
                 boolean next;
                 try {

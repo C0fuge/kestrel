@@ -461,12 +461,60 @@ smallDisk() {
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
   return 0
 }
+# Item 31 (7): direct memory of a distributed complete full scan. After the cluster checks
+# (sasl-cluster, speed only) the three servers restart as on the maintainer's stand: speed defaults
+# (4 endpoints per server, no small copy cache), distributedComplete=true, -XX:MaxDirectMemorySize=512m;
+# tools/ci/service-hdfs-lowdirect-check.py runs SELECT * FROM tpch.lineitem in complete mode four times
+# in a row on the first server (each answer merged from the endpoint answers of all nodes), exact
+# every time, no OutOfMemoryError in any log.
+lowDirect() {
+  local lowOpts rc4 merged oom i c
+  lowOpts=$(echo "$opts" | sed -E 's/ -DhdfsLocalCopyMaxBytes=[0-9]+//; s/ -DendpointsPerServer=1//')
+  for i in $(seq "$n"); do docker stop -t 20 "srv$i" > /dev/null; done
+  note "low direct memory: 3 servers, -XX:MaxDirectMemorySize=512m, options: $lowOpts"
+  for i in $(seq "$n"); do
+  # shellcheck disable=SC2086,SC2046
+  docker run -d --name "srvm$i" --network "container:dn$i" $(sockOf "$i") "${srvKrb[@]}" "${native[@]}" --cpus=$cpus --memory=$mem \
+    -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
+    -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
+    -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
+    sc-server /jdk/bin/java -Xmx$xmx -XX:MaxDirectMemorySize=512m --add-opens=java.base/java.lang=ALL-UNNAMED \
+    --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+    -Dhazelcast.phone.home.enabled=false -DnumServers=$n $lowOpts -Darrowflight.duckdb.extensionDir=/extdir \
+    -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
+    --data-dir "$dataDir" --localhost "$(dnIp "$i")" --port 32010 --hazelcast-port 5701 \
+    --hosts "$peers" --metrics-enabled false > /dev/null
+  done
+  for i in $(seq "$n"); do
+    c="srvm$i"
+    for _ in $(seq 180); do
+      docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+      [ "$(docker inspect -f '{{.State.Running}}' "$c")" = true ] || break
+      sleep 1
+    done
+    docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started' \
+      || finish fail "low direct memory: server $c did not start: $(docker logs "$c" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+  done
+  sleep 5
+  "$py" -I tools/ci/service-hdfs-lowdirect-check.py "$(dnIp 1):32010" "$in" > "$work/lowdirect-check.log" 2>&1; rc4=$?
+  cat "$work/lowdirect-check.log"
+  for i in $(seq "$n"); do docker logs "srvm$i" > "$work/srvm$i.log" 2>&1 || true; done
+  merged=$(grep -c 'distributedComplete=merged' "$work/srvm1.log" || true)
+  oom=$(cat "$work"/srvm*.log | grep -c 'OutOfMemoryError' || true)
+  note "low direct memory: $(grep -m 1 '^result ' "$work/lowdirect-check.log" || echo 'no result line'); merged $merged, OutOfMemoryError $oom; $(grep -m 1 -oE 'distributedComplete=merged endpoints=[0-9]+ elapsedMs=[0-9]+ peerBytes=[0-9]+' "$work/srvm1.log" || echo 'no merged line'); $(grep '^scan ' "$work/lowdirect-check.log" | tr '\n' ' ')"
+  [ "$rc4" -eq 0 ] || finish fail "low direct memory: $(grep -m 1 '^result fail' "$work/lowdirect-check.log" | cut -c13- || echo 'client failed')"
+  [ "$oom" -eq 0 ] || finish fail "low direct memory: OutOfMemoryError in a server log: $(cat "$work"/srvm*.log | grep -m 1 'OutOfMemoryError' | cut -c1-250)"
+  [ "$merged" -ge 4 ] || finish fail "low direct memory: $merged of the 4 full scans were merged from endpoint answers (distributedComplete=merged lines)"
+  return 0
+}
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
     finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
   if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
+  if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; fi
   finish pass ""
 fi
 detail=${result#result fail }

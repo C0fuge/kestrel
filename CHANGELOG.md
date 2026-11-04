@@ -98,6 +98,15 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - distributed complete answers ran out of direct memory (STATUS item 31, part 3)
+
+- With `distributedComplete=true` the node merging a complete answer opens every endpoint stream at once (so all
+  peers compute in parallel) but reads them one after another; every stream not yet read held up to five batches in
+  direct memory (Flight's read-ahead), so a full scan with 12 endpoints (`speed`: 4 per node, 3 nodes) failed with
+  `OutOfMemoryError: Cannot reserve 16777216 bytes of direct buffer memory` on a 512 MiB direct limit. A stream now
+  receives only its schema until the merge gets to it, then reads ahead as before; peers wait in their own bounded
+  outbound queues. Answers, wire format and settings are unchanged.
+
 ### Fixed - SASL HDFS clusters: complete one-table queries read their copies in batches (STATUS item 31, part 2)
 
 - In `complete` mode a query of one table (scan, aggregate, GROUP BY, DISTINCT, LIMIT; plain or qualified names)

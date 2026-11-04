@@ -39,6 +39,7 @@ on:
       - tools/ci/service-hdfs-cell.sh
       - tools/ci/service-hdfs-sasl-check.py
       - tools/ci/service-hdfs-smalldisk-check.py
+      - tools/ci/service-hdfs-lowdirect-check.py
 
 permissions:
   contents: read
