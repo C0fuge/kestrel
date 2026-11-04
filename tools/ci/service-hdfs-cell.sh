@@ -445,6 +445,8 @@ smallDisk() {
   [ "$rc3" -eq 0 ] || finish fail "small disk: $(grep -m 1 '^result fail' "$work/smalldisk-check.log" | cut -c13- || echo 'client failed')"
   [ -n "$peak" ] && [ "$peak" -lt "$size" ] || finish fail "small disk: copy disk peak use ${peak:-?} of $size bytes (filled)"
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
+  docker logs srvd 2>&1 | grep -q 'hdfs=copyBatches .*merge=rewrite' \
+    || finish fail "small disk: the HAVING / count(DISTINCT) query was not merged from copy batches (no merge=rewrite line)"
   [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
   return 0

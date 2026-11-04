@@ -731,8 +731,10 @@ public final class ExecutionService {
             unreadable = null;
         }
         boolean concatenatable = concatenatable(parsedQuery);
+        CopyBatchMerge merge = startListener && unreadable != null && !concatenatable
+                ? CopyBatchMerge.of(query, parsedQuery) : null;
         List<String[]> batches = startListener && unreadable != null
-                && (concatenatable || mergeable(parsedQuery))
+                && (concatenatable || merge != null)
                 ? copyBatches(fileUris, unreadable, copyLimit(unreadable)) : List.of();
         if (batches.size() > 1) {
             if (concatenatable) {
@@ -740,7 +742,7 @@ public final class ExecutionService {
                         pathTracker);
                 return;
             }
-            if (mergeCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
+            if (mergeCopyBatches(allocator, query, merge, batches, unreadable, listener,
                     pathTracker)) {
                 return;
             }
@@ -807,12 +809,13 @@ public final class ExecutionService {
      * its ORDER BY and LIMIT) with its copies held, the copies are released before the next batch
      * is copied, the part answers are kept in memory and merged into the ticket's answer as
      * distributed complete mode merges endpoint answers (counts and sums summed, minima and
-     * maxima taken again, per group; DISTINCT, ORDER BY and LIMIT applied again). The answer
-     * equals the one computed over all files at once.
+     * maxima taken again, per group; DISTINCT, ORDER BY and LIMIT applied again; HAVING applied
+     * to the merged groups; DISTINCT aggregates counted or summed again over the parts' distinct
+     * values). The answer equals the one computed over all files at once.
      *
      * @param allocator   Arrow buffer allocator
      * @param query       SQL query
-     * @param parsedQuery parsed query that {@link #mergeable} accepts
+     * @param merge       the merge of the query's batch answers ({@link CopyBatchMerge#of})
      * @param batches     the ticket's files in batches
      * @param unreadable  files this node cannot read where they are
      * @param listener    Flight stream listener, not started
@@ -823,7 +826,7 @@ public final class ExecutionService {
      */
     @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
     private boolean mergeCopyBatches(BufferAllocator allocator, String query,
-            ParquetQueryParser parsedQuery,
+            CopyBatchMerge merge,
             List<String[]> batches, List<DataFile> unreadable,
             FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
             throws Exception {
@@ -831,13 +834,18 @@ public final class ExecutionService {
         List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
         try {
             // An ORDER BY the merged answer cannot apply is known before anything is copied.
-            CompleteAnswerMerge.mergePartsSql(parsedQuery, "parts", outputNames, outputNames);
+            List<String> probe = new ArrayList<>(outputNames);
+            for (int i = 0; i < merge.extraColumns(); i++) {
+                probe.add(CopyBatchMerge.HAVING_PREFIX + i);
+            }
+            merge.mergeSql("parts", probe, outputNames);
         } catch (IllegalArgumentException e) {
             LOGGER.warn("qid={} node={} hdfs=copyBatches merge=fallback reason='{}'",
                     LogUtil.qid(), LogUtil.node(), e.getMessage());
             return false;
         }
-        ParquetQueryParser partQuery = CompleteAnswerMerge.partQuery(parsedQuery);
+        ParquetQueryParser parsedQuery = merge.partQuery();
+        String partSql = merge.partSql();
         Map<String, DataFile> byPath = new HashMap<>();
         for (DataFile file : unreadable) {
             byPath.put(file.relativePath(), file);
@@ -845,7 +853,7 @@ public final class ExecutionService {
         LOGGER.info("qid={} node={} hdfs=copyBatches batches={} files={} maxBytes={} merge={}",
                 LogUtil.qid(), LogUtil.node(), batches.size(),
                 batches.stream().mapToInt(b -> b.length).sum(), localCopyCache().maxBytes(),
-                parsedQuery.hasAggregation ? "aggregate" : "rows");
+                merge.rewritten() ? "rewrite" : parsedQuery.hasAggregation ? "aggregate" : "rows");
         try (CollectedAnswers parts = new CollectedAnswers(allocator, listener)) {
             for (String[] batch : batches) {
                 List<DataFile> toCopy = new ArrayList<>();
@@ -860,7 +868,7 @@ public final class ExecutionService {
                     continue;
                 }
                 try (LocalCopyCache.Lease copies = copies(toCopy, batch.length)) {
-                    readParquetFiles(allocator, query, partQuery, parquetFiles,
+                    readParquetFiles(allocator, partSql, parsedQuery, parquetFiles,
                             resolveUris(batch, copies), parts, true, pathTracker);
                 }
                 if (listener.isCancelled()) {
@@ -875,7 +883,7 @@ public final class ExecutionService {
             DistributedComplete.DeferredStart client = new DistributedComplete.DeferredStart(listener);
             client.expect(expected);
             try (org.apache.arrow.vector.ipc.ArrowReader reader = parts.reader()) {
-                String sql = CompleteAnswerMerge.mergePartsSql(parsedQuery, name, columns, outputNames);
+                String sql = merge.mergeSql(name, columns, outputNames);
                 readArrowParts(allocator, reader, name, sql, client);
             } catch (Exception e) {
                 if (client.sentBatch() || listener.isCancelled()) {
@@ -923,17 +931,16 @@ public final class ExecutionService {
     /**
      * Tells whether the answer of a query for a set of files can be merged from its answers for
      * parts of that set ({@link CompleteAnswerMerge#partQuery}), as {@link CompleteAnswerMerge}
-     * merges endpoint answers: an aggregate (also with ORDER BY and LIMIT), or a scan with
-     * DISTINCT or LIMIT. A scan with ORDER BY alone is not: its parts would keep every row.
+     * merges endpoint answers: an aggregate (also with ORDER BY and LIMIT, HAVING, or count or
+     * sum over DISTINCT values of one column: {@link CopyBatchMerge}), or a scan with DISTINCT or
+     * LIMIT. A scan with ORDER BY alone is not: its parts would keep every row.
      *
-     * @param parsed parsed query
+     * @param query SQL query
      * @return true for a query whose merged part answers are its answer
      */
-    static boolean mergeable(ParquetQueryParser parsed) {
-        if (parsed.isJoin || CompleteAnswerMerge.partsRefusal(parsed) != null) {
-            return false;
-        }
-        return parsed.hasAggregation || parsed.distinct || parsed.limit != null;
+    static boolean mergeable(String query) {
+        ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+        return !concatenatable(parsed) && CopyBatchMerge.of(query, parsed) != null;
     }
 
     /**

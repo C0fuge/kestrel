@@ -793,7 +793,14 @@ class ExecutionServiceTest {
                             + " ORDER BY n DESC, g LIMIT 3",
                     "SELECT DISTINCT g FROM s.t WHERE v > 500 ORDER BY g",
                     "SELECT v, d FROM s.t WHERE g = 2 ORDER BY v DESC LIMIT 5",
-                    "SELECT DISTINCT g FROM s.t ORDER BY g DESC LIMIT 3")) {
+                    "SELECT DISTINCT g FROM s.t ORDER BY g DESC LIMIT 3",
+                    // HAVING applied to the merged groups (totals 1140858..1144286): no batch
+                    // alone reaches the bound, groups 3, 4 and 5 stay below it in total.
+                    "SELECT g, sum(v) AS sv, count(*) FROM s.t GROUP BY g"
+                            + " HAVING sum(v) > 1142000 AND max(v) >= 10 ORDER BY g",
+                    "SELECT count(DISTINCT g) AS ng, sum(DISTINCT g), count(*) FROM s.t WHERE v > 5",
+                    "SELECT g, count(DISTINCT d) AS nd, sum(v) FROM s.t GROUP BY g"
+                            + " HAVING count(*) > 571 ORDER BY nd DESC, g LIMIT 4")) {
                 copiesOnDisk.clear();
                 List<String> expected = new java.util.ArrayList<>();
                 try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
@@ -899,16 +906,25 @@ class ExecutionServiceTest {
                 "SELECT a, count(*) FROM s.t GROUP BY a LIMIT 3",
                 "SELECT a, sum(b) AS s FROM s.t GROUP BY a ORDER BY s DESC LIMIT 3",
                 "SELECT DISTINCT a FROM s.t", "SELECT DISTINCT a FROM s.t ORDER BY a",
-                "SELECT a, b FROM s.t ORDER BY b DESC LIMIT 5", "SELECT a FROM s.t LIMIT 5")) {
-            assertTrue(ExecutionService.mergeable(ParquetQueryParser.parse(query)), query);
+                "SELECT a, b FROM s.t ORDER BY b DESC LIMIT 5", "SELECT a FROM s.t LIMIT 5",
+                "SELECT count(DISTINCT a) FROM s.t", "SELECT a, sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
+                "SELECT a, count(DISTINCT b), sum(DISTINCT b), min(c) FROM s.t GROUP BY a",
+                "SELECT a, max(b) AS m FROM s.t GROUP BY a HAVING NOT (a = 2 OR count(*) * 2 <= 10)"
+                        + " ORDER BY m LIMIT 2")) {
+            assertTrue(ExecutionService.mergeable(query), query);
         }
         for (String query : List.of("SELECT a FROM s.t", "SELECT a FROM s.t ORDER BY a",
                 "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3",
                 "SELECT a FROM s.t ORDER BY a LIMIT 3 OFFSET 1",
-                "SELECT count(DISTINCT a) FROM s.t", "SELECT a, sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
+                "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t",
+                "SELECT count(DISTINCT a + 1) FROM s.t",
+                "SELECT a, sum(b) FROM s.t GROUP BY a HAVING avg(b) > 1",
+                "SELECT a, sum(b) FROM s.t GROUP BY a HAVING count(DISTINCT b) > 1",
+                "SELECT a, sum(b) FROM s.t GROUP BY a HAVING abs(sum(b)) > 1",
+                "SELECT sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
                 "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(b) FROM s.t GROUP BY a",
                 "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a")) {
-            assertFalse(ExecutionService.mergeable(ParquetQueryParser.parse(query)), query);
+            assertFalse(ExecutionService.mergeable(query), query);
         }
     }
 

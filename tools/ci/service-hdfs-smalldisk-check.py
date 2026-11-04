@@ -16,17 +16,21 @@ disk), so only the free-space guard bounds the copies:
   it must either be answered exactly or be refused with the guard's message ("No room on the disk
   of the node-local copy cache", naming a file) - never "No space left on device", a short copy or
   "Connection reset";
-* afterwards the GROUP BY in parts must still be answered (a refusal leaves nothing reserved).
+* afterwards the GROUP BY in parts must still be answered (a refusal leaves nothing reserved);
+* in parts, a GROUP BY with HAVING and a count over DISTINCT values (shapes only one server
+  answers) must match the local files: merged from the disk-sized batches (``merge=rewrite``).
 
 Prints ``ok``/``FAIL`` lines, ``join refused`` or ``join answered`` and a last line ``result pass``
 or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
+import glob
 import importlib.util
 import os
 import sys
 
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 _SPEC = importlib.util.spec_from_file_location(
     "service_hdfs_sasl_check", os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -37,6 +41,24 @@ _SPEC.loader.exec_module(_SASL)
 CHUNKS_JOIN = ("SELECT count(*) AS n, sum(c.l_quantity) AS q FROM chunks.lineitem c"
                " JOIN spread.orders o ON c.l_orderkey = o.o_orderkey")
 REFUSAL = "No room on the disk of the node-local copy cache"
+HAVING = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q,"
+          " count(DISTINCT l_shipmode) AS m FROM chunks.lineitem"
+          " GROUP BY l_returnflag, l_linestatus HAVING sum(l_quantity) > {bound}")
+
+
+def reference_having(base):
+    """Per (l_returnflag, l_linestatus): count, sum(l_quantity), distinct l_shipmode, and a bound."""
+    table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                          columns=["l_returnflag", "l_linestatus", "l_quantity", "l_shipmode"])
+    agg = table.group_by(["l_returnflag", "l_linestatus"]).aggregate(
+        [("l_quantity", "count"), ("l_quantity", "sum"), ("l_shipmode", "count_distinct")])
+    rows = {(r["l_returnflag"], r["l_linestatus"]):
+            (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])),
+             r["l_shipmode_count_distinct"]) for r in agg.to_pylist()}
+    sums = sorted(v[1] for v in rows.values())
+    # Between the smallest and the largest group sum: some groups pass, some do not.
+    bound = (sums[0] + sums[-1]) / 2
+    return bound, {k: v for k, v in rows.items() if v[1] > bound}
 
 
 def main():
@@ -86,6 +108,22 @@ def main():
         else:
             fail(f"complete chunks join: not the copy disk guard's refusal: {_SASL.first_line(e)}")
     scan_and_group("after")
+    bound, want_having = reference_having(base)
+    try:
+        with _SASL.connect(server, "partial") as conn:
+            answer = _SASL.run(conn, HAVING.format(bound=bound))
+        got = {(r["l_returnflag"], r["l_linestatus"]):
+               (int(r["n"]), decimal.Decimal(str(r["q"])), int(r["m"])) for r in answer.to_pylist()}
+        if got.keys() != want_having.keys() or any(
+                got[k][0] != w[0] or got[k][2] != w[2] or abs(got[k][1] - w[1]) > decimal.Decimal("0.0001")
+                for k, w in want_having.items()):
+            fail(f"partial chunks.lineitem HAVING / count(DISTINCT): {got}, want {want_having}")
+        else:
+            print(f"ok partial chunks.lineitem HAVING / count(DISTINCT) ({len(got)} of the groups)",
+                  flush=True)
+    except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+        print(f"error text: {e}", flush=True)
+        fail(f"partial chunks.lineitem HAVING / count(DISTINCT): {_SASL.first_line(e)}")
     print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
     return 1 if failures else 0
 
