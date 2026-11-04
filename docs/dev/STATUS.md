@@ -23,6 +23,41 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-04 20:55 - BUG FIRST, ITEM 31: item 30 works only for schema-qualified table names; wrong
+> answers with plain names.** Stand: HA + Kerberos (Flight Kerberos + TLS), 3 DataNodes with
+> `dfs.data.transfer.protection=authentication`, short-circuit, one server per DataNode (1 and 3 servers, default and
+> `speed`), build `d2313a9eb651`, TPC-H SF1 with default schema `tpch`, plus a "spread" copy of lineitem/orders with
+> 1 MiB blocks (replication 2 / 1) so no node holds a file whole.
+> - With **schema-qualified** names (`tpch.lineitem`, `spread.orders_sp`): TPC-H 22/22 and the spread set 19/19 correct
+>   in every mode (hash-checked against a privileged-DataNode run); SASL times = privileged once copies are cached.
+> - With **plain names** (`lineitem`, as every client and the benchmark use, default schema): 3/22 pass (only tables
+>   held whole on the node), 3 refused, 16 fail:
+>   (a) refused: `INVALID_ARGUMENT: HDFS DataNodes require SASL ... a complete answer is computed on the node that
+>   receives the query, and this node lacks blocks of 5 file(s): tpch/lineitem/data_1.parquet ...` -> no copy made;
+>   (b) failed: `IO Error: Failed to read from HDFS file "hdfs://<ns>/data/parquet/tpch/orders/data_2.parquet" ...
+>   HdfsNetworkException: Read 8 bytes failed ... Connection reset by peer` -> DuckDB read a non-local file through
+>   hadoopfs (the table resolution for local copies misses unqualified names).
+>   Repro: one server on dn1, `SELECT count(*) FROM lineitem` (refused) vs `SELECT count(*) FROM tpch.lineitem` (ok).
+> - **WRONG ANSWERS, NO ERROR (worst):** comma join with a spread table and plain names returns 0 rows:
+>   `SELECT count(*) FROM orders_sp o, customer c WHERE o.o_custkey = c.c_custkey` (default schema `spread`) gives 0,
+>   right answer 1500000; TPC-H q03 / q12 on lineitem_sp/orders_sp give 0 rows instead of 10 / 2. Same SQL with
+>   `spread.` prefixes is correct. A view or file list that silently binds to nothing must be an error, never 0 rows.
+> - Complete mode never batches copies: count / GROUP BY / scans of the spread table with a 64 MiB copy dir fail
+>   `INTERNAL: ... No room on the disk of the node-local copy cache ... for this query's 8 file copies (207131954
+>   bytes)`; partial mode batches them but refuses GROUP BY (even `count(*)` per group) although START-NOTES says
+>   grouped aggregates are batched. A disk refusal should be RESOURCE_EXHAUSTED, not INTERNAL.
+> - With `hdfsLocalCopyMaxBytes` below the working set copies are re-made for every query and `localCopyOverLimit`
+>   is logged ~17 times per query (log once per query).
+> - 3 servers, default/`speed`: complete queries run wholly on the receiving node (expected) - fine; with
+>   `distributedComplete=true` + speed, a full scan right after a 6M-row scan failed 3 of 4 times with
+>   `OutOfMemoryError: Cannot reserve 16777216 bytes of direct buffer memory (allocated: 536104549, limit:
+>   536870912)` (512 MiB direct on the stand): size the scan buffers from MaxDirectMemorySize or back off, not fail.
+> Fix all of the above (resolve unqualified names through the session's default schema / search path everywhere item
+> 29/30 decides locality and copies; batch complete-mode single-table aggregates like partial mode; GROUP BY batching
+> in partial mode). **CI:** the sasl-cluster cells must run TPC-H 22/22 with PLAIN names and default schema (as the
+> benchmark clients do), the spread set with plain names incl. comma joins, answers hash-checked, plus the small copy
+> dir stage in complete mode. Then `package=true`, "ITEM 31 DONE". The maintainer's stand re-checks the build.
+
 > **Maintainer, 2026-11-03 12:20 - BUG FIRST, ITEM 29 (before 28): SASL data-transfer clusters refuse every query.**
 > Found on the maintainer's HA + Kerberos stand with `413485ba80fd`, DataNodes set to
 > `dfs.data.transfer.protection=authentication`, server on a DataNode with short-circuit (replication 2, 3 DataNodes):
