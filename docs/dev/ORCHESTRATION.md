@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-04 18:56 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-04 19:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) is in progress in the core lane.
 
@@ -8,7 +8,7 @@ Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copi
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 31: part 1 done (fa7f901a: plain names qualified, no silent 0-row joins, RESOURCE_EXHAUSTED, once-per-query log); part 2 (5) pushed 37cbf500 (complete one-table queries batched over copies); open: (6) partial GROUP BY batching, (7) direct-memory OOM with `distributedComplete=true`+speed, (8) CI small copy-dir stage in complete mode, `package=true` | bf927893 18:47Z (~9 min) | held 18:41Z (active) | fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); 37cbf500: Dev CI 41890561380 and service-hdfs 41890561200 running, Catalogs 41890561182 green |
+| core (`STATUS.md`) | ITEM 31: parts 1-2 done (fa7f901a; 37cbf500 complete one-table queries batched over copies; ea0f1d73 small-disk CI stage, 6 complete queries batched and exact); open: (7) direct-memory OOM with `distributedComplete=true` + speed full scans, then `package=true` and ITEM 31 DONE | 2896a9e9 lock 19:41Z (~15 min) | held 19:41Z (active) | ea0f1d73 green (Dev CI 41893438040, service-hdfs 41893438019, Catalogs 41893438065). Newest Dev CI on main **red, gate only**: `package=true` runs 41895426530 (ea0f1d73) and 41897670516 (d7e84969) failed in `service-gate` because main moved on ([skip ci] STATUS/lock commits) before the service matrix ran on that sha; build job green, no test failed. The lane needs to dispatch the matrix on a branch at the sha (as the gate message says) or package from a sha main does not move past. |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -20,7 +20,7 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41776324282 | d2313a9e | pass |
-| service-hdfs.yml | 41890561200 | 37cbf500 | running (previous 41883760502 on fa7f901a: pass) |
+| service-hdfs.yml | 41893438019 | ea0f1d73 | pass |
 | service-security.yml | 41776332023 | d2313a9e | pass |
 | service-stores.yml | 41776335441 | d2313a9e | pass |
 
@@ -34,18 +34,18 @@ No stale locks (marten and heron free).
 
 - marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 18:40Z: no new server jar, no
   maintainer items. Lock free.
-- heron: **IMPROVEMENTS DONE** (session 98); session 110 (18:51Z): nothing open, no new server build. Lock free.
+- heron: **IMPROVEMENTS DONE** (session 98); session 111 (19:50Z): nothing open, no new server build. Lock free.
 
 ## egret
 
 - Newest report: `results/FRESH-413485ba80fd.md` (run 41604206524, 10/10 green, upstream `6e264c10f403`).
   Speed vs upstream native: scans x1/x4 1.00-1.04, S3 ADBC export 0.92 (local 0.98), slow-link ZSTD export 0.96-1.06,
   load 0.92-0.98; upstream native 0-1/22 on TPC-H. Maintainer accepted it as final for item 30; README "In progress"
-  idle (17:27Z).
+  idle (19:30Z, no pre-release after d2313a9eb651).
 
 ## For the maintainer
 
-- **New Open question (item 31, core lane):** plain names that exist in several schemas - should the server honour
+- **Open question (item 31, core lane):** plain names that exist in several schemas - should the server honour
   the client's Flight `SCHEMA` header (default schema) as the first schema to resolve plain names, and on by default?
   Today `lineitem` with default schema `spread` fails ("Catalog Error") when `tpch.lineitem` also exists.
 - **ITEM 31 open:** ALL DONE needs ITEM 31 DONE plus a decision on egret FRESH for its pre-release.
@@ -54,6 +54,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-04 19:57Z: core on ITEM 31: part 2 (ea0f1d73) green (Dev CI 41893438040, service-hdfs 41893438019, Catalogs 41893438065); two `package=true` dispatches (41895426530 on ea0f1d73, 41897670516 on d7e84969) red only in `service-gate` (main moved by later [skip ci] commits, service matrix not run on that sha; build green) - process, not a test failure, no bug-first note; core lock 19:41Z (active), (7) direct-memory OOM next; marten/heron (session 111)/egret idle; no stale locks.
 - 2026-11-04 18:56Z: core on ITEM 31: part 1 fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); part 2 37cbf500 (complete one-table queries batched over copies) pushed 18:47Z, Dev CI 41890561380 / service-hdfs 41890561200 running, Catalogs 41890561182 green; new Open question (client SCHEMA header for plain names); lock 18:41Z active; marten/heron (session 110)/egret idle; no stale locks.
 - 2026-11-04 17:57Z: ALL DONE withdrawn: maintainer opened bug-first ITEM 31 (75edc566, plain-name SASL copies, wrong 0-row join answers); core lock 17:52Z, working; Dev CI on main green, service gate 4/4 green; marten 17:40Z/heron/egret idle; no stale locks.
 - 2026-11-04 16:56Z: ALL DONE written: maintainer accepted FRESH-413485ba80fd as final in egret (dac5040); core session 16:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten 16:41Z/heron session 109 idle.
