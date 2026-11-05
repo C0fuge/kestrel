@@ -1,17 +1,17 @@
 # Orchestration status
 
-Status as of **2026-11-05 12:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 13:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: the maintainer accepted items 31 and 32 on the stand and opened **ITEM 33** (small copy disk +
-distributedComplete subquery). The core lane is working on it now.
+Not ALL DONE: ITEM 33 (small copy disk + distributedComplete subquery, from the stand re-check of `5f60db1ee304`)
+is in progress in the core lane; no pre-release carries it yet.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33: (A) count(*) and (B) GROUP BY 1 batched + (C) copy disk never fills in a744ef50; (D) subqueries kept single-node in 75de58bc; (E) and the CI small-disk stage still open | 75de58bc, 33 min ago | held since 12:14Z (active) | Dev CI 42027060883 on 75de58bc **green**; dispatch 42029413029 on 75de58bc running |
+| core (`STATUS.md`) | ITEM 33: (A)-(D) + parser log done (a744ef50, 75de58bc); now (E): aeb87cdf partial queries with a subquery get the complete answer on SASL HDFS, 8e60638e copy refusals log `hdfs=reads` | 8e60638e, 8 min ago | held since 13:41Z (active) | Dev CI 42039372619 on 8e60638e running; Service hdfs 42039028971 on aeb87cdf running; Catalogs CI 42039029088 green. `package=true` 42031858690 on bfe09a23: build green, gate/package cancelled by the new push (not a failure) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | Catalogs CI 42027060689 green |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | Catalogs CI 42039029088 green |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
 No stale locks (marten and heron free).
@@ -20,10 +20,10 @@ No stale locks (marten and heron free).
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42014348488 | 5f60db1e | pass |
-| service-hdfs.yml | 42027060707 | 75de58bc | pass |
-| service-security.yml | 42014357596 | 5f60db1e | pass |
-| service-stores.yml | 42014361466 | 5f60db1e | pass |
+| service-cluster.yml | 42034043352 | bfe09a23 | pass |
+| service-hdfs.yml | 42039028971 | aeb87cdf | running (previous 42034048008 on bfe09a23 pass) |
+| service-security.yml | 42034053321 | bfe09a23 | pass |
+| service-stores.yml | 42034058301 | bfe09a23 | running (previous 42014361466 on 5f60db1e pass) |
 
 ## Pre-releases (newest 3)
 
@@ -33,21 +33,23 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 12:41Z: no new server jar. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 121 (11:51Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 13:41Z: no new server jar. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 122 (13:51Z): nothing open. Lock free.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `8060179bce0c` / `5f60db1ee304`.
-- ACCEPT on `5f60db1ee304` (run 42018218548): first report **DO NOT SHIP** - checks 1, 2, 3, 5, 6 pass everywhere,
-  check 4 (small disk) fails in all cells (complete-mode GROUP BY refused "No room on the disk ..."). That is the
-  same ground as the maintainer's ITEM 33 (A)-(C). egret fixed its check-4 reading (a5a0469) and runs an only rerun
-  (42027069331, in progress).
+- **EGRET ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only).** Full run 42018218548 + rerun 42027069331: checks
+  1-3, 5, 6 pass in all cells (check 6 `hdfs=reads` gap fixed); check 4 (64 MiB disk) fails: complete `sp-group` /
+  `sp-distinct` whose copies exceed the disk are refused instead of batched - covered by ITEM 33 (A)-(C). egret waits
+  for the next HDFS pre-release.
 
 ## For the maintainer
 
-- Nothing blocking. ITEM 33 is in progress in the core lane; egret's re-ACCEPT should follow its pre-release.
+- Nothing blocking. ITEM 33 is in progress; the core lane notes (E) "partial q04 INTERNAL" was not reproduced and
+  asks for the stand's exact error text / server log line, and asks the stand to re-run the 3-server sum -> DISTINCT
+  repro on the next pre-release.
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -55,6 +57,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 13:58Z: core session (lock 13:41Z) on ITEM 33 (E): aeb87cdf (partial subquery -> complete answer on SASL HDFS) + 8e60638e (copy refusals log hdfs=reads); Dev CI 42039372619 + Service hdfs 42039028971 running; `package=true` 42031858690 on bfe09a23 cancelled by the new push (build green); service matrix on bfe09a23: cluster/security/hdfs green, stores running; egret ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only, item 33 scope); marten/heron (session 122) idle; no stale locks.
 - 2026-11-05 12:58Z: maintainer accepted items 31/32 on the stand (f546f828) and opened ITEM 33 (small copy disk: count(*) / GROUP BY 1 batching, copy disk fills, distributedComplete subquery, minor logs); core session (lock 12:14Z) pushed a744ef50 + 75de58bc, Dev CI 42027060883 + Service hdfs 42027060707 green on 75de58bc, dispatch 42029413029 running; egret ACCEPT 5f60db1ee304 first report DO NOT SHIP (check 4 small disk, now in item 33 scope), harness fix a5a0469 + only rerun 42027069331 running; marten/heron idle.
 - 2026-11-05 11:56Z: pre-release `server-1.0.0-5f60db1ee304` (ITEM 32) published from Dev CI 42012727794; service matrix on 5f60db1e all green (42014348488/42014352876/42014357596/42014361466); egret ACCEPT 5f60db1ee304 run 42018218548 in progress; core session 11:42Z: no open item, waits for the re-check; marten/heron (session 121) idle; no locks.
 - 2026-11-05 10:56Z: maintainer accepted ITEM 31 for the stand (47764f75) and opened ITEM 32 (copy refusal code, relative reserve, hdfs=reads on complete path); core session 10:06-10:41Z did it in code (580dbdfa, 23063397, 04c70af7): Dev CI 42010391188 green (580dbdfa red 42008636974 = PeerReadGateTest race, fixed by 04c70af7), service-hdfs 42010059761 green; `package=true` Dev CI 42012727794 + service matrix running on 5f60db1e; egret will re-ACCEPT on the item 32 build; marten/heron (session 120) idle; no locks held.
