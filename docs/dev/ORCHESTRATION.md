@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-05 06:56 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 07:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) has its fixed pre-release
 `server-1.0.0-8060179bce0c`; it waits for the maintainer's stand re-check before "ITEM 31 DONE".
@@ -9,7 +9,7 @@ Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copi
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 31: parts 1-3 done (fa7f901a, 37cbf500/ea0f1d73, 1f3866d2 = (7) direct-memory OOM: `PeerReadGate`, idle endpoint streams read ahead only when the merge reaches them); pre-release built; remaining: stand re-check, then ITEM 31 DONE | 940405f8 unlock 21:41Z (session found nothing open; waits for stand re-check) | free | Dev CI on main green: 41902472862 (push, 1f3866d2) and 41905031992 (`package=true`, service gate green) |
+| core (`STATUS.md`) | ITEM 31: parts 1-3 done (fa7f901a, 37cbf500/ea0f1d73, 1f3866d2 = (7) direct-memory OOM: `PeerReadGate`, idle endpoint streams read ahead only when the merge reaches them); pre-release built; remaining: stand re-check, then ITEM 31 DONE | d59fec69 unlock 07:42Z (session found nothing open; waits for stand re-check) | free | Dev CI on main green: 41902472862 (push, 1f3866d2) and 41905031992 (`package=true`, service gate green) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -35,18 +35,21 @@ No stale locks (marten and heron free).
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
 - marten: **IMPROVEMENTS DONE** (2026-11-03 10:00Z). Finish mode; last session 2026-11-05 06:41Z: no new server jar. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 116 (2026-11-05 06:51Z): nothing open, no new server build in `e2e-assets`. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 117 (2026-11-05 07:51Z): nothing open, no new server build in `e2e-assets`. Lock free.
 
 ## egret
 
-- Newest report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`; scans 1.00-1.04 x upstream native, S3
-  ADBC export 0.92, load 0.92-0.98), accepted by the maintainer as final for item 30. README "In progress" idle
-  (2026-11-05 05:27Z); no FRESH run for `8060179bce0c` yet.
+- Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`; scans 1.00-1.04 x upstream native,
+  S3 ADBC export 0.92, load 0.92-0.98), accepted by the maintainer as final for item 30. No FRESH for `8060179bce0c`.
+- **New (maintainer task 2026-11-05 00:10): "SASL HDFS ACCEPTANCE"** - independent `accept-hdfs.yml` + `ci/accept/`
+  in egret, first target `server-1.0.0-8060179bce0c`. README: "ACCEPT 8060179bce0c IN PROGRESS". First dispatch
+  41986549800 failed after 32 s (setup; fixed by 886cb32, Hadoop download retries/mirrors); rerun 41986696064 running.
+  Report will be `results/ACCEPT-8060179bce0c.md` - this may stand in for the maintainer's stand re-check of ITEM 31.
 
 ## For the maintainer
 
 - **ITEM 31 fixed build ready:** `server-1.0.0-8060179bce0c` - re-check plain names (TPC-H 22/22 + spread set, 1 and
-  3 servers, default and `speed`) on the stand; then the core lane writes ITEM 31 DONE. Decide whether egret should
+  3 servers, default and `speed`) on the stand, or rely on egret's new SASL HDFS acceptance run (in progress); then the core lane writes ITEM 31 DONE. Decide whether egret should
   run FRESH on it (needed for ALL DONE).
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
@@ -55,6 +58,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 07:57Z: core session 07:42Z found nothing open (ITEM 31 waits for the stand re-check); CI and service matrix green on 8060179b; egret started the maintainer's SASL HDFS acceptance task (accept-hdfs.yml on 8060179bce0c: run 41986549800 failed in setup, fixed, 41986696064 running); marten (06:41Z)/heron (session 117) idle; no locks held.
 - 2026-11-05 06:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (06:41Z)/heron (session 116)/egret (05:27Z) idle; no locks held.
 - 2026-11-05 05:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (05:40Z)/heron (session 115)/egret (05:27Z) idle; no locks held.
 - 2026-11-05 04:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (04:40Z)/heron (session 115)/egret idle; no locks held.
@@ -94,4 +98,3 @@ No stale locks (marten and heron free).
 - 2026-11-03 08:57Z: ITEM 28 DONE (docs only); core idle; marten q19 step (join_keys 50000) in FE/BE CI; heron speed proof added; egret FRESH 413485ba80fd running (41604206524); no stale locks, Dev CI green.
 - 2026-11-03 08:00Z: ITEM 26 + 27 DONE (pre-release 413485ba80fd, service gate 4/4 green); core idle, no open item; heron IMPROVEMENTS DONE (session 98); marten join-key fix green, q19 + SF1 compare left; egret FRESH-25aa7eec0f0f done (not yet on 413485ba); no stale locks, no red Dev CI.
 - 2026-11-03 07:00Z: core on ITEM 27 (scan-perf workflow green 41589080058; 413485ba speed profile `duckDbPreserveInsertionOrder=false`, Dev CI green; service gate on `ci/core-27` running); marten fixing q12/q14 regression (58a0995, fe/be running); heron split-count default 1, proof compare 41586926044 running; egret fresh run 41584018828 still running; no stale locks, no red Dev CI.
-- 2026-11-03 06:00Z: core on ITEM 27 (locked 05:40Z, scan-perf workflow added); pre-release 25aa7eec0f0f out, service matrix 4/4 green; egret fresh run 41584018828 on it; marten q01/q17 closed but q12/q14 regressed (item 2 fix pending); heron full compare green, lane working; no stale locks, no red Dev CI.
