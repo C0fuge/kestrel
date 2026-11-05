@@ -3244,3 +3244,11 @@ S3 slowdown item below stays open for then).
 - 2026-11-04 late (core session): item 31 `package=true` done: pre-release `server-1.0.0-8060179bce0c` from Dev CI
   41905031992 (build, service gate, package green; service runs on `8060179b`: cluster 41907447179, hdfs 41907451727,
   security 41907457509, stores 41907462979). No code change. Item 31 waits for the stand re-check. Lock released.
+- 2026-11-05 (cloud session, core): no open item; checked egret's preliminary DO NOT SHIP on `8060179bce0c` against
+  code and CI logs (`5c83dd13`). Copy-disk refusal: wire status is RESOURCE_EXHAUSTED, ADBC prints it as `INTERNAL:
+  ... (ResourceExhausted; ...)` (harness reading; the CI small-disk check now requires `(ResourceExhausted;`).
+  Complete answers that copy nothing now log `hdfs=reads ... localCopy=0`; file counts cover every table read.
+  `ExecutionServiceTest` (completeAnswerReads... asserts the line). START-NOTES: small copy disks need a lower
+  `hdfsLocalCopyMinFreeBytes`; Open question on that default. CI on `5c83dd13`: Dev CI 42005115898, Service hdfs
+  42005115928 (small disk: join refused with ResourceExhausted), Catalogs CI 42005115931 green. No `package=true`
+  (log-only change; item 31 waits for egret's final report / the stand). Lock released.
