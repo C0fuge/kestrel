@@ -511,6 +511,36 @@ public class ConfigAdapter {
         return threads;
     }
 
+    /**
+     * Returns hdfsLocalCopyRoomWaitMillis from the system configuration.
+     *
+     * @return milliseconds a query waits for copy room held by other running queries
+     */
+    public static long hdfsLocalCopyRoomWaitMillis() {
+        return hdfsLocalCopyRoomWaitMillis(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code hdfsLocalCopyRoomWaitMillis} ({@code HDFS_LOCAL_COPY_ROOM_WAIT_MILLIS}): how
+     * long a query whose node-local copies do not fit waits for other running queries (such as
+     * the sibling tickets of the same query) to release theirs before it is refused; default 0,
+     * refused at once (item 33).
+     *
+     * @param props configuration source
+     * @return milliseconds, 0 or more
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long hdfsLocalCopyRoomWaitMillis(ConfigSource props) {
+        String value = getStringWithEnv("hdfsLocalCopyRoomWaitMillis",
+                "arrowflight.hdfs.localCopyRoomWaitMillis", "HDFS_LOCAL_COPY_ROOM_WAIT_MILLIS", "0",
+                props).trim();
+        if (!value.matches("\\d{1,15}")) {
+            throw new IllegalArgumentException("hdfsLocalCopyRoomWaitMillis must be 0 or more"
+                    + " milliseconds: " + value);
+        }
+        return Long.parseLong(value);
+    }
+
     /** Default of {@code shutdownDrainSeconds} (maintainer, 2026-10-29, lane 3 Q2). */
     public static final int DEFAULT_SHUTDOWN_DRAIN_SECONDS = 20;
 

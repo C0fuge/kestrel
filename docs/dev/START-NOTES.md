@@ -121,6 +121,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   otherwise it fails at once naming the files and the free bytes (`hdfs=localCopyNoSpace`, status
   `RESOURCE_EXHAUSTED`; ADBC clients print it as `INTERNAL: ... (ResourceExhausted; ...)`) instead of filling the
   disk. A set `hdfsLocalCopyMinFreeBytes` not below the disk's size refuses every copy (the cache line is then a WARN).
+  With `endpointsPerServer > 1` the tickets of one query copy on a node at once; on a small copy disk set
+  `hdfsLocalCopyRoomWaitMillis=<ms>` (default 0 = refuse at once) so that a ticket whose copies do not fit while
+  other running queries hold copies waits for them (`hdfs=localCopyRoomWait` / `hdfs=localCopyRoomWaited ms=`)
+  instead of being refused.
   `hdfs=reads` is logged for every query, also with `localCopy=0` and, for answers reading no data-store table or
   merged from peers (`distributedComplete=true`), with `files=0 ... tables=none|unknown|endpoints=N`. `hdfsLocalCopyMaxBytes=0`
   turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted

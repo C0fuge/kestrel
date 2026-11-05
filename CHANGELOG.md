@@ -53,6 +53,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
 | `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
+| `hdfsLocalCopyRoomWaitMillis` (`arrowflight.hdfs.localCopyRoomWaitMillis`, `HDFS_LOCAL_COPY_ROOM_WAIT_MILLIS`) | 0 = refuse at once | how long a query whose node-local copies do not fit waits for other running queries (e.g. the sibling tickets of the same query) to release theirs before it is refused |
 | `hdfsLocalCopyDir` (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`) | unset = below the DuckDB temp root | absolute directory (another disk) for the node-local copies; the server copies into its own `duckdb-<pid>-*` subdirectory there, allowed to DuckDB, deleted when it stops |
 
 **New plugin settings (all off by default)**
@@ -97,6 +98,19 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Added - `hdfsLocalCopyRoomWaitMillis`: wait for copy room held by other queries (STATUS item 33, speed cells)
+
+- With `endpointsPerServer > 1` on a small copy disk, the tickets of one partial query run in parallel on a node and
+  each pins its copies; when their sum exceeds the room, the later tickets were refused `RESOURCE_EXHAUSTED` at once
+  although the room comes back as soon as the earlier tickets end (egret `part-lineitem-sp` / `part-group-sp`).
+  New setting `hdfsLocalCopyRoomWaitMillis` (`arrowflight.hdfs.localCopyRoomWaitMillis`,
+  `HDFS_LOCAL_COPY_ROOM_WAIT_MILLIS`): a query whose new copies do not fit while other running queries hold copies
+  waits up to that long for a release, then plans again (log `hdfs=localCopyRoomWait` when it starts waiting,
+  `hdfs=localCopyRoomWaited ms=` when it fits). While it waits it holds no copies, so two waiting queries never hold
+  each other's room. When no other query holds copies it is refused at once as before; after the wait the refusal
+  says `after waiting N ms`. Default 0: refused at once, unchanged (making 30000 the default is an Open question).
+  The startup line `hdfs=localCopyCache` shows `roomWaitMillis=`.
 
 ### Changed - SASL HDFS clusters: every copy refusal of a complete answer says why it was not batched (STATUS item 33, regression)
 

@@ -1,7 +1,12 @@
 """Checks one server whose node-local copy disk is smaller than a query's input (STATUS item 30).
 
 Usage:
-  service-hdfs-smalldisk-check.py <host:port> <dir>
+  service-hdfs-smalldisk-check.py <host:port> <dir> [speed]
+
+With ``speed`` only the item 33 speed cells run: egret's partial ``part-lineitem-sp`` and
+``part-group-sp`` over ``lineitem_p``, against a server with ``endpointsPerServer > 1`` and
+``hdfsLocalCopyRoomWaitMillis`` set, so that the tickets of one query copy on the small disk at once
+and wait for each other's room instead of being refused; both must match the local files.
 
 The sasl-cluster cell (tools/ci/service-hdfs-cell.sh, profile balanced) stops its three servers and
 starts one server in dn1's network namespace whose ``hdfsLocalCopyDir`` is a size-limited tmpfs
@@ -105,11 +110,49 @@ def reference_filtered(base, bound):
     return len(kept), sum(kept, decimal.Decimal(0))
 
 
+# Item 33 speed cells (egret part-lineitem-sp / part-group-sp), partial mode, plain names.
+SPEED_TOTALS = "SELECT count(*) AS n, sum(l_quantity) AS q FROM lineitem_p"
+SPEED_GROUP = PLAIN_GROUP
+
+
+def speed(server, want_n, want_q, want_groups):
+    """Runs the speed cells three times each; returns the failures."""
+    failures = []
+    for i in range(3):
+        for what, sql in (("part-lineitem-sp", SPEED_TOTALS), ("part-group-sp", SPEED_GROUP)):
+            try:
+                with _SASL.connect(server, "partial") as conn:
+                    answer = _SASL.run(conn, sql)
+                if what == "part-lineitem-sp":
+                    n, q, _ = _SASL.totals(answer)
+                    good = n == want_n and abs(q - want_q) <= decimal.Decimal("0.0001")
+                    got = (n, q)
+                    want = (want_n, want_q)
+                else:
+                    got = _SASL.groups(answer)
+                    good = _SASL.same_groups(got, want_groups)
+                    want = want_groups
+                if good:
+                    print(f"ok speed {what} #{i + 1} ({answer.num_rows} rows)", flush=True)
+                else:
+                    failures.append(f"speed {what} #{i + 1}: {got}, want {want}")
+                    print(f"FAIL {failures[-1]}", flush=True)
+            except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                print(f"error text: {e}", flush=True)
+                failures.append(f"speed {what} #{i + 1}: {_SASL.first_line(e)}")
+                print(f"FAIL {failures[-1]}", flush=True)
+    return failures
+
+
 def main():
     server, base = sys.argv[1], sys.argv[2]
     want_n, want_q = _SASL.reference(base)
     want_groups = _SASL.reference_groups(base)
     print(f"reference chunks.lineitem: rows {want_n} sum(l_quantity) {want_q}", flush=True)
+    if len(sys.argv) > 3 and sys.argv[3] == "speed":
+        failures = speed(server, want_n, want_q, want_groups)
+        print("result pass" if not failures else f"result fail {failures[0]}", flush=True)
+        return 1 if failures else 0
     failures = []
 
     def fail(what):

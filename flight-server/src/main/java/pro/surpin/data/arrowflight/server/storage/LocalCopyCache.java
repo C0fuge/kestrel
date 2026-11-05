@@ -137,6 +137,7 @@ public final class LocalCopyCache implements AutoCloseable {
     private final Path directory;
     private final long maxBytes;
     private final long minFreeBytes;
+    private final long roomWaitMillis;
     private final FreeSpace freeSpace;
     private final Copier copier;
     private final ExecutorService copyPool;
@@ -177,6 +178,31 @@ public final class LocalCopyCache implements AutoCloseable {
     @SuppressWarnings("checkstyle:ParameterNumber")
     public LocalCopyCache(Path directory, long maxBytes, int threads, Copier copier,
             long minFreeBytes, FreeSpace freeSpace) throws IOException {
+        this(directory, maxBytes, threads, copier, minFreeBytes, freeSpace, 0);
+    }
+
+    /**
+     * Creates a cache that keeps bytes free on the disk of its directory and lets a query wait
+     * a bounded time for room held by the copies of other running queries.
+     *
+     * @param directory directory of the copies, created when missing
+     * @param maxBytes bytes the copies not in use may take together
+     * @param threads files copied at the same time
+     * @param copier reads a file's bytes
+     * @param minFreeBytes bytes that must stay free on the disk after a query's copies
+     * @param freeSpace tells the free bytes of the disk
+     * @param roomWaitMillis how long a query whose copies do not fit waits for other queries
+     *        to release theirs before it is refused; 0 refuses at once
+     * @throws IOException when the directory cannot be created
+     */
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public LocalCopyCache(Path directory, long maxBytes, int threads, Copier copier,
+            long minFreeBytes, FreeSpace freeSpace, long roomWaitMillis) throws IOException {
+        if (roomWaitMillis < 0) {
+            throw new IllegalArgumentException("roomWaitMillis must not be negative: "
+                    + roomWaitMillis);
+        }
+        this.roomWaitMillis = roomWaitMillis;
         if (maxBytes <= 0) {
             throw new IllegalArgumentException("maxBytes must be positive: " + maxBytes);
         }
@@ -249,31 +275,58 @@ public final class LocalCopyCache implements AutoCloseable {
         try {
             List<CompletableFuture<Path>> waits = new ArrayList<>(files.size());
             synchronized (this) {
-                // Copies already present are pinned first, so that making room for the new ones
-                // never evicts a copy this query reads (it would be copied again, unreserved).
+                long waitStart = 0;
                 List<DataFile> toCopy = new ArrayList<>();
-                Set<String> keys = new HashSet<>();
-                long needed = 0;
-                for (DataFile file : files) {
-                    if (lease.entries.containsKey(file.relativePath())) {
-                        continue;
+                while (true) {
+                    // Copies already present are pinned first, so that making room for the new ones
+                    // never evicts a copy this query reads (it would be copied again, unreserved).
+                    toCopy.clear();
+                    Set<String> keys = new HashSet<>();
+                    long needed = 0;
+                    for (DataFile file : files) {
+                        if (lease.entries.containsKey(file.relativePath())) {
+                            continue;
+                        }
+                        String key = key(file);
+                        Entry entry = entries.get(key);
+                        if (entry != null) {
+                            lease.reused++;
+                            entry.pins++;
+                            lease.entries.put(file.relativePath(), entry);
+                            waits.add(entry.ready);
+                        } else if (keys.add(key)) {
+                            toCopy.add(file);
+                            needed += file.size();
+                        }
                     }
-                    String key = key(file);
-                    Entry entry = entries.get(key);
-                    if (entry != null) {
-                        lease.reused++;
-                        entry.pins++;
-                        lease.entries.put(file.relativePath(), entry);
-                        waits.add(entry.ready);
-                    } else if (keys.add(key)) {
-                        toCopy.add(file);
-                        needed += file.size();
+                    if (!toCopy.isEmpty()) {
+                        // The new copies must have room before any of them is started.
+                        evictFor(needed);
+                        long waited = waitStart == 0 ? 0 : (System.nanoTime() - waitStart) / 1_000_000L;
+                        long left = roomWaitMillis - waited;
+                        if (!requireRoom(needed, toCopy, lease, left, waited)) {
+                            // Room is held by other running queries (e.g. the sibling tickets of
+                            // the same query, item 33): give back this query's pins, so that two
+                            // waiting queries never hold each other's room, and wait for a release.
+                            unpin(lease);
+                            waits.clear();
+                            if (waitStart == 0) {
+                                waitStart = System.nanoTime();
+                                LOGGER.info("qid={} node={} hdfs=localCopyRoomWait files={} neededBytes={}"
+                                        + " roomWaitMillis={}: other running queries hold the room",
+                                        LogUtil.qid(), LogUtil.node(), toCopy.size(), needed,
+                                        roomWaitMillis);
+                            }
+                            wait(Math.max(1L, left));
+                            continue;
+                        }
+                        if (waitStart != 0) {
+                            LOGGER.info("qid={} node={} hdfs=localCopyRoomWaited files={} neededBytes={}"
+                                    + " ms={}", LogUtil.qid(), LogUtil.node(), toCopy.size(), needed,
+                                    waited);
+                        }
                     }
-                }
-                if (!toCopy.isEmpty()) {
-                    // The new copies must have room before any of them is started.
-                    evictFor(needed);
-                    requireRoom(needed, toCopy, lease);
+                    break;
                 }
                 for (DataFile file : toCopy) {
                     String key = key(file);
@@ -353,6 +406,7 @@ public final class LocalCopyCache implements AutoCloseable {
                     entries.remove(entry.key);
                     cachedBytes -= entry.bytes;
                 }
+                notifyAll();
             }
             LOGGER.warn("node={} hdfs=localCopyFailed file={} reason='{}'", LogUtil.node(),
                     file.relativePath(), e.toString());
@@ -420,9 +474,15 @@ public final class LocalCopyCache implements AutoCloseable {
      * @param needed bytes of the new copies
      * @param toCopy files of the new copies, for the message
      * @param lease the query's lease, holding the copies it reuses, for the message
-     * @throws IOException when the disk has no room for them even without unused copies
+     * @param waitLeftMillis how much longer the query may wait for room other queries hold
+     * @param waitedMillis how long the query has waited already, for the message
+     * @return true when there is room, false when the query should wait for other queries'
+     *         copies to be released
+     * @throws IOException when the disk has no room for them even without unused copies and
+     *         waiting cannot help or its time is up
      */
-    private void requireRoom(long needed, List<DataFile> toCopy, Lease lease) throws IOException {
+    private boolean requireRoom(long needed, List<DataFile> toCopy, Lease lease, long waitLeftMillis,
+            long waitedMillis) throws IOException {
         long free = freeSpace.usableBytes(directory) - pendingBytes;
         Iterator<Entry> it = entries.values().iterator();
         while (free - needed < minFreeBytes && it.hasNext()) {
@@ -435,7 +495,7 @@ public final class LocalCopyCache implements AutoCloseable {
             }
         }
         if (free - needed >= minFreeBytes) {
-            return;
+            return true;
         }
         // The copies this query reuses are pinned by it, not by other queries (item 33).
         long reused = 0;
@@ -443,6 +503,11 @@ public final class LocalCopyCache implements AutoCloseable {
             reused += entry.bytes;
         }
         long others = Math.max(0, inUseBytes() - reused);
+        if (others > 0 && waitLeftMillis > 0) {
+            return false;
+        }
+        String waited = waitedMillis > 0 ? " after waiting " + waitedMillis
+                + " ms for them (hdfsLocalCopyRoomWaitMillis)" : "";
         LOGGER.warn("node={} hdfs=localCopyNoSpace dir={} files={} neededBytes={} freeBytes={}"
                 + " minFreeBytes={} reusedBytes={} otherInUseBytes={}", LogUtil.node(), directory,
                 toCopy.size(), needed, free, minFreeBytes, reused, others);
@@ -452,7 +517,7 @@ public final class LocalCopyCache implements AutoCloseable {
                 + " bytes are free and " + minFreeBytes + " must stay free"
                 + " (hdfsLocalCopyMinFreeBytes); the " + lease.entries.size() + " copies this query"
                 + " reuses take " + reused + " bytes, copies in use by other running queries take "
-                + others + " bytes. The query needs all its copies at once (it cannot be answered in"
+                + others + " bytes" + waited + ". The query needs all its copies at once (it cannot be answered in"
                 + " batches of copies). Nothing was copied; retry when other queries end, or give"
                 + " hdfsLocalCopyDir a larger disk");
     }
@@ -512,6 +577,25 @@ public final class LocalCopyCache implements AutoCloseable {
         if (cachedBytes > maxBytes) {
             evictFor(0);
         }
+        if (entry.pins == 0) {
+            // A query waiting for room (roomWaitMillis) may fit now.
+            notifyAll();
+        }
+    }
+
+    /**
+     * Gives back every pin of a lease that has not started copies yet, so that it can plan
+     * again after a wait; the caller holds this.
+     *
+     * @param lease lease holding only reused copies
+     */
+    private void unpin(Lease lease) {
+        for (Entry entry : lease.entries.values()) {
+            entry.pins--;
+        }
+        lease.entries.clear();
+        lease.reused = 0;
+        notifyAll();
     }
 
     /**

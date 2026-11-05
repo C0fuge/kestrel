@@ -426,6 +426,31 @@ checkReadsPerQid() { # containers...
     finish fail "hdfs=reads per query: $missing of $total successful queries without an hdfs=reads line (first: $first)"
   fi
 }
+# Starts the one small-disk server <name> in dn1's network namespace with /copies = <dir> and
+# the extra options <extra> (endpoints per server, room wait); fails the cell when it does not start.
+startSmallDiskServer() {
+  local name=$1 copies=$2 extra=$3
+  # shellcheck disable=SC2086,SC2046
+  docker run -d --name "$name" --network container:dn1 $(sockOf 1) -v "$copies:/copies" "${srvKrb[@]}" "${native[@]}" --cpus=2 --memory=4g \
+    -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
+    -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
+    -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
+    sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+    --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+    -Dhazelcast.phone.home.enabled=false ${opts//-DdistributedComplete=true/} -DnumServers=1 $extra \
+    -Darrowflight.duckdb.extensionDir=/extdir \
+    -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
+    --data-dir "$dataDir" --localhost "$(dnIp 1)" --port 32010 --hazelcast-port 5701 \
+    --hosts "$(dnIp 1):5701" --metrics-enabled false > /dev/null
+  for _ in $(seq 180); do
+    docker logs "$name" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+    [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ] || break
+    sleep 1
+  done
+  docker logs "$name" 2>&1 | grep -q 'Server Arrow Flight SQL started' \
+    || finish fail "small disk: server $name did not start: $(docker logs "$name" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+}
 # Item 30 part 2b (4): a copy disk smaller than a query's input. After the cluster checks (sasl-cluster,
 # balanced only), the three servers stop and one server (numServers=1) starts in dn1's network
 # namespace with hdfsLocalCopyDir on a host tmpfs of the largest lineitem file + 4 MiB plus the
@@ -437,7 +462,7 @@ checkReadsPerQid() { # containers...
 # (item 31: hdfs=completeInCopyBatches; srvd runs with distributedComplete at its default, false, as on
 # the maintainer's stand, so aggregates do not take the distributed path); the tmpfs is sampled and its peak use must stay below its size.
 smallDisk() {
-  local minFree largest total size dir peak sampler rc3 refused noSpace batches completeBatched i cacheLine
+  local minFree largest total size dir peak sampler rc3 rc5 refused noSpace batches completeBatched i cacheLine
   largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
   total=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | awk '{ s += $1 } END { print s + 0 }')
   # 90 % of the disk (the default reserve keeps 10 % free) holds the largest file + 4 MiB.
@@ -448,26 +473,7 @@ smallDisk() {
   dir="$work/smalldisk"; mkdir -p "$dir"
   sudo mount -t tmpfs -o "size=$size,mode=1777" tmpfs "$dir" || finish fail "small disk: tmpfs not mounted"
   note "small disk: tmpfs $size bytes for copies (largest lineitem file $largest, all $total, minFreeBytes $minFree)"
-  # shellcheck disable=SC2086,SC2046
-  docker run -d --name srvd --network container:dn1 $(sockOf 1) -v "$dir:/copies" "${srvKrb[@]}" "${native[@]}" --cpus=2 --memory=4g \
-    -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
-    -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
-    -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
-    sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
-    --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
-    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-    -Dhazelcast.phone.home.enabled=false ${opts//-DdistributedComplete=true/} -DnumServers=1 -DendpointsPerServer=1 \
-    -Darrowflight.duckdb.extensionDir=/extdir \
-    -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
-    --data-dir "$dataDir" --localhost "$(dnIp 1)" --port 32010 --hazelcast-port 5701 \
-    --hosts "$(dnIp 1):5701" --metrics-enabled false > /dev/null
-  for _ in $(seq 180); do
-    docker logs srvd 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
-    [ "$(docker inspect -f '{{.State.Running}}' srvd)" = true ] || break
-    sleep 1
-  done
-  docker logs srvd 2>&1 | grep -q 'Server Arrow Flight SQL started' \
-    || finish fail "small disk: server srvd did not start: $(docker logs srvd 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+  startSmallDiskServer srvd "$dir" "-DendpointsPerServer=1"
   sleep 3
   ( while :; do df -B1 --output=used "$dir" | tail -n 1; sleep 0.2; done ) > "$work/smalldisk-used.txt" 2>/dev/null &
   sampler=$!
@@ -480,6 +486,19 @@ smallDisk() {
   batches=$(docker logs srvd 2>&1 | grep -c 'hdfs=copyBatches' || true)
   completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches table=' || true)
   note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, complete in batches $completeBatched, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
+  # Item 33 speed cells: endpointsPerServer=4 on the same small disk, so the tickets of one
+  # partial query copy at once; with hdfsLocalCopyRoomWaitMillis they wait for each other's room
+  # instead of being refused (egret part-lineitem-sp / part-group-sp, exact answers, no refusal).
+  docker stop -t 20 srvd > /dev/null
+  startSmallDiskServer srvs "$dir" "-DendpointsPerServer=4 -DhdfsLocalCopyRoomWaitMillis=60000"
+  sleep 3
+  "$py" -I tools/ci/service-hdfs-smalldisk-check.py "$(dnIp 1):32010" "$in" speed > "$work/smalldisk-speed.log" 2>&1; rc5=$?
+  cat "$work/smalldisk-speed.log"
+  docker stop -t 20 srvs > /dev/null
+  note "small disk speed cells: $(grep -m 1 '^result ' "$work/smalldisk-speed.log" || echo 'no result line'); hdfs=localCopyRoomWait $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWait ' || true), hdfs=localCopyRoomWaited $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWaited' || true), hdfs=localCopyNoSpace $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true); $(docker logs srvs 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || echo 'no cache line')"
+  [ "$rc5" -eq 0 ] || finish fail "small disk speed cells: $(grep -m 1 '^result fail' "$work/smalldisk-speed.log" | cut -c13- || echo 'client failed')"
+  docker logs srvs 2>&1 | grep -q 'roomWaitMillis=60000' || finish fail "small disk speed cells: no roomWaitMillis=60000 in the cache line"
+  docker logs srvs 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk speed cells: 'No space left on device' in the server log"
   sudo umount "$dir" || true
   cacheLine=$(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || true)
   note "small disk: ${cacheLine:-no hdfs=localCopyCache line}"

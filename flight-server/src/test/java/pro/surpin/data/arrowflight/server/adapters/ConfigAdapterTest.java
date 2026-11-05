@@ -293,6 +293,20 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void hdfsLocalCopyRoomWaitMillisDefaultsToRefusingAtOnce() throws IOException {
+        // Item 33: opt-in bounded wait for copy room held by other running queries.
+        assertEquals(0, ConfigAdapter.hdfsLocalCopyRoomWaitMillis(source(Map.of(), Map.of())));
+        assertEquals(30000, ConfigAdapter.hdfsLocalCopyRoomWaitMillis(
+                source(Map.of("hdfsLocalCopyRoomWaitMillis", "30000"), Map.of())));
+        assertEquals(500, ConfigAdapter.hdfsLocalCopyRoomWaitMillis(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_ROOM_WAIT_MILLIS", "500"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyRoomWaitMillis(
+                source(Map.of("hdfsLocalCopyRoomWaitMillis", "-1"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.hdfsLocalCopyRoomWaitMillis(
+                source(Map.of("hdfsLocalCopyRoomWaitMillis", "30s"), Map.of())));
+    }
+
+    @Test
     void hdfsLocalCopyMinFreeBytesDefaultIsRelativeOnSmallDisks() throws IOException {
         // Item 32: by default min(1 GiB, 10 % of the copy disk), so a 64 MiB tmpfs takes copies.
         assertFalse(ConfigAdapter.hdfsLocalCopyMinFreeBytesSet(source(Map.of(), Map.of())));

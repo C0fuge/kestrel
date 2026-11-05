@@ -2285,19 +2285,22 @@ public final class ExecutionService {
             ConfigSource config = ConfigSource.system();
             boolean reserveSet = ConfigAdapter.hdfsLocalCopyMinFreeBytesSet(config);
             long minFreeBytes = ConfigAdapter.hdfsLocalCopyMinFreeBytes(config, diskBytes);
+            long roomWaitMillis = ConfigAdapter.hdfsLocalCopyRoomWaitMillis(config);
             localCopyCache = new LocalCopyCache(root, maxBytes, threads,
-                    file -> store.inputFile(file).newStream(), minFreeBytes, LocalCopyCache.FILE_STORE);
+                    file -> store.inputFile(file).newStream(), minFreeBytes, LocalCopyCache.FILE_STORE,
+                    roomWaitMillis);
             String reserve = reserveSet ? "set" : "default";
             if (diskBytes > 0 && minFreeBytes >= diskBytes) {
                 LOGGER.warn("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}"
-                        + " reserve={} diskBytes={}: the reserve is not below the disk's size, every"
-                        + " copy will be refused; lower hdfsLocalCopyMinFreeBytes or give"
+                        + " reserve={} diskBytes={} roomWaitMillis={}: the reserve is not below the disk's"
+                        + " size, every copy will be refused; lower hdfsLocalCopyMinFreeBytes or give"
                         + " hdfsLocalCopyDir a larger disk", LogUtil.node(), localCopyCache.directory(),
-                        maxBytes, threads, minFreeBytes, reserve, diskBytes);
+                        maxBytes, threads, minFreeBytes, reserve, diskBytes, roomWaitMillis);
             } else {
                 LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}"
-                        + " reserve={} diskBytes={}", LogUtil.node(), localCopyCache.directory(),
-                        maxBytes, threads, minFreeBytes, reserve, diskBytes);
+                        + " reserve={} diskBytes={} roomWaitMillis={}", LogUtil.node(),
+                        localCopyCache.directory(), maxBytes, threads, minFreeBytes, reserve, diskBytes,
+                        roomWaitMillis);
             }
         }
         return localCopyCache;

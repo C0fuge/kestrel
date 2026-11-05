@@ -461,4 +461,91 @@ class LocalCopyCacheTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new LocalCopyCache(dir, 0, 1, f -> unused));
     }
+
+    @Test
+    void queryWaitsForRoomHeldByAnotherQueryWithoutHoldingItsOwnCopies() throws Exception {
+        // Item 33, speed cells: sibling tickets of one query pin their copies at once on a small
+        // disk; with roomWaitMillis a ticket waits for a release instead of being refused.
+        DataFile a = file("s/t/a.parquet", 300, 1);
+        DataFile c = file("s/t/c.parquet", 400, 1);
+        DataFile x = file("s/t/x.parquet", 400, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                100, disk(1000), 30_000)) {
+            cache.acquire(List.of(a)).close();
+            LocalCopyCache.Lease running = cache.acquire(List.of(x));
+            // a (300, reused) + c (400) next to x (400, pinned) leave -100 of 100 free: wait.
+            java.util.concurrent.CompletableFuture<LocalCopyCache.Lease> waiting =
+                    new java.util.concurrent.CompletableFuture<>();
+            Thread query = new Thread(() -> {
+                try {
+                    waiting.complete(cache.acquire(List.of(a, c)));
+                } catch (IOException | RuntimeException e) {
+                    waiting.completeExceptionally(e);
+                }
+            }, "waiting-query");
+            query.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (query.getState() != Thread.State.TIMED_WAITING) {
+                assertTrue(System.nanoTime() < deadline, "the query waits for room");
+                Thread.sleep(5);
+            }
+            assertFalse(waiting.isDone(), "waits while x is in use");
+            // While it waits, it pins nothing: two waiting queries cannot hold each other's room.
+            assertEquals(400, cache.inUseBytes());
+            assertNull(opens.get(c.location()));
+            running.close();
+            try (LocalCopyCache.Lease lease = waiting.get(10, TimeUnit.SECONDS)) {
+                assertEquals(1, lease.reused());
+                assertEquals(1, lease.copied());
+                assertArrayEquals(content(c), Files.readAllBytes(lease.localPath(c.relativePath())));
+                assertArrayEquals(content(a), Files.readAllBytes(lease.localPath(a.relativePath())));
+                assertEquals(700, cache.inUseBytes());
+            }
+            query.join(10_000);
+            assertEquals(0, cache.inUseBytes());
+            assertEquals(1, opens.get(a.location()).get());
+        }
+    }
+
+    @Test
+    void roomWaitEndsWithTheRefusalWhenTheOtherQueryKeepsItsCopies() throws IOException {
+        DataFile a = file("s/t/a.parquet", 500, 1);
+        DataFile b = file("s/t/b.parquet", 500, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                100, disk(1000), 200)) {
+            try (LocalCopyCache.Lease held = cache.acquire(List.of(a))) {
+                long t = System.nanoTime();
+                LocalCopyCache.NoRoomException refused = assertThrows(
+                        LocalCopyCache.NoRoomException.class, () -> cache.acquire(List.of(b)));
+                assertTrue(System.nanoTime() - t >= TimeUnit.MILLISECONDS.toNanos(200));
+                assertTrue(refused.getMessage().contains("copies in use by other running queries take"
+                        + " 500 bytes after waiting "), refused.getMessage());
+                assertTrue(refused.getMessage().contains("(hdfsLocalCopyRoomWaitMillis)"),
+                        refused.getMessage());
+                assertEquals(500, cache.inUseBytes());
+                assertNull(opens.get(b.location()));
+            }
+        }
+    }
+
+    @Test
+    void noRoomWaitWhenNoOtherQueryHoldsCopies() throws IOException {
+        // Waiting cannot help when the disk is short without other queries' copies.
+        DataFile a = file("s/t/a.parquet", 950, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                100, disk(1000), 60_000)) {
+            long t = System.nanoTime();
+            LocalCopyCache.NoRoomException refused = assertThrows(
+                    LocalCopyCache.NoRoomException.class, () -> cache.acquire(List.of(a)));
+            assertTrue(System.nanoTime() - t < TimeUnit.SECONDS.toNanos(10));
+            assertFalse(refused.getMessage().contains("after waiting"), refused.getMessage());
+        }
+    }
+
+    @Test
+    void refusesANegativeRoomWait() {
+        InputStream unused = InputStream.nullInputStream();
+        assertThrows(IllegalArgumentException.class, () -> new LocalCopyCache(dir, 10, 1,
+                f -> unused, 0, LocalCopyCache.FILE_STORE, -1));
+    }
 }
