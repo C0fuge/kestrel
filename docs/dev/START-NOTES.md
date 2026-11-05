@@ -117,8 +117,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `hdfsLocalCopyDir=<absolute path>` (the server copies into a `duckdb-<pid>-*` subdirectory there, startup line
   `hdfs=localCopyCache dir=...` at the first copy). A query's new copies must leave `hdfsLocalCopyMinFreeBytes`
   (default 1 GiB) free on that disk (unused copies are evicted for room first, batches shrink to the room left);
-  otherwise it fails at once naming the files and the free bytes (`hdfs=localCopyNoSpace`) instead of filling the
-  disk. `hdfsLocalCopyMaxBytes=0`
+  otherwise it fails at once naming the files and the free bytes (`hdfs=localCopyNoSpace`, status
+  `RESOURCE_EXHAUSTED`; ADBC clients print it as `INTERNAL: ... (ResourceExhausted; ...)`) instead of filling the
+  disk. On a copy disk smaller than about 2 GiB set `hdfsLocalCopyMinFreeBytes` lower, or every copy is refused.
+  `hdfs=reads` is logged for every query reading data-store tables, also with `localCopy=0`. `hdfsLocalCopyMaxBytes=0`
   turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted
   when the server stops.
 - S3: DuckDB keeps its S3 connections and reads later ranges and queries over them

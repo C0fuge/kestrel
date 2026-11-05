@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Item 31 acceptance follow-up (2026-11-05, core lane, `5c83dd13`):** egret's preliminary acceptance of
+> `8060179bce0c` (DO NOT SHIP, see `ORCHESTRATION.md`) checked against the code and CI logs: (a) "copy-disk refusal
+> INTERNAL" is the ADBC client's code - ADBC has no resource-exhausted status; the wire status is RESOURCE_EXHAUSTED,
+> printed in parentheses (`INTERNAL: [FlightSQL] No room ... (ResourceExhausted; DoGet: ...`, CI 41907451727
+> sasl-cluster balanced) - harness reading, no server bug; the CI small-disk check now requires `(ResourceExhausted;`.
+> (b) "every copy refused on a 64 MiB tmpfs" is the documented default `hdfsLocalCopyMinFreeBytes` = 1 GiB (Open
+> question added). (c) missing `hdfs=reads` lines: complete answers that copied nothing logged none - now they log
+> `hdfs=reads ... localCopy=0` (additive log change); complete answers merged from peers (`distributedComplete=true`)
+> still log it on the endpoint nodes, not on the merging node. **Remaining:** egret's final report / the stand
+> re-check, then "ITEM 31 DONE" (a `package=true` with this log change only if they need it).
+
 > **Item 31 progress (2026-11-04, core lane, part 1 in `fa7f901a`):** done - (1) the silent 0 rows: the view of a
 > table a node holds no file of whole had typed NULL columns, and DuckDB folded joins on them to an empty result
 > without evaluating the error (reproduced on DuckDB 1.4.4); every column is now the error itself; (2) plain names: on
@@ -1302,6 +1313,12 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **`hdfsLocalCopyMinFreeBytes` default on small copy disks (2026-11-05, core lane).** The default reserve is 1 GiB;
+  on a copy disk smaller than that (egret's acceptance used a 64 MiB tmpfs for `hdfsLocalCopyDir` without setting the
+  reserve) every copy is refused (`RESOURCE_EXHAUSTED`, log `hdfs=localCopyNoSpace`). Options: (1) keep it (a tiny copy
+  disk must set the reserve; documented); (2) cap the default at a share of the disk's size, e.g. min(1 GiB, 10 %).
+  (2) changes a default, so it waits for the maintainer.
 
 - **Item 31: plain names in several schemas (2026-11-04, core lane).** A plain name is resolved like DuckDB resolves
   it: through the `main.*` alias view, which exists only when exactly one schema has a table of that name. The Flight
