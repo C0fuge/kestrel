@@ -23,6 +23,19 @@
 
 ## Next steps (one per session)
 
+> **Item 33 speed cells (2026-11-05 19:00Z, core lane, `f53b9709`):** built as an opt-in setting, default unchanged.
+> `hdfsLocalCopyRoomWaitMillis` (default 0 = refuse at once, as before): a ticket whose new copies do not fit while
+> other running queries (the sibling tickets of one partial query with `endpointsPerServer > 1`) hold copies waits up
+> to that long for a release and plans again (`hdfs=localCopyRoomWait`, then `hdfs=localCopyRoomWaited ms=`); while it
+> waits it holds no copies (no two waiting tickets hold each other's room); with no other query holding copies it is
+> refused at once; after a wait the refusal says `after waiting N ms`. Tests: `LocalCopyCacheTest` +4 (waits and
+> proceeds after the other lease closes, pins nothing while waiting; times out with the refusal; no wait when nothing
+> else is pinned; negative value refused), `ConfigAdapterTest` +1. CI small disk: a second server on the same tmpfs
+> with `endpointsPerServer=4 -DhdfsLocalCopyRoomWaitMillis=60000` runs egret's partial `part-lineitem-sp` /
+> `part-group-sp` (over `lineitem_p`) three times each, exact. **For the stand:** set
+> `-DhdfsLocalCopyRoomWaitMillis=30000` on the small-disk check (or answer the Open question to make it the default),
+> then "ITEM 33 DONE".
+
 > **Item 33 sp-group / sp-distinct (2026-11-05 18:30Z, core lane, `5b84e0a7`, `b9d279ab`, `ed4b26d1`):** done in code
 > and CI (Dev CI 42082455680, Service hdfs 42082455107 all cells, Catalogs CI 42082455774 green on `ed4b26d1`);
 > `package=true` dispatched on the unlock commit. Remaining: egret / stand re-check on that pre-release.
@@ -1486,6 +1499,8 @@ S3 slowdown item below stays open for then).
   leases hold the room waits for a release (bounded) before it is refused - new setting
   `hdfsLocalCopyRoomWaitMillis`, default 30000 (0 = refuse at once, today's behaviour). This changes a default
   (refusal -> bounded wait), so it waits for the maintainer's OK; the core lane builds it next if agreed.
+  *Update 2026-11-05 19:00Z (`f53b9709`):* built with default 0 (today's behaviour); the question left is only
+  whether the default becomes 30000 (a one-line change in `ConfigAdapter.hdfsLocalCopyRoomWaitMillis`).
 
 - *(Answered 2026-11-05 by the maintainer in item 32: `hdfsLocalCopyMinFreeBytes` default -> min(1 GiB, 10 % of the
   copy disk); built in `580dbdfa`.)*
