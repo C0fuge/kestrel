@@ -99,6 +99,13 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - tests: flaky `EndpointFailoverIntegrationTest` (load handover checked before it landed)
+
+- `ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad` read the planned node's load right after the stream
+  ended, but the server moves that load in the background and joins the move only after the last batch is sent; the
+  test now waits for the handover as it already did for the release (failed Dev CI 41644812393 and 42099508904, the
+  latter blocking the item 33 `package=true`). Test only, no server change.
+
 ### Added - `hdfsLocalCopyRoomWaitMillis`: wait for copy room held by other queries (STATUS item 33, speed cells)
 
 - With `endpointsPerServer > 1` on a small copy disk, the tickets of one partial query run in parallel on a node and

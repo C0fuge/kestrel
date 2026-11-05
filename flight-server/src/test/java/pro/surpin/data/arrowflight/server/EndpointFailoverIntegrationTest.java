@@ -101,7 +101,9 @@ class EndpointFailoverIntegrationTest {
 
         assertEquals(expected, rows(ticket(handle)));
 
-        assertEquals(700L, registry.get(GONE), "the planned node's load is handed over");
+        // The server moves the load in the background and joins that move only after the
+        // last batch is sent, so the client can see the end of the stream first.
+        assertEquals(700L, awaitLoad(registry, GONE, 700L), "the planned node's load is handed over");
         assertEquals(selfBefore, awaitLoad(registry, self, selfBefore),
                 "the running node took the load over and released it at the end");
         registry.remove(GONE);
@@ -162,8 +164,9 @@ class EndpointFailoverIntegrationTest {
     }
 
     /**
-     * Waits up to 10 s for a node's load to reach a value: the server releases an endpoint's
-     * load when its stream ends, which can be just after the client has read the last batch.
+     * Waits up to 10 s for a node's load to reach a value: the server moves and releases an
+     * endpoint's load when its stream ends, which can be just after the client has read the
+     * last batch.
      *
      * @param registry load registry
      * @param node     node URI
