@@ -1,18 +1,21 @@
 # Orchestration status
 
-Status as of **2026-11-05 16:56 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 17:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: ITEM 33 is shipped as pre-release `server-1.0.0-50fe065af50c`, but **egret's acceptance of that build is
-DO NOT SHIP** (check 4, small copy disk, all 4 cells): copies of finished queries stay pinned. A bug-first note is now
-at the top of the core lane's Next steps. "ITEM 33 DONE" not written.
+Not ALL DONE: ITEM 33 is still open. The core lane found no pin leak behind egret's check-4 failure on
+`50fe065af50c`: the refusal counted the query's own reused copies as "in use" (18219b9c). The real gap is that
+egret's `sp-group` / `sp-distinct` (and the speed-cell partial `part-lineitem-sp` / `part-group-sp`) are answered with
+every copy at once instead of in copy batches. The maintainer has answered with the exact SQL (cb29d02f: `avg`, two
+`count(DISTINCT)` columns, per-ticket batching in speed partial mode) and asked for tests + CI cells for these four
+queries, `package=true`, then "ITEM 33 DONE".
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33 + new bug-first note (egret check 4: pinned copies of finished queries) | b51c3ff1, 75 min ago (session 15:41Z, unlock, no code change) | free | Dev CI 42041121733 (push, 9dbde204) green; `package=true` 42043316941 green |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
+| core (`STATUS.md`) | ITEM 33: batch the 4 egret queries (avg, 2x count DISTINCT, speed partial per ticket) | 5b84e0a7, 5 min ago (refusals log why an answer was not batched) | held since 17:40Z (active) | Dev CI 42078627145 on 5b84e0a7 running; 18219b9c green (Dev CI 42073731097, Service hdfs 42073730677, Catalogs 42073730674); 42076153480 (dispatch on 9e04bde8) cancelled by the newer push |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 03:56Z (orchestrator) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 03:56Z (orchestrator) | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
 No stale locks (marten and heron free).
@@ -22,15 +25,15 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 42045636399 | 50fe065a | pass |
-| service-hdfs.yml | 42045642476 | 50fe065a | pass |
+| service-hdfs.yml | 42073730677 | 18219b9c | pass |
 | service-security.yml | 42045649442 | 50fe065a | pass |
 | service-stores.yml | 42045656149 | 50fe065a | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33. egret: DO NOT SHIP (check 4).
-- `server-1.0.0-5f60db1ee304` (2026-11-05 10:40Z): ITEM 32; accepted by the maintainer for the stand.
-- `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z).
+- `server-1.0.0-50fe065af50c` (2026-11-05 14:47Z): ITEM 33. egret: DO NOT SHIP (check 4); core: no pin leak, batching of 4 queries still open.
+- `server-1.0.0-5f60db1ee304` (2026-11-05 11:07Z): ITEM 32; accepted by the maintainer for the stand.
+- `server-1.0.0-8060179bce0c` (2026-11-04 20:48Z): ITEM 31.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
@@ -41,16 +44,13 @@ No stale locks (marten and heron free).
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `5f60db1ee304` / `50fe065af50c`.
-- **EGRET ACCEPT 50fe065af50c DONE: DO NOT SHIP** (run 42055012677, `results/ACCEPT-50fe065af50c.md`). Checks 1, 2, 3,
-  5, 6 pass in every cell; check 4 fails in all 4 cells: complete `sp-group` / `sp-distinct` (9 copies, ~156 MB)
-  refused ("Nothing was copied", "copies in use by running queries take 51955890 bytes" with no query running);
-  speed cells also refuse partial `part-lineitem-sp` / `part-group-sp` (passed on `5f60db1ee304`). Peak tmpfs 56.4 of
-  67.1 MB, no ENOSPC (item 33 (C) ENOSPC itself looks fixed).
+- Newest acceptance: `results/ACCEPT-50fe065af50c.md` (run 42055012677): DO NOT SHIP, check 4 only. README "In
+  progress": idle, newest tracked `50fe065af50c`.
 
 ## For the maintainer
 
-- **Do not put `50fe065af50c` on the stand yet**: egret's small-disk check shows copies stay pinned after queries end
-  (regression vs `5f60db1ee304` for 1-copy partial queries in the speed profile). Core lane has the bug-first note.
+- **Still do not put `50fe065af50c` on the stand**: the four small-disk queries are not batched yet; wait for the next
+  ITEM 33 pre-release and egret's re-ACCEPT. (The "pinned copies" suspicion is withdrawn by the core lane: no leak.)
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -58,6 +58,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 17:56Z: core lane analysed the egret check-4 failure: no pin leak (18219b9c, the refusal counted the query's own reused copies; Dev CI 42073731097 + Service hdfs 42073730677 green); maintainer gave the exact SQL of the 4 unbatched queries (cb29d02f: avg, two count DISTINCT, speed partial per-ticket); core session (lock 17:40Z) pushed 5b84e0a7, Dev CI 42078627145 running; ITEM 33 not done; marten/heron/egret idle; no stale locks.
 - 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
 - 2026-11-05 15:57Z: core session 15:41Z made no code change (ITEM 33 waits for the stand re-check of 50fe065af50c); Dev CI on main green (42041121733, package 42043316941), service gate 4/4 green on 50fe065a; egret ACCEPT 50fe065af50c running (42055012677); marten (15:41Z)/heron (session 123) idle; no stale locks.
 - 2026-11-05 14:58Z: core ITEM 33 done in code and CI ((A)-(D) a744ef50/75de58bc, (E) aeb87cdf/8e60638e/9dbde204; Dev CI 42041121733 green); `package=true` Dev CI 42043316941 green, service gate 4/4 green on 50fe065a -> pre-release `server-1.0.0-50fe065af50c`, waits for the stand re-check; core lock released 14:48Z; egret has no ACCEPT/FRESH for 50fe065af50c yet; marten (14:40Z)/heron (session 123) idle; no stale locks.
