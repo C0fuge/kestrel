@@ -23,6 +23,34 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-05 15:15 - ITEM 33 (stand re-check of `5f60db1ee304`).** Items 31 + 32 are accepted on a normal
+> copy disk: HA + Kerberos + SASL DataNodes, 1 and 3 servers, default / speed / speed + distributedComplete, 100/100
+> exact per pass (plain + qualified TPC-H 22/22, spread set incl. comma join 1500000, q03/q12 10/2 rows), low direct
+> memory 16 full scans no OOM, `hdfs=reads` for every qid. Left, mostly on a SMALL copy disk (64 MiB tmpfs, default
+> reserve = 6710880):
+> (A) complete mode: any query with `count(*)` over files that need copies is refused RESOURCE_EXHAUSTED instead of
+> batched (`SELECT count(*) FROM spread.lineitem_sp`, also with WHERE, `sum(x), count(*)`, GROUP BY + count(*));
+> `count(1)` (footers) and `sum(1)` (batched) work.
+> (B) GROUP BY with ordinals is not batched (`... GROUP BY 1` refused, `GROUP BY l_returnflag` batched), both modes.
+> (C) **copy disk fills up** (3 servers, default profile, partial mode): `INTERNAL: Query execution failed:
+> IOException: Cannot copy spread/lineitem_sp/data_1.parquet to the node-local cache ...: No space left on device`,
+> 10-11 queries per pass, reproduced 3x, tmpfs peak 65.9 of 67.1 MB. Repro on fresh servers with partial results:
+> `SELECT sum(l_quantity) FROM spread.lineitem_sp` (ok), then `SELECT DISTINCT l_shipmode FROM spread.lineitem_sp`
+> fails on 2 of 3 nodes: the first query's last batch copy (data_6, 25.4 MB) stays, the second query (whose files
+> include data_6) copies data_1 + data_3 (46 MB) next to it without reusing/evicting data_6 first -> the room check
+> must count unused cached copies as evictable AND reuse copies already present, and a copy must never be started
+> without its bytes reserved.
+> (D) distributedComplete, TPC-H q04 (EXISTS subquery): the endpoint's subquery reads lineitem without copy/locality
+> planning -> `HdfsNetworkException: Read 8 bytes failed ... Connection reset by peer` (hadoopfs TCP read under SASL),
+> the failover then fails `Catalog Error: Table with name "tpch.lineitem" does not exist because schema "tpch" does
+> not exist`, the final fallback answers correctly 3 s later. Subqueries must go through the same locality / copy
+> planning; the failover node must have the schema views.
+> (E) minor: partial-mode q04 refused with INTERNAL (should be INVALID_ARGUMENT); refused queries log no
+> `hdfs=reads` line; every multi-table query logs a `ParquetQueryParser` ERROR with stack trace ("Can only select from
+> ONE table") although it then succeeds - make it DEBUG.
+> CI: small-disk stage in partial mode on 3 servers (default profile) with the sum -> DISTINCT sequence, count(*) and
+> GROUP BY 1 batched, distributedComplete q04 with no HdfsNetworkException. Then `package=true`, "ITEM 33 DONE".
+
 > **Item 32 progress (2026-11-05, core lane, `580dbdfa`, CI fix `23063397`):** done in code and CI - (a) the
 > refusal is RESOURCE_EXHAUSTED on the wire (ADBC prints `INTERNAL: ... (ResourceExhausted; ...)`, see the
 > follow-up below; nothing to change server-side); `hdfsLocalCopyMinFreeBytes` unset now = min(1 GiB, 10 % of the copy
