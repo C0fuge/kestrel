@@ -23,6 +23,25 @@
 
 ## Next steps (one per session)
 
+> **Item 33 sp-group / sp-distinct (2026-11-05 18:xxZ, core lane, `5b84e0a7`, `b9d279ab`):** done in code, CI below.
+> - `sp-group` (avg): copy batches now merge plain averages through `AverageMerge` (each batch answers `sum(x)`,
+>   `count(x)`; the merge divides as DuckDB's avg, exact for DECIMAL / integer inputs), named and typed by the
+>   complete answer. avg with LIMIT / OFFSET / HAVING / DISTINCT / FILTER stays unbatched.
+> - `sp-distinct` (two count(DISTINCT)): batch answers are grouped by every DISTINCT input (was: one only), the
+>   merge counts each column's distinct values again. Note: each batch keeps its distinct value *combinations*
+>   (here (l_partkey, l_suppkey) pairs, up to the batch's rows) in memory until the merge.
+> - Every copy refusal of a complete answer now logs `hdfs=completeInCopyBatches skipped tables=[...] localCopy=
+>   copyBytes= reason='...'` with the exact reason (several declines logged nothing before).
+> - Tests: `CopyBatchMergeTest.averagesAndSeveralDistinctColumnsMergeIntoTheAnswer` (exact names/types/rows, the
+>   sp shapes), `ExecutionServiceTest.refusedCompleteAnswerLogsWhyItIsNotBatched`, `notBatchableReasonNamesTheCause`.
+>   CI small disk: the maintainer's exact `sp-group` / `sp-distinct` over plain `lineitem_p` in complete mode
+>   (15 complete queries batched).
+> - **Left (speed cells, partial `part-lineitem-sp` / `part-group-sp`):** these are batchable shapes; with
+>   `endpointsPerServer > 1` each ticket has ~1 file, so batching cannot help: the tickets of ONE query read in
+>   parallel on one node pin their copies at once (4 x 17-25 MB > 57 MB of room) and the last ones are refused.
+>   Fix proposed in Open questions (bounded wait for room held by other leases). The next stand / egret run's
+>   `hdfs=localCopyNoSpace ... otherInUseBytes=` line confirms it (> 0 with one query at a time = sibling tickets).
+
 > **Maintainer, 2026-11-05 21:00 - answer to the item 33 open point (exact SQL from egret `ci/accept/queries.py`).**
 > Thanks for the pin analysis; no leak accepted. Not batched on the 64 MiB disk (plain names, default schema `spread`):
 > - `sp-group`: `SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q, avg(l_discount) AS d FROM
@@ -1457,6 +1476,14 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 33, speed cells: copy refusals between tickets of one query (2026-11-05, core lane, decision needed).**
+  With `endpointsPerServer > 1` on a small copy disk, the tickets of one partial query run in parallel on a node and
+  each pins its copies; when their sum exceeds the room, the later tickets are refused RESOURCE_EXHAUSTED at once
+  although the room comes back as soon as the earlier tickets end. Proposal: a copy that does not fit because other
+  leases hold the room waits for a release (bounded) before it is refused - new setting
+  `hdfsLocalCopyRoomWaitMillis`, default 30000 (0 = refuse at once, today's behaviour). This changes a default
+  (refusal -> bounded wait), so it waits for the maintainer's OK; the core lane builds it next if agreed.
 
 - *(Answered 2026-11-05 by the maintainer in item 32: `hdfsLocalCopyMinFreeBytes` default -> min(1 GiB, 10 % of the
   copy disk); built in `580dbdfa`.)*
