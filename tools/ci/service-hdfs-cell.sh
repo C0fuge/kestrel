@@ -494,7 +494,8 @@ smallDisk() {
   sleep 3
   "$py" -I tools/ci/service-hdfs-smalldisk-check.py "$(dnIp 1):32010" "$in" speed > "$work/smalldisk-speed.log" 2>&1 &
   local checkPid=$!
-  # Thread dump while tickets wait for room (diagnosis of the 60 s stall seen in CI 42090655236).
+  # Thread dump while tickets may wait for room (printed on failure; it found the wake-up loop of
+  # CI 42090655236).
   sleep 20
   docker exec srvs /jdk/bin/jcmd 1 Thread.print > "$work/smalldisk-speed-threads.txt" 2>&1 || true
   wait "$checkPid"; rc5=$?
@@ -508,9 +509,9 @@ smallDisk() {
     awk 'BEGIN { RS = "" } /LocalCopyCache|hdfs-local-copy|BLOCKED/' "$work/smalldisk-speed-threads.txt" | head -n 200 | cut -c1-200
   fi
   note "small disk speed cells: $(grep -m 1 '^result ' "$work/smalldisk-speed.log" || echo 'no result line'); hdfs=localCopyRoomWait $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWait ' || true), hdfs=localCopyRoomWaited $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWaited' || true), hdfs=localCopyNoSpace $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true); $(docker logs srvs 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || echo 'no cache line')"
-  # Known open (STATUS item 33): the opt-in room wait still stalls a ticket for the full wait on
-  # the runner; reported, not failing the cell, until the thread dump above explains it.
-  [ "$rc5" -eq 0 ] || note "small disk speed cells: KNOWN OPEN (item 33, opt-in hdfsLocalCopyRoomWaitMillis): $(grep -m 1 '^result fail' "$work/smalldisk-speed.log" | cut -c13-200 || echo 'client failed')"
+  [ "$rc5" -eq 0 ] || finish fail "small disk speed cells: $(grep -m 1 '^result fail' "$work/smalldisk-speed.log" | cut -c13- || echo 'client failed')"
+  docker logs srvs 2>&1 | grep -q 'hdfs=localCopyRoomWaited' \
+    || note "small disk speed cells: no ticket had to wait (no hdfs=localCopyRoomWaited line)"
   docker logs srvs 2>&1 | grep -q 'roomWaitMillis=60000' || finish fail "small disk speed cells: no roomWaitMillis=60000 in the cache line"
   docker logs srvs 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk speed cells: 'No space left on device' in the server log"
   sudo umount "$dir" || true

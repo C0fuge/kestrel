@@ -594,12 +594,18 @@ public final class LocalCopyCache implements AutoCloseable {
      * @param lease lease holding only reused copies
      */
     private void unpin(Lease lease) {
+        boolean freed = false;
         for (Entry entry : lease.entries.values()) {
             entry.pins--;
+            freed |= entry.pins == 0;
         }
         lease.entries.clear();
         lease.reused = 0;
-        notifyAll();
+        if (freed) {
+            // Only when room came back: waiting queries woke each other in a loop otherwise,
+            // holding the monitor so that the copy and the release they waited for stalled.
+            notifyAll();
+        }
     }
 
     /**
