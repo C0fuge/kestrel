@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Item 32 progress (2026-11-05, core lane, `580dbdfa`, CI fix `23063397`):** done in code and CI - (a) the
+> refusal is RESOURCE_EXHAUSTED on the wire (ADBC prints `INTERNAL: ... (ResourceExhausted; ...)`, see the
+> follow-up below; nothing to change server-side); `hdfsLocalCopyMinFreeBytes` unset now = min(1 GiB, 10 % of the copy
+> disk), the cache line reads `hdfs=localCopyCache ... minFreeBytes=... reserve=default|set diskBytes=...` (WARN when
+> a set reserve is not below the disk size); (b) complete answers reading no data-store table log `hdfs=reads files=0
+> ... tables=none|unknown`, the merging node of `distributedComplete=true` logs `tables=endpoints=N`. CI service hdfs:
+> small-disk stage with the DEFAULT reserve (tmpfs 60 MiB, reserve 6 MiB, cache line checked) and a per-qid check
+> (every executionPath `success=true` qid has an `hdfs=reads` line) in every sasl cell/stage: 386/386, 379/379,
+> srvd 12/12, srvm 20/20, ha-krb-sasl 23/23. `package=true` dispatched on the unlock commit. **Remaining:** that
+> pre-release, then the stand / egret re-check -> "ITEM 32 DONE".
+
 > **Maintainer, 2026-11-05 13:05 - ITEM 32 (small, after item 31): two leftovers from the independent acceptance run**
 > (egret `results/ACCEPT-8060179bce0c.md`, its own cluster: HA + Kerberos + SASL DataNodes, 1 and 3 servers, both
 > profiles). Correctness passed everywhere (TPC-H 22/22 plain + qualified, spread set, partial sums, low direct memory).
@@ -1328,11 +1339,8 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
-- **`hdfsLocalCopyMinFreeBytes` default on small copy disks (2026-11-05, core lane).** The default reserve is 1 GiB;
-  on a copy disk smaller than that (egret's acceptance used a 64 MiB tmpfs for `hdfsLocalCopyDir` without setting the
-  reserve) every copy is refused (`RESOURCE_EXHAUSTED`, log `hdfs=localCopyNoSpace`). Options: (1) keep it (a tiny copy
-  disk must set the reserve; documented); (2) cap the default at a share of the disk's size, e.g. min(1 GiB, 10 %).
-  (2) changes a default, so it waits for the maintainer.
+- *(Answered 2026-11-05 by the maintainer in item 32: `hdfsLocalCopyMinFreeBytes` default -> min(1 GiB, 10 % of the
+  copy disk); built in `580dbdfa`.)*
 
 - **Item 31: plain names in several schemas (2026-11-04, core lane).** A plain name is resolved like DuckDB resolves
   it: through the `main.*` alias view, which exists only when exactly one schema has a table of that name. The Flight
@@ -3252,3 +3260,12 @@ S3 slowdown item below stays open for then).
   `hdfsLocalCopyMinFreeBytes`; Open question on that default. CI on `5c83dd13`: Dev CI 42005115898, Service hdfs
   42005115928 (small disk: join refused with ResourceExhausted), Catalogs CI 42005115931 green. No `package=true`
   (log-only change; item 31 waits for egret's final report / the stand). Lock released.
+- 2026-11-05 (cloud session, core): ITEM 32 (`580dbdfa`, `23063397`, `04c70af7`). Default copy reserve relative
+  (min(1 GiB, 10 % of the disk; maintainer's choice, Open question closed), cache line `reserve=default|set
+  diskBytes=...`, WARN when the reserve is not below the disk; `hdfs=reads files=0 ... tables=none|unknown|endpoints=N`
+  for complete answers reading no table / merged from peers. Tests: `ConfigAdapterTest` +1, `ExecutionServiceTest` +1.
+  CI service hdfs: small disk with the default reserve, per-qid `hdfs=reads` check everywhere on SASL (first version
+  called the check before its definition - fixed in `23063397`). Flake fix: `PeerReadGateTest.closingAnIdleFlightStreamEnds`
+  leaked 8192 bytes once (Dev CI 42008636974; the server call thread still held a batch when the allocator closed; the
+  test now waits for it). CI: Dev CI 42010391188 (`04c70af7`), Service hdfs 42010059761 (`23063397`, 12/12) and
+  42008636957, Catalogs CI 42010059722 green. `package=true` dispatched on the unlock commit. Lock released.
