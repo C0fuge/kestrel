@@ -23,6 +23,12 @@
 
 ## Next steps (one per session)
 
+> **Item 33 package (2026-11-05 21:30Z, core lane, `bbc8e7c1`):** the `package=true` Dev CI 42099508904 on the last
+> unlock commit failed in the build on the known flake `EndpointFailoverIntegrationTest` (second time), so no
+> pre-release carries the item 33 speed-cell work yet. Flake fixed (test waited for a background load move only
+> after the release; test only). `package=true` dispatched on this session's unlock commit; the stand / egret
+> re-check of item 33 uses that pre-release.
+
 > **Item 33 speed cells (2026-11-05 20:05Z, core lane, `f53b9709`, `95d0234f`, `1e82115a`, `70ffac12`):** done in code
 > and CI as an opt-in setting, default unchanged. `hdfsLocalCopyRoomWaitMillis` (default 0 = refuse at once, as
 > before): a ticket whose new copies do not fit while other running queries (the sibling tickets of one partial query
@@ -1531,7 +1537,7 @@ S3 slowdown item below stays open for then).
   *2026-11-04:* item 30 closed with the free-disk guard as the bound (pre-release `server-1.0.0-d2313a9eb651`); an
   answer here would be a follow-up item.
 
-- **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
+- *(Fixed 2026-11-05 in `bbc8e7c1`: it recurred in Dev CI 42099508904; the test checked the planned node's load before the server's background claim moved it.)* **Flake seen 2026-11-03 (core lane):** `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
   failed once in Dev CI 41644812393 (load 1000, want 700); passed before and locally. Watch for a repeat (likely a
   load-reservation timing race); no decision needed unless it recurs.
 - *(Answered 2026-11-03 13:15 by the maintainer: "reading non-local HDFS blocks under SASL" -> option 3, a local copy =
@@ -3490,3 +3496,9 @@ S3 slowdown item below stays open for then).
   hdfs 42096491844 green (attempt 2; attempt 1 `plain speed` died silently between docker run and the start check,
   unrelated) - speed cells exact, 18 waits, 0 refusals. The previous session's `package=true` 42084966934 failed its
   gate only because this session's lock commit moved main. `package=true` dispatched on the unlock commit. Lock released.
+- 2026-11-05 21:30Z (core lane): the item 33 `package=true` Dev CI 42099508904 (on `5092f2c5`) failed in the build on
+  the recurring flake `EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad`
+  (load 1000, want 700). Cause: the server moves an endpoint's load to the failover node in the background
+  (`claimEndpointLoadLater`) and joins it only after the last batch, so the test's immediate check raced it.
+  `bbc8e7c1`: the test waits up to 10 s for the handover (test only; Open question flake closed). Dev CI 42106064754
+  green. `package=true` dispatched on the unlock commit. Lock released.
