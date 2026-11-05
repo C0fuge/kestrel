@@ -1880,6 +1880,8 @@ public final class ExecutionService {
      * missing ones, typed as the table's view. SQL is returned unchanged when local copies are
      * off, when every file is readable here, or when DuckDB cannot name the query's tables;
      * table names written without a schema are qualified first ({@link #qualifyPlainNames}).
+     * Every query that reads a table of the data store logs one {@code hdfs=reads} line, also
+     * when nothing is copied ({@code localCopy=0}).
      *
      * @param clientSql SQL of the complete answer (restrictions already applied)
      * @return SQL to run and the copies it reads; close it after streaming
@@ -1906,11 +1908,12 @@ public final class ExecutionService {
         DataStore store = parquetAdapter.dataStore();
         Map<String, List<DataFile>> copied = new LinkedHashMap<>();
         List<DataFile> unreadable = new ArrayList<>();
+        Set<String> listedTables = new HashSet<>();
         int files = 0;
         for (ParquetQueryParser.JoinTable table : tables) {
             String schema = schemaRead(table);
             String key = copyKey(schema, table.table());
-            if (schema == null || copied.containsKey(key)
+            if (schema == null || listedTables.contains(key)
                     || parquetAdapter.isCatalogSchema(schema)) {
                 continue;
             }
@@ -1920,6 +1923,8 @@ public final class ExecutionService {
             } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
                 continue;   // not a table of the data store: DuckDB reports it
             }
+            listedTables.add(key);
+            files += listed.size();
             List<DataFile> missing = new ArrayList<>();
             for (DataFile file : listed) {
                 if (!store.readableHere(file)) {
@@ -1929,10 +1934,13 @@ public final class ExecutionService {
             if (!missing.isEmpty()) {
                 copied.put(key, listed);
                 unreadable.addAll(missing);
-                files += listed.size();
             }
         }
         if (copied.isEmpty()) {
+            if (!listedTables.isEmpty()) {
+                // Every file is held whole here: still one line per query on how it is read.
+                copies(List.of(), files);
+            }
             return new CopiedQuery(sql, null);
         }
         List<TableReferences.Reference> references = TableReferences.find(sql,

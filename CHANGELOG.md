@@ -98,6 +98,15 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - SASL HDFS clusters: `hdfs=reads` for every complete answer (STATUS item 31, acceptance)
+
+- A complete answer on a short-circuit-only node whose tables are all held whole now logs `hdfs=reads files=N
+  shortCircuit=N localCopy=0` too (before, only queries that copied logged the line), and `files=` / `shortCircuit=`
+  of complete answers that copy count every table the query reads, not only the copied ones.
+- The copy-disk refusal is `RESOURCE_EXHAUSTED` on the wire (since part 1). ADBC clients print it as `INTERNAL:
+  ... (ResourceExhausted; DoGet ...)` because ADBC has no resource-exhausted status; the gRPC status is the one in
+  parentheses. The CI small-disk stage now requires `ResourceExhausted` there.
+
 ### Fixed - distributed complete answers ran out of direct memory (STATUS item 31, part 3)
 
 - With `distributedComplete=true` the node merging a complete answer opens every endpoint stream at once (so all

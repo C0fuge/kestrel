@@ -638,10 +638,19 @@ class ExecutionServiceTest {
         }
         // Every file held whole, or copies off: the SQL is left as it is.
         when(store.readableHere(remote)).thenReturn(true);
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
         try (ExecutionService.CopiedQuery same = service.completeFromCopies(query)) {
             assertFalse(same.copied());
             assertEquals(query, same.sql());
+        } finally {
+            System.setErr(err);
         }
+        // Still one line on how the query's files are read (item 31 acceptance: every complete
+        // answer on a short-circuit-only node logs it), counting each table once.
+        assertTrue(log.toString(java.nio.charset.StandardCharsets.UTF_8)
+                .contains("hdfs=reads files=2 shortCircuit=2 localCopy=0"), log::toString);
         when(store.readableHere(remote)).thenReturn(false);
         when(parquet.localCopies()).thenReturn(false);
         assertEquals(query, service.completeFromCopies(query).sql());

@@ -122,7 +122,9 @@ def main():
     except Exception as e:  # noqa: BLE001 - only the guard's refusal is accepted
         text = str(e)
         print(f"error text: {text}", flush=True)
-        if REFUSAL in text and ".parquet" in text:
+        # ADBC has no resource-exhausted status (it prints INTERNAL); the gRPC status follows in
+        # parentheses and must be ResourceExhausted, not Internal.
+        if REFUSAL in text and ".parquet" in text and "(ResourceExhausted;" in text:
             print("join refused: complete chunks join refused by the copy disk guard, naming a file",
                   flush=True)
         else:
