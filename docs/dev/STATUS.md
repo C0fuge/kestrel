@@ -23,7 +23,9 @@
 
 ## Next steps (one per session)
 
-> **Item 33 sp-group / sp-distinct (2026-11-05 18:xxZ, core lane, `5b84e0a7`, `b9d279ab`):** done in code, CI below.
+> **Item 33 sp-group / sp-distinct (2026-11-05 18:30Z, core lane, `5b84e0a7`, `b9d279ab`, `ed4b26d1`):** done in code
+> and CI (Dev CI 42082455680, Service hdfs 42082455107 all cells, Catalogs CI 42082455774 green on `ed4b26d1`);
+> `package=true` dispatched on the unlock commit. Remaining: egret / stand re-check on that pre-release.
 > - `sp-group` (avg): copy batches now merge plain averages through `AverageMerge` (each batch answers `sum(x)`,
 >   `count(x)`; the merge divides as DuckDB's avg, exact for DECIMAL / integer inputs), named and typed by the
 >   complete answer. avg with LIMIT / OFFSET / HAVING / DISTINCT / FILTER stays unbatched.
@@ -3449,3 +3451,13 @@ S3 slowdown item below stays open for then).
   `otherInUseBytes=0`, release `inUseBytes=0`). Dev CI 42073731097 green, Service hdfs 42073730677 green (all
   cells). `package=true` dispatched on the unlock commit. Open: the stand's exact SQL for sp-group / sp-distinct /
   part-*-sp, plus the new log lines.
+- 2026-11-05 18:30Z (core lane): item 33, the maintainer's exact egret SQL. `5b84e0a7`: every copy refusal of a
+  complete answer logs `hdfs=completeInCopyBatches skipped tables= localCopy= copyBytes= reason=` (several declines
+  were silent). `b9d279ab`: copy batches merge plain avg (via `AverageMerge`, exact for DECIMAL/integer) and several
+  count(DISTINCT) columns (sp-group / sp-distinct); `CopyBatchMergeTest` +1, `ExecutionServiceTest` +2; CI small
+  disk runs both exact queries over plain `lineitem_p` in complete mode (15 complete queries batched). First Service
+  hdfs 42080311980 red only because the CI's pyarrow decimal mean rounds to scale 2 (server values right) ->
+  `ed4b26d1`. CI on `ed4b26d1`: Dev CI 42082455680, Service hdfs 42082455107, Catalogs CI 42082455774 green. The
+  previous session's `package=true` 42076153480 was cancelled (main moved). New Open question: bounded wait for copy
+  room between tickets of one query (speed cells, partial `part-*-sp`). `package=true` dispatched on the unlock
+  commit. Lock released.
