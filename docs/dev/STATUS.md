@@ -60,8 +60,8 @@
 > or refuses INVALID_ARGUMENT; other storage still answers it in parts (q07/q08/q09/q13/q22's FROM subqueries stay
 > refused INVALID_ARGUMENT in partial mode there, as before). Copy refusals (RESOURCE_EXHAUSTED) now log
 > `hdfs=reads ... copied=0 refused=noRoom`. CI sasl-cluster: the TPC-H queries with a subquery in PARTIAL mode on every
-> node must be exact (42/42 per cell). Dev CI 42041121733, Service hdfs 42041126387 (12/12) green. **Remaining:** the stand re-checks item 33 on the next `package=true`
-> build -> "ITEM 33 DONE".
+> node must be exact (42/42 per cell). Dev CI 42041121733, Service hdfs 42041126387 (12/12) green. **Pre-release `server-1.0.0-50fe065af50c`** (Dev CI
+> 42043316941: build, service gate, package green). **Remaining:** the stand re-checks item 33 on that build -> "ITEM 33 DONE".
 
 > **Item 33 progress (2026-11-05, core lane, `a744ef50` + `75de58bc`):** done in code and CI - (C) root cause
 > found: `LocalCopyCache.acquire` made room for a query's new copies BEFORE pinning the copies it reuses, so eviction
@@ -3351,3 +3351,6 @@ S3 slowdown item below stays open for then).
   42041121733, Service hdfs 42041126387 (12/12), Catalogs CI 42039029088 green. The earlier `package=true`
   42031858690 (on `bfe09a23`) was cancelled when this session's pushes started a newer Dev CI on main; `package=true`
   dispatched on the unlock commit. Lock released.
+- 2026-11-05 (core lane): item 33 waits only for the stand. The `package=true` Dev CI 42043316941 on `50fe065a` is green
+  (build, service gate: Service stores 42045656149, Service matrix (security) 42045649442, Service hdfs 42045642476,
+  Service cluster 42045636399; package) -> pre-release `server-1.0.0-50fe065af50c`. No code change this session. Lock released.
