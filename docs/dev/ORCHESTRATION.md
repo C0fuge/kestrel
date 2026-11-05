@@ -1,15 +1,16 @@
 # Orchestration status
 
-Status as of **2026-11-05 15:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 16:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: ITEM 33 is done in code and CI and shipped as pre-release `server-1.0.0-50fe065af50c`; it waits for the
-stand re-check ("ITEM 33 DONE" not written yet). egret acceptance run 42055012677 on that build is running; no FRESH for it.
+Not ALL DONE: ITEM 33 is shipped as pre-release `server-1.0.0-50fe065af50c`, but **egret's acceptance of that build is
+DO NOT SHIP** (check 4, small copy disk, all 4 cells): copies of finished queries stay pinned. A bug-first note is now
+at the top of the core lane's Next steps. "ITEM 33 DONE" not written.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33: all of (A)-(E) done (a744ef50, 75de58bc, aeb87cdf, 8e60638e, 9dbde204); waits for the stand re-check of `50fe065af50c` | b51c3ff1, 16 min ago (session 15:41Z, no code change, unlock) | free (released 15:41Z) | Dev CI 42041121733 (push, 9dbde204) green; `package=true` Dev CI 42043316941 on 50fe065a green (build, service gate, package) |
+| core (`STATUS.md`) | ITEM 33 + new bug-first note (egret check 4: pinned copies of finished queries) | b51c3ff1, 75 min ago (session 15:41Z, unlock, no code change) | free | Dev CI 42041121733 (push, 9dbde204) green; `package=true` 42043316941 green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -27,9 +28,9 @@ No stale locks (marten and heron free).
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 (small copy disk batching / no ENOSPC, GROUP BY ordinals, distributedComplete subqueries, partial q04 on SASL HDFS, logs). Waits for the stand re-check.
+- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33. egret: DO NOT SHIP (check 4).
 - `server-1.0.0-5f60db1ee304` (2026-11-05 10:40Z): ITEM 32; accepted by the maintainer for the stand.
-- `server-1.0.0-8060179bce0c` (2026-11-04 20:16Z): ITEM 31; accepted by the maintainer for the stand.
+- `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
@@ -39,15 +40,17 @@ No stale locks (marten and heron free).
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
-  No FRESH for `8060179bce0c` / `5f60db1ee304` / `50fe065af50c`.
-- Last acceptance: **EGRET ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only, small disk)** - covered by ITEM 33.
-  **EGRET ACCEPT 50fe065af50c RUNNING**: full accept-hdfs run 42055012677 (8 cells, harness a5ba272) dispatched 15:26Z, in progress.
+  No FRESH for `5f60db1ee304` / `50fe065af50c`.
+- **EGRET ACCEPT 50fe065af50c DONE: DO NOT SHIP** (run 42055012677, `results/ACCEPT-50fe065af50c.md`). Checks 1, 2, 3,
+  5, 6 pass in every cell; check 4 fails in all 4 cells: complete `sp-group` / `sp-distinct` (9 copies, ~156 MB)
+  refused ("Nothing was copied", "copies in use by running queries take 51955890 bytes" with no query running);
+  speed cells also refuse partial `part-lineitem-sp` / `part-group-sp` (passed on `5f60db1ee304`). Peak tmpfs 56.4 of
+  67.1 MB, no ENOSPC (item 33 (C) ENOSPC itself looks fixed).
 
 ## For the maintainer
 
-- **Stand re-check of ITEM 33 on `server-1.0.0-50fe065af50c`** (the core lane's only remaining step). Re-run the
-  3-server sum -> DISTINCT repro on the 64 MiB copy disk (CI covers it on one server + a unit test), count(*) /
-  GROUP BY 1 batching, distributedComplete q04, partial q04 on SASL HDFS.
+- **Do not put `50fe065af50c` on the stand yet**: egret's small-disk check shows copies stay pinned after queries end
+  (regression vs `5f60db1ee304` for 1-copy partial queries in the speed profile). Core lane has the bug-first note.
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -55,6 +58,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
 - 2026-11-05 15:57Z: core session 15:41Z made no code change (ITEM 33 waits for the stand re-check of 50fe065af50c); Dev CI on main green (42041121733, package 42043316941), service gate 4/4 green on 50fe065a; egret ACCEPT 50fe065af50c running (42055012677); marten (15:41Z)/heron (session 123) idle; no stale locks.
 - 2026-11-05 14:58Z: core ITEM 33 done in code and CI ((A)-(D) a744ef50/75de58bc, (E) aeb87cdf/8e60638e/9dbde204; Dev CI 42041121733 green); `package=true` Dev CI 42043316941 green, service gate 4/4 green on 50fe065a -> pre-release `server-1.0.0-50fe065af50c`, waits for the stand re-check; core lock released 14:48Z; egret has no ACCEPT/FRESH for 50fe065af50c yet; marten (14:40Z)/heron (session 123) idle; no stale locks.
 - 2026-11-05 13:58Z: core session (lock 13:41Z) on ITEM 33 (E): aeb87cdf (partial subquery -> complete answer on SASL HDFS) + 8e60638e (copy refusals log hdfs=reads); Dev CI 42039372619 + Service hdfs 42039028971 running; `package=true` 42031858690 on bfe09a23 cancelled by the new push (build green); service matrix on bfe09a23: cluster/security/hdfs green, stores running; egret ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only, item 33 scope); marten/heron (session 122) idle; no stale locks.

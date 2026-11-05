@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **Orchestrator bug-first note (2026-11-05 16:56Z) - egret ACCEPT `50fe065af50c`: DO NOT SHIP, check 4 (small copy disk)
+> fails in all 4 cells** (egret run 42055012677, `results/ACCEPT-50fe065af50c.md`). Complete `sp-group` and `sp-distinct`
+> (9 copies, ~156 MB) are refused outright ("Nothing was copied") instead of running in copy batches; the refusal says
+> "copies in use by running queries take 51955890 bytes" although the client runs one query at a time and every earlier
+> stream was read to the end and closed (with `5f60db1ee304` the same refusal saw all 67108864 bytes free). **Copies of
+> finished queries stay pinned** (likely the item 33 (C) "reused copies pinned first" path). Regression: in the speed
+> cells the partial `part-lineitem-sp` / `part-group-sp` (1 copy, 17 MB) are now refused too; they passed on
+> `5f60db1ee304`. Checks 1, 2, 3, 5, 6 pass everywhere. Fix with a regression test (sequence of closed streams, then a
+> batched aggregate on a small copy disk: in-use bytes must return to 0) before "ITEM 33 DONE".
+
 > **Maintainer, 2026-11-05 15:15 - ITEM 33 (stand re-check of `5f60db1ee304`).** Items 31 + 32 are accepted on a normal
 > copy disk: HA + Kerberos + SASL DataNodes, 1 and 3 servers, default / speed / speed + distributedComplete, 100/100
 > exact per pass (plain + qualified TPC-H 22/22, spread set incl. comma join 1500000, q03/q12 10/2 rows), low direct
