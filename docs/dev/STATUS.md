@@ -51,6 +51,18 @@
 > CI: small-disk stage in partial mode on 3 servers (default profile) with the sum -> DISTINCT sequence, count(*) and
 > GROUP BY 1 batched, distributedComplete q04 with no HdfsNetworkException. Then `package=true`, "ITEM 33 DONE".
 
+> **Item 33 (E) (2026-11-05, core lane, `aeb87cdf`, `8e60638e`, `9dbde204`):** done in code and CI - partial-mode q04 INTERNAL
+> found without the stand's text: the parser takes q04 as a one-table query of `orders` (the EXISTS is in WHERE), so
+> partial mode planned it in parts over orders' files and each endpoint read `lineitem` whole - on SASL short-circuit
+> only it fails on the blocks its DataNode lacks (INTERNAL). Now on short-circuit-only stores any partial query with a
+> nested query (subquery in WHERE or FROM, CTE, set operation) gets the complete answer (`QueryPlanner.nestedQueryCompleteReason`, log
+> `query=answeredCompletely mode=partial reason='the query has a subquery ...'`), which plans copies for every table
+> or refuses INVALID_ARGUMENT; other storage still answers it in parts (q07/q08/q09/q13/q22's FROM subqueries stay
+> refused INVALID_ARGUMENT in partial mode there, as before). Copy refusals (RESOURCE_EXHAUSTED) now log
+> `hdfs=reads ... copied=0 refused=noRoom`. CI sasl-cluster: the TPC-H queries with a subquery in PARTIAL mode on every
+> node must be exact (42/42 per cell). Dev CI 42041121733, Service hdfs 42041126387 (12/12) green. **Remaining:** the stand re-checks item 33 on the next `package=true`
+> build -> "ITEM 33 DONE".
+
 > **Item 33 progress (2026-11-05, core lane, `a744ef50` + `75de58bc`):** done in code and CI - (C) root cause
 > found: `LocalCopyCache.acquire` made room for a query's new copies BEFORE pinning the copies it reuses, so eviction
 > could delete a reused copy (data_6), which was then copied again without being counted -> ENOSPC. Reused copies are
@@ -3328,3 +3340,14 @@ S3 slowdown item below stays open for then).
   42027060883, Service hdfs 42027060707 (12/12, new small-disk checks ok), Catalogs CI 42027060689 green; `package=true`
   Dev CI 42029413029 on `75de58bc` stopped at the service gate only because main had moved (service-cluster/security/
   stores not dispatched for an old sha); `package=true` re-dispatched on the unlock commit. Open: (E) partial q04 INTERNAL needs the stand's error text. Lock released.
+- 2026-11-05 (cloud session, core): **item 33 (E)** - partial-mode q04 INTERNAL: the parser takes q04 as a one-table
+  query of orders, so it was planned in parts and each endpoint read the EXISTS subquery's lineitem whole (fails on
+  SASL short-circuit only). `aeb87cdf` + `9dbde204`: on short-circuit-only stores a partial query with a nested query
+  (WHERE/FROM subquery, CTE, set operation) gets the complete answer (`QueryPlanner.nestedQueryCompleteReason`,
+  `QueryPlannerTest.subqueriesOnWholeFileReadsGetTheCompleteAnswer`); other storage unchanged. `8e60638e`: copy
+  refusals log `hdfs=reads ... copied=0 refused=noRoom` (`ExecutionServiceTest.copyRefusalLogsItsReads`). CI
+  sasl-cluster: 14 TPC-H queries with subqueries in partial mode on every node, 42/42 exact (the first run on
+  `aeb87cdf`, 42039028971, found q07/q08/q09/q13/q22's FROM subqueries still refused -> `9dbde204`). Dev CI
+  42041121733, Service hdfs 42041126387 (12/12), Catalogs CI 42039029088 green. The earlier `package=true`
+  42031858690 (on `bfe09a23`) was cancelled when this session's pushes started a newer Dev CI on main; `package=true`
+  dispatched on the unlock commit. Lock released.
