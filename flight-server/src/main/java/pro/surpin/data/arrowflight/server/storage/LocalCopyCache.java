@@ -249,40 +249,41 @@ public final class LocalCopyCache implements AutoCloseable {
         try {
             List<CompletableFuture<Path>> waits = new ArrayList<>(files.size());
             synchronized (this) {
-                // The new copies are known, and must have room, before any of them is started.
+                // Copies already present are pinned first, so that making room for the new ones
+                // never evicts a copy this query reads (it would be copied again, unreserved).
                 List<DataFile> toCopy = new ArrayList<>();
-                Set<String> paths = new HashSet<>();
                 Set<String> keys = new HashSet<>();
                 long needed = 0;
                 for (DataFile file : files) {
+                    if (lease.entries.containsKey(file.relativePath())) {
+                        continue;
+                    }
                     String key = key(file);
-                    if (paths.add(file.relativePath()) && !entries.containsKey(key) && keys.add(key)) {
+                    Entry entry = entries.get(key);
+                    if (entry != null) {
+                        lease.reused++;
+                        entry.pins++;
+                        lease.entries.put(file.relativePath(), entry);
+                        waits.add(entry.ready);
+                    } else if (keys.add(key)) {
                         toCopy.add(file);
                         needed += file.size();
                     }
                 }
                 if (!toCopy.isEmpty()) {
+                    // The new copies must have room before any of them is started.
                     evictFor(needed);
                     requireRoom(needed, toCopy);
                 }
-                for (DataFile file : files) {
+                for (DataFile file : toCopy) {
                     String key = key(file);
-                    if (lease.entries.containsKey(file.relativePath())) {
-                        continue;
-                    }
-                    Entry entry = entries.get(key);
-                    if (entry == null) {
-                        entry = new Entry(key, directory.resolve(copyPath(key, file.relativePath())),
-                                file.size());
-                        entries.put(key, entry);
-                        cachedBytes += entry.bytes;
-                        pendingBytes += entry.bytes;
-                        made.add(entry);
-                        Entry copy = entry;
-                        copyPool.execute(() -> copy(file, copy));
-                    } else {
-                        lease.reused++;
-                    }
+                    Entry entry = new Entry(key, directory.resolve(copyPath(key, file.relativePath())),
+                            file.size());
+                    entries.put(key, entry);
+                    cachedBytes += entry.bytes;
+                    pendingBytes += entry.bytes;
+                    made.add(entry);
+                    copyPool.execute(() -> copy(file, entry));
                     entry.pins++;
                     lease.entries.put(file.relativePath(), entry);
                     waits.add(entry.ready);
@@ -299,7 +300,7 @@ public final class LocalCopyCache implements AutoCloseable {
             lease.close();
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while copying files to " + directory, e);
-        } catch (RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             lease.close();
             throw e;
         }
@@ -464,6 +465,23 @@ public final class LocalCopyCache implements AutoCloseable {
         }
         long disk = freeSpace.usableBytes(directory) - pendingBytes + evictable - minFreeBytes;
         return Math.max(1L, Math.min(maxBytes, disk));
+    }
+
+    /**
+     * Returns the files that have a copy in the cache, made or being made, so that a query
+     * copying in batches can read them first instead of evicting and copying them again.
+     *
+     * @param files files of a query
+     * @return relative paths of the files with a copy
+     */
+    public synchronized Set<String> present(List<DataFile> files) {
+        Set<String> present = new HashSet<>();
+        for (DataFile file : files) {
+            if (entries.containsKey(key(file))) {
+                present.add(file.relativePath());
+            }
+        }
+        return present;
     }
 
     /**

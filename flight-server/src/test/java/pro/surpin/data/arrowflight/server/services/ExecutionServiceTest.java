@@ -1058,6 +1058,23 @@ class ExecutionServiceTest {
                 batches.stream().map(List::of).toList());
     }
 
+    /** Item 33 (C): copies already cached go into the first batch, so they are reused. */
+    @Test
+    void cachedCopiesGoFirst() {
+        String[] ticket = {"a", "b", "c", "d"};
+        assertSame(ticket, ExecutionService.cachedFirst(ticket, Set.of()));
+        assertArrayEquals(new String[] {"b", "d", "a", "c"},
+                ExecutionService.cachedFirst(ticket, Set.of("d", "b")));
+        List<DataFile> unreadable = List.of(
+                new DataFile("a", "hdfs://a", 40, 1L, Set.of()),
+                new DataFile("b", "hdfs://b", 40, 1L, Set.of()),
+                new DataFile("c", "hdfs://c", 40, 1L, Set.of()),
+                new DataFile("d", "hdfs://d", 40, 1L, Set.of()));
+        assertEquals(List.of(List.of("d", "a"), List.of("b", "c")),
+                ExecutionService.copyBatches(ExecutionService.cachedFirst(ticket, Set.of("d")),
+                        unreadable, 80).stream().map(List::of).toList());
+    }
+
     /** Item 30 part 2b: only plain scans are read in batches of copies. */
     @Test
     void onlyPlainScansAreConcatenatable() {

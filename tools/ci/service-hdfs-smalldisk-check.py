@@ -68,6 +68,8 @@ def reference_having(base):
 
 PLAIN_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
                " FROM lineitem_p GROUP BY l_returnflag, l_linestatus")
+PLAIN_GROUP_ORDINALS = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
+                        " FROM lineitem_p GROUP BY 1, 2")
 PLAIN_FIRST_GROUPS = PLAIN_GROUP + " ORDER BY l_returnflag, l_linestatus LIMIT 3"
 PLAIN_FILTERED = "SELECT count(*) AS n, sum(l_quantity) AS q FROM lineitem_p WHERE l_quantity > {bound}"
 
@@ -150,6 +152,8 @@ def main():
     first_groups = dict(sorted(want_groups.items())[:3])
     bound = decimal.Decimal(25)
     want_fn, want_fq = reference_filtered(base, bound)
+    want_modes = set(pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                                   columns=["l_shipmode"]).column("l_shipmode").to_pylist())
     checks = [
         ("complete", "chunks.lineitem full scan", _SASL.CHUNKS_SCAN, "scan", None),
         ("complete", "chunks.lineitem GROUP BY", _SASL.CHUNKS_GROUP, "groups", want_groups),
@@ -160,6 +164,21 @@ def main():
         ("complete", "plain lineitem_p GROUP BY ORDER BY LIMIT", PLAIN_FIRST_GROUPS, "groups",
          first_groups),
         ("partial", "plain lineitem_p GROUP BY", PLAIN_GROUP, "groups", want_groups),
+        # Item 33 (A): unaliased count(*) (count_star() in the complete answer) is batched too.
+        ("complete", "plain lineitem_p unaliased count(*)", "SELECT count(*) FROM lineitem_p",
+         "positional", (want_n,)),
+        ("complete", "plain lineitem_p unaliased filtered count(*), sum",
+         f"SELECT count(*), sum(l_quantity) FROM lineitem_p WHERE l_quantity > {bound}",
+         "positional", (want_fn, want_fq)),
+        # Item 33 (B): GROUP BY ordinals are batched like the columns they name.
+        ("complete", "plain lineitem_p GROUP BY 1, 2", PLAIN_GROUP_ORDINALS, "groups", want_groups),
+        ("partial", "plain lineitem_p GROUP BY 1, 2", PLAIN_GROUP_ORDINALS, "groups", want_groups),
+        # Item 33 (C): a sum leaves its last batch's copies cached; the DISTINCT that follows
+        # must reuse or evict them, never fill the disk (No space left on device).
+        ("partial", "chunks.lineitem sum", "SELECT count(*) AS n, sum(l_quantity) AS q"
+         " FROM chunks.lineitem WHERE l_quantity >= 0", "totals", (want_n, want_q)),
+        ("partial", "chunks.lineitem DISTINCT l_shipmode", "SELECT DISTINCT l_shipmode"
+         " FROM chunks.lineitem", "distinct", want_modes),
     ]
     for mode, what, sql, kind, want in checks:
         try:
@@ -170,6 +189,20 @@ def main():
                 good = answer.num_rows == want_n and abs(q - want_q) <= decimal.Decimal("0.0001")
                 got = (answer.num_rows, q)
                 want = (want_n, want_q)
+            elif kind == "positional":
+                row = answer.to_pylist()
+                vals = [list(r.values()) for r in row]
+                got = tuple(sum(int(v[0] or 0) for v in vals) if i == 0 else
+                            sum(decimal.Decimal(str(v[i])) for v in vals if v[i] is not None)
+                            for i in range(len(want)))
+                good = all(abs(decimal.Decimal(got[i]) - decimal.Decimal(want[i]))
+                           <= decimal.Decimal("0.0001") for i in range(len(want)))
+                if mode == "complete" and answer.schema.names[0] != "count_star()":
+                    good = False
+                    got = (got, answer.schema.names)
+            elif kind == "distinct":
+                got = set(answer.column(0).to_pylist())
+                good = got == want
             elif kind == "totals":
                 n, q, _ = _SASL.totals(answer)
                 got = (n, q)

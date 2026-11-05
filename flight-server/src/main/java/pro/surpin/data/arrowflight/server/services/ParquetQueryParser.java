@@ -480,9 +480,36 @@ public class ParquetQueryParser {
             }
 
         } catch (Exception e) {
-            LOGGER.error("Error parsing SQL query", e);
+            // Callers fall back or report the failure; multi-table queries come here routinely (item 33 (E)).
+            LOGGER.debug("Error parsing SQL query", e);
             throw new RuntimeException("Invalid SQL query: " + query, e);
         }
+    }
+
+    /**
+     * Resolves a GROUP BY ordinal ({@code GROUP BY 1}) to the column it names in the select
+     * list, so that it groups like the column named (item 33 (B)); anything else is returned as
+     * it is.
+     *
+     * @param gf GROUP BY element
+     * @param selectList the select list
+     * @return the column at that position (without its alias), or gf
+     */
+    static GroupField groupByOrdinal(GroupField gf, List<? extends SelectFieldOrAsterisk> selectList) {
+        if (!(gf instanceof org.jooq.Param<?> param) || !(param.getValue() instanceof Number n)
+                || n instanceof Double || n instanceof Float
+                || n instanceof java.math.BigDecimal decimal && decimal.scale() > 0) {
+            return gf;
+        }
+        long position = n.longValue();
+        if (position < 1 || position > selectList.size()) {
+            return gf;
+        }
+        SelectFieldOrAsterisk item = selectList.get((int) position - 1);
+        if (item instanceof org.jooq.impl.QOM.FieldAlias<?> alias) {
+            item = alias.$field();
+        }
+        return item instanceof TableField<?, ?> column ? column : gf;
     }
 
     /**
@@ -838,7 +865,8 @@ public class ParquetQueryParser {
 
         List<String> gbCols = new ArrayList<>();
         String completeAnswerReason = null;
-        for (GroupField gf : select.$groupBy()) {
+        for (GroupField listed : select.$groupBy()) {
+            GroupField gf = groupByOrdinal(listed, select.$select());
             gbCols.add(noQuoteCtx.render(gf).trim());
             if (completeAnswerReason == null && !(gf instanceof TableField<?, ?>)) {
                 completeAnswerReason = "The GROUP BY expression '" + noQuoteCtx.renderInlined(gf).trim()

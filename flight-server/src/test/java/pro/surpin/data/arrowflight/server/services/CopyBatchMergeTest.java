@@ -80,6 +80,9 @@ class CopyBatchMergeTest {
                     + " ORDER BY dn DESC, grp",
             "SELECT grp, sum(DISTINCT price) AS sp FROM s.t GROUP BY grp HAVING count(*) > 59"
                     + " ORDER BY sp LIMIT 3",
+            // Item 33 (B): GROUP BY ordinals group like the columns they name.
+            "SELECT grp AS g, k, count(*) AS c, sum(qty) FROM s.t GROUP BY 1, 2 HAVING count(*) > 0"
+                    + " ORDER BY g, k",
             "SELECT k, count(DISTINCT grp) AS dg FROM s.t GROUP BY k HAVING sum(qty) IS NULL OR"
                     + " sum(qty) > 3000 ORDER BY k",
         };
@@ -104,6 +107,22 @@ class CopyBatchMergeTest {
             } else {
                 assertEquals(sorted(expected.rows), sorted(merged.rows), query + " -> " + sql);
             }
+        }
+    }
+
+    /** Item 33 (B): a GROUP BY ordinal naming a column is that column; others stay refused. */
+    @Test
+    void groupByOrdinalsNameTheirColumn() {
+        ParquetQueryParser parsed = ParquetQueryParser.parse(
+                "SELECT grp, sum(qty) FROM s.t GROUP BY 1");
+        assertEquals(List.of("grp"), parsed.groupByColumnNames);
+        assertNull(parsed.completeAnswerReason);
+        assertNotNull(CopyBatchMerge.of("SELECT grp, sum(qty) FROM s.t GROUP BY 1", parsed));
+        assertEquals(List.of("grp"), ParquetQueryParser.parse(
+                "SELECT grp AS g, count(*) FROM s.t GROUP BY 1").groupByColumnNames);
+        for (String query : List.of("SELECT grp, sum(qty) FROM s.t GROUP BY 2",
+                "SELECT grp, sum(qty) FROM s.t GROUP BY 3")) {
+            assertNotNull(ParquetQueryParser.parse(query).completeAnswerReason, query);
         }
     }
 

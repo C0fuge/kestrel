@@ -348,6 +348,51 @@ class LocalCopyCacheTest {
     }
 
     @Test
+    void roomForNewCopiesNeverEvictsACopyTheSameQueryReuses() throws IOException {
+        // Item 33 (C): the reused copy was evicted for the new one's room and then copied again
+        // without being counted, so the disk filled up (ENOSPC) instead of a clean refusal.
+        DataFile a = file("s/t/a.parquet", 400, 1);
+        DataFile b = file("s/t/b.parquet", 500, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                150, disk(1000))) {
+            Path pathA;
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+                pathA = lease.localPath(a.relativePath());
+            }
+            assertEquals(java.util.Set.of(a.relativePath()), cache.present(List.of(a, b)));
+            // a + b = 900 bytes leave 100 free, 150 must stay free: refused, a kept and unpinned.
+            assertThrows(LocalCopyCache.NoRoomException.class, () -> cache.acquire(List.of(a, b)));
+            assertEquals(1, opens.get(a.location()).get());
+            assertNull(opens.get(b.location()));
+            assertTrue(Files.exists(pathA));
+            // Unpinned after the refusal: b alone evicts it.
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(b))) {
+                assertEquals(500, Files.size(lease.localPath(b.relativePath())));
+            }
+            assertFalse(Files.exists(pathA));
+            assertEquals(java.util.Set.of(), cache.present(List.of(a)));
+        }
+    }
+
+    @Test
+    void limitEvictionNeverEvictsACopyTheSameQueryReuses() throws IOException {
+        DataFile a = file("s/t/a.parquet", 400, 1);
+        DataFile b = file("s/t/b.parquet", 300, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 500, 2, copier(),
+                0, disk(1_000_000))) {
+            cache.acquire(List.of(a)).close();
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(a, b))) {
+                assertEquals(1, lease.reused());
+                assertEquals(1, lease.copied());
+                assertArrayEquals(content(a), Files.readAllBytes(lease.localPath(a.relativePath())));
+            }
+            assertEquals(1, opens.get(a.location()).get());
+            // Over the limit once released: back within it.
+            assertTrue(cache.cachedBytes() <= 500, "cached " + cache.cachedBytes());
+        }
+    }
+
+    @Test
     void roomIsTheLimitOrWhatTheDiskLeaves() throws IOException {
         DataFile a = file("s/t/a.parquet", 300, 1);
         try (LocalCopyCache big = new LocalCopyCache(dir.resolve("big"), 800, 1, copier(),

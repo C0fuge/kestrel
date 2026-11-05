@@ -768,9 +768,12 @@ public final class ExecutionService {
         boolean concatenatable = concatenatable(parsedQuery);
         CopyBatchMerge merge = startListener && unreadable != null && !concatenatable
                 ? CopyBatchMerge.of(query, parsedQuery) : null;
+        // A merged answer does not depend on the file order: copies already cached go first,
+        // so they are reused before the cache makes room for the others (item 33 (C)).
         List<String[]> batches = startListener && unreadable != null
                 && (concatenatable || merge != null)
-                ? copyBatches(fileUris, unreadable, copyLimit(unreadable)) : List.of();
+                ? copyBatches(merge != null ? cachedFirst(fileUris, unreadable) : fileUris,
+                        unreadable, copyLimit(unreadable)) : List.of();
         if (batches.size() > 1) {
             if (concatenatable) {
                 readInCopyBatches(allocator, query, parsedQuery, batches, unreadable, listener,
@@ -990,6 +993,38 @@ public final class ExecutionService {
         return !parsed.isJoin && !parsed.hasAggregation && !parsed.hasOrderOrLimit()
                 && !parsed.distinct && parsed.having == null
                 && parsed.singleNodeFeature() == null && parsed.completeAnswerReason == null;
+    }
+
+    /**
+     * Orders a ticket's files so that those whose copy is in the cache come first.
+     *
+     * @param fileUris the ticket's relative file paths
+     * @param unreadable files among them that must be copied, not empty
+     * @return the paths, cached copies first, otherwise in ticket order
+     * @throws IOException when the cache cannot be created
+     */
+    private String[] cachedFirst(String[] fileUris, List<DataFile> unreadable) throws IOException {
+        return cachedFirst(fileUris, localCopyCache().present(unreadable));
+    }
+
+    /**
+     * Orders file paths so that the given ones come first, keeping the order otherwise.
+     *
+     * @param fileUris relative file paths
+     * @param first paths to put first
+     * @return reordered paths (the same array when nothing moves)
+     */
+    static String[] cachedFirst(String[] fileUris, Set<String> first) {
+        if (first.isEmpty()) {
+            return fileUris;
+        }
+        List<String> ordered = new ArrayList<>(fileUris.length);
+        List<String> rest = new ArrayList<>(fileUris.length);
+        for (String rel : fileUris) {
+            (first.contains(rel) ? ordered : rest).add(rel);
+        }
+        ordered.addAll(rest);
+        return ordered.toArray(new String[0]);
     }
 
     /**
@@ -1799,14 +1834,27 @@ public final class ExecutionService {
                 unreadable.add(file);
             }
         }
-        if (copyBatches(fileUris, unreadable, copyLimit(unreadable)).size() < 2
-                || !sameColumns(completeSchema(allocator, sql), resultSchema(allocator, sql))) {
+        if (copyBatches(fileUris, unreadable, copyLimit(unreadable)).size() < 2) {
             return false;
         }
-        LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}",
-                LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table, fileUris.length,
-                unreadable.size());
-        readParquet(allocator, sql, fileUris, listener, true, pathTracker);
+        Schema complete = completeSchema(allocator, sql);
+        Schema partial = resultSchema(allocator, sql);
+        boolean renamed = !sameColumns(complete, partial);
+        // Column names may differ (an unaliased count(*) is count_star() in the complete answer,
+        // item 33 (A)): the answer then takes the complete answer's names.
+        if (renamed && !RenamingStreamListener.sameTypes(complete, partial)) {
+            return false;
+        }
+        LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}"
+                + " renamed={}", LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table,
+                fileUris.length, unreadable.size(), renamed);
+        if (!renamed) {
+            readParquet(allocator, sql, fileUris, listener, true, pathTracker);
+            return true;
+        }
+        try (RenamingStreamListener named = new RenamingStreamListener(listener, allocator, complete)) {
+            readParquet(allocator, sql, fileUris, named, true, pathTracker);
+        }
         return true;
     }
 

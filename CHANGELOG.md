@@ -98,6 +98,20 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters, small copy disk: disk filled up, `count(*)` and `GROUP BY 1` refused (STATUS item 33, part 1)
+
+- Node-local copies: making room for a query's new copies could evict a copy the same query reuses, which was then
+  copied again without being counted, so the copy disk filled up (`IOException: Cannot copy ... No space left on
+  device`). Copies a query reuses are now pinned before anything is evicted, and every copy is started only with its
+  bytes counted against the disk. Aggregates, DISTINCT and LIMIT read in batches now take files already cached first.
+- Complete mode: a one-table query whose copies do not fit is read in batches also when the partial path names its
+  columns otherwise (an unaliased `count(*)` is `count_star()` in the complete answer); the answer keeps the complete
+  answer's names (log `hdfs=completeInCopyBatches ... renamed=true`). Before, such queries were refused
+  RESOURCE_EXHAUSTED.
+- `GROUP BY 1` (ordinals naming a column of the select list) groups like the column it names, in both modes, so it is
+  read in batches of copies like `GROUP BY <column>`.
+- The parser's "Can only select from ONE table" for multi-table queries is logged at DEBUG, not ERROR with a stack trace.
+
 ### Changed - node-local copy reserve relative on small disks; `hdfs=reads` on every complete answer (STATUS item 32)
 
 - `hdfsLocalCopyMinFreeBytes` unset now keeps min(1 GiB, 10 % of the copy disk's size) free instead of 1 GiB, so a
