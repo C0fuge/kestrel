@@ -369,10 +369,6 @@ if [ "$n" -gt 1 ]; then
       finish fail "hdfsLocalCopyDir=/copies set, but only $customDirs of $n node(s) copied there"
     fi
   fi
-  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
-    srvs=(); for i in $(seq "$n"); do srvs+=("srv$i"); done
-    checkReadsPerQid "${srvs[@]}"
-  fi
   if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
   fi
@@ -549,6 +545,8 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
     finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
   if $sasl && [ "$n" -eq 1 ]; then checkReadsPerQid "$srv"; fi
+  # shellcheck disable=SC2046
+  if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
   if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; fi
   finish pass ""
