@@ -98,6 +98,15 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - SASL HDFS clusters: partial-mode queries with a subquery failed INTERNAL (STATUS item 33 (E))
+
+- On HDFS read short-circuit only (SASL DataNodes), a query asked for in parts that holds a nested query (TPC-H q04's
+  `EXISTS`, `IN (SELECT ...)`, a CTE, a set operation) now gets the complete answer (log `query=answeredCompletely
+  mode=partial reason='the query has a subquery ...'`), which plans node-local copies for every table it reads, or
+  is refused INVALID_ARGUMENT when the node cannot read them. Before, it was planned in parts over the outer table's
+  files and each endpoint read the subquery's table whole, failing as INTERNAL on the blocks its DataNode lacks.
+  Other storage keeps answering such queries in parts.
+
 ### Fixed - SASL HDFS clusters, small copy disk: disk filled up, `count(*)` and `GROUP BY 1` refused; subqueries kept off distributed complete (STATUS item 33, part 1)
 
 - Node-local copies: making room for a query's new copies could evict a copy the same query reuses, which was then

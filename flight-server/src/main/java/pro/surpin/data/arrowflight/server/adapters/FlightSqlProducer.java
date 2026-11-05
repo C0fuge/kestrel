@@ -1132,7 +1132,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      * {@code ParquetQueryParser.completeAnswerReason}), and queries of catalog tables whose
      * snapshot has delete files or other files that cannot be read one by one, and queries with
      * time-travel queries other than reads of one catalog table whose earlier snapshot can be
-     * read file by file.
+     * read file by file, and queries with a nested query on HDFS read short-circuit only.
      *
      * @param query client SQL
      * @return reason, or null when endpoints answer for their own files (also for SQL the parser
@@ -1147,7 +1147,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             return queryPlanner.travelledTable(query) != null ? null
                     : "the query reads an earlier snapshot (FOR VERSION/TIMESTAMP AS OF)";
         }
-        String reason;
+        // Subqueries on SASL DataNodes: a part would read the subquery's table whole.
+        String reason = queryPlanner.nestedQueryCompleteReason(query);
+        if (reason != null) {
+            return reason;
+        }
         try {
             reason = pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(query)
                     .completeAnswerReason;

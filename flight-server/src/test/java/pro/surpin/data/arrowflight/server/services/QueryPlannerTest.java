@@ -513,6 +513,36 @@ class QueryPlannerTest {
         }
     }
 
+    /**
+     * Item 33 (E): on HDFS read short-circuit only a partial query with a subquery (TPC-H q04's
+     * EXISTS) gets the complete answer; a part would read the subquery's table whole and fail
+     * as INTERNAL on the blocks its DataNode lacks. Queries without one, and other storage,
+     * are read in parts as before.
+     */
+    @Test
+    void subqueriesOnWholeFileReadsGetTheCompleteAnswer() {
+        String q04 = "SELECT o_orderpriority, count(*) AS order_count FROM tpch.orders"
+                + " WHERE o_orderdate >= CAST('1993-07-01' AS date)"
+                + " AND o_orderdate < CAST('1993-10-01' AS date) AND EXISTS (SELECT * FROM"
+                + " tpch.lineitem WHERE l_orderkey = o_orderkey AND l_commitdate < l_receiptdate)"
+                + " GROUP BY o_orderpriority ORDER BY o_orderpriority";
+        String inList = "SELECT count(*) FROM s.t WHERE k IN (SELECT k FROM s.u)";
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        assertNotNull(planner.nestedQueryCompleteReason(q04));
+        assertTrue(planner.nestedQueryCompleteReason(inList).contains("subquery"));
+        assertNotNull(planner.nestedQueryCompleteReason("WITH r AS (SELECT a FROM s.t)"
+                + " SELECT max(a) FROM r"), "a CTE is not read in parts there either");
+        assertNull(planner.nestedQueryCompleteReason("SELECT o_orderpriority, count(*) FROM"
+                + " tpch.orders GROUP BY o_orderpriority"));
+        assertNull(planner.nestedQueryCompleteReason("SELECT * FROM (SELECT a FROM s.t) x"),
+                "the plain FROM wrapper is read in parts");
+
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(false);
+        assertNull(planner.nestedQueryCompleteReason(q04));
+    }
+
     /** Verifies the static check: a holder that is down does not count, others pass. */
     @Test
     void wholeFileValidationNeedsALiveHolder() throws Exception {

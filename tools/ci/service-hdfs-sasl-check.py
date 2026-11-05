@@ -26,7 +26,8 @@ resolves it; lineitem_p and orders_p with 1 MiB blocks and replication 1 (no nod
 whole). With PLAIN names, as benchmark clients write them: the 22 TPC-H queries complete on every
 node must equal the expected answers, a comma join of orders_p and customer_p must count every
 order (it gave 0 rows silently before item 31), and count/sum over lineitem_p must be exact in
-both modes. Prints ``ok``/``FAIL`` lines and a last line
+both modes. The TPC-H queries with a subquery over ``spread`` in PARTIAL mode on every node must
+equal the expected answers too (item 33 (E): answered completely, never INTERNAL). Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 """
 import decimal
@@ -248,6 +249,27 @@ def main():
                     with_copies += 1
     print(f"ok complete spread TPC-H: {with_copies} of {len(queries) * len(servers)} answers exact",
           flush=True)
+    # Item 33 (E): in parts, a query with a subquery (q04's EXISTS, q22's NOT EXISTS) gets the
+    # complete answer, which plans copies for every table: a part read the subquery's table whole
+    # and failed INTERNAL on the blocks its DataNode lacks.
+    nested = [(name, sql, want) for name, sql, want in queries if sql.lower().count("select") > 1]
+    nested_exact = 0
+    for server in servers:
+        with connect(server, "partial") as conn:
+            for name, sql, want in nested:
+                try:
+                    got = run(conn, sql.replace("tpch.", "spread."))
+                except Exception as e:  # noqa: BLE001 - any error fails the check, with its text
+                    print(f"error text: {e}", flush=True)
+                    fail(f"{server} partial spread {name} (subquery): {first_line(e)}")
+                    continue
+                diff = difference(got, want)
+                if diff:
+                    fail(f"{server} partial spread {name} (subquery): wrong answer: {diff}")
+                else:
+                    nested_exact += 1
+    print(f"ok partial spread TPC-H with subqueries ({','.join(n for n, _, _ in nested)}):"
+          f" {nested_exact} of {len(nested) * len(servers)} answers exact", flush=True)
     # Item 31: plain table names (no schema), resolved by the server to schema plain.
     want_orders = sum(pq.read_metadata(f).num_rows
                       for f in glob.glob(os.path.join(base, "data/tpch/orders", "*.parquet")))

@@ -313,6 +313,30 @@ public final class QueryPlanner {
     }
 
     /**
+     * Tells why a query asked for in parts gets its complete answer because it holds a nested
+     * query (a subquery such as TPC-H q04's EXISTS, a CTE, a set operation): on HDFS read short-circuit only (SASL DataNodes) an endpoint reads
+     * its own files of the outer table, but the subquery's table whole, and fails on the blocks
+     * its DataNode lacks (item 33 (E)). The complete path plans node-local copies or refuses
+     * the query with INVALID_ARGUMENT. Other storage reads in parts as before.
+     *
+     * @param query client SQL
+     * @return reason, or null when the store reads any block or the query has no subquery
+     */
+    public String nestedQueryCompleteReason(String query) {
+        if (!parquetAdapter.wholeFileReadsOnly()) {
+            return null;
+        }
+        boolean nested;
+        try {
+            nested = ParquetQueryParser.hasNestedQuery(query);
+        } catch (RuntimeException e) {
+            return null;   // the partial path reports the parser's error
+        }
+        return nested ? "the query has a subquery (or CTE, set operation), whose tables a part"
+                + " cannot read on HDFS read short-circuit only" : null;
+    }
+
+    /**
      * A time-travel query of one catalog table that its endpoints can read in parts.
      *
      * @param ticketQuery the query without its clause, for the tickets: their file entries
