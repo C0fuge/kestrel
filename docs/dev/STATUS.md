@@ -23,6 +23,28 @@
 
 ## Next steps (one per session)
 
+> **Item 33 regression (2026-11-05 17:40Z, core lane, `18219b9c`):** no leak found. Leases always release their
+> pins: a unit test runs 20 batched queries in sequence on a stand-sized small disk and gets `inUseBytes == 0`
+> after each one. The "copies in use by running queries take 51955890 bytes" was the refused query's OWN reused
+> copies. Item 33 (C) pins the copies a query reuses before making room, and the old message counted every cached
+> byte as "in use". CI shows the same pattern for the join that needs every copy:
+> `reusedBytes=51801081 otherInUseBytes=0`. With `5f60db1ee304` the same refusals saw every byte free because the
+> reused copies were evicted first. So egret's refused queries are queries answered with **every copy at once**, not
+> in copy batches. This change adds:
+> - the refusal message and `hdfs=localCopyNoSpace` now split `reusedBytes` / `otherInUseBytes`;
+> - every lease logs `hdfs=localCopyReleased ... inUseBytes=`;
+> - a complete query that does not fit and cannot be batched logs `hdfs=completeInCopyBatches skipped ...
+>   reason='...'` (WARN).
+>
+> CI small disk (Service hdfs 42073730677, all cells green; Dev CI 42073731097 green) adds a complete sum -> DISTINCT
+> -> GROUP BY 1, 2 ORDER BY -> DISTINCT sequence. All 13 complete queries ran in batches. The stage checks that the
+> last release logs `inUseBytes=0` and that no refusal counts other queries' copies.
+> **Still open:** why egret's `sp-group` / `sp-distinct` (and the speed-cell `part-lineitem-sp` / `part-group-sp`) are
+> not batched on the stand. The same shapes over `chunks.lineitem` are batched in CI. Needed: the exact SQL of those
+> four queries and the new `hdfs=completeInCopyBatches skipped` / `hdfs=copyBatches merge=fallback` /
+> `hdfs=localCopyNoSpace ... otherInUseBytes=` lines from a re-run on the next pre-release. If `otherInUseBytes > 0`
+> with one query at a time, that IS a pin leak, and the release line names the query that kept it.
+
 > **Maintainer, 2026-11-05 20:15 - ITEM 33 NOT DONE: regression in `50fe065af50c` (egret
 > `results/ACCEPT-50fe065af50c.md`, small-disk check, all 4 cells).** Copies of FINISHED queries stay pinned: the
 > complete `sp-group` / `sp-distinct` (9 copies, 156 MB > 64 MiB disk) are refused "No room ... 15147008 bytes are
@@ -3377,3 +3399,11 @@ S3 slowdown item below stays open for then).
 - 2026-11-05 (core lane): item 33 waits only for the stand. The `package=true` Dev CI 42043316941 on `50fe065a` is green
   (build, service gate: Service stores 42045656149, Service matrix (security) 42045649442, Service hdfs 42045642476,
   Service cluster 42045636399; package) -> pre-release `server-1.0.0-50fe065af50c`. No code change this session. Lock released.
+- 2026-11-05 17:40Z (core lane): item 33 regression (egret check 4) analysed: no pin leak. The "in use" bytes of
+  the refusal were the refused query's own reused copies. `18219b9c`: the refusal splits `reusedBytes` /
+  `otherInUseBytes`, `hdfs=localCopyReleased inUseBytes=` per lease, a WARN reason when a complete query is not
+  batched, and unit tests (20 sequential batched queries on a small disk -> `inUseBytes` 0; own vs other pins). The CI
+  small-disk stage runs a complete sum -> DISTINCT -> GROUP BY 1, 2 sequence (13/13 complete batched,
+  `otherInUseBytes=0`, release `inUseBytes=0`). Dev CI 42073731097 green, Service hdfs 42073730677 green (all
+  cells). `package=true` dispatched on the unlock commit. Open: the stand's exact SQL for sp-group / sp-distinct /
+  part-*-sp, plus the new log lines.
