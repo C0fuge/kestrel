@@ -28,6 +28,10 @@
 > pre-release carries the item 33 speed-cell work yet. Flake fixed (test waited for a background load move only
 > after the release; test only). `package=true` dispatched on this session's unlock commit; the stand / egret
 > re-check of item 33 uses that pre-release.
+>
+> **2026-11-05 21:45Z:** that `package=true` Dev CI 42108450187 on `35c15ab2` is green; pre-release
+> **`server-1.0.0-35c15ab226b9`** carries all item 33 work. Core lane waits for the stand / egret re-check on it (with
+> `-DhdfsLocalCopyRoomWaitMillis=30000` for the small-disk speed cells, or the Open question answered).
 
 > **Item 33 speed cells (2026-11-05 20:05Z, core lane, `f53b9709`, `95d0234f`, `1e82115a`, `70ffac12`):** done in code
 > and CI as an opt-in setting, default unchanged. `hdfsLocalCopyRoomWaitMillis` (default 0 = refuse at once, as
@@ -3502,3 +3506,7 @@ S3 slowdown item below stays open for then).
   (`claimEndpointLoadLater`) and joins it only after the last batch, so the test's immediate check raced it.
   `bbc8e7c1`: the test waits up to 10 s for the handover (test only; Open question flake closed). Dev CI 42106064754
   green. `package=true` dispatched on the unlock commit. Lock released.
+- 2026-11-05 21:45Z (cloud session, core lane): no code change. `package=true` Dev CI 42108450187 on `35c15ab2`
+  green -> pre-release `server-1.0.0-35c15ab226b9` (item 33 complete in code/CI). Item 33 now waits only for the
+  stand / egret re-check and the Open question on the `hdfsLocalCopyRoomWaitMillis` default; stopped early. Lock
+  released.
