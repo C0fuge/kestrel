@@ -25,6 +25,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `shutdownDrainSeconds` (`arrowflight.server.shutdownDrainSeconds`, `FLIGHT_SHUTDOWN_DRAIN_SECONDS`) | 20: a stopping node leaves the pool, refuses new calls `UNAVAILABLE`, lets running answers finish (`docker stop -t 25`) | did not exist; stop cut running answers (`INTERNAL`); `0` restores that |
 | `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath` (`HDFS_SHORTCIRCUIT` / `HDFS_DOMAIN_SOCKET_PATH`) | unset = `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` from the `LIBHDFS3_CONF` file, else from the server's Hadoop configuration (a socket path alone turns short-circuit on); startup line `hdfs=shortCircuit` | unset = hadoopfs's own defaults (off, no socket), so DuckDB read every HDFS block over TCP whatever `LIBHDFS3_CONF` said |
 | `duckDbPreserveInsertionOrder` under `resourceProfile=speed` only | `false` (rows without ORDER BY in any order) | `true` (balanced unchanged) |
+| `hdfsLocalCopyMinFreeBytes` (`arrowflight.hdfs.localCopyMinFreeBytes`, `HDFS_LOCAL_COPY_MIN_FREE_BYTES`) | unset = min(1 GiB, 10 % of the copies' disk); a size wins, 0 = the copies only have to fit (line `hdfs=localCopyCache ... minFreeBytes=... reserve=default\|set diskBytes=...`, WARN when a set reserve is not below the disk size) | 1 GiB on any disk (item 30) |
 
 **New server settings (opt-in or unchanged behaviour by default)**
 
@@ -53,7 +54,6 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
 | `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
 | `hdfsLocalCopyDir` (`arrowflight.hdfs.localCopyDir`, `HDFS_LOCAL_COPY_DIR`) | unset = below the DuckDB temp root | absolute directory (another disk) for the node-local copies; the server copies into its own `duckdb-<pid>-*` subdirectory there, allowed to DuckDB, deleted when it stops |
-| `hdfsLocalCopyMinFreeBytes` (`arrowflight.hdfs.localCopyMinFreeBytes`, `HDFS_LOCAL_COPY_MIN_FREE_BYTES`) | `1GiB` (0 = the copies only have to fit) | only with node-local copies: bytes that must stay free on the copies' disk after a query's new copies; a query that would leave less is refused before anything is copied (unused copies are evicted for room first) |
 
 **New plugin settings (all off by default)**
 
@@ -97,6 +97,19 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Changed - node-local copy reserve relative on small disks; `hdfs=reads` on every complete answer (STATUS item 32)
+
+- `hdfsLocalCopyMinFreeBytes` unset now keeps min(1 GiB, 10 % of the copy disk's size) free instead of 1 GiB, so a
+  small copy disk (e.g. a 64 MiB tmpfs) takes copies with the defaults; a set value is kept as it is. The
+  `hdfs=localCopyCache` line (first copy) adds `reserve=default|set diskBytes=...` and is a WARN when the reserve is
+  not below the disk's size (every copy would be refused).
+- On short-circuit-only stores every complete answer logs an `hdfs=reads` line: also one that reads no data-store
+  table (`files=0 ... tables=none|unknown`) and, on the merging node of `distributedComplete=true`, one with
+  `tables=endpoints=N` (the endpoint nodes log their own reads). Copy-disk refusals stay `RESOURCE_EXHAUSTED` on the wire
+  (ADBC prints `INTERNAL: ... (ResourceExhausted; ...)`).
+- CI (service hdfs): the small-disk stage runs with the default reserve and checks the cache line; every sasl cell and
+  stage checks that each successful query (executionPath `success=true`) has an `hdfs=reads` line with its qid.
 
 ### Changed - SASL HDFS clusters: `hdfs=reads` for every complete answer (STATUS item 31, acceptance)
 

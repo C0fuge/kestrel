@@ -369,6 +369,10 @@ if [ "$n" -gt 1 ]; then
       finish fail "hdfsLocalCopyDir=/copies set, but only $customDirs of $n node(s) copied there"
     fi
   fi
+  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    srvs=(); for i in $(seq "$n"); do srvs+=("srv$i"); done
+    checkReadsPerQid "${srvs[@]}"
+  fi
   if [ "$rc2" -ne 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "sasl check: $(grep -m 1 '^result fail' "$work/sasl-check.log" | cut -c13- || echo 'client failed')"
   fi
@@ -399,9 +403,32 @@ if [ "$n" -gt 1 ]; then
   [ "$copies" -eq 0 ] || copyBlocks=$(( copyBlocks + n * ${blocks:-0} + copies ))
   note "local copies: $copies file(s) (+$copyBlocks blocks allowed over TCP); $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=reads .*localCopy=[1-9].*' || echo 'no hdfs=reads line with a local copy')"
 fi
+# Item 32: every query that succeeded on a node (an executionPath line with success=true) has an
+# hdfs=reads line with its qid on that node (complete answers too, also those merged from peers or
+# reading no table) - the benchmark summaries count reads per query. Prints "<missing> <queries>
+# <first missing: container qid>".
+missingReads() { # containers...
+  local c
+  for c in "$@"; do docker logs "$c" 2>&1 | sed "s/^/$c /"; done > "$work/reads-qid.log"
+  awk '
+    / executionPath=.* success=true/ { if (match($0, /qid=[^ ]+/)) { done[$1 " " substr($0, RSTART, RLENGTH)] = 1 } }
+    / hdfs=reads / { if (match($0, /qid=[^ ]+/)) { reads[$1 " " substr($0, RSTART, RLENGTH)] = 1 } }
+    END { m = 0; t = 0; first = "-"; for (q in done) { t++; if (!(q in reads)) { m++; if (first == "-") first = q } }
+          print m, t, first }' "$work/reads-qid.log"
+}
+checkReadsPerQid() { # containers...
+  local out missing total first
+  out=$(missingReads "$@"); read -r missing total first _ <<< "$out"
+  note "hdfs=reads per query ($*): $(( total - missing )) of $total queries with a line"
+  if [ "$total" -eq 0 ] || [ "$missing" -ne 0 ]; then
+    [ "$first" = - ] || grep -F "${first#* }" "$work/reads-qid.log" | grep "^${first%% *} " | head -n 5 | cut -c1-300
+    finish fail "hdfs=reads per query: $missing of $total successful queries without an hdfs=reads line (first: $first)"
+  fi
+}
 # Item 30 part 2b (4): a copy disk smaller than a query's input. After the cluster checks (sasl-cluster,
 # balanced only), the three servers stop and one server (numServers=1) starts in dn1's network
-# namespace with hdfsLocalCopyDir on a host tmpfs of the largest lineitem file + minFreeBytes + 4 MiB,
+# namespace with hdfsLocalCopyDir on a host tmpfs of the largest lineitem file + 4 MiB plus the
+# DEFAULT reserve (item 32: hdfsLocalCopyMinFreeBytes not set, so min(1 GiB, 10 % of the disk)),
 # so smaller than chunks.lineitem; the cache limit stays at its default, only the disk bounds the
 # copies. tools/ci/service-hdfs-smalldisk-check.py: scans and GROUP BY in parts go in batches sized by
 # the disk's room; a complete join needing every copy is answered or refused by the guard (never
@@ -409,10 +436,12 @@ fi
 # (item 31: hdfs=completeInCopyBatches; srvd runs with distributedComplete at its default, false, as on
 # the maintainer's stand, so aggregates do not take the distributed path); the tmpfs is sampled and its peak use must stay below its size.
 smallDisk() {
-  local minFree=$(( 8 * 1048576 )) largest total size dir peak sampler rc3 refused noSpace batches completeBatched i
+  local minFree largest total size dir peak sampler rc3 refused noSpace batches completeBatched i cacheLine
   largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
   total=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | awk '{ s += $1 } END { print s + 0 }')
-  size=$(( (largest + minFree + 4 * 1048576 + 1048575) / 1048576 * 1048576 ))
+  # 90 % of the disk (the default reserve keeps 10 % free) holds the largest file + 4 MiB.
+  size=$(( ((largest + 4 * 1048576) * 10 / 9 + 1048575) / 1048576 * 1048576 ))
+  minFree=$(( size / 100 * 10 ))
   [ "$(( size - minFree ))" -lt "$total" ] || { note "small disk: $size bytes hold every lineitem file ($total); skipped"; return 0; }
   for i in $(seq "$n"); do docker stop -t 20 "srv$i" > /dev/null; done
   dir="$work/smalldisk"; mkdir -p "$dir"
@@ -427,7 +456,7 @@ smallDisk() {
     --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
     --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
     -Dhazelcast.phone.home.enabled=false ${opts//-DdistributedComplete=true/} -DnumServers=1 -DendpointsPerServer=1 \
-    -DhdfsLocalCopyMinFreeBytes=$minFree -Darrowflight.duckdb.extensionDir=/extdir \
+    -Darrowflight.duckdb.extensionDir=/extdir \
     -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
     --data-dir "$dataDir" --localhost "$(dnIp 1)" --port 32010 --hazelcast-port 5701 \
     --hosts "$(dnIp 1):5701" --metrics-enabled false > /dev/null
@@ -451,6 +480,10 @@ smallDisk() {
   completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches' || true)
   note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, complete in batches $completeBatched, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
   sudo umount "$dir" || true
+  cacheLine=$(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || true)
+  note "small disk: ${cacheLine:-no hdfs=localCopyCache line}"
+  [[ $cacheLine == *"reserve=default diskBytes=$size"* ]] && [[ $cacheLine == *"minFreeBytes=$(( size / 100 * 10 )) "* ]] \
+    || finish fail "small disk: want the default reserve 10 % of the $size-byte disk in the cache line, got: ${cacheLine:-none}"
   [ "$rc3" -eq 0 ] || finish fail "small disk: $(grep -m 1 '^result fail' "$work/smalldisk-check.log" | cut -c13- || echo 'client failed')"
   [ -n "$peak" ] && [ "$peak" -lt "$size" ] || finish fail "small disk: copy disk peak use ${peak:-?} of $size bytes (filled)"
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
@@ -459,6 +492,7 @@ smallDisk() {
   [ "$completeBatched" -ge 6 ] || finish fail "small disk: $completeBatched of the 6 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines)"
   [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
+  checkReadsPerQid srvd
   return 0
 }
 # Item 31 (7): direct memory of a distributed complete full scan. After the cluster checks
@@ -506,6 +540,7 @@ lowDirect() {
   [ "$rc4" -eq 0 ] || finish fail "low direct memory: $(grep -m 1 '^result fail' "$work/lowdirect-check.log" | cut -c13- || echo 'client failed')"
   [ "$oom" -eq 0 ] || finish fail "low direct memory: OutOfMemoryError in a server log: $(cat "$work"/srvm*.log | grep -m 1 'OutOfMemoryError' | cut -c1-250)"
   [ "$merged" -ge 4 ] || finish fail "low direct memory: $merged of the 4 full scans were merged from endpoint answers (distributedComplete=merged lines)"
+  checkReadsPerQid $(for i in $(seq "$n"); do echo "srvm$i"; done)
   return 0
 }
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
@@ -513,6 +548,7 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
     finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
+  if $sasl && [ "$n" -eq 1 ]; then checkReadsPerQid "$srv"; fi
   if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; fi
   finish pass ""

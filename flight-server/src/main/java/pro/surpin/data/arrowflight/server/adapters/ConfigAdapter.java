@@ -381,8 +381,40 @@ public class ConfigAdapter {
         return bytes;
     }
 
-    /** Default of {@code hdfsLocalCopyMinFreeBytes}: 1 GiB (item 30). */
+    /** Default of {@code hdfsLocalCopyMinFreeBytes} on disks of 10 GiB and more: 1 GiB (item 30). */
     public static final long DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_BYTES = 1L << 30;
+
+    /** Share of the copy disk's size kept free by default on disks below 10 GiB (item 32). */
+    public static final int DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_PERCENT = 10;
+
+    /**
+     * Tells whether {@code hdfsLocalCopyMinFreeBytes} is set in the configuration.
+     *
+     * @param props configuration source
+     * @return true when set, false when the default applies
+     */
+    public static boolean hdfsLocalCopyMinFreeBytesSet(ConfigSource props) {
+        return getStringWithEnv("hdfsLocalCopyMinFreeBytes", "arrowflight.hdfs.localCopyMinFreeBytes",
+                "HDFS_LOCAL_COPY_MIN_FREE_BYTES", null, props) != null;
+    }
+
+    /**
+     * Resolves the bytes kept free on the copy disk: the configured
+     * {@code hdfsLocalCopyMinFreeBytes}, else min(1 GiB, 10 % of the disk's size) so that a
+     * small copy disk still takes copies (item 32).
+     *
+     * @param props configuration source
+     * @param diskBytes total size of the copy disk, 0 or less when unknown
+     * @return bytes
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long hdfsLocalCopyMinFreeBytes(ConfigSource props, long diskBytes) {
+        if (hdfsLocalCopyMinFreeBytesSet(props) || diskBytes <= 0) {
+            return hdfsLocalCopyMinFreeBytes(props);
+        }
+        return Math.min(DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_BYTES,
+                diskBytes / 100 * DEFAULT_HDFS_LOCAL_COPY_MIN_FREE_PERCENT);
+    }
 
     /**
      * Returns hdfsLocalCopyMinFreeBytes from the system configuration.

@@ -657,6 +657,35 @@ class ExecutionServiceTest {
     }
 
     /**
+     * Item 32: a complete answer that reads no table of the data store still logs one
+     * {@code hdfs=reads} line on a short-circuit-only node, and none when local copies are off.
+     */
+    @Test
+    void completeAnswerWithoutTablesLogsItsReads() throws Exception {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.localCopies()).thenReturn(true);
+        ExecutionService service = new ExecutionService(parquet, mock(DuckDbAdapter.class),
+                mock(MetadataService.class), null, null);
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try (ExecutionService.CopiedQuery same = service.completeFromCopies("SELECT 1 AS one")) {
+            assertFalse(same.copied());
+            assertEquals("SELECT 1 AS one", same.sql());
+            service.logNoFileReads("endpoints=3");
+            when(parquet.localCopies()).thenReturn(false);
+            service.logNoFileReads("endpoints=4");
+        } finally {
+            System.setErr(err);
+        }
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains("hdfs=reads files=0 shortCircuit=0 localCopy=0 tables=none"), text);
+        assertTrue(text.contains("hdfs=reads files=0 shortCircuit=0 localCopy=0 tables=endpoints=3"),
+                text);
+        assertFalse(text.contains("tables=endpoints=4"), text);
+    }
+
+    /**
      * Item 30 part 2b: a scan whose local copies do not fit the cache is read in batches whose
      * copies fit, each batch's copies deleted before the next is copied, and every row is sent
      * through one stream (files read in place go with the first batch).

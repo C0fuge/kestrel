@@ -293,6 +293,25 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void hdfsLocalCopyMinFreeBytesDefaultIsRelativeOnSmallDisks() throws IOException {
+        // Item 32: by default min(1 GiB, 10 % of the copy disk), so a 64 MiB tmpfs takes copies.
+        assertFalse(ConfigAdapter.hdfsLocalCopyMinFreeBytesSet(source(Map.of(), Map.of())));
+        assertEquals(64L * 1024 * 1024 / 100 * 10,
+                ConfigAdapter.hdfsLocalCopyMinFreeBytes(source(Map.of(), Map.of()), 64L << 20));
+        assertEquals(1L << 30,
+                ConfigAdapter.hdfsLocalCopyMinFreeBytes(source(Map.of(), Map.of()), 500L << 30));
+        assertEquals(1L << 30,
+                ConfigAdapter.hdfsLocalCopyMinFreeBytes(source(Map.of(), Map.of()), 0));
+        // A set value is kept as it is, also above the disk's size.
+        assertTrue(ConfigAdapter.hdfsLocalCopyMinFreeBytesSet(
+                source(Map.of(), Map.of("HDFS_LOCAL_COPY_MIN_FREE_BYTES", "1GiB"))));
+        assertEquals(1L << 30, ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "1GiB"), Map.of()), 64L << 20));
+        assertEquals(0L, ConfigAdapter.hdfsLocalCopyMinFreeBytes(
+                source(Map.of("hdfsLocalCopyMinFreeBytes", "0"), Map.of()), 64L << 20));
+    }
+
+    @Test
     void hdfsLocalCopyMinFreeBytesDefaultsTo1GiBAndTakesSizes() throws IOException {
         assertEquals(1L << 30, ConfigAdapter.hdfsLocalCopyMinFreeBytes(source(Map.of(), Map.of())));
         assertEquals(500_000_000L, ConfigAdapter.hdfsLocalCopyMinFreeBytes(

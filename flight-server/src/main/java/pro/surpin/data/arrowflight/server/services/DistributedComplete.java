@@ -200,6 +200,8 @@ public final class DistributedComplete implements AutoCloseable {
             }
             client.flushStart();
             merged.incrementAndGet();
+            // The endpoint nodes log how they read the files; this node read none of them.
+            execution.logNoFileReads("endpoints=" + endpoints.size());
             LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
                     + " peerWaitMs={} query='{}'", LogUtil.node(), endpoints.size(),
                     (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),

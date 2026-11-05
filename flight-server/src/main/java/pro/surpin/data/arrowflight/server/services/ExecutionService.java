@@ -24,6 +24,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -62,6 +64,7 @@ import pro.surpin.data.arrowflight.spi.catalog.TableSnapshot;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 import pro.surpin.data.arrowflight.server.storage.LocalCopyCache;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 
 import java.math.BigDecimal;
 
@@ -1728,6 +1731,21 @@ public final class ExecutionService {
     }
 
     /**
+     * Logs the {@code hdfs=reads} line of a query that reads no file of the data store on this
+     * node (item 32), so that every query on a short-circuit-only store has one; nothing is
+     * logged when local copies are off.
+     *
+     * @param tables why no file is read: {@code none} (no table of the data store),
+     *        {@code unknown} (tables not named), or {@code endpoints=N} (merged from peers)
+     */
+    public void logNoFileReads(String tables) {
+        if (parquetAdapter.localCopies()) {
+            LOGGER.info("qid={} node={} hdfs=reads files=0 shortCircuit=0 localCopy=0 tables={}",
+                    LogUtil.qid(), LogUtil.node(), tables);
+        }
+    }
+
+    /**
      * Answers a complete-mode query of one table whose local copies do not fit the copy cache
      * at once (HDFS read short-circuit only, item 31): the table's files are read as one ticket
      * of the partial path, whose copies go in batches that fit (a scan's rows concatenated, an
@@ -1903,6 +1921,7 @@ public final class ExecutionService {
         try {
             tables = QueryTables.of(sql);
         } catch (IllegalArgumentException e) {
+            logNoFileReads("unknown");
             return new CopiedQuery(sql, null);
         }
         DataStore store = parquetAdapter.dataStore();
@@ -1937,7 +1956,9 @@ public final class ExecutionService {
             }
         }
         if (copied.isEmpty()) {
-            if (!listedTables.isEmpty()) {
+            if (listedTables.isEmpty()) {
+                logNoFileReads("none");
+            } else {
                 // Every file is held whole here: still one line per query on how it is read.
                 copies(List.of(), files);
             }
@@ -2081,11 +2102,25 @@ public final class ExecutionService {
             DataStore store = parquetAdapter.dataStore();
             long maxBytes = ConfigAdapter.hdfsLocalCopyMaxBytes();
             int threads = ConfigAdapter.hdfsLocalCopyThreads();
-            long minFreeBytes = ConfigAdapter.hdfsLocalCopyMinFreeBytes();
-            localCopyCache = new LocalCopyCache(duckDbAdapter.localCopyRoot(), maxBytes, threads,
+            Path root = Files.createDirectories(duckDbAdapter.localCopyRoot());
+            long diskBytes = Files.getFileStore(root).getTotalSpace();
+            ConfigSource config = ConfigSource.system();
+            boolean reserveSet = ConfigAdapter.hdfsLocalCopyMinFreeBytesSet(config);
+            long minFreeBytes = ConfigAdapter.hdfsLocalCopyMinFreeBytes(config, diskBytes);
+            localCopyCache = new LocalCopyCache(root, maxBytes, threads,
                     file -> store.inputFile(file).newStream(), minFreeBytes, LocalCopyCache.FILE_STORE);
-            LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}",
-                    LogUtil.node(), localCopyCache.directory(), maxBytes, threads, minFreeBytes);
+            String reserve = reserveSet ? "set" : "default";
+            if (diskBytes > 0 && minFreeBytes >= diskBytes) {
+                LOGGER.warn("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}"
+                        + " reserve={} diskBytes={}: the reserve is not below the disk's size, every"
+                        + " copy will be refused; lower hdfsLocalCopyMinFreeBytes or give"
+                        + " hdfsLocalCopyDir a larger disk", LogUtil.node(), localCopyCache.directory(),
+                        maxBytes, threads, minFreeBytes, reserve, diskBytes);
+            } else {
+                LOGGER.info("node={} hdfs=localCopyCache dir={} maxBytes={} threads={} minFreeBytes={}"
+                        + " reserve={} diskBytes={}", LogUtil.node(), localCopyCache.directory(),
+                        maxBytes, threads, minFreeBytes, reserve, diskBytes);
+            }
         }
         return localCopyCache;
     }
