@@ -28,6 +28,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Checks that an endpoint answer stream not yet read receives only its schema (item 31: idle
@@ -83,15 +84,21 @@ class PeerReadGateTest {
     @Tag("integration")
     void closingAnIdleFlightStreamEnds() throws Exception {
         Schema schema = new Schema(List.of(Field.nullable("v", new ArrowType.Int(64, true))));
-        try (BufferAllocator allocator = new RootAllocator();
+        BufferAllocator allocator = new RootAllocator();
+        BatchProducer producer = new BatchProducer(allocator, schema);
+        try (allocator;
                 FlightServer server = FlightServer.builder(allocator, Location.forGrpcInsecure("localhost", 0),
-                        new BatchProducer(allocator, schema)).build().start();
+                        producer).build().start();
                 FlightClient client = FlightClient.builder(allocator,
                         Location.forGrpcInsecure("localhost", server.getPort())).build()) {
             PeerReadGate gate = new PeerReadGate();
             FlightStream stream = client.getStream(new Ticket("t".getBytes(StandardCharsets.UTF_8)), gate);
             assertEquals(schema.getFields(), stream.getSchema().getFields());
             assertTimeoutPreemptively(Duration.ofSeconds(20), stream::close);
+            // The server's call thread may still hold a batch after the cancel: let it release
+            // it before the shared allocator closes (else a spurious "Memory was leaked").
+            assertTrue(producer.finished.await(20, java.util.concurrent.TimeUnit.SECONDS),
+                    "producer did not end after the cancel");
         }
     }
 
@@ -204,6 +211,8 @@ class PeerReadGateTest {
     private static final class BatchProducer extends NoOpFlightProducer {
         private final BufferAllocator allocator;
         private final Schema schema;
+        /** Counted down when a getStream call has released its batches. */
+        private final java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
 
         /**
          * Creates the producer.
@@ -231,6 +240,8 @@ class PeerReadGateTest {
                     listener.putNext();
                 }
                 listener.completed();
+            } finally {
+                finished.countDown();
             }
         }
     }
