@@ -98,6 +98,16 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - SASL HDFS clusters: every copy refusal of a complete answer says why it was not batched (STATUS item 33, regression)
+
+- A complete-mode answer refused for lack of copy room (RESOURCE_EXHAUSTED) now always logs
+  `hdfs=completeInCopyBatches skipped tables=[...] localCopy=N copyBytes=B reason='...'` (WARN) with the exact reason
+  it was not read in batches of copies: the query joins tables or reads more than one table (named), it is not one
+  query of one table (parser message), it uses a feature the batches cannot merge (named, e.g. ORDER BY without an
+  aggregate, DISTINCT or LIMIT), the column types differ, the statement has parameter values, or its copies make one
+  batch only / fitted the copy room when it was planned (sizes given). Before, several of these cases logged nothing,
+  and the line came before the refusal even when the query was then answered. Log only; answers unchanged.
+
 ### Changed - SASL HDFS clusters: copy refusals tell the query's own copies from other queries' (STATUS item 33, regression)
 
 - A copy refusal (RESOURCE_EXHAUSTED, `hdfs=localCopyNoSpace`) no longer reports the copies the refused query itself

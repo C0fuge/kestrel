@@ -704,6 +704,111 @@ class ExecutionServiceTest {
     }
 
     /**
+     * Item 33 regression: a complete answer refused for lack of copy room logs why it was not
+     * read in batches of copies, so a refusal on a small copy disk names its cause.
+     */
+    @Test
+    void refusedCompleteAnswerLogsWhyItIsNotBatched(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path a = dir.resolve("a.parquet");
+        java.nio.file.Path b = dir.resolve("b.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT range AS v FROM range(100)) TO '" + a + "' (FORMAT parquet)");
+            st.execute("COPY (SELECT range AS v FROM range(100)) TO '" + b + "' (FORMAT parquet)");
+        }
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile first = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet",
+                java.nio.file.Files.size(a), 1L, Set.of());
+        DataFile second = new DataFile("s/u/b.parquet", "hdfs://ns/data/s/u/b.parquet",
+                java.nio.file.Files.size(b), 1L, Set.of());
+        DataFile third = new DataFile("s/u/c.parquet", "hdfs://ns/data/s/u/c.parquet",
+                java.nio.file.Files.size(b), 1L, Set.of());
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.tableFiles("s", "t")).thenReturn(List.of(first));
+        when(parquet.tableFiles("s", "u")).thenReturn(List.of(second, third));
+        when(parquet.getTableSchema(anyString(), anyString())).thenReturn(new Schema(List.of()));
+        when(store.readableHere(any(DataFile.class))).thenReturn(false);
+        when(store.inputFile(any(DataFile.class))).thenReturn(new org.apache.parquet.io.LocalInputFile(a));
+        when(duckDb.localCopyRoot()).thenReturn(dir.resolve("localcopy"));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+        org.apache.arrow.flight.FlightProducer.ServerStreamListener listener =
+                mock(org.apache.arrow.flight.FlightProducer.ServerStreamListener.class);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        // A reserve no disk has: the copy room is 1 byte and every copy is refused.
+        System.setProperty("hdfsLocalCopyMinFreeBytes", "1000000000000000000");
+        try (BufferAllocator allocator = new RootAllocator()) {
+            ExecutionService.CopyBatches one = service.completeInCopyBatches(allocator,
+                    "SELECT count(*) FROM s.t", listener, null);
+            assertFalse(one.streamed());
+            assertTrue(one.notBatched().contains("the 1 copies of s.t") && one.notBatched()
+                    .contains("make one batch only; the copy room is 1 bytes"), one.notBatched());
+            String ordered = "SELECT v FROM s.u ORDER BY v";
+            ExecutionService.CopyBatches sorted = service.completeInCopyBatches(allocator, ordered,
+                    listener, null);
+            assertFalse(sorted.streamed());
+            assertTrue(sorted.notBatched().contains("ORDER BY without"), sorted.notBatched());
+            assertNotNull(pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
+                    .in(assertThrows(java.io.IOException.class,
+                            () -> service.completeFromCopies(ordered, sorted.notBatched()))));
+            ExecutionService.CopyBatches joined = service.completeInCopyBatches(allocator,
+                    "SELECT count(*) FROM s.t JOIN s.u ON t.v = u.v", listener, null);
+            assertFalse(joined.streamed());
+            assertNotNull(joined.notBatched());
+            // Without a reason (copies off, or a caller that has none) no line is added.
+            assertThrows(java.io.IOException.class,
+                    () -> service.completeFromCopies("SELECT count(*) FROM s.t", null));
+        } finally {
+            System.clearProperty("hdfsLocalCopyMinFreeBytes");
+            System.setErr(err);
+        }
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains("hdfs=completeInCopyBatches skipped tables=[s.u] localCopy=2 copyBytes="
+                + 2 * java.nio.file.Files.size(b) + " reason='its answer cannot be merged from batches"
+                + " of copies (ORDER BY without"), text);
+        assertEquals(1, text.split("hdfs=completeInCopyBatches skipped", -1).length - 1, text);
+        verify(listener, times(0)).start(any());
+        when(parquet.localCopies()).thenReturn(false);
+        try (BufferAllocator allocator = new RootAllocator()) {
+            ExecutionService.CopyBatches off = service.completeInCopyBatches(allocator,
+                    "SELECT count(*) FROM s.t", listener, null);
+            assertFalse(off.streamed());
+            assertNull(off.notBatched());
+        }
+    }
+
+    /** Item 33 regression: each reason a complete query is not read in batches of copies is named. */
+    @Test
+    void notBatchableReasonNamesTheCause() {
+        List<ParquetQueryParser.JoinTable> t = List.of(new ParquetQueryParser.JoinTable("s", "t", null));
+        String scan = "SELECT a FROM s.t WHERE a > 1";
+        assertNull(ExecutionService.notBatchableReason(scan, ParquetQueryParser.parse(scan), t));
+        String group = "SELECT a, count(*) FROM s.t GROUP BY 1";
+        assertNull(ExecutionService.notBatchableReason(group, ParquetQueryParser.parse(group), t));
+        assertEquals("the query reads [s.t, s.u], not only s.t", ExecutionService.notBatchableReason(
+                scan, ParquetQueryParser.parse(scan), List.of(new ParquetQueryParser.JoinTable("s", "t", null),
+                        new ParquetQueryParser.JoinTable("s", "u", null))));
+        assertEquals("the query reads [t], not only s.t", ExecutionService.notBatchableReason(
+                scan, ParquetQueryParser.parse(scan), List.of(new ParquetQueryParser.JoinTable(null, "t", null))));
+        String join = "SELECT count(*) FROM s.t x JOIN s.u y ON x.a = y.a";
+        assertEquals("the query joins tables", ExecutionService.notBatchableReason(join,
+                ParquetQueryParser.parse(join), List.of(new ParquetQueryParser.JoinTable("s", "t", null),
+                        new ParquetQueryParser.JoinTable("s", "u", null))));
+        String ordered = "SELECT a FROM s.t ORDER BY a";
+        assertEquals("its answer cannot be merged from batches of copies (ORDER BY without an"
+                + " aggregate, DISTINCT or LIMIT)", ExecutionService.notBatchableReason(ordered,
+                        ParquetQueryParser.parse(ordered), t));
+    }
+
+    /**
      * Item 32: a complete answer that reads no table of the data store still logs one
      * {@code hdfs=reads} line on a short-circuit-only node, and none when local copies are off.
      */

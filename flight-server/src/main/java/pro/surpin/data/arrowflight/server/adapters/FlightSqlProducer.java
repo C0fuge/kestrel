@@ -717,18 +717,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 pathTracker.select(ExecutionPath.COMPLETE_ANSWER);
                 DistributedComplete distributed = distributedComplete;
                 // A query of catalog views runs as checked: its views replaced by their queries.
-                if ((distributed == null || state.parameters() != null || !expanded.equals(query)
-                        || !distributed.stream(query, user, listener))
-                        && (state.parameters() != null || !executionService.completeInCopyBatches(
-                                allocator, expanded, listener, pathTracker))) {
-                    try (ExecutionService.CopiedQuery copied =
-                            executionService.completeFromCopies(expanded)) {
-                        if (!copied.copied()) {
-                            requireReadableHere(query);
-                        }
-                        executionService.readComplete(allocator, copied.sql(), state.parameters(),
-                                listener, true);
-                    }
+                if (distributed == null || state.parameters() != null || !expanded.equals(query)
+                        || !distributed.stream(query, user, listener)) {
+                    streamComplete(allocator, query, expanded, state, listener, pathTracker);
                 }
             } else {
                 executionService.readParquet(
@@ -1857,6 +1848,42 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             T request, FlightDescriptor descriptor, Schema schema) {
         final List<FlightEndpoint> endpoints = determineEndpoints(request, descriptor, schema);
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
+    }
+
+    /**
+     * Streams a complete answer on this node: in batches of copies when its one table's copies
+     * do not fit at once, else over every file (copied where this node lacks blocks).
+     *
+     * @param allocator   Arrow buffer allocator
+     * @param query       client SQL
+     * @param expanded    SQL with restrictions and catalog views applied
+     * @param state       the ticket's state
+     * @param listener    Flight stream listener
+     * @param pathTracker runtime execution-path tracker
+     * @throws Exception on copy or execution failure
+     */
+    private void streamComplete(BufferAllocator allocator, String query, String expanded,
+            HandleState state, FlightProducer.ServerStreamListener listener,
+            ExecutionPathTracker pathTracker) throws Exception {
+        String notBatched;
+        if (state.parameters() != null) {
+            notBatched = "the statement has parameter values";
+        } else {
+            ExecutionService.CopyBatches batches = executionService.completeInCopyBatches(
+                    allocator, expanded, listener, pathTracker);
+            if (batches != null && batches.streamed()) {
+                return;
+            }
+            notBatched = batches == null ? null : batches.notBatched();
+        }
+        try (ExecutionService.CopiedQuery copied =
+                executionService.completeFromCopies(expanded, notBatched)) {
+            if (!copied.copied()) {
+                requireReadableHere(query);
+            }
+            executionService.readComplete(allocator, copied.sql(), state.parameters(),
+                    listener, true);
+        }
     }
 
     /**

@@ -1796,20 +1796,24 @@ public final class ExecutionService {
      * aggregate, DISTINCT or LIMIT merged from the batches' answers), so the answer equals the
      * one computed over all files at once. Nothing is sent and false is returned when local
      * copies are off, the copies fit, the query reads more than one table or a shape the batches
-     * cannot answer, or the partial path would describe its answer differently.
+     * cannot answer, or the partial path would describe its answer differently; the result then
+     * says why, for the log line of a refusal ({@link #completeFromCopies(String, String)}).
      *
      * @param allocator   Arrow buffer allocator
      * @param clientSql   SQL of the complete answer (restrictions already applied)
      * @param listener    Flight stream listener, not started
      * @param pathTracker runtime execution-path tracker
-     * @return true when the answer was streamed
+     * @return whether the answer was streamed, and why not
      * @throws Exception on copy or execution failure
      */
-    public boolean completeInCopyBatches(BufferAllocator allocator, String clientSql,
+    public CopyBatches completeInCopyBatches(BufferAllocator allocator, String clientSql,
             FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
             throws Exception {
-        if (!parquetAdapter.localCopies() || TimeTravelClause.present(clientSql)) {
-            return false;
+        if (!parquetAdapter.localCopies()) {
+            return CopyBatches.declined(null);
+        }
+        if (TimeTravelClause.present(clientSql)) {
+            return CopyBatches.declined("the query reads a past snapshot");
         }
         String sql;
         ParquetQueryParser parsed;
@@ -1821,18 +1825,23 @@ public final class ExecutionService {
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         } catch (RuntimeException e) {
-            return false;   // the complete path reports what is wrong with the SQL
+            // The complete path reports what is wrong with the SQL.
+            return CopyBatches.declined("the query is not one query of one table ("
+                    + e.getMessage() + ")");
         }
-        if (parsed.schema == null || parsed.table == null
-                || parquetAdapter.isCatalogSchema(parsed.schema)) {
-            return false;
+        if (parsed.schema == null || parsed.table == null) {
+            return CopyBatches.declined("the query names no table with its schema");
         }
-        boolean batchable = batchableComplete(sql, parsed, tables);
+        if (parquetAdapter.isCatalogSchema(parsed.schema)) {
+            return CopyBatches.declined(parsed.schema + " is a catalog schema");
+        }
+        String notBatchable = notBatchableReason(sql, parsed, tables);
         List<DataFile> listed;
         try {
             listed = parquetAdapter.tableFiles(parsed.schema, parsed.table);
         } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
-            return false;
+            return CopyBatches.declined(parsed.schema + "." + parsed.table
+                    + " is not a table of the data store (" + e.getMessage() + ")");
         }
         DataStore store = parquetAdapter.dataStore();
         List<DataFile> unreadable = new ArrayList<>();
@@ -1844,13 +1853,17 @@ public final class ExecutionService {
                 unreadable.add(file);
             }
         }
-        if (copyBatches(fileUris, unreadable, copyLimit(unreadable)).size() < 2) {
-            return false;
+        long room = copyLimit(unreadable);
+        if (copyBatches(fileUris, unreadable, room).size() < 2) {
+            String copies = "the " + unreadable.size() + " copies of " + parsed.schema + "."
+                    + parsed.table + " (" + bytes(unreadable) + " bytes)";
+            return CopyBatches.declined(unreadable.isEmpty() ? "no file of " + parsed.schema + "."
+                    + parsed.table + " needs a copy" : bytes(unreadable) <= room
+                    ? copies + " fitted the copy room (" + room + " bytes) when the query was planned"
+                    : copies + " make one batch only; the copy room is " + room + " bytes");
         }
-        if (!batchable) {
-            logNotInCopyBatches(parsed, unreadable.size(), "the query reads more than this table or"
-                    + " its answer cannot be merged from batches of copies");
-            return false;
+        if (notBatchable != null) {
+            return CopyBatches.declined(notBatchable);
         }
         Schema complete = completeSchema(allocator, sql);
         Schema partial = resultSchema(allocator, sql);
@@ -1858,35 +1871,56 @@ public final class ExecutionService {
         // Column names may differ (an unaliased count(*) is count_star() in the complete answer,
         // item 33 (A)): the answer then takes the complete answer's names.
         if (renamed && !RenamingStreamListener.sameTypes(complete, partial)) {
-            logNotInCopyBatches(parsed, unreadable.size(), "the column types of the answer in parts "
+            return CopyBatches.declined("the column types of the answer in parts "
                     + partial.getFields() + " differ from the complete answer's " + complete.getFields());
-            return false;
         }
         LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}"
                 + " renamed={}", LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table,
                 fileUris.length, unreadable.size(), renamed);
         if (!renamed) {
             readParquet(allocator, sql, fileUris, listener, true, pathTracker);
-            return true;
+            return CopyBatches.STREAMED;
         }
         try (RenamingStreamListener named = new RenamingStreamListener(listener, allocator, complete)) {
             readParquet(allocator, sql, fileUris, named, true, pathTracker);
         }
-        return true;
+        return CopyBatches.STREAMED;
     }
 
     /**
-     * Logs why a complete-mode query whose copies do not fit at once is not read in batches of
-     * copies (item 33): it then needs every copy at once and is refused when the disk lacks room.
+     * Returns the bytes of files.
      *
-     * @param parsed the parsed SQL
-     * @param copies files that need copies
-     * @param reason why the batches cannot answer it
+     * @param files data files
+     * @return the sum of their sizes
      */
-    private static void logNotInCopyBatches(ParquetQueryParser parsed, int copies, String reason) {
-        LOGGER.warn("qid={} node={} hdfs=completeInCopyBatches skipped table={}.{} localCopy={}"
-                + " reason='{}'", LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table, copies,
-                reason);
+    private static long bytes(List<DataFile> files) {
+        long total = 0;
+        for (DataFile file : files) {
+            total += file.size();
+        }
+        return total;
+    }
+
+    /**
+     * Whether a complete answer was streamed in batches of copies and, when not, why.
+     *
+     * @param streamed true when the answer was streamed
+     * @param notBatched why it was not, or null when it was or the question does not arise
+     *        (local copies off)
+     */
+    public record CopyBatches(boolean streamed, String notBatched) {
+        /** The answer was streamed in batches of copies. */
+        public static final CopyBatches STREAMED = new CopyBatches(true, null);
+
+        /**
+         * Returns a result for an answer not streamed in batches.
+         *
+         * @param reason why, or null
+         * @return the result
+         */
+        public static CopyBatches declined(String reason) {
+            return new CopyBatches(false, reason);
+        }
     }
 
     /**
@@ -1902,13 +1936,44 @@ public final class ExecutionService {
      */
     static boolean batchableComplete(String sql, ParquetQueryParser parsed,
             List<ParquetQueryParser.JoinTable> tables) {
-        if (parsed.isJoin || parsed.schema == null || parsed.table == null || tables.size() != 1
-                || tables.get(0).schema() == null
+        return notBatchableReason(sql, parsed, tables) == null;
+    }
+
+    /**
+     * Tells why a complete-mode query cannot be answered by the partial path over all files of
+     * its one table read in batches of copies ({@link #batchableComplete}).
+     *
+     * @param sql SQL with plain names qualified
+     * @param parsed the parsed SQL
+     * @param tables the tables the SQL reads ({@link QueryTables#of})
+     * @return the reason, or null when the batches answer it
+     */
+    static String notBatchableReason(String sql, ParquetQueryParser parsed,
+            List<ParquetQueryParser.JoinTable> tables) {
+        if (parsed.isJoin) {
+            return "the query joins tables";
+        }
+        if (parsed.schema == null || parsed.table == null) {
+            return "the query names no table with its schema";
+        }
+        if (tables.size() != 1 || tables.get(0).schema() == null
                 || !tables.get(0).schema().equalsIgnoreCase(parsed.schema)
                 || !tables.get(0).table().equalsIgnoreCase(parsed.table)) {
-            return false;
+            List<String> names = new ArrayList<>(tables.size());
+            for (ParquetQueryParser.JoinTable table : tables) {
+                names.add(table.schema() == null ? table.table() : table.schema() + "." + table.table());
+            }
+            return "the query reads " + names + ", not only " + parsed.schema + "." + parsed.table;
         }
-        return concatenatable(parsed) || CopyBatchMerge.of(sql, parsed) != null;
+        if (concatenatable(parsed) || CopyBatchMerge.of(sql, parsed) != null) {
+            return null;
+        }
+        String why = parsed.completeAnswerReason != null ? parsed.completeAnswerReason
+                : parsed.singleNodeFeature() != null ? "it uses " + parsed.singleNodeFeature()
+                : CompleteAnswerMerge.partsRefusal(parsed);
+        return "its answer cannot be merged from batches of copies"
+                + (why == null ? (parsed.hasOrderOrLimit() ? " (ORDER BY without an aggregate, DISTINCT"
+                        + " or LIMIT)" : "") : ": " + why);
     }
 
     /**
@@ -1987,6 +2052,23 @@ public final class ExecutionService {
      *         the rewrite cannot replace (e.g. without its schema), naming its files
      */
     public CopiedQuery completeFromCopies(String clientSql) throws IOException {
+        return completeFromCopies(clientSql, null);
+    }
+
+    /**
+     * Prepares a complete answer on a node lacking blocks of the tables it reads, as
+     * {@link #completeFromCopies(String)}; when the copies are refused for lack of room, a WARN
+     * line {@code hdfs=completeInCopyBatches skipped} gives the reason the answer was not read in
+     * batches of copies (item 33).
+     *
+     * @param clientSql SQL of the complete answer (restrictions already applied)
+     * @param notBatched why the answer is not read in batches of copies, or null
+     * @return SQL to run and the copies it reads; close it after streaming
+     * @throws IOException when a file cannot be listed or copied
+     * @throws IllegalArgumentException when a table whose files are copied is also read in a way
+     *         the rewrite cannot replace (e.g. without its schema), naming its files
+     */
+    public CopiedQuery completeFromCopies(String clientSql, String notBatched) throws IOException {
         if (!parquetAdapter.localCopies() || TimeTravelClause.present(clientSql)) {
             return new CopiedQuery(clientSql, null);
         }
@@ -2007,6 +2089,7 @@ public final class ExecutionService {
         Map<String, List<DataFile>> copied = new LinkedHashMap<>();
         List<DataFile> unreadable = new ArrayList<>();
         Set<String> listedTables = new HashSet<>();
+        List<String> copiedNames = new ArrayList<>();
         int files = 0;
         for (ParquetQueryParser.JoinTable table : tables) {
             String schema = schemaRead(table);
@@ -2031,6 +2114,7 @@ public final class ExecutionService {
             }
             if (!missing.isEmpty()) {
                 copied.put(key, listed);
+                copiedNames.add(schema + "." + table.table());
                 unreadable.addAll(missing);
             }
         }
@@ -2066,7 +2150,17 @@ public final class ExecutionService {
                         + " cannot be read from local copies; this node lacks blocks of"));
             }
         }
-        LocalCopyCache.Lease lease = copies(unreadable, files);
+        LocalCopyCache.Lease lease;
+        try {
+            lease = copies(unreadable, files);
+        } catch (LocalCopyCache.NoRoomException e) {
+            if (notBatched != null) {
+                LOGGER.warn("qid={} node={} hdfs=completeInCopyBatches skipped tables={} localCopy={}"
+                        + " copyBytes={} reason='{}'", LogUtil.qid(), LogUtil.node(), copiedNames,
+                        unreadable.size(), bytes(unreadable), notBatched);
+            }
+            throw e;
+        }
         try {
             List<String> sources = new ArrayList<>(references.size());
             for (TableReferences.Reference reference : references) {
