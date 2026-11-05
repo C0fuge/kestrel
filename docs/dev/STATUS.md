@@ -51,6 +51,25 @@
 > CI: small-disk stage in partial mode on 3 servers (default profile) with the sum -> DISTINCT sequence, count(*) and
 > GROUP BY 1 batched, distributedComplete q04 with no HdfsNetworkException. Then `package=true`, "ITEM 33 DONE".
 
+> **Item 33 progress (2026-11-05, core lane, `a744ef50` + `75de58bc`):** done in code and CI - (C) root cause
+> found: `LocalCopyCache.acquire` made room for a query's new copies BEFORE pinning the copies it reuses, so eviction
+> could delete a reused copy (data_6), which was then copied again without being counted -> ENOSPC. Reused copies are
+> now pinned first (a refusal unpins them), every copy started is counted against the disk, and aggregate / DISTINCT /
+> LIMIT batches take cached files first (`cachedFirst`). (A) complete-mode batches accepted only identical column
+> names; unaliased `count(*)` is `count_star()` in the complete answer -> now same types suffice and the answer takes
+> the complete names (`RenamingStreamListener`, log `hdfs=completeInCopyBatches ... renamed=true`). (B) `GROUP BY 1`
+> resolves to the select-list column (also in partial mode: answered in parts like `GROUP BY <column>`, before it got
+> the complete answer). (D) `distributedComplete` keeps queries with subqueries (more than one table, or a nested
+> SELECT) on the single-node complete path, which plans copies for every table. (E) parser ERROR -> DEBUG. CI: the
+> small-disk stage adds unaliased count(*) / filtered count(*), sum (complete), GROUP BY 1, 2 (both modes) and the sum ->
+> DISTINCT sequence (partial); sasl-cluster fails on any `HdfsNetworkException` / "does not exist because schema" line
+> (0). Service hdfs 42027060707 12/12, Dev CI 42027060883 green; `package=true` dispatched on the unlock commit (the
+> first one, 42029413029, hit "main moved"). **Remaining:** (E) partial-mode q04 INTERNAL - not
+> reproduced from the description (parse failures and IllegalArgumentException already map to INVALID_ARGUMENT); needs
+> the stand's exact error text / server log line. The CI small-disk stage is one server; the 3-server sum -> DISTINCT
+> repro is covered by the unit test `LocalCopyCacheTest.roomForNewCopiesNeverEvictsACopyTheSameQueryReuses` - the
+> stand should re-run its repro. Then "ITEM 33 DONE".
+
 > **Item 32 progress (2026-11-05, core lane, `580dbdfa`, CI fix `23063397`):** done in code and CI - (a) the
 > refusal is RESOURCE_EXHAUSTED on the wire (ADBC prints `INTERNAL: ... (ResourceExhausted; ...)`, see the
 > follow-up below; nothing to change server-side); `hdfsLocalCopyMinFreeBytes` unset now = min(1 GiB, 10 % of the copy
@@ -3298,3 +3317,14 @@ S3 slowdown item below stays open for then).
   test now waits for it). CI: Dev CI 42010391188 (`04c70af7`), Service hdfs 42010059761 (`23063397`, 12/12) and
   42008636957, Catalogs CI 42010059722 green. `package=true` dispatched on the unlock commit. Lock released.
   Package: pre-release `server-1.0.0-5f60db1ee304` from Dev CI 42012727794 (build, service gate, package green).
+- 2026-11-05 (cloud session, core): **item 33** (maintainer 15:15). `a744ef50`: (C) copy disk filled up - reused copies
+  were evictable while the same query made room for its new copies, then re-copied uncounted; now pinned first
+  (`LocalCopyCacheTest.roomForNewCopiesNeverEvictsACopyTheSameQueryReuses`, `limitEvictionNeverEvicts...`), cached
+  files first in merged batches; (A) complete batches with other column names renamed to the complete answer's
+  (`RenamingStreamListenerTest`); (B) GROUP BY ordinals (`CopyBatchMergeTest.groupByOrdinalsNameTheirColumn` + a merged
+  ordinal query); (E) parser log DEBUG. `75de58bc`: (D) distributedComplete skips subqueries
+  (`DistributedCompleteMergeableTest`), sasl-cluster check for HdfsNetworkException. Behaviour note (requested by the
+  maintainer): partial-mode `GROUP BY <ordinal>` is now answered in parts like `GROUP BY <column>`. CI: Dev CI
+  42027060883, Service hdfs 42027060707 (12/12, new small-disk checks ok), Catalogs CI 42027060689 green; `package=true`
+  Dev CI 42029413029 on `75de58bc` stopped at the service gate only because main had moved (service-cluster/security/
+  stores not dispatched for an old sha); `package=true` re-dispatched on the unlock commit. Open: (E) partial q04 INTERNAL needs the stand's error text. Lock released.
