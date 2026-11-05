@@ -86,9 +86,11 @@ def reference_sp(base):
                           columns=["l_returnflag", "l_linestatus", "l_quantity", "l_discount",
                                    "l_partkey", "l_suppkey"])
     agg = table.group_by(["l_returnflag", "l_linestatus"]).aggregate(
-        [("l_quantity", "count"), ("l_quantity", "sum"), ("l_discount", "mean")])
+        [("l_quantity", "count"), ("l_quantity", "sum"), ("l_discount", "sum"), ("l_discount", "count")])
+    # Not pyarrow's mean: over a DECIMAL it keeps the input's scale (0.05), DuckDB's avg is a DOUBLE.
     groups = {(r["l_returnflag"], r["l_linestatus"]):
-              (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])), float(r["l_discount_mean"]))
+              (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])),
+               float(decimal.Decimal(str(r["l_discount_sum"])) / r["l_discount_count"]))
               for r in agg.to_pylist()}
     keys = (len(pc.unique(table.column("l_partkey"))), len(pc.unique(table.column("l_suppkey"))))
     return groups, keys
