@@ -64,6 +64,8 @@ public final class DistributedComplete implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DistributedComplete.class);
     private static final AtomicLong NEXT = new AtomicLong();
+    private static final java.util.regex.Pattern SELECT_WORD =
+            java.util.regex.Pattern.compile("\\bselect\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
     private static final String VIEW_PREFIX = "__kestrel_endpoint_answers_";
     /** Start of the {@code UNAVAILABLE} description when an endpoint answer was lost. */
     static final String PEER_LOST = "peer lost during distributed complete answer; retry";
@@ -350,7 +352,41 @@ public final class DistributedComplete implements AutoCloseable {
             LOGGER.debug("node={} distributedComplete=skipped reason='{}'", LogUtil.node(), refusal);
             return null;
         }
+        String other = otherTables(query);
+        if (other != null) {
+            // Each endpoint would read the other tables (an EXISTS / IN subquery) whole, without
+            // the planner's locality and node-local copies: on SASL HDFS over TCP, which fails
+            // (item 33 (D)). The single-node complete path copies what it reads.
+            LOGGER.debug("node={} distributedComplete=skipped reason='{}'", LogUtil.node(), other);
+            return null;
+        }
         return parsed;
+    }
+
+    /**
+     * Tells why a query reads more than the one table its endpoints are planned for.
+     *
+     * @param query client SQL
+     * @return reason, or null when it reads exactly one table
+     */
+    static String otherTables(String query) {
+        List<ParquetQueryParser.JoinTable> tables;
+        try {
+            tables = QueryTables.of(query);
+        } catch (RuntimeException e) {
+            return "its tables cannot be named: " + e.getMessage();
+        }
+        if (tables.size() != 1) {
+            return "it reads " + tables.size() + " tables (a subquery of another table)";
+        }
+        // A subquery of the same table reads it whole on every endpoint, also without the
+        // planner's locality (a SELECT inside a string literal only costs the merge).
+        java.util.regex.Matcher selects = SELECT_WORD.matcher(query);
+        int count = 0;
+        while (selects.find()) {
+            count++;
+        }
+        return count > 1 ? "it has a subquery" : null;
     }
 
     /**

@@ -327,6 +327,11 @@ if [ "$n" -gt 1 ]; then
   for i in $(seq "$n"); do
     note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), complete from copies $(docker logs "srv$i" 2>&1 | grep -c 'hdfs=completeFromCopies'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
   done
+  # Item 33 (D): distributedComplete endpoints must not read a subquery's table over TCP
+  # (TPC-H q04's EXISTS: HdfsNetworkException under SASL) nor miss its schema on failover.
+  netFail=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'HdfsNetworkException\|does not exist because schema' || true)
+  note "item 33 (D): HdfsNetworkException / missing schema lines $netFail; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE '(HdfsNetworkException|does not exist because schema).{0,160}' || echo 'none')"
+  [ "$netFail" -eq 0 ] || finish fail "item 33 (D): a server read over TCP (HdfsNetworkException) or missed a schema on failover"
   batched=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=copyBatches' || true)
   note "scans read in batches of copies: $batched; $(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -m 1 -oE 'hdfs=copyBatches .*' || echo 'no hdfs=copyBatches line')"
   # Item 30 part 2b: aggregates (the chunks GROUP BY) answered per batch of copies and merged.

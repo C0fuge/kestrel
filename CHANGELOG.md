@@ -98,7 +98,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
-### Fixed - SASL HDFS clusters, small copy disk: disk filled up, `count(*)` and `GROUP BY 1` refused (STATUS item 33, part 1)
+### Fixed - SASL HDFS clusters, small copy disk: disk filled up, `count(*)` and `GROUP BY 1` refused; subqueries kept off distributed complete (STATUS item 33, part 1)
 
 - Node-local copies: making room for a query's new copies could evict a copy the same query reuses, which was then
   copied again without being counted, so the copy disk filled up (`IOException: Cannot copy ... No space left on
@@ -111,6 +111,10 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - `GROUP BY 1` (ordinals naming a column of the select list) groups like the column it names, in both modes, so it is
   read in batches of copies like `GROUP BY <column>`.
 - The parser's "Can only select from ONE table" for multi-table queries is logged at DEBUG, not ERROR with a stack trace.
+- `distributedComplete=true`: a query with a subquery (TPC-H q04's `EXISTS`, `IN (SELECT ...)`, a subquery of the
+  same table) keeps the single-node complete path, which plans locality and node-local copies for every table it
+  reads. Before, each endpoint read the subquery's table whole without them (on SASL HDFS over TCP:
+  `HdfsNetworkException`), and the failover node lacked the schema views.
 
 ### Changed - node-local copy reserve relative on small disks; `hdfs=reads` on every complete answer (STATUS item 32)
 

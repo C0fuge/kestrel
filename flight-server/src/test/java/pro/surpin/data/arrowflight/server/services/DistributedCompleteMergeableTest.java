@@ -1,0 +1,50 @@
+package pro.surpin.data.arrowflight.server.services;
+
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
+/**
+ * Tests which complete-mode queries distributed complete mode merges from endpoint answers.
+ */
+@Tag("unit")
+class DistributedCompleteMergeableTest {
+
+    /** Item 33 (D): a subquery of another table keeps the single-node path (TPC-H q04 shape). */
+    @Test
+    void subqueriesOfOtherTablesKeepTheSingleNodePath() {
+        String q04 = "SELECT o_orderpriority, count(*) AS order_count FROM tpch.orders"
+                + " WHERE o_orderdate >= DATE '1993-07-01' AND o_orderdate < DATE '1993-10-01'"
+                + " AND EXISTS (SELECT * FROM tpch.lineitem WHERE l_orderkey = o_orderkey"
+                + " AND l_commitdate < l_receiptdate) GROUP BY o_orderpriority";
+        assertNull(DistributedComplete.mergeable(q04));
+        assertNotNull(DistributedComplete.otherTables(q04));
+        for (String query : List.of(
+                "SELECT count(*) FROM tpch.orders WHERE o_custkey IN (SELECT c_custkey FROM tpch.customer)",
+                "SELECT sum(o_totalprice) FROM tpch.orders o WHERE NOT EXISTS"
+                        + " (SELECT 1 FROM tpch.lineitem l WHERE l.l_orderkey = o.o_orderkey)")) {
+            assertNull(DistributedComplete.mergeable(query), query);
+        }
+    }
+
+    /** One-table aggregates are still merged. */
+    @Test
+    void oneTableAggregatesAreMerged() {
+        for (String query : List.of("SELECT count(*) AS n, sum(l_quantity) AS q FROM tpch.lineitem",
+                "SELECT l_returnflag, count(*) AS n FROM tpch.lineitem GROUP BY l_returnflag")) {
+            assertNull(DistributedComplete.otherTables(query), query);
+            assertNotNull(DistributedComplete.mergeable(query), query);
+        }
+    }
+
+    /** A subquery of the same table would see only an endpoint's files: never merged. */
+    @Test
+    void subqueriesOfTheSameTableAreNotMerged() {
+        assertNull(DistributedComplete.mergeable("SELECT count(*) FROM tpch.lineitem"
+                + " WHERE l_quantity > (SELECT avg(l_quantity) FROM tpch.lineitem)"));
+    }
+}
