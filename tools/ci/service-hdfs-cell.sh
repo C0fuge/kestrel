@@ -495,6 +495,11 @@ smallDisk() {
   "$py" -I tools/ci/service-hdfs-smalldisk-check.py "$(dnIp 1):32010" "$in" speed > "$work/smalldisk-speed.log" 2>&1; rc5=$?
   cat "$work/smalldisk-speed.log"
   docker stop -t 20 srvs > /dev/null
+  docker logs srvs > "$work/smalldisk-speed-server.log" 2>&1 || true
+  if [ "$rc5" -ne 0 ]; then
+    echo "--- speed server: copy lines (last 120) ---"
+    grep -E 'hdfs=localCopy|hdfs=copyBatches|hdfs=reads|DoGet' "$work/smalldisk-speed-server.log" | tail -n 120 | cut -c1-400
+  fi
   note "small disk speed cells: $(grep -m 1 '^result ' "$work/smalldisk-speed.log" || echo 'no result line'); hdfs=localCopyRoomWait $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWait ' || true), hdfs=localCopyRoomWaited $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyRoomWaited' || true), hdfs=localCopyNoSpace $(docker logs srvs 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true); $(docker logs srvs 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || echo 'no cache line')"
   [ "$rc5" -eq 0 ] || finish fail "small disk speed cells: $(grep -m 1 '^result fail' "$work/smalldisk-speed.log" | cut -c13- || echo 'client failed')"
   docker logs srvs 2>&1 | grep -q 'roomWaitMillis=60000' || finish fail "small disk speed cells: no roomWaitMillis=60000 in the cache line"

@@ -45,6 +45,8 @@ public final class LocalCopyCache implements AutoCloseable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(LocalCopyCache.class);
     private static final int BUFFER_BYTES = 1 << 20;
+    /** Longest wait between two room checks of a query waiting for copy room (item 33). */
+    private static final long ROOM_RECHECK_MILLIS = 1000;
 
     /** Copies one file's bytes; the store's Java client in the server. */
     @FunctionalInterface
@@ -317,7 +319,9 @@ public final class LocalCopyCache implements AutoCloseable {
                                         LogUtil.qid(), LogUtil.node(), toCopy.size(), needed,
                                         roomWaitMillis);
                             }
-                            wait(Math.max(1L, left));
+                            // Re-checked at least every second: disk room also comes back without a
+                            // release (a deleted copy's space is freed when its last reader closes it).
+                            wait(Math.max(1L, Math.min(left, ROOM_RECHECK_MILLIS)));
                             continue;
                         }
                         if (waitStart != 0) {
