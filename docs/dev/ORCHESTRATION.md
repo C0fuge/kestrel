@@ -1,15 +1,15 @@
 # Orchestration status
 
-Status as of **2026-11-05 14:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 15:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: ITEM 33 is done in code and CI and shipped as pre-release `server-1.0.0-50fe065af50c`; it waits for the
-stand re-check ("ITEM 33 DONE" not written yet). egret has no acceptance / FRESH run for that build yet.
+stand re-check ("ITEM 33 DONE" not written yet). egret acceptance run 42055012677 on that build is running; no FRESH for it.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33: all of (A)-(E) done (a744ef50, 75de58bc, aeb87cdf, 8e60638e, 9dbde204); waits for the stand re-check of `50fe065af50c` | 28b1c84d, 10 min ago (unlock) | free (released 14:48Z) | Dev CI 42041121733 (push, 9dbde204) green; `package=true` Dev CI 42043316941 on 50fe065a green (build, service gate, package) |
+| core (`STATUS.md`) | ITEM 33: all of (A)-(E) done (a744ef50, 75de58bc, aeb87cdf, 8e60638e, 9dbde204); waits for the stand re-check of `50fe065af50c` | b51c3ff1, 16 min ago (session 15:41Z, no code change, unlock) | free (released 15:41Z) | Dev CI 42041121733 (push, 9dbde204) green; `package=true` Dev CI 42043316941 on 50fe065a green (build, service gate, package) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-04 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -33,7 +33,7 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 14:40Z: no new server jar, no maintainer items. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 15:41Z: no new server jar, no maintainer items. Lock free.
 - heron: **IMPROVEMENTS DONE**; session 123 (14:50Z): nothing open. Lock free.
 
 ## egret
@@ -41,7 +41,7 @@ No stale locks (marten and heron free).
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `8060179bce0c` / `5f60db1ee304` / `50fe065af50c`.
 - Last acceptance: **EGRET ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only, small disk)** - covered by ITEM 33.
-  README "In progress" (13:28Z): idle, newest tracked `5f60db1ee304`; egret should pick up `50fe065af50c` next.
+  **EGRET ACCEPT 50fe065af50c RUNNING**: full accept-hdfs run 42055012677 (8 cells, harness a5ba272) dispatched 15:26Z, in progress.
 
 ## For the maintainer
 
@@ -55,6 +55,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 15:57Z: core session 15:41Z made no code change (ITEM 33 waits for the stand re-check of 50fe065af50c); Dev CI on main green (42041121733, package 42043316941), service gate 4/4 green on 50fe065a; egret ACCEPT 50fe065af50c running (42055012677); marten (15:41Z)/heron (session 123) idle; no stale locks.
 - 2026-11-05 14:58Z: core ITEM 33 done in code and CI ((A)-(D) a744ef50/75de58bc, (E) aeb87cdf/8e60638e/9dbde204; Dev CI 42041121733 green); `package=true` Dev CI 42043316941 green, service gate 4/4 green on 50fe065a -> pre-release `server-1.0.0-50fe065af50c`, waits for the stand re-check; core lock released 14:48Z; egret has no ACCEPT/FRESH for 50fe065af50c yet; marten (14:40Z)/heron (session 123) idle; no stale locks.
 - 2026-11-05 13:58Z: core session (lock 13:41Z) on ITEM 33 (E): aeb87cdf (partial subquery -> complete answer on SASL HDFS) + 8e60638e (copy refusals log hdfs=reads); Dev CI 42039372619 + Service hdfs 42039028971 running; `package=true` 42031858690 on bfe09a23 cancelled by the new push (build green); service matrix on bfe09a23: cluster/security/hdfs green, stores running; egret ACCEPT 5f60db1ee304 DONE: DO NOT SHIP (check 4 only, item 33 scope); marten/heron (session 122) idle; no stale locks.
 - 2026-11-05 12:58Z: maintainer accepted items 31/32 on the stand (f546f828) and opened ITEM 33 (small copy disk: count(*) / GROUP BY 1 batching, copy disk fills, distributedComplete subquery, minor logs); core session (lock 12:14Z) pushed a744ef50 + 75de58bc, Dev CI 42027060883 + Service hdfs 42027060707 green on 75de58bc, dispatch 42029413029 running; egret ACCEPT 5f60db1ee304 first report DO NOT SHIP (check 4 small disk, now in item 33 scope), harness fix a5a0469 + only rerun 42027069331 running; marten/heron idle.
