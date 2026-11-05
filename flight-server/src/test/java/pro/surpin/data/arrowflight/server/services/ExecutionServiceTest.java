@@ -657,6 +657,53 @@ class ExecutionServiceTest {
     }
 
     /**
+     * Item 33 (E): a complete answer whose copies are refused for lack of disk room still logs
+     * its {@code hdfs=reads} line (marked {@code refused=noRoom}) before the refusal goes out.
+     */
+    @Test
+    void copyRefusalLogsItsReads(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path a = dir.resolve("a.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT range AS v FROM range(100)) TO '" + a + "' (FORMAT parquet)");
+        }
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile remote = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet",
+                java.nio.file.Files.size(a), 1L, Set.of());
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(true);
+        when(parquet.tableFiles("s", "t")).thenReturn(List.of(remote));
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        when(store.readableHere(remote)).thenReturn(false);
+        when(store.inputFile(remote)).thenReturn(new org.apache.parquet.io.LocalInputFile(a));
+        when(duckDb.localCopyRoot()).thenReturn(dir.resolve("localcopy"));
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        // A reserve no disk has: every copy is refused.
+        System.setProperty("hdfsLocalCopyMinFreeBytes", "1000000000000000000");
+        try {
+            java.io.IOException e = assertThrows(java.io.IOException.class,
+                    () -> service.completeFromCopies("SELECT count(*) FROM s.t"));
+            assertNotNull(pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
+                    .in(e), e::toString);
+        } finally {
+            System.clearProperty("hdfsLocalCopyMinFreeBytes");
+            System.setErr(err);
+        }
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains("hdfs=reads files=1 shortCircuit=0 localCopy=1 copied=0"
+                + " refused=noRoom"), text);
+    }
+
+    /**
      * Item 32: a complete answer that reads no table of the data store still logs one
      * {@code hdfs=reads} line on a short-circuit-only node, and none when local copies are off.
      */

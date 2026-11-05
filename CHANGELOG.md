@@ -106,6 +106,8 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   is refused INVALID_ARGUMENT when the node cannot read them. Before, it was planned in parts over the outer table's
   files and each endpoint read the subquery's table whole, failing as INTERNAL on the blocks its DataNode lacks.
   Other storage keeps answering such queries in parts.
+- A complete answer refused for lack of copy-disk room (RESOURCE_EXHAUSTED) logs its `hdfs=reads ... copied=0
+  refused=noRoom` line too, so every query on a short-circuit-only node has one.
 
 ### Fixed - SASL HDFS clusters, small copy disk: disk filled up, `count(*)` and `GROUP BY 1` refused; subqueries kept off distributed complete (STATUS item 33, part 1)
 

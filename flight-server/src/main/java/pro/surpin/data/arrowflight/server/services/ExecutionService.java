@@ -1755,7 +1755,16 @@ public final class ExecutionService {
                     LogUtil.qid(), LogUtil.node(), files, files);
             return null;
         }
-        LocalCopyCache.Lease lease = localCopyCache().acquire(unreadable);
+        LocalCopyCache.Lease lease;
+        try {
+            lease = localCopyCache().acquire(unreadable);
+        } catch (LocalCopyCache.NoRoomException e) {
+            // A refused query logs its reads too (item 33 (E)): nothing was copied.
+            LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy={} copied=0"
+                    + " refused=noRoom", LogUtil.qid(), LogUtil.node(), files,
+                    files - unreadable.size(), unreadable.size());
+            throw e;
+        }
         long ms = Math.max(1L, lease.millis());
         LOGGER.info("qid={} node={} hdfs=reads files={} shortCircuit={} localCopy={} copied={}"
                 + " reused={} copiedBytes={} copyMs={} copyMBps={}", LogUtil.qid(), LogUtil.node(),
