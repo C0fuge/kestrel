@@ -101,11 +101,12 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 ### Fixed - SASL HDFS clusters: partial-mode queries with a subquery failed INTERNAL (STATUS item 33 (E))
 
 - On HDFS read short-circuit only (SASL DataNodes), a query asked for in parts that holds a nested query (TPC-H q04's
-  `EXISTS`, `IN (SELECT ...)`, a CTE, a set operation) now gets the complete answer (log `query=answeredCompletely
+  `EXISTS`, `IN (SELECT ...)`, a subquery in FROM such as q07/q13's, a CTE, a set operation) now gets the complete answer (log `query=answeredCompletely
   mode=partial reason='the query has a subquery ...'`), which plans node-local copies for every table it reads, or
   is refused INVALID_ARGUMENT when the node cannot read them. Before, it was planned in parts over the outer table's
   files and each endpoint read the subquery's table whole, failing as INTERNAL on the blocks its DataNode lacks.
-  Other storage keeps answering such queries in parts.
+  Other storage keeps answering such queries in parts (and refusing FROM subqueries other than a column list over
+  one table, as before).
 - A complete answer refused for lack of copy-disk room (RESOURCE_EXHAUSTED) logs its `hdfs=reads ... copied=0
   refused=noRoom` line too, so every query on a short-circuit-only node has one.
 

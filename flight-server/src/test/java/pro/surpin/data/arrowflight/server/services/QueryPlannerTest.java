@@ -534,6 +534,8 @@ class QueryPlannerTest {
         assertTrue(planner.nestedQueryCompleteReason(inList).contains("subquery"));
         assertNotNull(planner.nestedQueryCompleteReason("WITH r AS (SELECT a FROM s.t)"
                 + " SELECT max(a) FROM r"), "a CTE is not read in parts there either");
+        assertNotNull(planner.nestedQueryCompleteReason("SELECT k, count(*) FROM (SELECT k, sum(v) AS s"
+                + " FROM s.t GROUP BY k) x GROUP BY k"), "a FROM subquery the parts cannot flatten");
         assertNull(planner.nestedQueryCompleteReason("SELECT o_orderpriority, count(*) FROM"
                 + " tpch.orders GROUP BY o_orderpriority"));
         assertNull(planner.nestedQueryCompleteReason("SELECT * FROM (SELECT a FROM s.t) x"),

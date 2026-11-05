@@ -329,6 +329,10 @@ public final class QueryPlanner {
         boolean nested;
         try {
             nested = ParquetQueryParser.hasNestedQuery(query);
+        } catch (IllegalArgumentException e) {
+            // A subquery in FROM that is more than a column list over one table (TPC-H q07,
+            // q13): the parts cannot answer it, the complete path can.
+            nested = true;
         } catch (RuntimeException e) {
             return null;   // the partial path reports the parser's error
         }
