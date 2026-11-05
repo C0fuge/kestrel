@@ -1500,8 +1500,10 @@ S3 slowdown item below stays open for then).
   leases hold the room waits for a release (bounded) before it is refused - new setting
   `hdfsLocalCopyRoomWaitMillis`, default 30000 (0 = refuse at once, today's behaviour). This changes a default
   (refusal -> bounded wait), so it waits for the maintainer's OK; the core lane builds it next if agreed.
-  *Update 2026-11-05 19:00Z (`f53b9709`):* built with default 0 (today's behaviour); the question left is only
-  whether the default becomes 30000 (a one-line change in `ConfigAdapter.hdfsLocalCopyRoomWaitMillis`).
+  *Update 2026-11-05 20:05Z (`f53b9709` .. `70ffac12`):* built with default 0 (today's behaviour), works in CI
+  (speed cells exact, 0 refusals with the wait on); the question left is only whether the default becomes 30000 (a
+  one-line change in `ConfigAdapter.hdfsLocalCopyRoomWaitMillis`). Note: a ticket can only wait while the client keeps
+  reading the other endpoints; a client that reads endpoints strictly one after another would still time out.
 
 - *(Answered 2026-11-05 by the maintainer in item 32: `hdfsLocalCopyMinFreeBytes` default -> min(1 GiB, 10 % of the
   copy disk); built in `580dbdfa`.)*
@@ -3477,3 +3479,14 @@ S3 slowdown item below stays open for then).
   previous session's `package=true` 42076153480 was cancelled (main moved). New Open question: bounded wait for copy
   room between tickets of one query (speed cells, partial `part-*-sp`). `package=true` dispatched on the unlock
   commit. Lock released.
+- 2026-11-05 20:05Z (core lane): item 33 speed cells. `f53b9709`: new opt-in `hdfsLocalCopyRoomWaitMillis` (default 0 =
+  refuse at once, unchanged): a ticket whose copies do not fit while other queries hold copies waits for a release,
+  holding no copies meanwhile; `LocalCopyCacheTest` +4, `ConfigAdapterTest` +1; CI small disk gets a second server with
+  `endpointsPerServer=4` running egret's partial `part-lineitem-sp` / `part-group-sp` 3x each. First Service hdfs
+  42087909550 reproduced egret's refusals (each query: one ticket stalled for the full wait); `95d0234f` re-checks every
+  second; `1e82115a` takes a jcmd thread dump in the stage (42093459677): waiting tickets woke each other in a
+  notifyAll loop holding the cache lock (Dev CI 42093460272 red on the new 4-ticket regression test). `70ffac12`:
+  unpin notifies only when a copy became unused. CI on `70ffac12`: Dev CI 42096491904, Catalogs CI 42096491894, Service
+  hdfs 42096491844 green (attempt 2; attempt 1 `plain speed` died silently between docker run and the start check,
+  unrelated) - speed cells exact, 18 waits, 0 refusals. The previous session's `package=true` 42084966934 failed its
+  gate only because this session's lock commit moved main. `package=true` dispatched on the unlock commit. Lock released.
