@@ -548,4 +548,40 @@ class LocalCopyCacheTest {
         assertThrows(IllegalArgumentException.class, () -> new LocalCopyCache(dir, 10, 1,
                 f -> unused, 0, LocalCopyCache.FILE_STORE, -1));
     }
+
+    @Test
+    void ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying() throws Exception {
+        // Item 33 speed cells (CI 42090655236): four tickets, room for one copy at a time, copies
+        // still being made when the others start waiting; each must get the room in turn.
+        LocalCopyCache.Copier slow = f -> {
+            try {
+                Thread.sleep(150);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new ByteArrayInputStream(content(f));
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 4, slow,
+                100, disk(1000), 20_000)) {
+            List<Future<Long>> tickets = new java.util.ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                DataFile f = file("s/t/p" + i + ".parquet", 600, 1);
+                tickets.add(pool.submit(() -> {
+                    long t = System.nanoTime();
+                    try (LocalCopyCache.Lease lease = cache.acquire(List.of(f))) {
+                        assertArrayEquals(content(f), Files.readAllBytes(lease.localPath(f.relativePath())));
+                        Thread.sleep(50);
+                    }
+                    return (System.nanoTime() - t) / 1_000_000L;
+                }));
+            }
+            for (Future<Long> ticket : tickets) {
+                assertTrue(ticket.get(30, TimeUnit.SECONDS) < 10_000, "no ticket waits for the timeout");
+            }
+            assertEquals(0, cache.inUseBytes());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }
