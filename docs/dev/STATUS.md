@@ -23,18 +23,19 @@
 
 ## Next steps (one per session)
 
-> **Item 33 speed cells (2026-11-05 19:00Z, core lane, `f53b9709`):** built as an opt-in setting, default unchanged.
-> `hdfsLocalCopyRoomWaitMillis` (default 0 = refuse at once, as before): a ticket whose new copies do not fit while
-> other running queries (the sibling tickets of one partial query with `endpointsPerServer > 1`) hold copies waits up
-> to that long for a release and plans again (`hdfs=localCopyRoomWait`, then `hdfs=localCopyRoomWaited ms=`); while it
-> waits it holds no copies (no two waiting tickets hold each other's room); with no other query holding copies it is
-> refused at once; after a wait the refusal says `after waiting N ms`. Tests: `LocalCopyCacheTest` +4 (waits and
-> proceeds after the other lease closes, pins nothing while waiting; times out with the refusal; no wait when nothing
-> else is pinned; negative value refused), `ConfigAdapterTest` +1. CI small disk: a second server on the same tmpfs
-> with `endpointsPerServer=4 -DhdfsLocalCopyRoomWaitMillis=60000` runs egret's partial `part-lineitem-sp` /
-> `part-group-sp` (over `lineitem_p`) three times each, exact. **For the stand:** set
-> `-DhdfsLocalCopyRoomWaitMillis=30000` on the small-disk check (or answer the Open question to make it the default),
-> then "ITEM 33 DONE".
+> **Item 33 speed cells (2026-11-05 20:05Z, core lane, `f53b9709`, `95d0234f`, `1e82115a`, `70ffac12`):** done in code
+> and CI as an opt-in setting, default unchanged. `hdfsLocalCopyRoomWaitMillis` (default 0 = refuse at once, as
+> before): a ticket whose new copies do not fit while other running queries (the sibling tickets of one partial query
+> with `endpointsPerServer > 1`) hold copies waits up to that long and plans again (`hdfs=localCopyRoomWait`, then
+> `hdfs=localCopyRoomWaited ms=`). While it waits it holds no copies, so no two waiting tickets hold each other's room.
+> With no other query holding copies it is refused at once, and a refusal after a wait says `after waiting N ms`. It
+> re-checks at least every second. The first CI runs reproduced egret's refusals on the small disk. A CI thread dump
+> then showed waiting tickets waking each other in a loop that held the cache lock (fixed in `70ffac12`, regression
+> test `ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying`). CI small disk, second server with `endpointsPerServer=4
+> -DhdfsLocalCopyRoomWaitMillis=60000`: egret's partial `part-lineitem-sp` / `part-group-sp` (over `lineitem_p`)
+> three times each, exact, 18 waits, 0 refusals (Service hdfs 42096491844). **For the stand:** run the small-disk
+> check with `-DhdfsLocalCopyRoomWaitMillis=30000` (or answer the Open question to make it the default). Then
+> "ITEM 33 DONE" if sp-group / sp-distinct / both speed cells pass.
 
 > **Item 33 sp-group / sp-distinct (2026-11-05 18:30Z, core lane, `5b84e0a7`, `b9d279ab`, `ed4b26d1`):** done in code
 > and CI (Dev CI 42082455680, Service hdfs 42082455107 all cells, Catalogs CI 42082455774 green on `ed4b26d1`);

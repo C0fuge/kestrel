@@ -111,9 +111,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   each other's room. When no other query holds copies it is refused at once as before; after the wait the refusal
   says `after waiting N ms`. Default 0: refused at once, unchanged (making 30000 the default is an Open question).
   The startup line `hdfs=localCopyCache` shows `roomWaitMillis=`.
-- **Known open:** on the CI small disk with `endpointsPerServer=4` the ticket that gets the room still stalls until the
-  waiting tickets give up (`copyMs` = the wait), so the speed cells are still refused; keep the default 0 until fixed.
-  A waiting query re-checks the disk at least every second.
+- A waiting query re-checks the disk at least every second, and waiting queries no longer wake each other in a loop
+  (first CI runs: the loop held the cache's lock so the ticket holding the room could not finish until the others
+  timed out; regression test `LocalCopyCacheTest.ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying`). CI small disk with
+  `endpointsPerServer=4 -DhdfsLocalCopyRoomWaitMillis=60000`: egret's partial `part-lineitem-sp` / `part-group-sp` three
+  times each, exact, 18 waits, 0 refusals.
 
 ### Changed - SASL HDFS clusters: every copy refusal of a complete answer says why it was not batched (STATUS item 33, regression)
 

@@ -124,8 +124,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   With `endpointsPerServer > 1` the tickets of one query copy on a node at once; on a small copy disk set
   `hdfsLocalCopyRoomWaitMillis=<ms>` (default 0 = refuse at once) so that a ticket whose copies do not fit while
   other running queries hold copies waits for them (`hdfs=localCopyRoomWait` / `hdfs=localCopyRoomWaited ms=`)
-  instead of being refused. **Not usable yet (item 33, open):** in CI the ticket that gets the room still stalls
-  until the others' wait ends, so leave it at 0.
+  instead of being refused (CI small disk, 4 endpoints: egret's `part-lineitem-sp` / `part-group-sp` exact with
+  `hdfsLocalCopyRoomWaitMillis=60000`, no refusal).
   `hdfs=reads` is logged for every query, also with `localCopy=0` and, for answers reading no data-store table or
   merged from peers (`distributedComplete=true`), with `files=0 ... tables=none|unknown|endpoints=N`. `hdfsLocalCopyMaxBytes=0`
   turns copies off (such files are then refused). Copies go over the network at the DataNodes' speed and are deleted
