@@ -1,19 +1,21 @@
 # Orchestration status
 
-Status as of **2026-11-05 18:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 19:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: ITEM 33 is still open. The core lane batched egret's `sp-group` (avg) and `sp-distinct` (two
-count DISTINCT) in copy batches (5b84e0a7, b9d279ab, ed4b26d1; CI green) and built the speed-cell fix as an opt-in
-setting `hdfsLocalCopyRoomWaitMillis` (f53b9709, default 0 = unchanged; CI running). The `package=true` for
-ed4b26d1's work (Dev CI 42084966934 on 38bbc066) did not produce a pre-release: its service gate refused because main
-moved on before the service matrix ran on that commit (procedural, not a test failure; no rerun - it would fail the
-same way). The core lane holds the lock and will package again.
+Not ALL DONE: ITEM 33 is still open (speed cells). The core lane holds the lock and is working: the opt-in copy-room
+wait (`hdfsLocalCopyRoomWaitMillis`, f53b9709) livelocked on the runner (two waiting tickets woke each other in a
+loop); 95d0234f / 1e82115a added a periodic disk re-check, a thread dump and docs ("room wait not usable yet"),
+70ffac12 fixes the wake loop (`unpin()` notifies only when a copy became unused). The newest finished Dev CI on main
+(42093460272 on 1e82115a) is red in the lane's own new test
+`LocalCopyCacheTest.ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying` (line 580, "no ticket waits for the timeout");
+70ffac12 is the fix and names that run, its Dev CI 42096491904 is running - no bug-first note (the lane is on it).
+No `package=true` since 50fe065af50c.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33: speed cells (opt-in `hdfsLocalCopyRoomWaitMillis`), then `package=true` + egret re-check | f53b9709 / STATUS 18:50Z, ~7 min ago | held since 18:41Z (active) | f53b9709: Dev CI 42087909568 + Service hdfs 42087909550 running, Catalogs 42087909545 green; ed4b26d1 green (Dev CI 42082455680, Service hdfs 42082455107); package run 42084966934 red at service gate (main moved, procedural) |
+| core (`STATUS.md`) | ITEM 33: speed cells (copy-room wait), then `package=true` + egret re-check | 70ffac12, 19:42Z (~14 min ago) | held since 18:41Z (active) | 70ffac12: Dev CI 42096491904 running, Catalogs 42096491894 green, Service hdfs 42096491844 red only in `plain speed` (known open; 9 other cells green); 1e82115a: Dev CI 42093460272 red (test above), Service hdfs 42093459677 green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 09:41Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 09:41Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -25,7 +27,7 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 42045636399 | 50fe065a | pass |
-| service-hdfs.yml | 42087909550 | f53b9709 | running (previous 42082455107 on ed4b26d1: pass) |
+| service-hdfs.yml | 42096491844 | 70ffac12 | fail (`plain speed` only, known open item 33 cell) |
 | service-security.yml | 42045649442 | 50fe065a | pass |
 | service-stores.yml | 42045656149 | 50fe065a | pass |
 
@@ -37,22 +39,21 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session unlock 18:40Z: no new server jar, no maintainer items. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session unlock 19:40Z: no new server jar, no maintainer items. Lock free.
 - heron: **IMPROVEMENTS DONE**; session 123 (14:50Z): nothing open. Lock free.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-25aa7eec0f0f.md` / `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `5f60db1ee304` / `50fe065af50c`.
-- Newest acceptance: `results/ACCEPT-50fe065af50c.md`: DO NOT SHIP, check 4 only. README "In progress": idle, newest tracked `50fe065af50c`.
+- Newest acceptance: `results/ACCEPT-50fe065af50c.md`: DO NOT SHIP, check 4 only. README "In progress": idle (19:26Z), newest tracked `50fe065af50c`.
 
 ## For the maintainer
 
-- **Do not put `50fe065af50c` on the stand**; wait for the next ITEM 33 pre-release (not built yet: the last
-  `package=true` was refused by the service gate because main moved) and egret's re-ACCEPT.
-- **New Open question (item 33, speed cells):** make `hdfsLocalCopyRoomWaitMillis` default 30000 (bounded wait for
-  copy room held by sibling tickets of one partial query)? Built as opt-in (default 0, unchanged); for the stand set
-  `-DhdfsLocalCopyRoomWaitMillis=30000` on the small-disk check, or answer to change the default.
+- **Do not put `50fe065af50c` on the stand**; wait for the next ITEM 33 pre-release and egret's re-ACCEPT.
+- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0). Note: the
+  core lane's docs now say the room wait is not usable yet (livelock found in CI, fix 70ffac12 under test) - do not
+  set it on the stand until the lane reports it green.
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -60,6 +61,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 19:56Z: core (lock 18:41Z, active) on ITEM 33 speed cells: room wait reworked (95d0234f, 1e82115a, 70ffac12); Dev CI 42093460272 on 1e82115a red in LocalCopyCacheTest.ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying (own new test, fixed by 70ffac12, Dev CI 42096491904 running); Service hdfs plain-speed cell red (known open, reported as such); no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-05 18:57Z: core batched sp-group (avg) / sp-distinct (2x count DISTINCT) (ed4b26d1; Dev CI 42082455680 + Service hdfs 42082455107 green); package run 42084966934 refused at service gate (main moved); speed cells as opt-in hdfsLocalCopyRoomWaitMillis (f53b9709, CI running); new Open question on its default.
 - 2026-11-05 17:56Z: core lane analysed the egret check-4 failure: no pin leak (18219b9c, the refusal counted the query's own reused copies; Dev CI 42073731097 + Service hdfs 42073730677 green); maintainer gave the exact SQL of the 4 unbatched queries (cb29d02f: avg, two count DISTINCT, speed partial per-ticket); core session (lock 17:40Z) pushed 5b84e0a7, Dev CI 42078627145 running; ITEM 33 not done; marten/heron/egret idle; no stale locks.
 - 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
