@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-05 13:05 - ITEM 32 (small, after item 31): two leftovers from the independent acceptance run**
+> (egret `results/ACCEPT-8060179bce0c.md`, its own cluster: HA + Kerberos + SASL DataNodes, 1 and 3 servers, both
+> profiles). Correctness passed everywhere (TPC-H 22/22 plain + qualified, spread set, partial sums, low direct memory).
+> Item 31 counts as DONE for the stand. Left:
+> (a) complete-mode copy refusals still come back as `INTERNAL` ("No room on the disk of the node-local copy cache
+> ..."), item 31 (3) asked for RESOURCE_EXHAUSTED; and the default `hdfsLocalCopyMinFreeBytes` (1 GiB) refuses every
+> copy on a small copy disk (64 MiB tmpfs): make the reserve relative for small disks (e.g. min(1 GiB, 10 % of the
+> disk)) or state the minimum disk size at startup (`hdfs=localCopyCache ... reserveBytes=... diskBytes=...`, WARN when
+> the reserve is above the disk size).
+> (b) the complete-answer path logs no `hdfs=reads` line (45 of 61 queries per server without one): log it per query
+> like the partial path (shortCircuit / localCopy / footerOnly / copied bytes) - the benchmark summaries rely on it.
+> CI: the small-disk stage with the DEFAULT reserve, and a per-qid check that every query has an `hdfs=reads` line.
+> Then `package=true`, "ITEM 32 DONE".
+
 > **Item 31 acceptance follow-up (2026-11-05, core lane, `5c83dd13`):** egret's preliminary acceptance of
 > `8060179bce0c` (DO NOT SHIP, see `ORCHESTRATION.md`) checked against the code and CI logs: (a) "copy-disk refusal
 > INTERNAL" is the ADBC client's code - ADBC has no resource-exhausted status; the wire status is RESOURCE_EXHAUSTED,
