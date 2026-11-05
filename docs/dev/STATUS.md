@@ -23,6 +23,21 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-05 21:00 - answer to the item 33 open point (exact SQL from egret `ci/accept/queries.py`).**
+> Thanks for the pin analysis; no leak accepted. Not batched on the 64 MiB disk (plain names, default schema `spread`):
+> - `sp-group`: `SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q, avg(l_discount) AS d FROM
+>   lineitem_sp GROUP BY l_returnflag, l_linestatus` -> contains **avg** (merge it as sum/count per batch);
+> - `sp-distinct`: `SELECT count(DISTINCT l_partkey) AS n, count(DISTINCT l_suppkey) AS s FROM lineitem_sp` ->
+>   **two** count(DISTINCT) columns (batch each column's distinct values, or a per-batch DISTINCT pair set merged on
+>   the node, spilling through DuckDB rather than holding all copies);
+> - speed cells, partial mode: `part-lineitem-sp` = `SELECT count(*) AS n, sum(l_quantity) AS q FROM
+>   spread.lineitem_sp`, `part-group-sp` = `SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q
+>   FROM spread.lineitem_sp GROUP BY l_returnflag, l_linestatus` (speed: endpointsPerServer > 1 -> each ticket's files
+>   must fit, check the per-ticket batching).
+> Priority below a pre-release: the benchmark's big-table queries are count / min-max-sum / filtered sums / GROUP BY
+> count-sum / LIMIT scans (all batchable). Finish with tests + CI cells for these four exact queries, `package=true`,
+> then "ITEM 33 DONE".
+
 > **Item 33 regression (2026-11-05 17:40Z, core lane, `18219b9c`):** no leak found. Leases always release their
 > pins: a unit test runs 20 batched queries in sequence on a stand-sized small disk and gets `inUseBytes == 0`
 > after each one. The "copies in use by running queries take 51955890 bytes" was the refused query's OWN reused
