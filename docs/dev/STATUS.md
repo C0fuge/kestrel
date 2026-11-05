@@ -31,8 +31,8 @@
 > ... tables=none|unknown`, the merging node of `distributedComplete=true` logs `tables=endpoints=N`. CI service hdfs:
 > small-disk stage with the DEFAULT reserve (tmpfs 60 MiB, reserve 6 MiB, cache line checked) and a per-qid check
 > (every executionPath `success=true` qid has an `hdfs=reads` line) in every sasl cell/stage: 386/386, 379/379,
-> srvd 12/12, srvm 20/20, ha-krb-sasl 23/23. `package=true` dispatched on the unlock commit. **Remaining:** that
-> pre-release, then the stand / egret re-check -> "ITEM 32 DONE".
+> srvd 12/12, srvm 20/20, ha-krb-sasl 23/23. **Pre-release `server-1.0.0-5f60db1ee304`** (Dev CI 42012727794: build,
+> service gate, package green). **Remaining:** the stand / egret re-check -> "ITEM 32 DONE".
 
 > **Maintainer, 2026-11-05 13:05 - ITEM 32 (small, after item 31): two leftovers from the independent acceptance run**
 > (egret `results/ACCEPT-8060179bce0c.md`, its own cluster: HA + Kerberos + SASL DataNodes, 1 and 3 servers, both
@@ -3269,3 +3269,4 @@ S3 slowdown item below stays open for then).
   leaked 8192 bytes once (Dev CI 42008636974; the server call thread still held a batch when the allocator closed; the
   test now waits for it). CI: Dev CI 42010391188 (`04c70af7`), Service hdfs 42010059761 (`23063397`, 12/12) and
   42008636957, Catalogs CI 42010059722 green. `package=true` dispatched on the unlock commit. Lock released.
+  Package: pre-release `server-1.0.0-5f60db1ee304` from Dev CI 42012727794 (build, service gate, package green).
