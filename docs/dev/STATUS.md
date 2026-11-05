@@ -23,6 +23,19 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-05 20:15 - ITEM 33 NOT DONE: regression in `50fe065af50c` (egret
+> `results/ACCEPT-50fe065af50c.md`, small-disk check, all 4 cells).** Copies of FINISHED queries stay pinned: the
+> complete `sp-group` / `sp-distinct` (9 copies, 156 MB > 64 MiB disk) are refused "No room ... 15147008 bytes are
+> free ... copies in use by running queries take 51955890 bytes. Nothing was copied" although the client sends one
+> query at a time and every earlier stream was read to the end and closed (with `5f60db1ee304` the same refusal saw
+> all 67108864 bytes free). Likely the item 33 "reused copies pinned first" path never unpins on lease close /
+> stream end / cancel. This is a leak that also matters on big disks (pinned copies are never evicted, so a long
+> benchmark on a ~1.3 TB table would run out of copy room). And still open from item 33 (A): those complete GROUP BY /
+> DISTINCT over 9 copies must run in copy batches, not be refused. Fix: pins released when the query's lease closes
+> (success, error, cancel, client disconnect), a test that runs 20 one-table queries in sequence over a cache smaller
+> than the table and asserts `inUseBytes == 0` between queries; CI small-disk stage asserts the same from the log.
+> Then `package=true`. The stand re-check follows the egret ACCEPT verdict.
+
 > **Orchestrator bug-first note (2026-11-05 16:56Z) - egret ACCEPT `50fe065af50c`: DO NOT SHIP, check 4 (small copy disk)
 > fails in all 4 cells** (egret run 42055012677, `results/ACCEPT-50fe065af50c.md`). Complete `sp-group` and `sp-distinct`
 > (9 copies, ~156 MB) are refused outright ("Nothing was copied") instead of running in copy batches; the refusal says
