@@ -1,16 +1,16 @@
 # Orchestration status
 
-Status as of **2026-11-05 08:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-05 09:57 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) has its fixed pre-release
-`server-1.0.0-8060179bce0c`; it waits for the maintainer's stand re-check (or egret's SASL HDFS acceptance) before
-"ITEM 31 DONE". **egret's preliminary acceptance report says DO NOT SHIP** (see egret below).
+Not ALL DONE: bug-first **ITEM 31** (plain table names with SASL node-local copies) is not "ITEM 31 DONE".
+**egret's final SASL HDFS acceptance of `server-1.0.0-8060179bce0c` says DO NOT SHIP**; the core lane (session
+09:41Z, lock held) answered it in `5c83dd13` (see egret below). No ITEM 31 DONE yet.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 31: parts 1-3 done; pre-release built; remaining: stand re-check, then ITEM 31 DONE | d59fec69 unlock 07:42Z (session found nothing open) | free | Dev CI on main green: 41902472862 (push, 1f3866d2) and 41905031992 (`package=true`, service gate green) |
+| core (`STATUS.md`) | ITEM 31 acceptance follow-up: log fix `5c83dd13` + STATUS `8c6082f5` (09:46Z); remaining: egret final / stand re-check, then ITEM 31 DONE | 8c6082f5, 10 min ago | **held 09:41Z** (active session) | Dev CI 42005115898 on 5c83dd13 **running**; Catalogs 42005115931 and Service hdfs 42005115928 green; previous Dev CI on main green (41902472862, 41905031992) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-03 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -22,39 +22,44 @@ No stale locks (marten and heron free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 41907447179 | 8060179b | pass |
-| service-hdfs.yml | 41907451727 | 8060179b | pass |
+| service-hdfs.yml | 42005115928 | 5c83dd13 | pass |
 | service-security.yml | 41907457509 | 8060179b | pass |
 | service-stores.yml | 41907462979 | 8060179b | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-8060179bce0c` (2026-11-04 20:16Z): ITEM 31 parts 1-3 - **for the stand re-check**.
+- `server-1.0.0-8060179bce0c` (2026-11-04 20:16Z): ITEM 31 parts 1-3; egret acceptance DO NOT SHIP.
 - `server-1.0.0-d2313a9eb651` (2026-11-04 04:42Z): ITEM 30; has the item-31 plain-name bugs.
 - `server-1.0.0-5122cea1f045` (2026-11-03 11:04Z): item 29 part 2.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 2026-11-05 06:41Z: no new server jar. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 118 (2026-11-05 08:51Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 2026-11-05 09:41Z: no new server jar. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 119 (2026-11-05 09:51Z): nothing open. Lock free.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `8060179bce0c`.
-- **SASL HDFS ACCEPTANCE of `8060179bce0c`:** preliminary `results/ACCEPT-8060179bce0c.md` (run 41986696064):
-  **verdict DO NOT SHIP**. Checks 1-3, 5 pass in all cells (TPC-H 22/22 plain + qualified, spread set, partial sums,
-  low direct memory). **Check 4 (small copy disk) fails in all 4 cells:** with `-DhdfsLocalCopyDir` on a 64 MiB tmpfs
-  every copy is refused (default `hdfsLocalCopyMinFreeBytes` 1 GiB > the disk) and the complete-mode refusal comes back
-  as **INTERNAL, not RESOURCE_EXHAUSTED** - contradicts item 31 (3) "copy-disk refusal = RESOURCE_EXHAUSTED" (a path
-  that still maps to INTERNAL). **Check 6 (logs) fails in 3 cells:** complete-answer queries without an `hdfs=reads`
-  line (16 lines / 61 queries). Harness fixes since; final run 41995351608 running (cells in progress). Not yet written
-  into the core lane's Next steps (egret may still classify parts as harness false fails).
+- **ACCEPT 8060179bce0c DONE (final, run 41995351608, 10/10 jobs green): verdict DO NOT SHIP.** Pass in all 4
+  cells: TPC-H 22/22 plain + qualified, spread set (17/17 on 1 server, 47/47 on 3), partial sums = complete, low
+  direct memory (no OOM), no `HdfsNetworkException`. Fail (egret: server, not harness): check 4 - on a 64 MiB tmpfs
+  copy disk every copy is refused (1 GiB default reserve) and the refusal shows INTERNAL; check 6 - 45-46 complete
+  answers per cell without an `hdfs=reads` line.
+- **Core lane's answer (`5c83dd13`, 09:46Z):** check 4 INTERNAL is the ADBC client's mapping (ADBC has no
+  resource-exhausted code; the wire status is RESOURCE_EXHAUSTED, shown as `(ResourceExhausted; ...`) - harness
+  reading; CI now asserts it. The 1 GiB reserve is the documented default -> new Open question. Check 6: complete
+  answers that copied nothing now log `hdfs=reads ... localCopy=0` (merged `distributedComplete` answers log it on
+  the endpoint nodes). No new pre-release yet (a `package=true` only if needed).
 
 ## For the maintainer
 
-- **ITEM 31 build `server-1.0.0-8060179bce0c`: egret acceptance preliminary DO NOT SHIP** (copy-disk refusal INTERNAL
-  instead of RESOURCE_EXHAUSTED; missing `hdfs=reads` log lines; 1 GiB free-space reserve refuses every copy on a small
-  copy disk). Final report from run 41995351608 pending. If confirmed, the core lane needs a bug-first note.
+- **ITEM 31: decide whether egret's DO NOT SHIP stands.** egret says check 4/6 are server faults; the core lane says
+  check 4 (status code) is the ADBC client's mapping and fixed check 6 (logging) in `5c83dd13` (CI running). For a
+  shippable build: `package=true` with 5c83dd13, egret re-ACCEPT with the harness reading `(ResourceExhausted;`
+  and a reserve set for its tmpfs (or a default change, below).
+- **New Open question:** `hdfsLocalCopyMinFreeBytes` default 1 GiB refuses every copy on small copy disks - keep and
+  document, or cap at min(1 GiB, 10 % of the disk)?
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -62,6 +67,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-05 09:57Z: egret final ACCEPT 8060179bce0c (41995351608): DO NOT SHIP (check 4 INTERNAL vs RESOURCE_EXHAUSTED + 1 GiB reserve, check 6 missing hdfs=reads); core session 09:41Z answered in 5c83dd13 (check 4a = ADBC client mapping, wire status is RESOURCE_EXHAUSTED; 4b = new Open question; check 6 log fix), Dev CI 42005115898 running; marten/heron (session 119) idle.
 - 2026-11-05 08:57Z: egret preliminary SASL HDFS acceptance of 8060179bce0c (41986696064): DO NOT SHIP - check 4 copy-disk refusal INTERNAL not RESOURCE_EXHAUSTED (all cells), check 6 missing hdfs=reads lines; final run 41995351608 running; kestrel no change (CI/service matrix green); marten/heron (session 118) idle; no locks held.
 - 2026-11-05 07:57Z: core session 07:42Z found nothing open (ITEM 31 waits for the stand re-check); CI and service matrix green on 8060179b; egret started the maintainer's SASL HDFS acceptance task (accept-hdfs.yml on 8060179bce0c: run 41986549800 failed in setup, fixed, 41986696064 running); marten (06:41Z)/heron (session 117) idle; no locks held.
 - 2026-11-05 06:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (06:41Z)/heron (session 116)/egret (05:27Z) idle; no locks held.
@@ -101,4 +107,3 @@ No stale locks (marten and heron free).
 - 2026-11-03 10:57Z: core on ITEM 29 part 2 (routing, view binding per table, sasl-cluster cell; Dev CI 41620905057 green, service-hdfs running); service-cluster 41614141178 on 00e3e896 **red** (hdfs-ha loss q18 "READ not supported in state standby"); egret FRESH 413485ba run green, report pending; marten/heron idle; no stale locks.
 - 2026-11-03 09:57Z: core on bug-first ITEM 29 (part 1 done 75e63681/dcc8f919; Dev CI red on 75e63681 = SpotBugs, fixed by dcc8f919, green 41609483775); new Open question item 29 (non-local SASL reads); marten IMPROVEMENTS DONE; heron idle; egret FRESH 413485ba80fd still running; no stale locks.
 - 2026-11-03 08:57Z: ITEM 28 DONE (docs only); core idle; marten q19 step (join_keys 50000) in FE/BE CI; heron speed proof added; egret FRESH 413485ba80fd running (41604206524); no stale locks, Dev CI green.
-- 2026-11-03 08:00Z: ITEM 26 + 27 DONE (pre-release 413485ba80fd, service gate 4/4 green); core idle, no open item; heron IMPROVEMENTS DONE (session 98); marten join-key fix green, q19 + SF1 compare left; egret FRESH-25aa7eec0f0f done (not yet on 413485ba); no stale locks, no red Dev CI.
