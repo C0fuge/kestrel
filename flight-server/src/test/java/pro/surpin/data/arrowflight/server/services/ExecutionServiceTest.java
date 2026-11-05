@@ -1149,19 +1149,20 @@ class ExecutionServiceTest {
                 "SELECT count(DISTINCT a) FROM s.t", "SELECT a, sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
                 "SELECT a, count(DISTINCT b), sum(DISTINCT b), min(c) FROM s.t GROUP BY a",
                 "SELECT a, max(b) AS m FROM s.t GROUP BY a HAVING NOT (a = 2 OR count(*) * 2 <= 10)"
-                        + " ORDER BY m LIMIT 2")) {
+                        + " ORDER BY m LIMIT 2",
+                // Item 33 regression (egret sp-group / sp-distinct shapes).
+                "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a")) {
             assertTrue(ExecutionService.mergeable(query), query);
         }
         for (String query : List.of("SELECT a FROM s.t", "SELECT a FROM s.t ORDER BY a",
                 "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3",
                 "SELECT a FROM s.t ORDER BY a LIMIT 3 OFFSET 1",
-                "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t",
-                "SELECT count(DISTINCT a + 1) FROM s.t",
+                "SELECT count(DISTINCT a + 1) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a LIMIT 2",
                 "SELECT a, sum(b) FROM s.t GROUP BY a HAVING avg(b) > 1",
                 "SELECT a, sum(b) FROM s.t GROUP BY a HAVING count(DISTINCT b) > 1",
                 "SELECT a, sum(b) FROM s.t GROUP BY a HAVING abs(sum(b)) > 1",
                 "SELECT sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
-                "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(b) FROM s.t GROUP BY a",
+                "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(DISTINCT b) FROM s.t GROUP BY a",
                 "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a")) {
             assertFalse(ExecutionService.mergeable(query), query);
         }

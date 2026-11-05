@@ -108,6 +108,16 @@ public final class AverageMerge {
     }
 
     /**
+     * Returns the number of averages in the select list: each adds one column (its count) to
+     * the part answers.
+     *
+     * @return number of averages
+     */
+    public int averageCount() {
+        return (int) averages.stream().filter(Boolean::booleanValue).count();
+    }
+
+    /**
      * Returns the query the endpoints answer.
      *
      * @return part query SQL

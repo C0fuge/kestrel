@@ -28,9 +28,10 @@ import java.util.Map;
  * (item 30, local copies larger than the cache). Accepts what {@link CompleteAnswerMerge} merges
  * from part answers, plus two shapes only one node can answer: an aggregate with HAVING (the
  * parts answer it without HAVING, with every aggregate the condition reads as an extra column;
- * the condition is applied to the merged groups) and count or sum over DISTINCT values of one
- * column (the parts also group by that column, so each part keeps its distinct values; the
- * merge counts or sums them again over distinct values).
+ * the condition is applied to the merged groups), count or sum over DISTINCT values of columns
+ * (the parts also group by those columns, so each part keeps its distinct values; the merge
+ * counts or sums them again over distinct values), and plain averages (each part answers
+ * {@code sum(x)} and {@code count(x)} instead, see {@link AverageMerge}).
  */
 public final class CopyBatchMerge {
 
@@ -47,6 +48,7 @@ public final class CopyBatchMerge {
     private final String partSql;
     private final List<AggFunc> havingFuncs;
     private final HavingNode having;
+    private final AverageMerge averages;
 
     /**
      * Creates the merge of one query.
@@ -56,14 +58,16 @@ public final class CopyBatchMerge {
      * @param partSql SQL of the query every batch answers
      * @param havingFuncs per extra HAVING column, the aggregate it holds
      * @param having HAVING condition over the merged answer, or null
+     * @param averages the rewrite of the query's averages, or null
      */
     private CopyBatchMerge(ParquetQueryParser original, ParquetQueryParser part, String partSql,
-            List<AggFunc> havingFuncs, HavingNode having) {
+            List<AggFunc> havingFuncs, HavingNode having, AverageMerge averages) {
         this.original = original;
         this.part = part;
         this.partSql = partSql;
         this.havingFuncs = List.copyOf(havingFuncs);
         this.having = having;
+        this.averages = averages;
     }
 
     /**
@@ -79,18 +83,51 @@ public final class CopyBatchMerge {
         }
         boolean distinctAggregate = parsed.selectExprs.stream().anyMatch(e -> e.distinct);
         if (parsed.having == null && !distinctAggregate) {
+            if (parsed.completeAnswerReason != null) {
+                return averages(query, parsed);
+            }
             if (CompleteAnswerMerge.partsRefusal(parsed) != null
                     || !(parsed.hasAggregation || parsed.distinct || parsed.limit != null)) {
                 return null;
             }
             ParquetQueryParser part = CompleteAnswerMerge.partQuery(parsed);
-            return new CopyBatchMerge(parsed, part, query, List.of(), null);
+            return new CopyBatchMerge(parsed, part, query, List.of(), null, null);
         }
         try {
             return rewrite(query, parsed);
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /**
+     * Plans the merge of a query whose select list has plain averages (item 33, regression):
+     * every batch answers each {@code avg(x)} as {@code sum(x)} and {@code count(x)}, merged as
+     * {@link AverageMerge} merges endpoint answers.
+     *
+     * @param query client SQL
+     * @param parsed the parsed client query
+     * @return the merge, or null when the query is not such an aggregate, or has LIMIT or OFFSET
+     */
+    private static CopyBatchMerge averages(String query, ParquetQueryParser parsed) {
+        if (parsed.limit != null || parsed.offset != null) {
+            return null;
+        }
+        AverageMerge averages = AverageMerge.of(query);
+        if (averages == null) {
+            return null;
+        }
+        ParquetQueryParser part;
+        try {
+            part = ParquetQueryParser.parse(averages.partQuery());
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (!part.hasAggregation || part.having != null || part.selectExprs.stream().anyMatch(e -> e.distinct)
+                || CompleteAnswerMerge.refusal(part) != null) {
+            return null;
+        }
+        return new CopyBatchMerge(parsed, part, averages.partQuery(), List.of(), null, averages);
     }
 
     /**
@@ -120,8 +157,8 @@ public final class CopyBatchMerge {
         }
         List<SelectFieldOrAsterisk> items = new ArrayList<>();
         List<GroupField> groups = new ArrayList<>(select.$groupBy());
-        String distinctColumn = null;
-        org.jooq.Field<?> distinctField = null;
+        // Every DISTINCT input: the parts are grouped by all of them (item 33, regression).
+        Map<String, org.jooq.Field<?>> distinctFields = new LinkedHashMap<>();
         int position = 0;
         for (SelectFieldOrAsterisk item : select.$select()) {
             if (!(item instanceof org.jooq.Field<?> field)) {
@@ -136,23 +173,15 @@ public final class CopyBatchMerge {
                     return null;
                 }
                 String name = column.getName();
-                if (distinctColumn != null && !distinctColumn.equalsIgnoreCase(name)) {
-                    // Two DISTINCT inputs would need the parts grouped by both.
-                    return null;
-                }
-                if (distinctColumn == null) {
-                    distinctColumn = name;
-                    distinctField = DSL.field(DSL.name(name));
-                }
+                org.jooq.Field<?> distinctField = distinctFields.computeIfAbsent(
+                        name.toLowerCase(Locale.ROOT), k -> DSL.field(DSL.name(name)));
                 items.add(distinctField.as(DISTINCT_PREFIX + position));
             } else {
                 items.add(item);
             }
             position++;
         }
-        if (distinctField != null) {
-            groups.add(distinctField);
-        }
+        groups.addAll(distinctFields.values());
         List<AggFunc> havingFuncs = new ArrayList<>();
         HavingNode havingNode = null;
         if (select.$having() != null) {
@@ -178,7 +207,7 @@ public final class CopyBatchMerge {
                 || part.selectExprs.size() != parsed.selectExprs.size() + havingFuncs.size()) {
             return null;
         }
-        return new CopyBatchMerge(parsed, part, partSql, havingFuncs, havingNode);
+        return new CopyBatchMerge(parsed, part, partSql, havingFuncs, havingNode, null);
     }
 
     /**
@@ -206,7 +235,17 @@ public final class CopyBatchMerge {
      * @return extra column count
      */
     public int extraColumns() {
-        return havingFuncs.size();
+        return averages != null ? averages.averageCount() : havingFuncs.size();
+    }
+
+    /**
+     * Tells whether the batches answer the query's averages as sums and counts; the partial
+     * path cannot describe such a query, its complete answer names the columns.
+     *
+     * @return true when the query has plain averages
+     */
+    public boolean averages() {
+        return averages != null;
     }
 
     /**
@@ -216,7 +255,7 @@ public final class CopyBatchMerge {
      * @return true for a rewritten query
      */
     public boolean rewritten() {
-        return having != null || original.selectExprs.stream().anyMatch(e -> e.distinct);
+        return averages != null || having != null || original.selectExprs.stream().anyMatch(e -> e.distinct);
     }
 
     /**
@@ -230,6 +269,30 @@ public final class CopyBatchMerge {
      *         item is not an output column
      */
     public String mergeSql(String parts, List<String> partColumns, List<String> outputNames) {
+        return mergeSql(parts, partColumns, outputNames, null);
+    }
+
+    /**
+     * Renders the DuckDB SQL that computes the answer from the union of the batches' answers,
+     * dividing merged averages as DuckDB's avg does for the part answers' sum types.
+     *
+     * @param parts SQL relation holding the rows of all part answers
+     * @param partColumns column names of the part answers, in order
+     * @param outputNames column names of the answer, in order
+     * @param sumScales per part answer column, the decimal scale of a DECIMAL column, 0 for an
+     *        integer, null for any other type ({@link DistributedComplete#sumScales}); null when
+     *        unknown (every sum then divided as a floating-point sum)
+     * @return merge SQL
+     * @throws IllegalArgumentException when the part answers do not fit the query or an ORDER BY
+     *         item is not an output column
+     */
+    public String mergeSql(String parts, List<String> partColumns, List<String> outputNames,
+            List<Integer> sumScales) {
+        if (averages != null) {
+            List<Integer> scales = sumScales != null ? sumScales
+                    : java.util.Collections.nCopies(partColumns.size(), null);
+            return averages.mergeSql(part, parts, partColumns, scales, outputNames);
+        }
         if (!rewritten()) {
             return CompleteAnswerMerge.mergePartsSql(original, parts, partColumns, outputNames);
         }

@@ -868,7 +868,9 @@ public final class ExecutionService {
             List<String[]> batches, List<DataFile> unreadable,
             FlightProducer.ServerStreamListener listener, ExecutionPathTracker pathTracker)
             throws Exception {
-        Schema expected = resultSchema(allocator, query);
+        // The partial path cannot describe averages: the complete answer names them.
+        Schema expected = merge.averages() ? completeSchema(allocator, query)
+                : resultSchema(allocator, query);
         List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
         try {
             // An ORDER BY the merged answer cannot apply is known before anything is copied.
@@ -921,7 +923,8 @@ public final class ExecutionService {
             DistributedComplete.DeferredStart client = new DistributedComplete.DeferredStart(listener);
             client.expect(expected);
             try (org.apache.arrow.vector.ipc.ArrowReader reader = parts.reader()) {
-                String sql = merge.mergeSql(name, columns, outputNames);
+                String sql = merge.mergeSql(name, columns, outputNames,
+                        DistributedComplete.sumScales(parts.schema()));
                 readArrowParts(allocator, reader, name, sql, client);
             } catch (Exception e) {
                 if (client.sentBatch() || listener.isCancelled()) {
@@ -1866,7 +1869,9 @@ public final class ExecutionService {
             return CopyBatches.declined(notBatchable);
         }
         Schema complete = completeSchema(allocator, sql);
-        Schema partial = resultSchema(allocator, sql);
+        CopyBatchMerge merge = concatenatable(parsed) ? null : CopyBatchMerge.of(sql, parsed);
+        // Averages are answered by the batches as sums and counts, named by the complete answer.
+        Schema partial = merge != null && merge.averages() ? complete : resultSchema(allocator, sql);
         boolean renamed = !sameColumns(complete, partial);
         // Column names may differ (an unaliased count(*) is count_star() in the complete answer,
         // item 33 (A)): the answer then takes the complete answer's names.

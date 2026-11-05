@@ -490,7 +490,7 @@ smallDisk() {
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
   docker logs srvd 2>&1 | grep -q 'hdfs=copyBatches .*merge=rewrite' \
     || finish fail "small disk: the HAVING / count(DISTINCT) query was not merged from copy batches (no merge=rewrite line)"
-  [ "$completeBatched" -ge 10 ] || finish fail "small disk: $completeBatched of the 10 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines); $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=completeInCopyBatches skipped .*' | cut -c1-300)"
+  [ "$completeBatched" -ge 15 ] || finish fail "small disk: $completeBatched of the 15 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines); $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=completeInCopyBatches skipped .*' | cut -c1-300)"
   # Item 33 regression: one query at a time, so no copy stays pinned once a lease is released, and
   # a refusal (the join) never counts copies of other (finished) queries as in use.
   released=$(docker logs srvd 2>&1 | grep -oE 'hdfs=localCopyReleased .*' | tail -n 1)

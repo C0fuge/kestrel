@@ -74,6 +74,26 @@ PLAIN_FIRST_GROUPS = PLAIN_GROUP + " ORDER BY l_returnflag, l_linestatus LIMIT 3
 PLAIN_FILTERED = "SELECT count(*) AS n, sum(l_quantity) AS q FROM lineitem_p WHERE l_quantity > {bound}"
 
 
+# Item 33 regression: egret's sp-group (with avg) and sp-distinct (two count(DISTINCT)), plain names.
+SP_GROUP = ("SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q, avg(l_discount) AS d"
+            " FROM lineitem_p GROUP BY l_returnflag, l_linestatus")
+SP_DISTINCT = "SELECT count(DISTINCT l_partkey) AS n, count(DISTINCT l_suppkey) AS s FROM lineitem_p"
+
+
+def reference_sp(base):
+    """Per (l_returnflag, l_linestatus): count, sum(l_quantity), avg(l_discount); distinct part/supp keys."""
+    table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
+                          columns=["l_returnflag", "l_linestatus", "l_quantity", "l_discount",
+                                   "l_partkey", "l_suppkey"])
+    agg = table.group_by(["l_returnflag", "l_linestatus"]).aggregate(
+        [("l_quantity", "count"), ("l_quantity", "sum"), ("l_discount", "mean")])
+    groups = {(r["l_returnflag"], r["l_linestatus"]):
+              (r["l_quantity_count"], decimal.Decimal(str(r["l_quantity_sum"])), float(r["l_discount_mean"]))
+              for r in agg.to_pylist()}
+    keys = (len(pc.unique(table.column("l_partkey"))), len(pc.unique(table.column("l_suppkey"))))
+    return groups, keys
+
+
 def reference_filtered(base, bound):
     """Row count and sum(l_quantity) of the local lineitem rows with l_quantity above a bound."""
     table = pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
@@ -154,7 +174,11 @@ def main():
     want_fn, want_fq = reference_filtered(base, bound)
     want_modes = set(pq.read_table(glob.glob(os.path.join(base, "data/tpch/lineitem", "*.parquet")),
                                    columns=["l_shipmode"]).column("l_shipmode").to_pylist())
+    want_sp_groups, want_sp_keys = reference_sp(base)
     checks = [
+        # Item 33 regression (egret sp-group / sp-distinct): avg and two count(DISTINCT) batched.
+        ("complete", "plain lineitem_p GROUP BY with avg (sp-group)", SP_GROUP, "avggroups", want_sp_groups),
+        ("complete", "plain lineitem_p two count(DISTINCT) (sp-distinct)", SP_DISTINCT, "keys", want_sp_keys),
         ("complete", "chunks.lineitem full scan", _SASL.CHUNKS_SCAN, "scan", None),
         ("complete", "chunks.lineitem GROUP BY", _SASL.CHUNKS_GROUP, "groups", want_groups),
         ("complete", "plain lineitem_p count/sum", _SASL.PLAIN_LINEITEM, "totals", (want_n, want_q)),
@@ -212,6 +236,16 @@ def main():
                 if mode == "complete" and answer.schema.names[0] != "count_star()":
                     good = False
                     got = (got, answer.schema.names)
+            elif kind == "avggroups":
+                got = {(r["l_returnflag"], r["l_linestatus"]):
+                       (int(r["n"]), decimal.Decimal(str(r["q"])), float(r["d"])) for r in answer.to_pylist()}
+                good = got.keys() == want.keys() and all(
+                    got[k][0] == w[0] and abs(got[k][1] - w[1]) <= decimal.Decimal("0.0001")
+                    and abs(got[k][2] - w[2]) <= 1e-9 * max(1.0, abs(w[2])) for k, w in want.items())
+            elif kind == "keys":
+                row = answer.to_pylist()
+                got = (int(row[0]["n"]), int(row[0]["s"])) if len(row) == 1 else row
+                good = got == want
             elif kind == "distinct":
                 got = set(answer.column(0).to_pylist())
                 good = got == want

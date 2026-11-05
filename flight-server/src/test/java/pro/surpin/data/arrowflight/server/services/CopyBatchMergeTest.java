@@ -110,6 +110,63 @@ class CopyBatchMergeTest {
         }
     }
 
+    /**
+     * Item 33 regression: the stand's unbatched shapes - averages (egret {@code sp-group}) and
+     * several count(DISTINCT) columns (egret {@code sp-distinct}) - merge into exactly the answer
+     * computed over all rows at once, names and types included.
+     */
+    @Test
+    void averagesAndSeveralDistinctColumnsMergeIntoTheAnswer() throws SQLException {
+        String[] queries = {
+            "SELECT grp, k, count(*) AS n, sum(qty) AS q, avg(price) AS d FROM s.t GROUP BY grp, k",
+            "SELECT count(DISTINCT grp) AS n, count(DISTINCT k) AS s FROM s.t",
+            "SELECT avg(qty), avg(k) AS ak, avg(price) FROM s.t WHERE id > 3",
+            "SELECT grp, avg(qty) AS aq, min(name) FROM s.t GROUP BY grp ORDER BY aq DESC",
+            "SELECT grp, count(DISTINCT name) AS dn, count(DISTINCT k), sum(DISTINCT k) AS sk,"
+                    + " count(*) AS c FROM s.t GROUP BY grp ORDER BY grp",
+            "SELECT avg(qty) AS none FROM s.t WHERE id < 0",
+        };
+        for (String query : queries) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            CopyBatchMerge merge = CopyBatchMerge.of(query, parsed);
+            assertNotNull(merge, query);
+            assertTrue(merge.rewritten(), query);
+            assertEquals(query.contains("avg("), merge.averages(), query);
+            List<String> columns = batchAnswers(merge.partSql());
+            assertEquals(parsed.selectExprs.size() + merge.extraColumns(), columns.size(), query);
+            Answer expected = answer(query, "src");
+            String sql = merge.mergeSql("parts", columns, expected.names(), partScales());
+            Answer merged = answer(sql, null);
+            assertEquals(expected.header, merged.header, query + " -> " + sql);
+            if (parsed.orderBy != null) {
+                assertEquals(expected.rows, merged.rows, query + " -> " + sql);
+            } else {
+                assertEquals(sorted(expected.rows), sorted(merged.rows), query + " -> " + sql);
+            }
+        }
+    }
+
+    /**
+     * Reads the decimal scale of each column of the table {@code parts} as
+     * {@link DistributedComplete#sumScales} does from an Arrow schema.
+     *
+     * @return per column, the scale of a DECIMAL, 0 for an integer, null otherwise
+     * @throws SQLException when DuckDB fails
+     */
+    private List<Integer> partScales() throws SQLException {
+        List<Integer> scales = new ArrayList<>();
+        try (Statement st = connection.createStatement();
+                ResultSet rs = st.executeQuery("SELECT * FROM parts LIMIT 0")) {
+            ResultSetMetaData md = rs.getMetaData();
+            for (int i = 1; i <= md.getColumnCount(); i++) {
+                String type = md.getColumnTypeName(i);
+                scales.add(type.startsWith("DECIMAL") ? Integer.valueOf(md.getScale(i))
+                        : type.matches("(U?)(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)") ? Integer.valueOf(0) : null);
+            }
+        }
+        return scales;
+    }
+
     /** Item 33 (B): a GROUP BY ordinal naming a column is that column; others stay refused. */
     @Test
     void groupByOrdinalsNameTheirColumn() {
@@ -143,8 +200,9 @@ class CopyBatchMergeTest {
     /** Verifies shapes whose batch answers cannot be merged are refused. */
     @Test
     void unmergeableShapesAreRefused() {
-        for (String query : List.of("SELECT grp FROM s.t", "SELECT grp, avg(qty) FROM s.t GROUP BY grp",
-                "SELECT count(DISTINCT grp), count(DISTINCT k) FROM s.t",
+        for (String query : List.of("SELECT grp FROM s.t", "SELECT grp, avg(qty) FROM s.t GROUP BY grp LIMIT 2",
+                "SELECT grp, avg(DISTINCT qty) FROM s.t GROUP BY grp", "SELECT avg(qty) + 1 FROM s.t",
+                "SELECT grp, avg(qty) FROM s.t GROUP BY grp HAVING avg(qty) > 1",
                 "SELECT count(DISTINCT k + 1) FROM s.t",
                 "SELECT grp, sum(qty) FROM s.t GROUP BY grp HAVING avg(qty) > 1",
                 "SELECT grp, sum(qty) FROM s.t GROUP BY grp HAVING count(DISTINCT k) > 1",
