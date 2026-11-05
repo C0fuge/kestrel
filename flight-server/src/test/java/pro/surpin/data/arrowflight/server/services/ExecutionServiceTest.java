@@ -982,6 +982,55 @@ class ExecutionServiceTest {
         }
     }
 
+    /**
+     * Item 33 regression: on a copy disk smaller than a table (the stand's 64 MiB tmpfs, scaled
+     * down), a sequence of one-query-at-a-time batched answers over the table's copies is never
+     * refused, and no copy stays pinned once a query's batches are released.
+     */
+    @Test
+    void sequentialBatchedQueriesOnASmallCopyDiskAreNeverRefusedAndLeaveNothingPinned(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        long capacity = 67_108;
+        long reserve = capacity / 10;
+        java.nio.file.Path root = dir.resolve("c");
+        List<DataFile> files = new java.util.ArrayList<>();
+        String[] ticket = new String[9];
+        for (int i = 0; i < ticket.length; i++) {
+            ticket[i] = "spread/lineitem_sp/data_" + i + ".parquet";
+            files.add(new DataFile(ticket[i], "hdfs://ns/data/" + ticket[i], i == 6 ? 25_400 : 17_300,
+                    1L, Set.of()));
+        }
+        pro.surpin.data.arrowflight.server.storage.LocalCopyCache.FreeSpace disk = d -> {
+            try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(root)) {
+                return capacity - walk.filter(java.nio.file.Files::isRegularFile)
+                        .mapToLong(f -> f.toFile().length()).sum();
+            }
+        };
+        try (pro.surpin.data.arrowflight.server.storage.LocalCopyCache cache =
+                new pro.surpin.data.arrowflight.server.storage.LocalCopyCache(root, 32L << 30, 2,
+                        f -> new java.io.ByteArrayInputStream(new byte[(int) f.size()]), reserve, disk)) {
+            for (int query = 0; query < 20; query++) {
+                // Odd queries keep the ticket order (a scan), even ones take cached copies first.
+                String[] order = query % 2 == 0
+                        ? ExecutionService.cachedFirst(ticket, cache.present(files)) : ticket;
+                List<String[]> batches = ExecutionService.copyBatches(order, files, cache.room());
+                assertTrue(batches.size() > 1, "query " + query);
+                for (String[] batch : batches) {
+                    List<DataFile> toCopy = new java.util.ArrayList<>();
+                    for (String rel : batch) {
+                        files.stream().filter(f -> f.relativePath().equals(rel)).forEach(toCopy::add);
+                    }
+                    try (pro.surpin.data.arrowflight.server.storage.LocalCopyCache.Lease lease =
+                            cache.acquire(toCopy)) {
+                        assertTrue(cache.inUseBytes() > 0);
+                        assertTrue(disk.usableBytes(root) >= reserve, "query " + query);
+                    }
+                }
+                assertEquals(0, cache.inUseBytes(), "query " + query);
+            }
+        }
+    }
+
     /** Item 30 part 2b: which aggregates, DISTINCT and LIMIT queries are merged from batches of copies. */
     @Test
     void onlyMergeableQueriesAreAnsweredPerBatch() {

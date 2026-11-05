@@ -273,7 +273,7 @@ public final class LocalCopyCache implements AutoCloseable {
                 if (!toCopy.isEmpty()) {
                     // The new copies must have room before any of them is started.
                     evictFor(needed);
-                    requireRoom(needed, toCopy);
+                    requireRoom(needed, toCopy, lease);
                 }
                 for (DataFile file : toCopy) {
                     String key = key(file);
@@ -419,9 +419,10 @@ public final class LocalCopyCache implements AutoCloseable {
      *
      * @param needed bytes of the new copies
      * @param toCopy files of the new copies, for the message
+     * @param lease the query's lease, holding the copies it reuses, for the message
      * @throws IOException when the disk has no room for them even without unused copies
      */
-    private void requireRoom(long needed, List<DataFile> toCopy) throws IOException {
+    private void requireRoom(long needed, List<DataFile> toCopy, Lease lease) throws IOException {
         long free = freeSpace.usableBytes(directory) - pendingBytes;
         Iterator<Entry> it = entries.values().iterator();
         while (free - needed < minFreeBytes && it.hasNext()) {
@@ -436,16 +437,24 @@ public final class LocalCopyCache implements AutoCloseable {
         if (free - needed >= minFreeBytes) {
             return;
         }
-        long inUse = cachedBytes;
+        // The copies this query reuses are pinned by it, not by other queries (item 33).
+        long reused = 0;
+        for (Entry entry : new HashSet<>(lease.entries.values())) {
+            reused += entry.bytes;
+        }
+        long others = Math.max(0, inUseBytes() - reused);
         LOGGER.warn("node={} hdfs=localCopyNoSpace dir={} files={} neededBytes={} freeBytes={}"
-                + " minFreeBytes={} inUseBytes={}", LogUtil.node(), directory, toCopy.size(), needed,
-                free, minFreeBytes, inUse);
+                + " minFreeBytes={} reusedBytes={} otherInUseBytes={}", LogUtil.node(), directory,
+                toCopy.size(), needed, free, minFreeBytes, reused, others);
         throw new NoRoomException("No room on the disk of the node-local copy cache " + directory
-                + " for this query's " + toCopy.size() + " file copies (" + needed + " bytes, e.g. "
-                + toCopy.get(0).relativePath() + "): " + Math.max(0, free) + " bytes are free and "
-                + minFreeBytes + " must stay free (hdfsLocalCopyMinFreeBytes); copies in use by"
-                + " running queries take " + inUse + " bytes. Nothing was copied; retry when other"
-                + " queries end, or give hdfsLocalCopyDir a larger disk");
+                + " for this query's " + toCopy.size() + " new file copies (" + needed
+                + " bytes, e.g. " + toCopy.get(0).relativePath() + "): " + Math.max(0, free)
+                + " bytes are free and " + minFreeBytes + " must stay free"
+                + " (hdfsLocalCopyMinFreeBytes); the " + lease.entries.size() + " copies this query"
+                + " reuses take " + reused + " bytes, copies in use by other running queries take "
+                + others + " bytes. The query needs all its copies at once (it cannot be answered in"
+                + " batches of copies). Nothing was copied; retry when other queries end, or give"
+                + " hdfsLocalCopyDir a larger disk");
     }
 
     /**
@@ -521,6 +530,22 @@ public final class LocalCopyCache implements AutoCloseable {
      */
     public synchronized long cachedBytes() {
         return cachedBytes;
+    }
+
+    /**
+     * Returns the bytes of the copies pinned by queries (made or being made); 0 when no query
+     * holds a lease.
+     *
+     * @return bytes
+     */
+    public synchronized long inUseBytes() {
+        long inUse = 0;
+        for (Entry entry : entries.values()) {
+            if (entry.pins > 0) {
+                inUse += entry.bytes;
+            }
+        }
+        return inUse;
     }
 
     /**
@@ -642,6 +667,12 @@ public final class LocalCopyCache implements AutoCloseable {
             closed = true;
             for (Entry entry : entries.values()) {
                 release(entry);
+            }
+            if (!entries.isEmpty()) {
+                // One line per lease: in-use bytes go back to 0 when no query runs (item 33).
+                LOGGER.info("qid={} node={} hdfs=localCopyReleased files={} inUseBytes={}"
+                        + " cachedBytes={}", LogUtil.qid(), LogUtil.node(), entries.size(),
+                        inUseBytes(), cachedBytes());
             }
         }
     }

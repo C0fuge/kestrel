@@ -1823,10 +1823,11 @@ public final class ExecutionService {
         } catch (RuntimeException e) {
             return false;   // the complete path reports what is wrong with the SQL
         }
-        if (!batchableComplete(sql, parsed, tables)
+        if (parsed.schema == null || parsed.table == null
                 || parquetAdapter.isCatalogSchema(parsed.schema)) {
             return false;
         }
+        boolean batchable = batchableComplete(sql, parsed, tables);
         List<DataFile> listed;
         try {
             listed = parquetAdapter.tableFiles(parsed.schema, parsed.table);
@@ -1846,12 +1847,19 @@ public final class ExecutionService {
         if (copyBatches(fileUris, unreadable, copyLimit(unreadable)).size() < 2) {
             return false;
         }
+        if (!batchable) {
+            logNotInCopyBatches(parsed, unreadable.size(), "the query reads more than this table or"
+                    + " its answer cannot be merged from batches of copies");
+            return false;
+        }
         Schema complete = completeSchema(allocator, sql);
         Schema partial = resultSchema(allocator, sql);
         boolean renamed = !sameColumns(complete, partial);
         // Column names may differ (an unaliased count(*) is count_star() in the complete answer,
         // item 33 (A)): the answer then takes the complete answer's names.
         if (renamed && !RenamingStreamListener.sameTypes(complete, partial)) {
+            logNotInCopyBatches(parsed, unreadable.size(), "the column types of the answer in parts "
+                    + partial.getFields() + " differ from the complete answer's " + complete.getFields());
             return false;
         }
         LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}"
@@ -1865,6 +1873,20 @@ public final class ExecutionService {
             readParquet(allocator, sql, fileUris, named, true, pathTracker);
         }
         return true;
+    }
+
+    /**
+     * Logs why a complete-mode query whose copies do not fit at once is not read in batches of
+     * copies (item 33): it then needs every copy at once and is refused when the disk lacks room.
+     *
+     * @param parsed the parsed SQL
+     * @param copies files that need copies
+     * @param reason why the batches cannot answer it
+     */
+    private static void logNotInCopyBatches(ParquetQueryParser parsed, int copies, String reason) {
+        LOGGER.warn("qid={} node={} hdfs=completeInCopyBatches skipped table={}.{} localCopy={}"
+                + " reason='{}'", LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table, copies,
+                reason);
     }
 
     /**

@@ -478,7 +478,7 @@ smallDisk() {
   refused=$(grep -c '^join refused' "$work/smalldisk-check.log" || true)
   noSpace=$(docker logs srvd 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true)
   batches=$(docker logs srvd 2>&1 | grep -c 'hdfs=copyBatches' || true)
-  completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches' || true)
+  completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches table=' || true)
   note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, complete in batches $completeBatched, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
   sudo umount "$dir" || true
   cacheLine=$(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || true)
@@ -490,7 +490,13 @@ smallDisk() {
   [ "$batches" -gt 0 ] || finish fail "small disk: the copies of chunks.lineitem exceed the disk, but no hdfs=copyBatches line"
   docker logs srvd 2>&1 | grep -q 'hdfs=copyBatches .*merge=rewrite' \
     || finish fail "small disk: the HAVING / count(DISTINCT) query was not merged from copy batches (no merge=rewrite line)"
-  [ "$completeBatched" -ge 6 ] || finish fail "small disk: $completeBatched of the 6 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines)"
+  [ "$completeBatched" -ge 10 ] || finish fail "small disk: $completeBatched of the 10 complete one-table queries over chunks / lineitem_p were read in batches of copies (hdfs=completeInCopyBatches lines); $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=completeInCopyBatches skipped .*' | cut -c1-300)"
+  # Item 33 regression: one query at a time, so no copy stays pinned once a lease is released, and
+  # a refusal (the join) never counts copies of other (finished) queries as in use.
+  released=$(docker logs srvd 2>&1 | grep -oE 'hdfs=localCopyReleased .*' | tail -n 1)
+  [[ $released == *" inUseBytes=0 "* ]] || finish fail "small disk: copies still pinned after the last query: ${released:-no hdfs=localCopyReleased line}"
+  docker logs srvd 2>&1 | grep -E 'hdfs=localCopyNoSpace .*otherInUseBytes=[1-9]' | head -n 1 | grep -q . \
+    && finish fail "small disk: a refusal counted copies of other queries as in use: $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*otherInUseBytes=[1-9].*')"
   [ "$refused" -eq 0 ] || [ "$noSpace" -gt 0 ] || finish fail "small disk: join refused, but no hdfs=localCopyNoSpace line"
   docker logs srvd 2>&1 | grep -qiE 'No space left on device' && finish fail "small disk: 'No space left on device' in the server log"
   checkReadsPerQid srvd

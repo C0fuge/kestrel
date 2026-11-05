@@ -179,6 +179,18 @@ def main():
          " FROM chunks.lineitem WHERE l_quantity >= 0", "totals", (want_n, want_q)),
         ("partial", "chunks.lineitem DISTINCT l_shipmode", "SELECT DISTINCT l_shipmode"
          " FROM chunks.lineitem", "distinct", want_modes),
+        # Item 33 regression (egret check 4): in COMPLETE mode, one query at a time, a sum, a
+        # DISTINCT and a GROUP BY over a table larger than the disk, each after the previous
+        # one's copies stayed cached: batched, never refused (copies of finished queries unpinned).
+        ("complete", "chunks.lineitem sum (sequence)", "SELECT count(*) AS n, sum(l_quantity) AS q"
+         " FROM chunks.lineitem WHERE l_quantity >= 0", "totals", (want_n, want_q)),
+        ("complete", "chunks.lineitem DISTINCT l_shipmode (sequence)", "SELECT DISTINCT l_shipmode"
+         " FROM chunks.lineitem ORDER BY 1", "distinct", want_modes),
+        ("complete", "chunks.lineitem GROUP BY 1, 2 ORDER BY 1, 2 (sequence)",
+         "SELECT l_returnflag, l_linestatus, count(*) AS n, sum(l_quantity) AS q"
+         " FROM chunks.lineitem GROUP BY 1, 2 ORDER BY 1, 2", "groups", want_groups),
+        ("complete", "chunks.lineitem DISTINCT l_shipmode (sequence, again)",
+         "SELECT DISTINCT l_shipmode FROM chunks.lineitem", "distinct", want_modes),
     ]
     for mode, what, sql, kind, want in checks:
         try:

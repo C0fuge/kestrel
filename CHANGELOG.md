@@ -98,6 +98,19 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - SASL HDFS clusters: copy refusals tell the query's own copies from other queries' (STATUS item 33, regression)
+
+- A copy refusal (RESOURCE_EXHAUSTED, `hdfs=localCopyNoSpace`) no longer reports the copies the refused query itself
+  reuses as "copies in use by running queries": its message names the bytes of the copies this query reuses and of
+  the copies other running queries hold apart, and the log line reads `reusedBytes=... otherInUseBytes=...`
+  (was `inUseBytes=...`, which counted every cached copy). Copies already cached are pinned by the query that reuses
+  them before room is made (item 33 (C)), so a query that needs all its copies at once was refused naming its own
+  reused copies as "in use" on a small copy disk; no copy stays pinned after its query ends (unit-tested over 20
+  sequential batched queries on a stand-sized disk).
+- Every released lease logs `hdfs=localCopyReleased files=N inUseBytes=X cachedBytes=Y` (0 in-use bytes when no
+  query runs), and a complete-mode query whose copies do not fit at once but cannot be read in batches of copies logs
+  `hdfs=completeInCopyBatches skipped ... reason='...'` (WARN) before it is answered (or refused) with every copy at once.
+
 ### Fixed - SASL HDFS clusters: partial-mode queries with a subquery failed INTERNAL (STATUS item 33 (E))
 
 - On HDFS read short-circuit only (SASL DataNodes), a query asked for in parts that holds a nested query (TPC-H q04's

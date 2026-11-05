@@ -361,7 +361,12 @@ class LocalCopyCacheTest {
             }
             assertEquals(java.util.Set.of(a.relativePath()), cache.present(List.of(a, b)));
             // a + b = 900 bytes leave 100 free, 150 must stay free: refused, a kept and unpinned.
-            assertThrows(LocalCopyCache.NoRoomException.class, () -> cache.acquire(List.of(a, b)));
+            LocalCopyCache.NoRoomException refused = assertThrows(LocalCopyCache.NoRoomException.class,
+                    () -> cache.acquire(List.of(a, b)));
+            // Item 33: the copy the refused query reuses is its own, not one of another query.
+            assertTrue(refused.getMessage().contains("the 1 copies this query reuses take 400 bytes,"
+                    + " copies in use by other running queries take 0 bytes"), refused.getMessage());
+            assertEquals(0, cache.inUseBytes());
             assertEquals(1, opens.get(a.location()).get());
             assertNull(opens.get(b.location()));
             assertTrue(Files.exists(pathA));
@@ -371,6 +376,33 @@ class LocalCopyCacheTest {
             }
             assertFalse(Files.exists(pathA));
             assertEquals(java.util.Set.of(), cache.present(List.of(a)));
+        }
+    }
+
+    @Test
+    void refusalCountsCopiesPinnedByOtherQueriesApartFromItsOwn() throws IOException {
+        DataFile a = file("s/t/a.parquet", 300, 1);
+        DataFile b = file("s/t/b.parquet", 200, 1);
+        DataFile c = file("s/t/c.parquet", 400, 1);
+        try (LocalCopyCache cache = new LocalCopyCache(dir.resolve("c"), 10_000, 2, copier(),
+                150, disk(1000))) {
+            cache.acquire(List.of(b)).close();
+            assertEquals(0, cache.inUseBytes());
+            try (LocalCopyCache.Lease running = cache.acquire(List.of(a))) {
+                assertEquals(300, cache.inUseBytes());
+                // b (200, reused) + c (400) next to a (300, another query's) leave 100 of 150 free.
+                LocalCopyCache.NoRoomException refused = assertThrows(
+                        LocalCopyCache.NoRoomException.class, () -> cache.acquire(List.of(b, c)));
+                assertTrue(refused.getMessage().contains("this query reuses take 200 bytes, copies in"
+                        + " use by other running queries take 300 bytes"), refused.getMessage());
+                assertEquals(300, cache.inUseBytes());
+            }
+            assertEquals(0, cache.inUseBytes());
+            // With a released, b and c fit.
+            try (LocalCopyCache.Lease lease = cache.acquire(List.of(b, c))) {
+                assertEquals(600, cache.inUseBytes());
+            }
+            assertEquals(0, cache.inUseBytes());
         }
     }
 
