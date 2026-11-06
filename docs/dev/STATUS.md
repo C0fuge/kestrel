@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-06 13:10 - item 33 accepted on the stand (`35c15ab226b9`); ITEM 34 (minor, log hygiene).**
+> Stand: normal disk 1/3 servers x default/speed/speed+distributedComplete all exact, `hdfs=reads` 525/525, release
+> `inUseBytes=0` after every query, 0 HdfsNetworkException / catalog errors / fallbacks; 64 MiB disk: count(*),
+> GROUP BY 1, avg, two count(DISTINCT) batched, sum->DISTINCT repro 0 ENOSPC (peak 60.1 of 67.1 MB), speed partial
+> passes with and without room wait. Left (log only): (a) partial-mode multi-table refusals log
+> `FlightSqlProducer - Error getting Arrow schema for query` + `RuntimeException: Invalid SQL query` stack through
+> `ParquetQueryParser.parseChecked` (8 per pass) - log one WARN line without stack; (b) those refusals and the
+> partial-mode DISTINCT refusals log no qid and no `hdfs=reads` line; (c) every copy-disk refusal is an ERROR with a
+> ~30-line `NoRoomException` stack - WARN, one line (it is an expected RESOURCE_EXHAUSTED). Tests asserting the log
+> shape; `package=true`; "ITEM 34 DONE".
+
 > **Item 33 package (2026-11-05 21:30Z, core lane, `bbc8e7c1`):** the `package=true` Dev CI 42099508904 on the last
 > unlock commit failed in the build on the known flake `EndpointFailoverIntegrationTest` (second time), so no
 > pre-release carries the item 33 speed-cell work yet. Flake fixed (test waited for a background load move only
