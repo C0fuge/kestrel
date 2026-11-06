@@ -1,20 +1,20 @@
 # Orchestration status
 
-Status as of **2026-11-06 16:56 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 17:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **pre-release `server-1.0.0-19efa29b1b57`** (items 35 + 36 (3), (5) + 36 (1) part 1) is out (package Dev CI
-42249857195 green, service gate 4/4 green on 19efa29b), but it waits for the stand rerun (8-concurrent DC rehearsal,
-"ITEM 35 DONE"; item 36 (1) cell) and egret has no FRESH/ACCEPT for it yet. The core session (lock 16:41Z, active) has
-pushed item 36 (1) CI cell (9b9875c0), 36 (2) keytab-only start error (06e3c0e5) and part of 36 (4) log noise (ba8b5d82);
-Dev CI 42255936543 on ba8b5d82 running (the two earlier pushes' Dev CI runs were superseded/cancelled).
+Not ALL DONE: item 36 is open in the core lane. New **pre-release `server-1.0.0-5a8e831eade2`** (17:02Z) carries items
+35 + 36 (1) part 1 and CI cell, (2) keytab-only start error, (3), (5), (4) one-line logs; it supersedes
+`19efa29b1b57` for the stand rerun. The core session (lock 17:41Z, active) pushed e7b4bfa6 (rest of 36 (4): stop-time
+failures one WARN + UNAVAILABLE, rate-limited `pool=queueGrowth`, `unreadableTable` INFO with copies); Dev CI
+42264944379 on it running. Still open in 36 (4): the "SQL twice" refusal WARN needs one stand log line.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 36: (1) CI cell, (2), (4) in progress; (1) leak waits for the stand | ba8b5d82, 2026-11-06 16:49Z | 16:41Z (active) | Dev CI 42255936543 (ba8b5d82): running; last green Dev CI 42249857195 (19efa29b, package); Service hdfs 42255067021 (9b9875c0, new DC small-disk stage): pass |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 19:57Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 19:57Z | free | Catalogs CI 42255066903 (9b9875c0): pass |
+| core (`STATUS.md`) | ITEM 36: (1) leak waits for the stand, (4) rest in progress | e7b4bfa6, 2026-11-06 17:48Z | 17:41Z (active) | Dev CI 42264944379 (e7b4bfa6): running; last green Dev CI 42257953849 (5a8e831e, package) |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 20:43Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 20:43Z | free | Catalogs CI 42255066903 (9b9875c0): pass |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
 No stale locks (marten and heron locks free).
@@ -23,42 +23,45 @@ No stale locks (marten and heron locks free).
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42252100348 | 19efa29b | pass |
-| service-hdfs.yml | 42255067021 | 9b9875c0 | pass (also 42252107647 on 19efa29b: pass) |
-| service-security.yml | 42252114148 | 19efa29b | pass |
-| service-stores.yml | 42252120114 | 19efa29b | pass |
+| service-cluster.yml | 42260426491 | 5a8e831e | pass |
+| service-hdfs.yml | 42260432816 | 5a8e831e | pass |
+| service-security.yml | 42260437983 | 5a8e831e | pass |
+| service-stores.yml | 42260442899 | 5a8e831e | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-19efa29b1b57` (2026-11-06 16:10Z): ITEMS 35, 36 (3), (5), 36 (1) part 1; waits for the stand and egret.
+- `server-1.0.0-5a8e831eade2` (2026-11-06 17:02Z): items 35, 36 (1) part 1 + CI cell, (2), (3), (5), (4) part; for the stand rerun.
+- `server-1.0.0-19efa29b1b57` (2026-11-06 16:10Z): items 35, 36 (3), (5), 36 (1) part 1; egret ACCEPT running.
 - `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34; accepted on the stand; egret ACCEPT SHIP, FRESH done.
-- `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Session 16:40-17:05Z: **SERVER deafc861cce3 CHECKED** (compare SF1
-  42250112453 / SF10 42250115981, 88/88 correct; SF1 q16 slower traced to the connector series `fl1eb792`, not the
-  server); unlocked.
-- heron: **IMPROVEMENTS DONE**; "SERVER deafc861cce3 CHECKED" (session 135); session 137 (15:51Z): nothing open.
-- Neither has checked `19efa29b1b57` yet.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED (16:42Z); session 17:41Z "finish mode,
+  nothing new". Open question (no decision needed to continue): fix TPC-H q16 SF1 ~0.5 s slowdown from the join-key
+  IN-list pushdown (`fl1eb792`) or leave it.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 137 (15:51Z): nothing open.
+- Neither has checked `19efa29b1b57` / `5a8e831eade2` yet.
 
 ## egret
 
-- Newest: **FRESH deafc861cce3 DONE** (run 42223833724, 10/10 green, `results/FRESH-deafc861cce3.md`; load per step
-  re-report 42244896618): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 % at 128 clients, 22/22, 0 errors;
-  upstream native `9e4787906b07` still fails TPC-H/small. README "In progress": idle (15:56Z), newest tracked
-  deafc861cce3; no run yet for `19efa29b1b57`.
+- Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724, `results/FRESH-deafc861cce3.md`): speed vs balanced
+  scans x4/x8 1.30-1.58, load +42-45 % at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails
+  TPC-H/small. README "In progress" (17:27Z): ACCEPT `19efa29b1b57` running (run 42261777686). No run for
+  `5a8e831eade2` yet.
 
 ## For the maintainer
 
-- **Stand rerun on `server-1.0.0-19efa29b1b57`:** 8-concurrent DC rehearsal (for "ITEM 35 DONE") and the item 36 (1)
-  cell; expect `distributedComplete=oneStreamPerNode` lines. If copies still stay deleted-open, send the refusal line
-  (now with `deletedOpenFiles=`) plus a `jstack` of the entry node. Note: items 36 (2), (4) land after this build.
+- **Stand rerun:** use `server-1.0.0-5a8e831eade2` (newest; has 36 (2) keytab-only start check too): 8-concurrent DC
+  rehearsal ("ITEM 35 DONE") and the item 36 (1) cell (expect `distributedComplete=oneStreamPerNode`, check
+  `deletedOpenFiles=`). If copies stay deleted-open, send the refusal line plus a `jstack` of the entry node. Also one
+  stand log line of a refusal WARN that embeds the SQL twice (36 (4) rest). Keytab-only start should now fail at start
+  with the cause, or answer with `KRB5CCNAME=FILE:...`.
 - **Open question (item 35):** default budget `distributedCompletePeerStreams` (one per 128 MiB direct memory).
-- egret FRESH/ACCEPT for `19efa29b1b57` (or the next build with all of item 36) not started.
+- **marten open question:** TPC-H q16 SF1 slowdown from join-key pushdown - fix or leave.
 
 ## History
 
+- 2026-11-06 17:58Z: new pre-release `server-1.0.0-5a8e831eade2` (17:02Z; items 35, 36 (1) part 1 + CI cell, (2) keytab-only start, (4) one-line logs; Dev CI 42257953849 green, service gate 4/4 green on 5a8e831e); core session (lock 17:41Z) pushed e7b4bfa6 (rest of 36 (4)), Dev CI 42264944379 running; egret ACCEPT 19efa29b1b57 running (42261777686); marten/heron idle; no stale locks.
 - 2026-11-06 16:56Z: pre-release `server-1.0.0-19efa29b1b57` (items 35, 36 (3)/(5), 36 (1) part 1; package Dev CI 42249857195 green, service gate 4/4 green); core (lock 16:41Z) pushed 36 (1) CI cell, 36 (2), 36 (4) part, Dev CI 42255936543 running; marten SERVER deafc861cce3 CHECKED; egret idle.
 - 2026-11-06 15:58Z: core did ITEM 35 + ITEM 36 (3), (5) in code/CI (Dev CI 42241541621 green on 4ca7be01); both package runs (42238168755 fd67ac4a, 42244135498 cd3c0ea6) built green but failed the service gate (main moved) -> no pre-release; core session (lock 15:40Z) on ITEM 36 (1) (ece08961, Dev CI 42247203245 running); egret FRESH deafc861cce3 DONE (speed 1.10-1.15 of upstream 9e4787906b07 on S3 scans, JDBC c1 p50 1.10 flag); marten deafc861cce3 regression lakefs + check 13 PASS, A/B 3,4 running; heron session 137 idle; no stale locks.
 - 2026-11-06 14:58Z: maintainer accepted ITEM 34 on the stand and opened ITEM 36 (0b076bf6: DC small-disk room leak, keytab-only error, Ranger code, log noise, NN timeouts; after item 35); item 35 `package=true` Dev CI 42233371052 cancelled in the new item 35 step, core session (lock 14:41Z) changed the step (fd67ac4a, DuckDB wheel) and re-dispatched Dev CI 42238168755 (running); egret ACCEPT deafc861cce3 SHIP, FRESH 42223833724 still running; marten M4 on deafc861cce3 part 1 (S3 1-9, iceberg pass), pair 2 running; heron session 136 idle; no stale locks.
@@ -98,4 +101,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-04 18:56Z: core on ITEM 31: part 1 fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); part 2 37cbf500 (complete one-table queries batched over copies) pushed 18:47Z, Dev CI 41890561380 / service-hdfs 41890561200 running, Catalogs 41890561182 green; new Open question (client SCHEMA header for plain names); lock 18:41Z active; marten/heron (session 110)/egret idle; no stale locks.
 - 2026-11-04 17:57Z: ALL DONE withdrawn: maintainer opened bug-first ITEM 31 (75edc566, plain-name SASL copies, wrong 0-row join answers); core lock 17:52Z, working; Dev CI on main green, service gate 4/4 green; marten 17:40Z/heron/egret idle; no stale locks.
 - 2026-11-04 16:56Z: ALL DONE written: maintainer accepted FRESH-413485ba80fd as final in egret (dac5040); core session 16:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten 16:41Z/heron session 109 idle.
-- 2026-11-04 15:57Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (15:40Z)/heron (session 109)/egret (15:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
