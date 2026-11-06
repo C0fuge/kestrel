@@ -179,4 +179,17 @@ public final class LogUtil {
                 extra.isEmpty() ? "" : " " + extra);
     }
 
+    /**
+     * Returns a text for a log line on one line: line breaks become a literal backslash-n.
+     *
+     * @param text text, e.g. a client's SQL, or null
+     * @return the text without line breaks
+     */
+    public static String oneLine(String text) {
+        if (text == null) {
+            return null;
+        }
+        return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n");
+    }
+
 }

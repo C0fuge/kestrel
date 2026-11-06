@@ -745,7 +745,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException noRoom =
                     pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException.in(e);
             String memory = memoryShortage(e);
-            if (memory != null) {
+            FlightRuntimeException denied = memory == null ? denial(e) : null;
+            if (denied != null) {
+                // Access denied: the client's permissions, not a server fault (item 36 (3)).
+                failureReason = denied.status().description();
+                LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=denied error='{}'",
+                        qid, LogUtil.node(), Thread.currentThread().getName(),
+                        serverUri, elapsed, filePaths.length, failureReason);
+            } else if (memory != null) {
                 // Direct memory ran short (item 35): RESOURCE_EXHAUSTED, one line, no stack.
                 failureReason = memory;
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=resourceExhausted error='{}'",
@@ -767,7 +774,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         qid, LogUtil.node(), Thread.currentThread().getName(),
                         serverUri, elapsed, filePaths.length, failure, e);
             }
-            if (memory != null && !(e instanceof FlightRuntimeException)) {
+            if (denied != null) {
+                listener.error(denied);
+            } else if (memory != null && !(e instanceof FlightRuntimeException)) {
                 // Not the client's fault (Arrow reports its memory limit as a bad argument).
                 listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(memory)
                         .withCause(e).toRuntimeException());
@@ -829,6 +838,35 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             }
         }
         return null;
+    }
+
+    /**
+     * Finds an access denial (an UNAUTHORIZED status, PERMISSION_DENIED on the wire) among the
+     * causes of a failure, so a denial raised under another call is not reported as INTERNAL
+     * (item 36 (3)).
+     *
+     * @param e failure
+     * @return the denial, or null when the failure is not one
+     */
+    static FlightRuntimeException denial(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof FlightRuntimeException flight
+                    && flight.status().code() == org.apache.arrow.flight.FlightStatusCode.UNAUTHORIZED) {
+                return flight;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Logs an access denial as one WARN line, without a stack (item 36 (3)).
+     *
+     * @param denial the denial
+     * @param query client SQL
+     */
+    private static void logDenial(FlightRuntimeException denial, String query) {
+        LOGGER.warn("qid={} node={} query=denied reason='{}' query='{}'", LogUtil.qid(), LogUtil.node(),
+                denial.status().description(), LogUtil.oneLine(query));
     }
 
     private static boolean isFileNotFound(Throwable e) {
@@ -1077,6 +1115,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
                     .toRuntimeException();
         } catch (RuntimeException e) {
+            FlightRuntimeException denied = denial(e);
+            if (denied != null) {
+                logDenial(denied, query);
+                throw denied;
+            }
             LOGGER.error("Error describing query: {}", query, e);
             throw CallStatus.INTERNAL.withDescription(failureDescription(e))
                     .withCause(e).toRuntimeException();
@@ -1313,6 +1356,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 throw CallStatus.INVALID_ARGUMENT
                         .withDescription(description)
                         .withCause(e).toRuntimeException();
+            }
+            FlightRuntimeException denied = denial(e);
+            if (denied != null) {
+                logDenial(denied, query);
+                throw denied;
             }
             LOGGER.error("Error getting Arrow schema for query: {}", query, e);
             if (isFileNotFound(e)) {

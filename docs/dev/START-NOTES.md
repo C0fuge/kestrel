@@ -61,6 +61,11 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   `rpc.client.read.timeout=15000`, `rpc.client.write.timeout=15000`, `rpc.client.timeout=20000`,
   `rpc.client.connect.retry=2`); libhdfs3's defaults let a query hang for minutes after a NameNode host crash. The
   server logs a WARN at startup while one of them is unset or over a minute.
+- HDFS HA, the server's own Java Hadoop client (footers, listings, metadata): set in the `hdfs-site.xml` /
+  `core-site.xml` on the server's class path `ipc.client.connect.timeout=5000`,
+  `ipc.client.connect.max.retries.on.timeouts=2` and `dfs.client.failover.sleep.max.millis=2000`. With Hadoop's
+  defaults a NameNode host crash stalls queries for 67-71 s (`getFileInfo` waits ~20 s per attempt on the dead
+  NameNode); with these the slowest query on the maintainer's stand took 25.5 s (item 36 (5)).
 - LDAP / Active Directory logins for JDBC/ODBC/ADBC and BI tools (user name + password, no Kerberos on the client):
   unpack `flight-auth-...tar.zst` into `/opt/flight`, add `:/opt/flight/auth/ldap/*` to `-cp`, and set
   `FLIGHT_AUTH_PROVIDER=ldap`, TLS (`FLIGHT_TLS_CERT` / `FLIGHT_TLS_KEY`), `FLIGHT_LDAP_URL=ldaps://dc1.corp:636

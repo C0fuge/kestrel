@@ -101,6 +101,18 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - access denials reported as INTERNAL with an ERROR stack (STATUS item 36 (3), (5))
+
+- A denial (UNAUTHORIZED, PERMISSION_DENIED on the wire) raised under another failure while a query is described
+  (`Error getting Arrow schema`, `Error describing query`) or executed was reported as INTERNAL with an ERROR and a
+  long stack. It now reaches the client as the denial and logs one WARN line: `query=denied reason='...' query='...'`
+  (SQL on one line), or `execution=failed ... result=denied error='...'`. Denials that already reached the client as
+  UNAUTHORIZED are unchanged. Tests: `FlightSqlProducerTest.deniedSchemaIsUnauthorizedWithOneWarnLine`,
+  `deniedExecutionIsUnauthorizedWithOneWarnLine`, `denialIsFoundAmongTheCauses`.
+- START-NOTES: recommended Java Hadoop client settings for HDFS HA NameNode host crashes
+  (`ipc.client.connect.timeout=5000`, `ipc.client.connect.max.retries.on.timeouts=2`,
+  `dfs.client.failover.sleep.max.millis=2000`; slowest query 67-71 s -> 25.5 s on the stand).
+
 ### Fixed - CI: item 35 step compiled DuckDB from source (no wheel for `duckdb==1.4.1`)
 
 - The Dev CI step "Distributed complete under concurrency (item 35)" generates its Parquet data with `duckdb==1.5.6`
