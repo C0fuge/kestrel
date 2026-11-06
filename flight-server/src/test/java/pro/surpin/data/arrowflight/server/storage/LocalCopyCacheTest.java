@@ -584,4 +584,33 @@ class LocalCopyCacheTest {
             pool.shutdownNow();
         }
     }
+
+    /**
+     * Item 36 (1): a copy deleted while this process still reads it keeps its disk room; the
+     * cache counts such copies (they are named in a refusal for room), and only those below its
+     * directory.
+     */
+    @Test
+    void countsDeletedCopiesStillOpen(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(LocalCopyCache.OPEN_FILES),
+                "needs /proc/self/fd");
+        Path cache = Files.createDirectories(dir.resolve("cache"));
+        Path held = Files.write(Files.createDirectories(cache.resolve("ab")).resolve("x.parquet"),
+                new byte[4096]);
+        Path closed = Files.write(cache.resolve("y.parquet"), new byte[100]);
+        Path outside = Files.write(dir.resolve("z.parquet"), new byte[50]);
+        assertArrayEquals(new long[] {0, 0}, LocalCopyCache.deletedOpen(LocalCopyCache.OPEN_FILES, cache));
+        try (java.nio.channels.FileChannel reader = java.nio.channels.FileChannel.open(held);
+                java.nio.channels.FileChannel other = java.nio.channels.FileChannel.open(outside)) {
+            Files.delete(held);
+            Files.delete(closed);
+            Files.delete(outside);
+            assertTrue(reader.isOpen() && other.isOpen());
+            assertArrayEquals(new long[] {1, 4096},
+                    LocalCopyCache.deletedOpen(LocalCopyCache.OPEN_FILES, cache));
+        }
+        assertArrayEquals(new long[] {0, 0}, LocalCopyCache.deletedOpen(LocalCopyCache.OPEN_FILES, cache));
+        // No listing of open files (not Linux): nothing is counted.
+        assertArrayEquals(new long[] {0, 0}, LocalCopyCache.deletedOpen(dir.resolve("none"), cache));
+    }
 }

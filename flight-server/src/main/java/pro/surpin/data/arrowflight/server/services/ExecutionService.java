@@ -1778,6 +1778,16 @@ public final class ExecutionService {
     }
 
     /**
+     * Tells whether the nodes copy the files they cannot read where they are to a node-local
+     * cache (item 30); the setting is the same on every node of a cluster.
+     *
+     * @return true when local copies are on
+     */
+    public boolean localCopies() {
+        return parquetAdapter.localCopies();
+    }
+
+    /**
      * Logs the {@code hdfs=reads} line of a query that reads no file of the data store on this
      * node (item 32), so that every query on a short-circuit-only store has one; nothing is
      * logged when local copies are off.

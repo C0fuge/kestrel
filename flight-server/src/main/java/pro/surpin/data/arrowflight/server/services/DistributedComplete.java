@@ -202,18 +202,33 @@ public final class DistributedComplete implements AutoCloseable {
         }
         long start = System.nanoTime();
         DeferredStart client = new DeferredStart(listener);
-        List<FlightStream> streams = new ArrayList<>(endpoints.size());
-        List<PeerReadGate> gates = new ArrayList<>(endpoints.size());
+        List<FlightStream> streams = java.util.Collections.synchronizedList(new ArrayList<>(endpoints.size()));
+        List<PeerReadGate> gates = java.util.Collections.synchronizedList(new ArrayList<>(endpoints.size()));
+        // With local copies, an endpoint holds its copies while its answer waits to be read (the
+        // merge reads one answer after the other): two endpoints of one node then wait for each
+        // other's copy room until one is refused (item 36 (1)). Such a node runs them in turn.
+        List<String> nodes = oneStreamPerNode(parsed) ? nodeKeys(endpoints) : null;
         EndpointAnswers answers = null;
         try {
             CallOption identity = identityOption(user);
-            for (FlightEndpoint endpoint : endpoints) {
+            for (int i = 0; i < endpoints.size(); i++) {
+                if (nodes != null && !firstOnNode(nodes, i)) {
+                    streams.add(null);
+                    gates.add(null);
+                    continue;
+                }
+                FlightEndpoint endpoint = endpoints.get(i);
                 PeerReadGate gate = new PeerReadGate();
                 gates.add(gate);
                 streams.add(client(endpoint, 0).getStream(endpoint.getTicket(), identity, gate));
             }
+            if (nodes != null && streams.contains(null)) {
+                LOGGER.info("node={} distributedComplete=oneStreamPerNode endpoints={} nodes={} query='{}'",
+                        LogUtil.node(), endpoints.size(), new java.util.HashSet<>(nodes).size(),
+                        LogUtil.oneLine(query));
+            }
             failOver(endpoints, streams, gates, identity);
-            Schema schema = commonSchema(streams);
+            Schema schema = commonSchema(opened(streams));
             // The answer the client was promised: names and types of the single-node path.
             Schema expected = execution.completeSchema(allocator, query);
             client.expect(expected);
@@ -223,7 +238,9 @@ public final class DistributedComplete implements AutoCloseable {
             String sql = averages == null
                     ? CompleteAnswerMerge.mergeSql(parsed, name, columns, outputNames)
                     : averages.mergeSql(parsed, name, columns, sumScales(schema), outputNames);
-            answers = new EndpointAnswers(allocator, streams, gates, schema);
+            StreamOpener opener = nodes == null ? null
+                    : index -> openLater(endpoints, streams, gates, identity, index, schema);
+            answers = new EndpointAnswers(allocator, streams, gates, schema, nodes, opener);
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
             } finally {
@@ -263,8 +280,137 @@ public final class DistributedComplete implements AutoCloseable {
             return false;
         } finally {
             closeAll(streams);
+            releaseLoads(unopened(endpoints, streams));
             admitted.close();
         }
+    }
+
+    /**
+     * Tells whether a merge on this node opens one endpoint stream per node at a time: with
+     * local copies on, unless every endpoint answers one row (an aggregate without GROUP BY and
+     * DISTINCT), which never waits to be read while it holds copies.
+     *
+     * @param parsed the part query
+     * @return true when the endpoints of one node run in turn
+     */
+    private boolean oneStreamPerNode(ParquetQueryParser parsed) {
+        boolean oneRow = parsed.hasAggregation && parsed.groupByColumnNames.isEmpty()
+                && !parsed.distinct;
+        return !oneRow && execution.localCopies();
+    }
+
+    /**
+     * Names the node of each endpoint by its first location.
+     *
+     * @param endpoints planned endpoints
+     * @return one key per endpoint, in the same order
+     */
+    static List<String> nodeKeys(List<FlightEndpoint> endpoints) {
+        List<String> nodes = new ArrayList<>(endpoints.size());
+        for (FlightEndpoint endpoint : endpoints) {
+            nodes.add(endpoint.getLocations().isEmpty() ? ""
+                    : String.valueOf(endpoint.getLocations().get(0).getUri()));
+        }
+        return nodes;
+    }
+
+    /**
+     * Tells whether an endpoint is the first of its node.
+     *
+     * @param nodes node key of each endpoint
+     * @param index the endpoint
+     * @return true when no earlier endpoint has its node
+     */
+    static boolean firstOnNode(List<String> nodes, int index) {
+        return nodes.subList(0, index).indexOf(nodes.get(index)) < 0;
+    }
+
+    /**
+     * Finds the endpoint of a node to open once one of its answers has been read.
+     *
+     * @param nodes node key of each endpoint
+     * @param opened whether each endpoint's stream is open
+     * @param drained the endpoint whose answer has been read
+     * @return the next endpoint of the same node not opened yet, or -1
+     */
+    static int nextOnNode(List<String> nodes, List<Boolean> opened, int drained) {
+        for (int i = drained + 1; i < nodes.size(); i++) {
+            if (!opened.get(i) && nodes.get(i).equals(nodes.get(drained))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Lists the streams opened so far.
+     *
+     * @param streams endpoint streams, null where not opened
+     * @return the open ones, in order
+     */
+    private static List<FlightStream> opened(List<FlightStream> streams) {
+        synchronized (streams) {
+            return streams.stream().filter(Objects::nonNull).toList();
+        }
+    }
+
+    /**
+     * Lists the endpoints whose stream was never opened.
+     *
+     * @param endpoints planned endpoints
+     * @param streams their streams, null where not opened
+     * @return endpoints not opened
+     */
+    private static List<FlightEndpoint> unopened(List<FlightEndpoint> endpoints,
+            List<FlightStream> streams) {
+        List<FlightEndpoint> left = new ArrayList<>();
+        synchronized (streams) {
+            for (int i = 0; i < endpoints.size(); i++) {
+                if (i >= streams.size() || streams.get(i) == null) {
+                    left.add(endpoints.get(i));
+                }
+            }
+        }
+        return left;
+    }
+
+    /**
+     * Opens the stream of an endpoint that waited for an earlier answer of its node, failing over
+     * to its backup locations, and checks that it answers with the merge's columns.
+     *
+     * @param endpoints planned endpoints
+     * @param streams their streams, null where not opened
+     * @param gates their read gates, in the same order
+     * @param identity the client's signed identity
+     * @param index the endpoint to open
+     * @param schema the columns of the answers opened first
+     * @throws IllegalStateException when the answer has other columns
+     */
+    private void openLater(List<FlightEndpoint> endpoints, List<FlightStream> streams,
+            List<PeerReadGate> gates, CallOption identity, int index, Schema schema) {
+        FlightEndpoint endpoint = endpoints.get(index);
+        PeerReadGate gate = new PeerReadGate();
+        gates.set(index, gate);
+        streams.set(index, client(endpoint, 0).getStream(endpoint.getTicket(), identity, gate));
+        failOver(endpoints, streams, gates, identity, index);
+        Schema answer = streams.get(index).getSchema();
+        if (!schema.getFields().equals(answer.getFields())) {
+            throw new IllegalStateException("Endpoint answers have different columns: " + schema
+                    + " and " + answer);
+        }
+    }
+
+    /**
+     * Opens the stream of an endpoint the merge reads later.
+     */
+    @FunctionalInterface
+    interface StreamOpener {
+        /**
+         * Opens the stream of an endpoint.
+         *
+         * @param index the endpoint
+         */
+        void open(int index);
     }
 
     /**
@@ -473,24 +619,42 @@ public final class DistributedComplete implements AutoCloseable {
     private void failOver(List<FlightEndpoint> endpoints, List<FlightStream> streams, List<PeerReadGate> gates,
             CallOption identity) {
         for (int i = 0; i < endpoints.size(); i++) {
-            FlightEndpoint endpoint = endpoints.get(i);
-            for (int location = 0; ; location++) {
-                try {
-                    streams.get(i).getSchema();
-                    break;
-                } catch (FlightRuntimeException e) {
-                    if (location + 1 >= endpoint.getLocations().size()) {
-                        throw e;
-                    }
-                    LOGGER.info("node={} distributedComplete=failover from={} to={} reason='{}'", LogUtil.node(),
-                            endpoint.getLocations().get(location).getUri(),
-                            endpoint.getLocations().get(location + 1).getUri(), e.getMessage());
-                    closeAll(List.of(streams.get(i)));
-                    PeerReadGate gate = new PeerReadGate();
-                    gates.set(i, gate);
-                    streams.set(i, client(endpoint, location + 1).getStream(endpoint.getTicket(), identity, gate));
-                    failovers.incrementAndGet();
+            if (streams.get(i) != null) {
+                failOver(endpoints, streams, gates, identity, i);
+            }
+        }
+    }
+
+    /**
+     * Waits for the schema of one endpoint answer, reading it again from the endpoint's next
+     * location when it fails before its schema.
+     *
+     * @param endpoints planned endpoints
+     * @param streams their streams, in the same order; a failed one is replaced
+     * @param gates the streams' read gates, in the same order; replaced with their streams
+     * @param identity the client's signed identity
+     * @param i the endpoint
+     * @throws FlightRuntimeException when the endpoint failed at all its locations
+     */
+    private void failOver(List<FlightEndpoint> endpoints, List<FlightStream> streams, List<PeerReadGate> gates,
+            CallOption identity, int i) {
+        FlightEndpoint endpoint = endpoints.get(i);
+        for (int location = 0; ; location++) {
+            try {
+                streams.get(i).getSchema();
+                return;
+            } catch (FlightRuntimeException e) {
+                if (location + 1 >= endpoint.getLocations().size()) {
+                    throw e;
                 }
+                LOGGER.info("node={} distributedComplete=failover from={} to={} reason='{}'", LogUtil.node(),
+                        endpoint.getLocations().get(location).getUri(),
+                        endpoint.getLocations().get(location + 1).getUri(), e.getMessage());
+                closeAll(List.of(streams.get(i)));
+                PeerReadGate gate = new PeerReadGate();
+                gates.set(i, gate);
+                streams.set(i, client(endpoint, location + 1).getStream(endpoint.getTicket(), identity, gate));
+                failovers.incrementAndGet();
             }
         }
     }
@@ -551,7 +715,7 @@ public final class DistributedComplete implements AutoCloseable {
      * @param streams endpoint streams
      */
     private static void cancel(List<FlightStream> streams) {
-        for (FlightStream stream : streams) {
+        for (FlightStream stream : opened(streams)) {
             try {
                 stream.cancel("The complete answer is not merged from endpoint answers", null);
             } catch (RuntimeException e) {
@@ -567,7 +731,7 @@ public final class DistributedComplete implements AutoCloseable {
      * @param streams endpoint streams
      */
     private static void closeAll(List<FlightStream> streams) {
-        for (FlightStream stream : streams) {
+        for (FlightStream stream : opened(streams)) {
             try {
                 stream.close();
             } catch (Exception e) {
@@ -600,6 +764,8 @@ public final class DistributedComplete implements AutoCloseable {
         private final List<FlightStream> streams;
         private final List<PeerReadGate> gates;
         private final Schema schema;
+        private final List<String> nodes;
+        private final StreamOpener opener;
         private int current;
         /** Read by the caller after DuckDB's scan thread wrote them. */
         private final AtomicLong bytes = new AtomicLong();
@@ -617,19 +783,74 @@ public final class DistributedComplete implements AutoCloseable {
          */
         EndpointAnswers(BufferAllocator allocator, List<FlightStream> streams, List<PeerReadGate> gates,
                 Schema schema) {
+            this(allocator, streams, gates, schema, null, null);
+        }
+
+        /**
+         * Creates the reader over endpoint streams of one schema, some opened only once an
+         * earlier answer of their node has been read (null in the lists until then).
+         *
+         * @param allocator allocator of the reader's batch
+         * @param streams endpoint streams, null where not opened yet; filled in by the opener
+         * @param gates their read gates, in the same order
+         * @param schema their common schema
+         * @param nodes node key of each endpoint, or null when every stream is open
+         * @param opener opens the stream of an endpoint, or null when every stream is open
+         */
+        EndpointAnswers(BufferAllocator allocator, List<FlightStream> streams, List<PeerReadGate> gates,
+                Schema schema, List<String> nodes, StreamOpener opener) {
             super(allocator);
             if (gates.size() != streams.size()) {
                 throw new IllegalArgumentException("One read gate per endpoint stream");
             }
-            this.streams = List.copyOf(streams);
-            this.gates = List.copyOf(gates);
+            if ((nodes == null) != (opener == null) || nodes != null && nodes.size() != streams.size()) {
+                throw new IllegalArgumentException("One node per endpoint stream, with an opener");
+            }
+            this.streams = opener == null ? List.copyOf(streams) : streams;
+            this.gates = opener == null ? List.copyOf(gates) : gates;
             this.schema = schema;
+            this.nodes = nodes;
+            this.opener = opener;
+        }
+
+        /**
+         * Opens the stream of an endpoint, keeping a failure for {@link #failure()}.
+         *
+         * @param index the endpoint
+         */
+        private void open(int index) {
+            try {
+                opener.open(index);
+            } catch (RuntimeException e) {
+                failure.compareAndSet(null, e);
+                throw e;
+            }
+        }
+
+        /**
+         * Opens the next endpoint of a node whose answer has just been read, so that it computes
+         * while the answers before it are read.
+         *
+         * @param drained the endpoint whose answer has been read
+         */
+        private void openNextOnNode(int drained) {
+            List<Boolean> opened = new ArrayList<>(streams.size());
+            for (int i = 0; i < streams.size(); i++) {
+                opened.add(streams.get(i) != null);
+            }
+            int next = nextOnNode(nodes, opened, drained);
+            if (next >= 0) {
+                open(next);
+            }
         }
 
         @Override
         public boolean loadNextBatch() throws IOException {
             prepareLoadNextBatch();
             while (current < streams.size()) {
+                if (streams.get(current) == null) {
+                    open(current);
+                }
                 FlightStream stream = streams.get(current);
                 gates.get(current).activate();
                 long waitStart = System.nanoTime();
@@ -647,6 +868,9 @@ public final class DistributedComplete implements AutoCloseable {
                         loadRecordBatch(batch);
                     }
                     return true;
+                }
+                if (opener != null) {
+                    openNextOnNode(current);
                 }
                 current++;
             }

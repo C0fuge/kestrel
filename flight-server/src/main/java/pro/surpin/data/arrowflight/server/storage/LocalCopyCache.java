@@ -512,18 +512,60 @@ public final class LocalCopyCache implements AutoCloseable {
         }
         String waited = waitedMillis > 0 ? " after waiting " + waitedMillis
                 + " ms for them (hdfsLocalCopyRoomWaitMillis)" : "";
+        long[] stale = deletedOpen(OPEN_FILES, directory);
+        String held = stale[0] == 0 ? "" : "; " + stale[0] + " deleted copies still open in this"
+                + " server take " + stale[1] + " bytes";
         LOGGER.warn("node={} hdfs=localCopyNoSpace dir={} files={} neededBytes={} freeBytes={}"
-                + " minFreeBytes={} reusedBytes={} otherInUseBytes={}", LogUtil.node(), directory,
-                toCopy.size(), needed, free, minFreeBytes, reused, others);
+                + " minFreeBytes={} reusedBytes={} otherInUseBytes={} deletedOpenFiles={}"
+                + " deletedOpenBytes={}", LogUtil.node(), directory, toCopy.size(), needed, free,
+                minFreeBytes, reused, others, stale[0], stale[1]);
         throw new NoRoomException("No room on the disk of the node-local copy cache " + directory
                 + " for this query's " + toCopy.size() + " new file copies (" + needed
                 + " bytes, e.g. " + toCopy.get(0).relativePath() + "): " + Math.max(0, free)
                 + " bytes are free and " + minFreeBytes + " must stay free"
                 + " (hdfsLocalCopyMinFreeBytes); the " + lease.entries.size() + " copies this query"
                 + " reuses take " + reused + " bytes, copies in use by other running queries take "
-                + others + " bytes" + waited + ". The query needs all its copies at once (it cannot be answered in"
+                + others + " bytes" + waited + held + ". The query needs all its copies at once (it cannot be answered in"
                 + " batches of copies). Nothing was copied; retry when other queries end, or give"
                 + " hdfsLocalCopyDir a larger disk");
+    }
+
+    /** Directory listing the files this process holds open (Linux). */
+    static final Path OPEN_FILES = Path.of("/proc/self/fd");
+
+    /** Suffix Linux gives the link of an open file that was deleted. */
+    private static final String DELETED = " (deleted)";
+
+    /**
+     * Counts the copies below a directory that were deleted while this process still holds them
+     * open: their disk room comes back only when the last reader closes them (item 36 (1)).
+     *
+     * @param openFiles directory of links to the open files, {@code /proc/self/fd} on Linux
+     * @param directory the cache directory
+     * @return files and bytes; zeros where open files cannot be listed
+     */
+    static long[] deletedOpen(Path openFiles, Path directory) {
+        long files = 0;
+        long bytes = 0;
+        String prefix = directory.toString() + "/";
+        Set<String> seen = new HashSet<>();
+        try (java.nio.file.DirectoryStream<Path> links = Files.newDirectoryStream(openFiles)) {
+            for (Path link : links) {
+                try {
+                    String target = Files.readSymbolicLink(link).toString();
+                    if (target.startsWith(prefix) && target.endsWith(DELETED) && seen.add(target)) {
+                        files++;
+                        // The link still reaches the file: its size is what it holds on the disk.
+                        bytes += Files.size(link);
+                    }
+                } catch (IOException | UnsupportedOperationException e) {
+                    // Closed meanwhile, or not a link.
+                }
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            return new long[] {0, 0};
+        }
+        return new long[] {files, bytes};
     }
 
     /**

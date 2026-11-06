@@ -101,6 +101,20 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - distributed complete on a small copy disk: endpoints of one node waited for each other's copy room (STATUS item 36 (1), part 1)
+
+- With local copies on (SASL HDFS, `hdfsLocalCopyMaxBytes` > 0) and several endpoints per node (`endpointsPerServer`,
+  4 under `resourceProfile=speed`), a merge opened every endpoint stream at once but reads the answers one after the
+  other: endpoints not yet read copied their files and held the copy room while they waited, and a sibling endpoint
+  of the same node waited for that room until it was refused (`No room ... The query needs all its copies at once`)
+  although the query fits in batches. Such a merge now opens one endpoint per node at a time; the node's next
+  endpoint opens as soon as its earlier answer has been read, so nodes still compute in parallel (log line
+  `distributedComplete=oneStreamPerNode`). Aggregates without GROUP BY / DISTINCT (one-row answers) and clusters
+  without local copies are unchanged.
+- A copy-room refusal and its `hdfs=localCopyNoSpace` line now also count the copies deleted while this server still
+  holds them open (`deletedOpenFiles=`, `deletedOpenBytes=`; Linux `/proc/self/fd`), whose disk room only comes back
+  when their reader closes them.
+
 ### Fixed - access denials reported as INTERNAL with an ERROR stack (STATUS item 36 (3), (5))
 
 - A denial (UNAUTHORIZED, PERMISSION_DENIED on the wire) raised under another failure while a query is described
