@@ -751,28 +751,29 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 failureReason = denied.status().description();
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=denied error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
-                        serverUri, elapsed, filePaths.length, failureReason);
+                        serverUri, elapsed, filePaths.length, LogUtil.oneLine(failureReason));
             } else if (memory != null) {
                 // Direct memory ran short (item 35): RESOURCE_EXHAUSTED, one line, no stack.
                 failureReason = memory;
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=resourceExhausted error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
-                        serverUri, elapsed, filePaths.length, memory);
+                        serverUri, elapsed, filePaths.length, LogUtil.oneLine(memory));
             } else if (noRoom != null) {
                 // The copy disk is full for now: an expected RESOURCE_EXHAUSTED, one line, no stack.
                 failureReason = String.valueOf(noRoom.getMessage());
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=noRoom error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
-                        serverUri, elapsed, filePaths.length, failureReason);
+                        serverUri, elapsed, filePaths.length, LogUtil.oneLine(failureReason));
             } else if (cancelled || e instanceof IllegalArgumentException) {
                 // The client went away, or its query or values are wrong: not a server fault.
                 LOGGER.info("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result={} error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
-                        serverUri, elapsed, filePaths.length, cancelled ? "cancelled" : "rejected", failure);
+                        serverUri, elapsed, filePaths.length, cancelled ? "cancelled" : "rejected",
+                        LogUtil.oneLine(failure));
             } else {
                 LOGGER.error("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=failed error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
-                        serverUri, elapsed, filePaths.length, failure, e);
+                        serverUri, elapsed, filePaths.length, LogUtil.oneLine(failure), e);
             }
             if (denied != null) {
                 listener.error(denied);
@@ -1100,10 +1101,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 // The first refusal on a node shows where it came from (a storage error under
                 // DuckDB, a missing extension); later ones log their reason only.
                 LOGGER.warn("node={} query=refused reason='{}' query='{}' first=true", LogUtil.node(),
-                        reason, query, e);
+                        LogUtil.oneLine(reason), LogUtil.oneLine(query), e);
             } else {
-                LOGGER.info("node={} query=refused reason='{}' query='{}'", LogUtil.node(), reason,
-                        query);
+                LOGGER.info("node={} query=refused reason='{}' query='{}'", LogUtil.node(),
+                        LogUtil.oneLine(reason), LogUtil.oneLine(query));
             }
             CallStatus status = message.startsWith("Catalog Error")
                     ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
@@ -1305,7 +1306,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         LogUtil.setQid(qid);
         try {
             LOGGER.warn("qid={} node={} query=refused mode=partial reason='{}' query='{}'", qid,
-                    LogUtil.node(), reason, query);
+                    LogUtil.node(), LogUtil.oneLine(reason), LogUtil.oneLine(query));
             executionService.logRefusedReads("partialPlan");
         } finally {
             LogUtil.setQid(previous);

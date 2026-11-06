@@ -93,6 +93,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   (`HDFS_KERBEROS_PRINCIPAL` / `HDFS_KERBEROS_KEYTAB`); the server writes and renews the ticket cache the hadoopfs
   extension reads (startup line `hdfs=kerberosTicketCache ... path=...`). Optional `hdfsKerberosTicketCache`; a WARN
   says when it is not the cache the extension reads (`KRB5CCNAME` / `hadoop.security.kerberos.ticket.cache.path`).
+  Without either, the extension reads krb5's `default_ccache_name` (`KRB5_CONFIG` / `/etc/krb5.conf`): a `FILE:`
+  default is used; a keyring or KCM default (RHEL-like hosts) fails the start - set `KRB5CCNAME=FILE:/path` then.
 - HDFS short-circuit and the native Hadoop library (libhadoop): all data reads go through the hadoopfs extension
   (libhdfs3), which reads short-circuit without libhadoop. Only the server's own Java HDFS client (Parquet footers and
   metadata, about one block per file) needs libhadoop for short-circuit; without it those few reads go over TCP, and on

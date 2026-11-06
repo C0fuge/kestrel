@@ -101,6 +101,27 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - Kerberos keytab start on a host whose krb5 default ticket cache is a keyring (STATUS item 36 (2))
+
+- With `hdfsKerberosPrincipal` + `hdfsKerberosKeytab` set and neither `KRB5CCNAME` nor
+  `hadoop.security.kerberos.ticket.cache.path` (LIBHDFS3_CONF) naming the ticket cache, the hadoopfs extension reads
+  libkrb5's default, `default_ccache_name` of `KRB5_CONFIG` or `/etc/krb5.conf` (RHEL-like hosts ship
+  `KEYRING:persistent:%{uid}` or `KCM:`), while the server wrote `/tmp/krb5cc_<uid>`: the extension found no ticket,
+  every catalog view failed and every query answered `Catalog Error: Table with name ... does not exist`. The server
+  now reads `default_ccache_name` (following `include` / `includedir`, expanding `%{uid}`, `%{euid}`, `%{USERID}`,
+  `%{TEMP}`): a `FILE:` default is where the keytab login is written; any other cache type fails the start with the
+  cause and the fix (`set KRB5CCNAME=FILE:<path> for the server process, or hadoop.security.kerberos.ticket.cache.path
+  in the LIBHDFS3_CONF file`). Setups with `KRB5CCNAME` or the LIBHDFS3_CONF path set are unchanged.
+- `views=createFailed` now logs DuckDB's error (e.g. `IO Error: Unable to connect to HDFS ...`) instead of the JDBC
+  driver's `Attempting to execute an unsuccessful or closed pending query result` line in front of it.
+
+### Added - CI: distributed complete on small copy disks (STATUS item 36 (1))
+
+- Service hdfs, sasl-cluster speed cell: last stage restarts the three servers as on the maintainer's stand
+  (`resourceProfile=speed`, `distributedComplete=true`, `hdfsLocalCopyDir` on a small tmpfs each) and runs eight
+  complete queries over `chunks.lineitem` twice (`tools/ci/service-hdfs-dcsmalldisk-check.py`): every answer exact,
+  and after each query no server holds a deleted copy file open (`/proc/1/fd`).
+
 ### Fixed - distributed complete on a small copy disk: endpoints of one node waited for each other's copy room (STATUS item 36 (1), part 1)
 
 - With local copies on (SASL HDFS, `hdfsLocalCopyMaxBytes` > 0) and several endpoints per node (`endpointsPerServer`,

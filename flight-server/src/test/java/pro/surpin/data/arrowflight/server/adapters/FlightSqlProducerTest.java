@@ -599,7 +599,7 @@ class FlightSqlProducerTest {
         when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
         doThrow(new java.io.IOException("copies failed",
                 new pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException(
-                        "No room on the disk of the node-local copy cache /x")))
+                        "No room on the disk of the node-local copy cache /x\nfor SELECT *\nFROM t")))
                 .when(executionService).readParquet(eq(allocator), eq(state.query()),
                         eq(state.filePaths()), eq(listener), anyBoolean(),
                         any(ExecutionPathTracker.class));
@@ -627,8 +627,10 @@ class FlightSqlProducerTest {
         String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
         List<String> failed = text.lines().filter(l -> l.contains("execution=failed")).toList();
         assertEquals(1, failed.size(), text);
+        // Item 36 (4): a multi-line reason stays on the record's one line.
         assertTrue(failed.get(0).contains("WARN") && failed.get(0).contains("result=noRoom error='No"
-                + " room on the disk of the node-local copy cache /x'"), failed.get(0));
+                + " room on the disk of the node-local copy cache /x\\nfor SELECT *\\nFROM t'"), failed.get(0));
+        assertTrue(text.lines().noneMatch(l -> l.startsWith("FROM t")), text);
         assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
     }
 
