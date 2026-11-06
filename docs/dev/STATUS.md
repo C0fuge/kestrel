@@ -23,6 +23,26 @@
 
 ## Next steps (one per session)
 
+> **Item 36 (2026-11-06 17:40Z, core lane, `9b9875c0` / `06e3c0e5` / `ba8b5d82`): (1) CI cell done and green, (2)
+> done in code, (4) one-line part done; Dev CI 42255936543 green.** (1) Service hdfs 42255067021 (all 10 cells green) has a new
+> last stage in the sasl-cluster speed cell: three servers as on the stand (`resourceProfile=speed`,
+> `distributedComplete=true`, `hdfsLocalCopyDir=/lcopy` on a 60 MiB tmpfs each, default reserve; the largest lineitem
+> file is 52 MB), eight complete queries over `chunks.lineitem` (no node holds a file whole) twice: 16/16 exact, 16
+> merged, 14 `oneStreamPerNode`, 2 `hdfs=localCopyNoSpace` lines (answered anyway) with `deletedOpenFiles=0`, and no
+> server held a deleted copy open after any query. So with part 1 (`ece08961`) the stand's cell does not reproduce in
+> CI; the stand rerun on the `package=true` build decides whether the leak is gone. (2) Keytab-only start: with
+> neither `KRB5CCNAME` nor LIBHDFS3_CONF's `hadoop.security.kerberos.ticket.cache.path` set, libhdfs3 reads krb5's
+> `default_ccache_name`, which RHEL-like hosts set to `KEYRING:persistent:%{uid}` (or `KCM:`), while the server wrote
+> `/tmp/krb5cc_<uid>`: no ticket for hadoopfs, every view failed, every query `Table ... does not exist`. The server
+> now reads `default_ccache_name` (KRB5_CONFIG or /etc/krb5.conf, include/includedir, `%{uid}` etc.): a FILE default
+> is where the login is written, any other type fails the start with the cause and the fix (set
+> `KRB5CCNAME=FILE:<path>`). `views=createFailed` logs DuckDB's error instead of the JDBC pending-result line. Not
+> verified against a real keyring host (CI cells set `KRB5CCNAME`); the stand's keytab-only start should now fail at
+> start with that message - or, with `KRB5CCNAME=FILE:...`, answer. (4) `query=refused` and `execution=failed` lines
+> keep multi-line reasons and SQL on one line (`LogUtil.oneLine`). **Next for item 36:** rest of (4):
+> `RejectedExecutionException` stacks on stop, rate-limit `pool=queueGrowth`, `views=unreadableTable` -> INFO when
+> copies answer, and the "SQL twice" in the refusal WARN (needs one stand log line to find which message embeds it).
+
 > **Item 36 (1) part 1 (2026-11-06 16:10Z, core lane, `ece08961`, Dev CI 42247203245 green): one cause found and fixed; the leak of
 > deleted-open copies is not reproduced yet.** Found by reading the DC path: a merge reads its endpoint answers one
 > after the other (`EndpointAnswers`), but it opened every endpoint stream at once and waited for each schema, which an
@@ -3684,3 +3704,9 @@ S3 slowdown item below stays open for then).
   rule out DuckDB holding files after close (see Next steps). The previous `package=true` run 42244135498 built
   green, but its service gate failed again because `main` moved. `package=true` dispatched on this unlock commit.
   Lock released.
+- 2026-11-06 (cloud session, core lane): item 36. (1) CI stage "dc small disk" in the Service hdfs sasl-cluster speed
+  cell (`9b9875c0`, Service hdfs 42255067021 green, 16/16 exact, no deleted-open copies): the stand's leak does not
+  reproduce in CI with part 1. (2) keytab-only start: the krb5 `default_ccache_name` is read; a non-file default
+  fails the start with the cause (`06e3c0e5`; changes start behaviour only where every HDFS read failed anyway, as the
+  maintainer asked). (4) one-line refusal / failure log lines (`ba8b5d82`). Dev CI 42255936543 green. `package=true`
+  dispatched on the unlock commit. Lock released.

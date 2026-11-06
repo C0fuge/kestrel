@@ -115,6 +115,11 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - `views=createFailed` now logs DuckDB's error (e.g. `IO Error: Unable to connect to HDFS ...`) instead of the JDBC
   driver's `Attempting to execute an unsuccessful or closed pending query result` line in front of it.
 
+### Changed - refusal and failure log lines stay on one line (STATUS item 36 (4), part)
+
+- `query=refused` (reason and SQL) and `execution=failed` (error) lines write line breaks as `\n`, so one record is
+  one line even for multi-line SQL or DuckDB messages. Client statuses and messages are unchanged.
+
 ### Added - CI: distributed complete on small copy disks (STATUS item 36 (1))
 
 - Service hdfs, sasl-cluster speed cell: last stage restarts the three servers as on the maintainer's stand
