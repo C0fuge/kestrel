@@ -1,11 +1,11 @@
 # Orchestration status
 
-Status as of **2026-11-06 20:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 21:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: ITEM 36 waits for the stand. New **pre-release `server-1.0.0-6384bc55b173`** (18:36Z) carries all of
 item 36 done so far ((1) leak fix part 1 + CI cell, (2) keytab-only start check, (3), (5), (4) log noise incl. stop
 WARN/UNAVAILABLE, rate-limited `pool=queueGrowth`, `unreadableTable` INFO); it supersedes `5a8e831eade2` for the stand
-rerun. Core lane unlocked 18:41Z: "nothing to do but wait"; no kestrel commits since. Kestrel CI all green; no bug-first
+rerun. Core lane sessions 18:41Z and 21:41Z: "nothing open, waits for the stand" (lock/unlock only). Kestrel CI all green; no bug-first
 notes in any lane. **egret ACCEPT `6384bc55b173` DONE: SHIP** (42278048164, 20:15Z; all 6 checks in all 4 cells, check 4
 with room wait; it does not cover the stand case of item 36 (1), (2) keytab start or (4) log wording).
 
@@ -13,7 +13,7 @@ with room wait; it does not cover the stand case of item 36 (1), (2) keytab star
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 36: packaged, waits for the stand rerun + "ITEM 36 DONE" | 268efc8f, 2026-11-06 18:41Z | free | Dev CI 42267369022 (6384bc55, package): pass |
+| core (`STATUS.md`) | ITEM 36: packaged, waits for the stand rerun + "ITEM 36 DONE" | e1a270df (unlock), 2026-11-06 21:41Z | free | Dev CI 42267369022 (6384bc55, package): pass |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 20:43Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 20:43Z | free | Catalogs CI 42255066903 (9b9875c0): pass |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -66,6 +66,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-06 21:56Z: no change: core session 21:41Z lock/unlock only (waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret idle (21:26Z README, newest tracked 6384bc55b173); marten (17:41Z)/heron (session 137) idle; no stale locks.
 - 2026-11-06 20:57Z: no kestrel lane commits since 18:41Z (core waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret ACCEPT 6384bc55b173 SHIP (42278048164); marten/heron idle; no stale locks.
 - 2026-11-06 19:56Z: no kestrel commits since 18:58Z (core idle, waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret ACCEPT 6384bc55b173 running (42278048164); marten (17:41Z)/heron (session 137) idle; no stale locks.
 - 2026-11-06 18:58Z: new pre-release `server-1.0.0-6384bc55b173` (18:36Z; ITEM 36 packaged incl. (4) rest; package Dev CI 42267369022 green, service gate 4/4 green on 6384bc55); core unlocked 18:41Z, waits for the stand; egret ACCEPT 19efa29b1b57 SHIP (42261777686); marten/heron idle; no stale locks.
@@ -105,4 +106,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-05 03:56Z: no change since 21:57Z: no commits on kestrel main; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten/heron (session 114)/egret idle; no locks held.
 - 2026-11-04 21:57Z: no change: core session 21:41Z found nothing open (ITEM 31 waits for the stand re-check of `server-1.0.0-8060179bce0c`); CI and service matrix green on 8060179b; marten/heron (session 113)/egret idle; no stale locks.
 - 2026-11-04 20:57Z: core ITEM 31 (7) done (1f3866d2, Dev CI 41902472862 green); `package=true` Dev CI 41905031992 green with service gate 4/4 green -> pre-release `server-1.0.0-8060179bce0c`; waits for the stand re-check, then ITEM 31 DONE; core lock released 20:48Z; marten/heron (session 112)/egret idle (egret has no FRESH for 8060179bce0c yet); no stale locks.
-- 2026-11-04 19:57Z: core on ITEM 31: part 2 (ea0f1d73) green (Dev CI 41893438040, service-hdfs 41893438019, Catalogs 41893438065); two `package=true` dispatches (41895426530 on ea0f1d73, 41897670516 on d7e84969) red only in `service-gate` (main moved by later [skip ci] commits, service matrix not run on that sha; build green) - process, not a test failure, no bug-first note; core lock 19:41Z (active), (7) direct-memory OOM next; marten/heron (session 111)/egret idle; no stale locks.
