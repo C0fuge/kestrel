@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-06 07:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 08:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: ITEM 33 is not written DONE, and egret has no final ACCEPT / FRESH for `server-1.0.0-35c15ab226b9`.
 egret ACCEPT 35c15ab226b9 (run 42113544966, 22:33Z) is **PARTIAL / provisional DO NOT SHIP**: checks 1, 2, 3, 5, 6
@@ -39,14 +39,14 @@ No stale locks (marten and heron free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 07:40Z: no new server jar, no maintainer items. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 08:41Z: no new server jar, no maintainer items. Lock free.
 - heron: **IMPROVEMENTS DONE**; session 129 (07:51Z): nothing open. Lock free.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `5f60db1ee304` / `50fe065af50c` / `35c15ab226b9`.
-- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (PARTIAL, see top). README "In progress": idle 07:27Z, waits
+- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (PARTIAL, see top). README "In progress": idle 07:27Z, no egret run since 42113544966; waits
   for the maintainer to confirm or dispatch the room-wait ACCEPT run; nothing running.
 
 ## For the maintainer
@@ -63,6 +63,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-06 08:56Z: no change since 07:57Z: no kestrel lane commits; Dev CI/service gate green on 35c15ab2, no new pre-release; egret idle, room-wait ACCEPT for 35c15ab226b9 still not dispatched; marten (08:41Z)/heron (session 129) idle; no stale locks.
 - 2026-11-06 07:57Z: no change since 06:56Z: core session 07:41Z lock/unlock only (waits for the egret room-wait re-check of item 33); Dev CI/service gate green on 35c15ab2, no new pre-release; egret idle (07:27Z), no new run; marten (07:40Z)/heron (session 129) idle; no stale locks.
 - 2026-11-06 06:56Z: no change since 05:56Z: no kestrel lane commits since 21:41Z, Dev CI/service gate green on 35c15ab2, no new pre-release; egret idle (03:26Z) waiting for the maintainer's room-wait ACCEPT dispatch for 35c15ab226b9; marten (06:41Z)/heron (session 128) idle; no stale locks.
 - 2026-11-06 05:56Z: no change since 04:56Z: no kestrel lane commits since 21:41Z, Dev CI/service gate green on 35c15ab2, no new pre-release; egret idle (03:26Z) waiting for the maintainer's room-wait ACCEPT dispatch for 35c15ab226b9; marten (05:41Z)/heron (session 127) idle; no stale locks.
