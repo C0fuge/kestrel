@@ -589,6 +589,74 @@ lowDirect() {
   checkReadsPerQid $(for i in $(seq "$n"); do echo "srvm$i"; done)
   return 0
 }
+# Item 36 (1): distributed complete on small copy disks, as on the maintainer's stand. After the low
+# direct memory stage (sasl-cluster, speed only) the three servers restart with the speed defaults
+# (4 endpoints per server), distributedComplete=true and hdfsLocalCopyDir=/lcopy, each on its own
+# host tmpfs of the largest lineitem file + 4 MiB above the DEFAULT reserve (smaller than any node's
+# share of chunks.lineitem). tools/ci/service-hdfs-dcsmalldisk-check.py runs eight complete queries
+# over chunks.lineitem twice on the first server: every answer exact, and after each query no server
+# holds a deleted copy file open (/proc/1/fd). No "No space left on device", no NoRoomException stack.
+dcSmallDisk() {
+  local dcOpts largest size rc6 i c merged perNode noSpace stacks
+  largest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | tail -n 1)
+  size=$(( ((largest + 4 * 1048576) * 10 / 9 + 1048575) / 1048576 * 1048576 ))
+  dcOpts=$(echo "$opts" | sed -E 's/ -DhdfsLocalCopyMaxBytes=[0-9]+//; s/ -DendpointsPerServer=1//')
+  dcOpts="$dcOpts -DhdfsLocalCopyDir=/lcopy"
+  for i in $(seq "$n"); do docker stop -t 20 "srvm$i" > /dev/null 2>&1 || true; done
+  note "dc small disk: 3 servers, a $size-byte tmpfs each for copies (largest lineitem file $largest), options: $dcOpts"
+  for i in $(seq "$n"); do
+  mkdir -p "$work/dcdisk$i"
+  sudo mount -t tmpfs -o "size=$size,mode=1777" tmpfs "$work/dcdisk$i" || finish fail "dc small disk: tmpfs $i not mounted"
+  # shellcheck disable=SC2086,SC2046
+  docker run -d --name "srvc$i" --network "container:dn$i" $(sockOf "$i") -v "$work/dcdisk$i:/lcopy" "${srvKrb[@]}" "${native[@]}" --cpus=$cpus --memory=$mem \
+    -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
+    -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
+    -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
+    sc-server /jdk/bin/java -Xmx$xmx -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+    --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+    --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+    -Dhazelcast.phone.home.enabled=false -DnumServers=$n $dcOpts -Darrowflight.duckdb.extensionDir=/extdir \
+    -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
+    --data-dir "$dataDir" --localhost "$(dnIp "$i")" --port 32010 --hazelcast-port 5701 \
+    --hosts "$peers" --metrics-enabled false > /dev/null
+  done
+  for i in $(seq "$n"); do
+    c="srvc$i"
+    for _ in $(seq 180); do
+      docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
+      [ "$(docker inspect -f '{{.State.Running}}' "$c")" = true ] || break
+      sleep 1
+    done
+    docker logs "$c" 2>&1 | grep -q 'Server Arrow Flight SQL started' \
+      || finish fail "dc small disk: server $c did not start: $(docker logs "$c" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
+  done
+  sleep 5
+  "$py" -I tools/ci/service-hdfs-dcsmalldisk-check.py "$(dnIp 1):32010" "$in" "$(for i in $(seq "$n"); do printf 'srvc%s,' "$i"; done | sed 's/,$//')" \
+    > "$work/dcsmalldisk-check.log" 2>&1; rc6=$?
+  cat "$work/dcsmalldisk-check.log"
+  if [ "$rc6" -ne 0 ]; then
+    for i in $(seq "$n"); do
+      echo "--- srvc$i: open files below /lcopy, copy lines (last 30) ---"
+      docker exec "srvc$i" sh -c 'ls -l /proc/1/fd 2>/dev/null' | grep -F -- '-> /lcopy/' | head -n 20
+      docker logs "srvc$i" 2>&1 | grep -E 'hdfs=localCopy|distributedComplete=' | tail -n 30 | cut -c1-300
+    done
+    docker exec srvc1 /jdk/bin/jcmd 1 Thread.print > "$work/dcsmalldisk-threads.txt" 2>&1 || true
+  fi
+  for i in $(seq "$n"); do docker stop -t 20 "srvc$i" > /dev/null; docker logs "srvc$i" > "$work/srvc$i.log" 2>&1 || true; done
+  for i in $(seq "$n"); do sudo umount "$work/dcdisk$i" || true; done
+  merged=$(grep -c 'distributedComplete=merged' "$work/srvc1.log" || true)
+  perNode=$(grep -c 'distributedComplete=oneStreamPerNode' "$work/srvc1.log" || true)
+  noSpace=$(cat "$work"/srvc*.log | grep -c 'hdfs=localCopyNoSpace' || true)
+  stacks=$(cat "$work"/srvc*.log | grep -c 'LocalCopyCache\$NoRoomException' || true)
+  note "dc small disk: $(grep -m 1 '^result ' "$work/dcsmalldisk-check.log" || echo 'no result line'); merged $merged, oneStreamPerNode $perNode, hdfs=localCopyNoSpace $noSpace; $(cat "$work"/srvc*.log | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' | cut -c1-300 || echo 'no refusal line')"
+  [ "$rc6" -eq 0 ] || finish fail "dc small disk: $(grep -m 1 '^result fail' "$work/dcsmalldisk-check.log" | cut -c13- || echo 'client failed')"
+  [ "$stacks" -eq 0 ] || finish fail "dc small disk: $stacks NoRoomException stack line(s) in the server logs"
+  cat "$work"/srvc*.log | grep -qiE 'No space left on device' && finish fail "dc small disk: 'No space left on device' in a server log"
+  [ "$merged" -ge 1 ] || finish fail "dc small disk: no complete answer was merged from endpoint answers (no distributedComplete=merged line)"
+  # shellcheck disable=SC2046
+  checkReadsPerQid $(for i in $(seq "$n"); do echo "srvc$i"; done)
+  return 0
+}
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
@@ -598,7 +666,7 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   # shellcheck disable=SC2046
   if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
   if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
-  if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; fi
+  if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
   finish pass ""
 fi
 detail=${result#result fail }
