@@ -165,11 +165,14 @@ jobs:
       # 16 full scans + 32 small queries at once must all be exact, with no failed execution in the
       # server log. 16 scans, not the stand's 8: on a 4-core runner 8 passed even before the fix
       # (the stand has more cores), 16 failed with the stand's "memory limit" INVALID_ARGUMENT.
+      # The data generator takes a DuckDB wheel only (duckdb 1.4.1 has none for the runner's Python
+      # and compiled from source for 12-15 min, which ran the job into its timeout).
       - name: Distributed complete under concurrency (item 35)
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/dc35"; mkdir -p "$work/data/tpch/lineitem"
-          "$RUNNER_TEMP/py/bin/pip" install --quiet duckdb==1.4.1
+          "$RUNNER_TEMP/py/bin/pip" install --quiet --only-binary=duckdb duckdb==1.5.6
           "$RUNNER_TEMP/py/bin/python" -I -c "
           import duckdb, sys
           c = duckdb.connect(); c.execute('INSTALL tpch; LOAD tpch; CALL dbgen(sf=1)')

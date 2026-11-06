@@ -101,6 +101,13 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - CI: item 35 step compiled DuckDB from source (no wheel for `duckdb==1.4.1`)
+
+- The Dev CI step "Distributed complete under concurrency (item 35)" generates its Parquet data with `duckdb==1.5.6`
+  (wheels only, as the other workflows) and has its own 10-minute timeout. With 1.4.1 pip built DuckDB from source
+  (12 min on the push run, over the 30-minute job budget on the `package=true` run 42233371052, which was cancelled).
+  CI only; the server is unchanged.
+
 ### Fixed - concurrent distributed complete answers failed on the Arrow memory limit (STATUS item 35)
 
 - With `distributedComplete=true`, concurrent full scans no longer fail with `INVALID_ARGUMENT: Could not load
