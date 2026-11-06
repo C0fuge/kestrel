@@ -23,6 +23,35 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-06 17:45 - ITEM 34 DONE (stand) + ITEM 36 (after item 35): findings of the widest stand check
+> of `deafc861cce3`.** Stand: HA + Kerberos (Flight Kerberos + TLS) + Ranger, SASL and privileged DataNodes, 1/3
+> servers x default/speed/speed+DC. No wrong answer in ~18 000 hash-checked answers; item 34 log shape holds (0 ERROR
+> lines for expected refusals); NameNode failover 0 failures; server restart mid-loop 150/150; 32 clients x 2 min
+> 0 errors, `inUseBytes=0` after. Egret ACCEPT `deafc861cce3`: SHIP. Item 36:
+> (1) **`distributedComplete=true` on a small copy disk leaks room.** 3 servers `-DresourceProfile=speed
+> -DdistributedComplete=true -DhdfsLocalCopyDir=/lcopy` (64 MiB tmpfs, default reserve), fresh servers:
+> `SELECT * FROM spread.lineitem_sp` (no node holds a file whole) -> `RESOURCE_EXHAUSTED: No room ... 2 new file
+> copies (50219542 bytes ...): 11972608 bytes are free ... The query needs all its copies at once`; afterwards sum /
+> DISTINCT / top-20 / scans of that table are refused too, the last with "0 bytes are free". The entry node holds 55 MB
+> in 6 DELETED-but-still-open copy files (DuckDB / Arrow readers of the DC path not closed), counted as used. Room wait
+> only delays the refusal. Without DC all 8 queries answer (batched). Also 4-7 Netty "Stream closed before write" stacks
+> per node. Fix: close every reader of the DC endpoints' copies; DC single-table queries batched like the non-DC path;
+> CI cell DC + small disk, asserting no deleted-open files (`/proc/<pid>/fd`) after each query.
+> (2) Keytab-only start (no ticket cache) now answers every query `INVALID_ARGUMENT: Catalog Error: Table with name
+> lineitem does not exist!` (log: `views=createFailed ... 'Attempting to execute an unsuccessful or closed pending query
+> result'`); earlier builds said `IO Error: Unable to connect to HDFS`. Fail at start (or per query) with the real
+> cause: hadoopfs needs a ticket cache (`KRB5CCNAME`), or export the keytab login to a private ccache with renewal.
+> (3) Ranger denial: status INTERNAL -> PERMISSION_DENIED; log WARN one line, not ERROR + ~110 stack lines.
+> (4) Log noise: the refusal WARN embeds the SQL twice with newlines (one record up to 67 lines) - log it once on one
+> line (escape newlines); ~200 lines of `RejectedExecutionException` stacks on node stop; ~300 `pool=queueGrowth` WARN
+> per node under 32 clients (rate-limit); `CatalogViews views=unreadableTable` WARN for tables that are answered via
+> copies (INFO).
+> (5) Docs: NameNode host-crash stalls (67-71 s slowest query) come from the server's Java Hadoop client
+> (getFileInfo waits 20 s on the dead NN); with `ipc.client.connect.timeout=5000`,
+> `ipc.client.connect.max.retries.on.timeouts=2`, `dfs.client.failover.sleep.max.millis=2000` the slowest was 25.5 s.
+> Put these in START-NOTES as the recommended client settings (or set them as server defaults when unset).
+> `package=true`, "ITEM 36 DONE".
+
 > **Item 35 (2026-11-06 14:00Z, core lane, `2e128c2e`): done in code and CI**, waiting for the stand. Reproduced
 > locally on one node with the stand's settings (6M-row lineitem-shaped Parquet, `-Xmx2g -XX:MaxDirectMemorySize=2g`,
 > speed + distributedComplete, 4 cores). Before the change, 8 scans + 32 small queries passed on 4 cores, but 16 + 32
