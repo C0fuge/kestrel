@@ -1,12 +1,13 @@
 # Orchestration status
 
-Status as of **2026-11-06 19:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 20:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: ITEM 36 waits for the stand. New **pre-release `server-1.0.0-6384bc55b173`** (18:36Z) carries all of
 item 36 done so far ((1) leak fix part 1 + CI cell, (2) keytab-only start check, (3), (5), (4) log noise incl. stop
 WARN/UNAVAILABLE, rate-limited `pool=queueGrowth`, `unreadableTable` INFO); it supersedes `5a8e831eade2` for the stand
 rerun. Core lane unlocked 18:41Z: "nothing to do but wait"; no kestrel commits since. Kestrel CI all green; no bug-first
-notes in any lane. egret ACCEPT `6384bc55b173` running (42278048164, since 19:15Z).
+notes in any lane. **egret ACCEPT `6384bc55b173` DONE: SHIP** (42278048164, 20:15Z; all 6 checks in all 4 cells, check 4
+with room wait; it does not cover the stand case of item 36 (1), (2) keytab start or (4) log wording).
 
 ## Lanes
 
@@ -40,7 +41,7 @@ No stale locks (marten and heron locks free).
   Open question (no decision needed to continue): fix TPC-H q16 SF1 ~0.5 s slowdown from the join-key IN-list
   pushdown or leave it.
 - heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 137 (15:51Z): nothing open.
-- Neither has checked `19efa29b1b57` / `5a8e831eade2` / `6384bc55b173` yet.
+- Neither has checked `19efa29b1b57` / `5a8e831eade2` / `6384bc55b173` yet (no commits since 17:41Z / 15:51Z).
 
 ## egret
 
@@ -48,8 +49,9 @@ No stale locks (marten and heron locks free).
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
 - **EGRET ACCEPT 19efa29b1b57 DONE** (18:29Z, run 42261777686): **SHIP**, all 6 checks pass in all 4 cells (check 4
   with room wait).
-- **ACCEPT `6384bc55b173` running** (accept-hdfs 42278048164, started 19:15Z). No FRESH for `5a8e831eade2` /
-  `6384bc55b173` yet.
+- **EGRET ACCEPT 6384bc55b173 DONE** (20:15Z, run 42278048164): **SHIP**, all 6 checks pass in all 4 cells (check 4
+  with room wait). No FRESH wave for `5a8e831eade2` / `6384bc55b173` (egret: no change on the local/S3 path). Nothing
+  running; next ACCEPT on a pre-release newer than `6384bc55b173` with an HDFS item.
 
 ## For the maintainer
 
@@ -64,6 +66,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-06 20:57Z: no kestrel lane commits since 18:41Z (core waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret ACCEPT 6384bc55b173 SHIP (42278048164); marten/heron idle; no stale locks.
 - 2026-11-06 19:56Z: no kestrel commits since 18:58Z (core idle, waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret ACCEPT 6384bc55b173 running (42278048164); marten (17:41Z)/heron (session 137) idle; no stale locks.
 - 2026-11-06 18:58Z: new pre-release `server-1.0.0-6384bc55b173` (18:36Z; ITEM 36 packaged incl. (4) rest; package Dev CI 42267369022 green, service gate 4/4 green on 6384bc55); core unlocked 18:41Z, waits for the stand; egret ACCEPT 19efa29b1b57 SHIP (42261777686); marten/heron idle; no stale locks.
 - 2026-11-06 17:58Z: new pre-release `server-1.0.0-5a8e831eade2` (17:02Z; items 35, 36 (1) part 1 + CI cell, (2) keytab-only start, (4) one-line logs; Dev CI 42257953849 green, service gate 4/4 green on 5a8e831e); core session (lock 17:41Z) pushed e7b4bfa6 (rest of 36 (4)), Dev CI 42264944379 running; egret ACCEPT 19efa29b1b57 running (42261777686); marten/heron idle; no stale locks.
@@ -103,4 +106,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-04 21:57Z: no change: core session 21:41Z found nothing open (ITEM 31 waits for the stand re-check of `server-1.0.0-8060179bce0c`); CI and service matrix green on 8060179b; marten/heron (session 113)/egret idle; no stale locks.
 - 2026-11-04 20:57Z: core ITEM 31 (7) done (1f3866d2, Dev CI 41902472862 green); `package=true` Dev CI 41905031992 green with service gate 4/4 green -> pre-release `server-1.0.0-8060179bce0c`; waits for the stand re-check, then ITEM 31 DONE; core lock released 20:48Z; marten/heron (session 112)/egret idle (egret has no FRESH for 8060179bce0c yet); no stale locks.
 - 2026-11-04 19:57Z: core on ITEM 31: part 2 (ea0f1d73) green (Dev CI 41893438040, service-hdfs 41893438019, Catalogs 41893438065); two `package=true` dispatches (41895426530 on ea0f1d73, 41897670516 on d7e84969) red only in `service-gate` (main moved by later [skip ci] commits, service matrix not run on that sha; build green) - process, not a test failure, no bug-first note; core lock 19:41Z (active), (7) direct-memory OOM next; marten/heron (session 111)/egret idle; no stale locks.
-- 2026-11-04 18:56Z: core on ITEM 31: part 1 fa7f901a green (Dev CI 41883760528, service-hdfs 41883760502, Catalogs 41883760547); part 2 37cbf500 (complete one-table queries batched over copies) pushed 18:47Z, Dev CI 41890561380 / service-hdfs 41890561200 running, Catalogs 41890561182 green; new Open question (client SCHEMA header for plain names); lock 18:41Z active; marten/heron (session 110)/egret idle; no stale locks.
