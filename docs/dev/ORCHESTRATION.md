@@ -1,20 +1,19 @@
 # Orchestration status
 
-Status as of **2026-11-06 10:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 11:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: the maintainer accepted ITEM 33 on the stand (`35c15ab226b9`, d94e4068) and opened **ITEM 34** (minor,
-log hygiene: one-line WARN for expected partial-mode refusals and copy-disk `NoRoomException`, qid + `hdfs=reads` on
-refusals). Core session (lock 10:41Z, active) pushed 85293332; Dev CI 42205205027 running. ITEM 34 DONE not written yet.
-**egret ACCEPT 35c15ab226b9 (run 42196478105): SHIP** - all checks pass in all 4 cells, incl. check 4 small disk in
-both speed cells.
+Not ALL DONE: **ITEM 34 (log hygiene) is done in code and CI; pre-release `server-1.0.0-deafc861cce3` carries it**
+(package Dev CI 42207423706 green, all four service workflows green on deafc861). The core lane waits for the stand
+check of the log shape -> "ITEM 34 DONE". egret ACCEPT 35c15ab226b9: SHIP with `-DhdfsLocalCopyRoomWaitMillis=30000`
+(check 4 in the speed cells fails without it, watcher run 42113544966).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 34 (log hygiene) in progress | 85293332, 2026-11-06 10:46Z | held 10:41Z (active) | Dev CI 42205205027 running; Catalogs 42205204951 + Service hdfs 42205205124 green on 85293332; last finished Dev CI green (42108450187 package on 35c15ab2) |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:02Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:02Z | free | - |
+| core (`STATUS.md`) | ITEM 34 done in code/CI, waits for the stand | 1d5d4149, 2026-11-06 11:42Z | free | Dev CI 42207423706 (package, deafc861) green; Dev CI 42205205027 + Catalogs 42205204951 green on 85293332 |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
 No stale locks (marten and heron free).
@@ -23,40 +22,43 @@ No stale locks (marten and heron free).
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42110845591 | 35c15ab2 | pass |
-| service-hdfs.yml | 42205205124 | 85293332 | pass |
-| service-security.yml | 42110857408 | 35c15ab2 | pass |
-| service-stores.yml | 42110862958 | 35c15ab2 | pass |
+| service-cluster.yml | 42208920309 | deafc861 | pass |
+| service-hdfs.yml | 42208924919 | deafc861 | pass |
+| service-security.yml | 42208929742 | deafc861 | pass |
+| service-stores.yml | 42208934008 | deafc861 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand by the maintainer; egret ACCEPT **SHIP**.
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut. egret: DO NOT SHIP (check 4); superseded.
-- `server-1.0.0-5f60db1ee304` (2026-11-05 10:40Z): ITEM 32; accepted by the maintainer for the stand.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34 (log hygiene); waits for the stand check.
+- `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand; egret ACCEPT **SHIP** with room wait.
+- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut; superseded.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 10:41Z: no new server jar, no maintainer items. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 131 (10:51Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 11:41Z: no new server jar, no maintainer items. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 132 (11:51Z): nothing open. Lock free.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
-  No FRESH for `5f60db1ee304` / `50fe065af50c` / `35c15ab226b9`.
-- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (run 42196478105, 10:37Z): **SHIP**, checks 1-6 pass in
-  default x1/x3 and speed x1/x3.
+  No FRESH for the newer pre-releases (`35c15ab226b9`, `deafc861cce3`).
+- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (run 42196478105): **SHIP with
+  `-DhdfsLocalCopyRoomWaitMillis=30000`**, checks 1-6 pass in all 4 cells; without room wait speed check 4 fails
+  (42113544966). README: idle 11:40Z, newest tracked 35c15ab226b9.
 
 ## For the maintainer
 
-- Nothing blocking. ITEM 34 is in progress in the core lane; a `package=true` pre-release follows it.
-- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0); the stand
-  says speed partial passes with and without room wait - may be closable.
+- **Stand check of ITEM 34** on `server-1.0.0-deafc861cce3` (one-line WARN for partial-mode refusals and copy-disk
+  NoRoom, qid + `hdfs=reads` on refusals), then write "ITEM 34 DONE".
+- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0). The stand
+  says speed partial passes with and without room wait; egret says speed check 4 fails without it - worth deciding.
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
 
 ## History
 
+- 2026-11-06 11:56: ITEM 34 done in code/CI, pre-release server-1.0.0-deafc861cce3 (Dev CI 42207423706), all 4 service workflows green on deafc861; waits for the stand; egret ACCEPT 35c15ab226b9 SHIP with room wait; marten/heron idle; no stale locks.
 - 2026-11-06 10:58Z: maintainer accepted ITEM 33 on the stand (d94e4068) and opened ITEM 34 (log hygiene); core session (lock 10:41Z) pushed 85293332, Dev CI 42205205027 running, Service hdfs/Catalogs green; egret ACCEPT 35c15ab226b9 (42196478105) SHIP, all cells; marten (10:41Z)/heron (session 131) idle; no stale locks.
 - 2026-11-06 09:59Z: egret accept-hdfs 42196478105 on 35c15ab226b9 dispatched by the maintainer 09:37Z, running (presumably the room-wait re-check for ITEM 33); no kestrel lane commits; Dev CI/service gate green on 35c15ab2, no new pre-release; marten (09:40Z)/heron (session 130) idle; no stale locks.
 - 2026-11-06 08:56Z: no change since 07:57Z: no kestrel lane commits; Dev CI/service gate green on 35c15ab2, no new pre-release; egret idle, room-wait ACCEPT for 35c15ab226b9 still not dispatched; marten (08:41Z)/heron (session 129) idle; no stale locks.
