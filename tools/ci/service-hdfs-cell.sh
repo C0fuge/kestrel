@@ -485,6 +485,11 @@ smallDisk() {
   noSpace=$(docker logs srvd 2>&1 | grep -c 'hdfs=localCopyNoSpace' || true)
   batches=$(docker logs srvd 2>&1 | grep -c 'hdfs=copyBatches' || true)
   completeBatched=$(docker logs srvd 2>&1 | grep -c 'hdfs=completeInCopyBatches table=' || true)
+  # Item 34: a copy-disk refusal is one WARN line (result=noRoom), never an ERROR with a stack.
+  noRoomStacks=$(docker logs srvd 2>&1 | grep -c 'LocalCopyCache\$NoRoomException' || true)
+  if [ "$refused" -gt 0 ] && [ "$noRoomStacks" -gt 0 ]; then
+    finish fail "small disk: a copy-disk refusal logged a NoRoomException stack ($noRoomStacks line(s)); want one WARN line"
+  fi
   note "small disk: $(grep -m 1 '^result ' "$work/smalldisk-check.log" || echo 'no result line'); join $([ "$refused" -gt 0 ] && echo refused || echo answered), hdfs=localCopyNoSpace $noSpace, hdfs=copyBatches $batches, complete in batches $completeBatched, peak use ${peak:-?} of $size bytes; $(docker logs srvd 2>&1 | grep -m 1 -oE 'hdfs=localCopyNoSpace .*' || echo 'no refusal line')"
   # Item 33 speed cells: endpointsPerServer=4 on the same small disk, so the tickets of one
   # partial query copy at once; with hdfsLocalCopyRoomWaitMillis they wait for each other's room

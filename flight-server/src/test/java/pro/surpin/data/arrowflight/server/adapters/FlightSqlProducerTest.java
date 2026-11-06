@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -505,6 +506,130 @@ class FlightSqlProducerTest {
                         FlightDescriptor.command(new byte[]{1})));
 
         assertEquals(FlightStatusCode.INVALID_ARGUMENT, error.status().code());
+    }
+
+    /**
+     * Verifies queries refused while planned in parts (several tables, a feature endpoints
+     * cannot answer) log one WARN line without a stack under a query id, and their reads line
+     * under the same id (item 34).
+     */
+    @Test
+    void partialRefusalsLogOneWarnLineWithQueryIdAndReads() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        QueryPlanner queryPlanner = mock(QueryPlanner.class);
+        String join = "SELECT count(*) FROM tpch.lineitem l, tpch.orders o"
+                + " WHERE l.l_orderkey = o.o_orderkey";
+        when(executionService.resultSchema(allocator, join)).thenThrow(new RuntimeException(
+                "Invalid SQL query: " + join, new IllegalArgumentException(
+                        "Only single-table queries are supported")));
+        String distinct = "SELECT l_returnflag FROM tpch.lineitem";
+        when(executionService.resultSchema(allocator, distinct)).thenReturn(new Schema(List.of(
+                Field.nullable("l_returnflag", ArrowType.Utf8.INSTANCE))));
+        when(queryPlanner.plan(distinct)).thenThrow(new IllegalArgumentException(
+                "An aggregate over DISTINCT values is not supported when the table is served by"
+                        + " several Flight nodes"));
+        List<String> readsQids = new java.util.ArrayList<>();
+        org.mockito.Mockito.doAnswer(call -> readsQids.add(
+                pro.surpin.data.arrowflight.server.LogUtil.qid())).when(executionService)
+                .logRefusedReads("partialPlan");
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), queryPlanner, executionService,
+                mock(ClusterService.class), "partial");
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        FlightRuntimeException joinError;
+        FlightRuntimeException distinctError;
+        try {
+            joinError = org.junit.jupiter.api.Assertions.assertThrows(FlightRuntimeException.class,
+                    () -> producer.getFlightInfoStatement(
+                            FlightSql.CommandStatementQuery.newBuilder().setQuery(join).build(),
+                            mock(FlightProducer.CallContext.class),
+                            FlightDescriptor.command(new byte[]{1})));
+            distinctError = org.junit.jupiter.api.Assertions.assertThrows(
+                    FlightRuntimeException.class, () -> producer.getFlightInfoStatement(
+                            FlightSql.CommandStatementQuery.newBuilder().setQuery(distinct).build(),
+                            mock(FlightProducer.CallContext.class),
+                            FlightDescriptor.command(new byte[]{1})));
+        } finally {
+            System.setErr(err);
+        }
+
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, joinError.status().code());
+        assertEquals(FlightStatusCode.INVALID_ARGUMENT, distinctError.status().code());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        List<String> refusals = text.lines().filter(l -> l.contains("query=refused mode=partial"))
+                .toList();
+        assertEquals(2, refusals.size(), text);
+        for (String line : refusals) {
+            assertTrue(line.contains("WARN"), line);
+        }
+        assertTrue(refusals.get(0).contains("IllegalArgumentException: Only single-table queries are supported'"),
+                refusals.get(0));
+        assertTrue(refusals.get(1).contains("reason='An aggregate over DISTINCT values"),
+                refusals.get(1));
+        assertTrue(!text.contains("Error getting Arrow schema") && !text.contains("\tat ")
+                && !text.contains("ERROR"), text);
+        assertEquals(2, readsQids.size());
+        for (int i = 0; i < 2; i++) {
+            assertNotNull(readsQids.get(i));
+            assertTrue(refusals.get(i).contains("qid=" + readsQids.get(i) + " "), refusals.get(i));
+        }
+        assertTrue(!readsQids.get(0).equals(readsQids.get(1)), readsQids.toString());
+        assertNull(pro.surpin.data.arrowflight.server.LogUtil.qid());
+    }
+
+    /**
+     * Verifies a stream refused for lack of copy room is RESOURCE_EXHAUSTED and logs one WARN
+     * line without a stack (item 34).
+     */
+    @Test
+    void copyDiskRefusalLogsOneWarnLine() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        ByteString handle = ByteString.copyFromUtf8("noroom-query");
+        HandleState state = new HandleState(
+                "select * from tpch.lineitem", new String[]{"part.parquet"}, null, 0L);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        doThrow(new java.io.IOException("copies failed",
+                new pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException(
+                        "No room on the disk of the node-local copy cache /x")))
+                .when(executionService).readParquet(eq(allocator), eq(state.query()),
+                        eq(state.filePaths()), eq(listener), anyBoolean(),
+                        any(ExecutionPathTracker.class));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                    .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class),
+                    listener);
+        } finally {
+            System.setErr(err);
+        }
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).error(error.capture());
+        FlightRuntimeException reported = assertInstanceOf(
+                FlightRuntimeException.class, error.getValue());
+        assertEquals(FlightStatusCode.RESOURCE_EXHAUSTED, reported.status().code());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        List<String> failed = text.lines().filter(l -> l.contains("execution=failed")).toList();
+        assertEquals(1, failed.size(), text);
+        assertTrue(failed.get(0).contains("WARN") && failed.get(0).contains("result=noRoom error='No"
+                + " room on the disk of the node-local copy cache /x'"), failed.get(0));
+        assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
     }
 
     /** Verifies key metadata requests are answered with an empty result. */

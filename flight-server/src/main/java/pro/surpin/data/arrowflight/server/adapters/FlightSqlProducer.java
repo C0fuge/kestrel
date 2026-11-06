@@ -742,7 +742,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             failureReason = failure;
             boolean cancelled = e instanceof FlightRuntimeException fe
                     && fe.status().code() == org.apache.arrow.flight.FlightStatusCode.CANCELLED;
-            if (cancelled || e instanceof IllegalArgumentException) {
+            pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException noRoom =
+                    pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException.in(e);
+            if (noRoom != null) {
+                // The copy disk is full for now: an expected RESOURCE_EXHAUSTED, one line, no stack.
+                failureReason = String.valueOf(noRoom.getMessage());
+                LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=noRoom error='{}'",
+                        qid, LogUtil.node(), Thread.currentThread().getName(),
+                        serverUri, elapsed, filePaths.length, failureReason);
+            } else if (cancelled || e instanceof IllegalArgumentException) {
                 // The client went away, or its query or values are wrong: not a server fault.
                 LOGGER.info("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result={} error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
@@ -757,12 +765,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             } else if (e instanceof IllegalArgumentException) {
                 listener.error(CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage())
                         .withCause(e).toRuntimeException());
-            } else if (pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
-                    .in(e) != null) {
+            } else if (noRoom != null) {
                 // The node's copy disk is full for now: a resource limit, not a server fault.
-                listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(
-                        pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException
-                                .in(e).getMessage())
+                listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(noRoom.getMessage())
                         .withCause(e).toRuntimeException());
             } else {
                 listener.error(CallStatus.INTERNAL
@@ -1096,6 +1101,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             return new FlightInfo(arrowSchema, descriptor, plan.endpoints(),
                     plan.totalBytes(), plan.totalRecords());
         } catch (IllegalArgumentException e) {
+            logPartialRefusal(query, String.valueOf(e.getMessage()));
             throw CallStatus.INVALID_ARGUMENT
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
@@ -1188,14 +1194,38 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         } catch (IllegalStateException e) {
             String why = String.valueOf(e.getMessage());
             int hint = why.indexOf(" Ask for partial results");
+            String description = reason + ", so the query needs one node to see all rows; "
+                    + (hint > 0 ? why.substring(0, hint) : why);
+            logPartialRefusal(query, description);
             throw CallStatus.INVALID_ARGUMENT
-                    .withDescription(reason + ", so the query needs one node to see all rows; "
-                            + (hint > 0 ? why.substring(0, hint) : why))
+                    .withDescription(description)
                     .withCause(e).toRuntimeException();
         }
         LOGGER.info("node={} query=answeredCompletely mode=partial reason='{}' query='{}'",
                 LogUtil.node(), reason, query);
         return new FlightInfo(completeSchemaFor(query), descriptor, plan.endpoints(), -1, -1);
+    }
+
+    /**
+     * Logs a query refused while it is planned in parts (SQL the partial path cannot read, a
+     * feature endpoints cannot answer for their own files): one WARN line without a stack, as
+     * the refusal is the client's error, under a query id of its own, and the query's
+     * {@code hdfs=reads} line ({@code refused=partialPlan}), so every refused query has both.
+     *
+     * @param query client SQL
+     * @param reason what the client is told
+     */
+    private void logPartialRefusal(String query, String reason) {
+        String qid = qid(copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8)));
+        String previous = LogUtil.qid();
+        LogUtil.setQid(qid);
+        try {
+            LOGGER.warn("qid={} node={} query=refused mode=partial reason='{}' query='{}'", qid,
+                    LogUtil.node(), reason, query);
+            executionService.logRefusedReads("partialPlan");
+        } finally {
+            LogUtil.setQid(previous);
+        }
     }
 
     /**
@@ -1234,16 +1264,19 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
                     .toRuntimeException();
         } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            if (message.startsWith("Invalid SQL query")) {
+                // SQL the partial path cannot read (e.g. several tables): the client's error.
+                String description = failureDescription(e);
+                logPartialRefusal(query, description);
+                throw CallStatus.INVALID_ARGUMENT
+                        .withDescription(description)
+                        .withCause(e).toRuntimeException();
+            }
             LOGGER.error("Error getting Arrow schema for query: {}", query, e);
             if (isFileNotFound(e)) {
                 throw CallStatus.NOT_FOUND
                         .withDescription(SCHEMA_NOT_FOUND_MESSAGE)
-                        .withCause(e).toRuntimeException();
-            }
-            String message = String.valueOf(e.getMessage());
-            if (message.startsWith("Invalid SQL query")) {
-                throw CallStatus.INVALID_ARGUMENT
-                        .withDescription(failureDescription(e))
                         .withCause(e).toRuntimeException();
             }
             IOException storage = storageFailure(e);

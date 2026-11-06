@@ -703,6 +703,30 @@ class ExecutionServiceTest {
                 + " refused=noRoom"), text);
     }
 
+    /** Verifies a refused query logs its reads line only when local copies are on (item 34). */
+    @Test
+    void refusedQueryLogsItsReadsLine() {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        ExecutionService service = new ExecutionService(parquet, mock(DuckDbAdapter.class),
+                mock(MetadataService.class), null, null);
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        pro.surpin.data.arrowflight.server.LogUtil.setQid("q1");
+        try {
+            service.logRefusedReads("partialPlan");
+            when(parquet.localCopies()).thenReturn(true);
+            service.logRefusedReads("partialPlan");
+        } finally {
+            pro.surpin.data.arrowflight.server.LogUtil.setQid(null);
+            System.setErr(err);
+        }
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(1, text.split("hdfs=reads", -1).length - 1, text);
+        assertTrue(text.contains("qid=q1 node=") && text.contains("hdfs=reads files=0"
+                + " shortCircuit=0 localCopy=0 copied=0 refused=partialPlan"), text);
+    }
+
     /**
      * Item 33 regression: a complete answer refused for lack of copy room logs why it was not
      * read in batches of copies, so a refusal on a small copy disk names its cause.

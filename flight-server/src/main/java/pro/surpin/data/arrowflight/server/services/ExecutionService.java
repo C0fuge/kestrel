@@ -1793,6 +1793,19 @@ public final class ExecutionService {
     }
 
     /**
+     * Logs the {@code hdfs=reads} line of a query refused before it read any file (item 34), so
+     * that a refused query has one too; nothing is logged when local copies are off.
+     *
+     * @param refusal where it was refused, e.g. {@code partialPlan}
+     */
+    public void logRefusedReads(String refusal) {
+        if (parquetAdapter.localCopies()) {
+            LOGGER.info("qid={} node={} hdfs=reads files=0 shortCircuit=0 localCopy=0 copied=0"
+                    + " refused={}", LogUtil.qid(), LogUtil.node(), refusal);
+        }
+    }
+
+    /**
      * Answers a complete-mode query of one table whose local copies do not fit the copy cache
      * at once (HDFS read short-circuit only, item 31): the table's files are read as one ticket
      * of the partial path, whose copies go in batches that fit (a scan's rows concatenated, an

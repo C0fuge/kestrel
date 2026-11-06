@@ -99,6 +99,20 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - log hygiene for expected refusals (STATUS item 34)
+
+- Partial-mode queries refused while planned (SQL the partial path cannot read, e.g. several tables; features
+  endpoints cannot answer, e.g. an aggregate over DISTINCT values; complete answers on local-disk clusters) log one
+  WARN line `qid=<id> node=<n> query=refused mode=partial reason='...' query='...'` without a stack (the multi-table
+  case was `ERROR Error getting Arrow schema for query` with a `RuntimeException: Invalid SQL query` stack), and,
+  with local copies on, an `hdfs=reads files=0 shortCircuit=0 localCopy=0 copied=0 refused=partialPlan` line under
+  the same qid. Each refused planning call gets its own qid.
+- A stream refused for lack of copy room (`RESOURCE_EXHAUSTED`) logs one WARN line `execution=failed ... result=noRoom
+  error='No room ...'` instead of an ERROR with the `NoRoomException` stack. Client statuses are unchanged.
+- Tests: `FlightSqlProducerTest.partialRefusalsLogOneWarnLineWithQueryIdAndReads`,
+  `copyDiskRefusalLogsOneWarnLine`, `ExecutionServiceTest.refusedQueryLogsItsReadsLine`; the Service hdfs small-disk
+  stage fails when a refused join logs a `NoRoomException` stack.
+
 ### Fixed - tests: flaky `EndpointFailoverIntegrationTest` (load handover checked before it landed)
 
 - `ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad` read the planned node's load right after the stream
