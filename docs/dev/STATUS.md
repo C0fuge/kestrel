@@ -23,6 +23,32 @@
 
 ## Next steps (one per session)
 
+> **Item 36 (2026-11-06 15:35Z, core lane, `4ca7be01`): (3) and (5) done in code and CI; (1), (2), (4) open.**
+> (3) A denial (UNAUTHORIZED = gRPC PERMISSION_DENIED) raised under another failure while a query is described
+> (`Error getting Arrow schema` / `Error describing query`) or executed is no longer wrapped into INTERNAL with an
+> ERROR stack: the client gets the denial, the log one WARN `query=denied reason='...' query='...'` (SQL on one line,
+> new `LogUtil.oneLine`) or `execution=failed ... result=denied`. Denials that already reached the client as
+> UNAUTHORIZED keep their status. (5) START-NOTES now recommend `ipc.client.connect.timeout=5000`,
+> `ipc.client.connect.max.retries.on.timeouts=2`, `dfs.client.failover.sleep.max.millis=2000` for the server's Java
+> Hadoop client (docs only, no default changed). Dev CI 42241541621 green. Also fixed: the item 35 `package=true` run
+> 42233371052 was cancelled at the job timeout because the item 35 step's data generator compiled `duckdb==1.4.1`
+> from source (no wheel for the runner's Python); it now takes the 1.5.6 wheel only, with a 10-minute step timeout
+> (`fd67ac4a`; the step now takes ~1 min). The `package=true` run on that commit built green (42238168755) but its
+> service gate failed because `main` moved on before the service workflows could be dispatched; `package=true`
+> dispatched again on this session's unlock commit (carries items 35 and 36 (3), (5)).
+> **Next for item 36 (in this order):** (1) DC + small copy disk room leak. Leads from reading the code (not yet
+> reproduced): `DistributedComplete.stream` merges the endpoint answers; each endpoint node (the entry node too)
+> answers its ticket through `ExecutionService.readParquet`, whose copies are leased with try-with-resources around
+> `readParquetFiles` -> `DuckDbAdapter.streamSql`. Copy-reading statements are already never cached
+> (`readsLocalCopies`), so look for (a) an endpoint stream cancelled by the merging node (`cancel(streams)` after a
+> refusal) whose DuckDB result / Arrow reader is not closed while the lease is released and the copy evicted
+> (deleted but still open), (b) the DC endpoint answer of a `SELECT *` going through `copies(...)` without copy
+> batches (the stand's "needs all its copies at once") although the non-DC path batches it. Repro: Service hdfs
+> small-disk cell with `-DresourceProfile=speed -DdistributedComplete=true`, `SELECT * FROM spread.lineitem_sp`, then
+> count deleted-open files under `/proc/<pid>/fd` after each query. (2) keytab-only start error, (4) log noise
+> (refusal WARN embeds the SQL twice - use `LogUtil.oneLine`; `RejectedExecutionException` stacks on stop;
+> rate-limit `pool=queueGrowth`; `views=unreadableTable` -> INFO when copies answer).
+
 > **Maintainer, 2026-11-06 17:45 - ITEM 34 DONE (stand) + ITEM 36 (after item 35): findings of the widest stand check
 > of `deafc861cce3`.** Stand: HA + Kerberos (Flight Kerberos + TLS) + Ranger, SASL and privileged DataNodes, 1/3
 > servers x default/speed/speed+DC. No wrong answer in ~18 000 hash-checked answers; item 34 log shape holds (0 ERROR
@@ -3622,3 +3648,9 @@ S3 slowdown item below stays open for then).
   were exact. Dev CI 42228594645 (new step 48/48), Service cluster 42228613615, Service hdfs 42228617852, Catalogs CI
   42228594886 green. Open question added on the default budget. `package=true` dispatched on the unlock commit.
   Lock released.
+- 2026-11-06 (core lane, cloud session 14:41-15:40Z): item 35 package run 42233371052 was cancelled (item 35 CI step
+  compiled `duckdb==1.4.1` from source, 30-minute job timeout); fixed in `fd67ac4a` (1.5.6 wheel only, step timeout
+  10 min); its package run 42238168755 built green, service gate failed only because `main` moved. Item 36 (3)
+  (denials keep UNAUTHORIZED / PERMISSION_DENIED, one WARN line) and (5) (START-NOTES NameNode client settings) done
+  in `4ca7be01`, Dev CI 42241541621 green (item 35 step 65 s). Item 36 (1), (2), (4) open, leads for (1) in Next
+  steps. `package=true` dispatched on the unlock commit. Lock released.
