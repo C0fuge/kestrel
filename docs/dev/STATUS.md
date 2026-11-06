@@ -3731,3 +3731,7 @@ S3 slowdown item below stays open for then).
   stop skips its cancel check; `pool=queueGrowth` at most once per 10 s with `peakQueued`/`suppressed` (new
   `IoPool`, refused tasks no longer counted active); `views=unreadableTable` INFO when local copies answer. "SQL
   twice" still needs a stand log line. `package=true` dispatched on the unlock commit. Lock released.
+- 2026-11-06 18:40Z (cloud session, core lane): nothing to do but wait. Item 36 is packaged as pre-release
+  `server-1.0.0-6384bc55b173` (package Dev CI 42267369022 green; service gate Service cluster 42269501072, hdfs
+  42269586098, matrix (security) 42269591550, stores 42269597085 all green). Waiting for the stand rerun ((1) leak,
+  (2) keytab start, (4) logs plus one log line for "SQL twice") and "ITEM 36 DONE". Lock released.
