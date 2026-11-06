@@ -1,69 +1,65 @@
 # Orchestration status
 
-Status as of **2026-11-06 15:58 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 16:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 35** and **ITEM 36 (3), (5)** are done in code/CI, but **no pre-release yet**: the second
-`package=true` run (42244135498 on cd3c0ea6) built green but its `service-gate` failed again because `main` moved on
-(the core lane's own `[skip ci] lock` commit 7a190cdb) before the service workflows could be dispatched - process, not a
-test failure (same as 42238168755 on fd67ac4a). The gate script says to dispatch `package=true` from a pinned branch
-(e.g. `ci/core-gate`). The core session (lock 15:40Z, active) is on ITEM 36 (1) (ece08961, DC merges open one endpoint
-per node at a time); Dev CI 42247203245 on ece08961 running.
+Not ALL DONE: **pre-release `server-1.0.0-19efa29b1b57`** (items 35 + 36 (3), (5) + 36 (1) part 1) is out (package Dev CI
+42249857195 green, service gate 4/4 green on 19efa29b), but it waits for the stand rerun (8-concurrent DC rehearsal,
+"ITEM 35 DONE"; item 36 (1) cell) and egret has no FRESH/ACCEPT for it yet. The core session (lock 16:41Z, active) has
+pushed item 36 (1) CI cell (9b9875c0), 36 (2) keytab-only start error (06e3c0e5) and part of 36 (4) log noise (ba8b5d82);
+Dev CI 42255936543 on ba8b5d82 running (the two earlier pushes' Dev CI runs were superseded/cancelled).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 36 (1) DC small-disk leak; (2), (4) open | ece08961, 2026-11-06 15:53Z | 15:40Z (active) | Dev CI 42247203245 (ece08961): running; package 42244135498 (cd3c0ea6): build green, service-gate red (main moved); last green Dev CI 42241541621 (4ca7be01) |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 18:49Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 18:49Z | free | Catalogs CI 42228594886 (2e128c2e): pass |
+| core (`STATUS.md`) | ITEM 36: (1) CI cell, (2), (4) in progress; (1) leak waits for the stand | ba8b5d82, 2026-11-06 16:49Z | 16:41Z (active) | Dev CI 42255936543 (ba8b5d82): running; last green Dev CI 42249857195 (19efa29b, package); Service hdfs 42255067021 (9b9875c0, new DC small-disk stage): pass |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 19:57Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 19:57Z | free | Catalogs CI 42255066903 (9b9875c0): pass |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
-No stale locks (marten lock 15:40Z, active; heron lock free).
+No stale locks (marten and heron locks free).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42228613615 | 2e128c2e | pass |
-| service-hdfs.yml | 42228617852 | 2e128c2e | pass (12/12 cells) |
-| service-security.yml | 42208929742 | deafc861 | pass |
-| service-stores.yml | 42208934008 | deafc861 | pass |
-
-None ran on fd67ac4a / cd3c0ea6 (the gate could not dispatch them).
+| service-cluster.yml | 42252100348 | 19efa29b | pass |
+| service-hdfs.yml | 42255067021 | 9b9875c0 | pass (also 42252107647 on 19efa29b: pass) |
+| service-security.yml | 42252114148 | 19efa29b | pass |
+| service-stores.yml | 42252120114 | 19efa29b | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34; accepted on the stand (ITEM 34 DONE); egret ACCEPT SHIP, FRESH done.
+- `server-1.0.0-19efa29b1b57` (2026-11-06 16:10Z): ITEMS 35, 36 (3), (5), 36 (1) part 1; waits for the stand and egret.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34; accepted on the stand; egret ACCEPT SHIP, FRESH done.
 - `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand.
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut; superseded.
-
-No pre-release for items 35 / 36 yet.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Session (lock 15:40Z) on the server `deafc861cce3` regression: S3 1-9,
-  iceberg, lakefs and check 13 PASS; M4 checks 3, 4 timing A/B (0e457de30f25 vs deafc861cce3) dispatched.
-- heron: **IMPROVEMENTS DONE**; "SERVER deafc861cce3 CHECKED" (session 135); session 137: nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Session 16:40-17:05Z: **SERVER deafc861cce3 CHECKED** (compare SF1
+  42250112453 / SF10 42250115981, 88/88 correct; SF1 q16 slower traced to the connector series `fl1eb792`, not the
+  server); unlocked.
+- heron: **IMPROVEMENTS DONE**; "SERVER deafc861cce3 CHECKED" (session 135); session 137 (15:51Z): nothing open.
+- Neither has checked `19efa29b1b57` yet.
 
 ## egret
 
-- **FRESH deafc861cce3 DONE** (run 42223833724, 10/10 green, `results/FRESH-deafc861cce3.md`): speed vs balanced scans
-  x4/x8 1.30-1.58, S3 TPC-H 0.15-0.18, S3 small p95 0.03-0.06, load +42-45 % at 128 clients (0.94-0.95 of upstream
-  native), 22/22, 0 errors. Regression by the rule (smaller, carried over): local small JDBC c1 p50 1.10. Upstream native
-  moved to `9e4787906b07`: still fails TPC-H/small; speed is 1.10-1.15 of it on S3 scans.
-- ACCEPT deafc861cce3: SHIP. README "In progress": idle, waits for a pre-release newer than `deafc861cce3`.
+- Newest: **FRESH deafc861cce3 DONE** (run 42223833724, 10/10 green, `results/FRESH-deafc861cce3.md`; load per step
+  re-report 42244896618): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 % at 128 clients, 22/22, 0 errors;
+  upstream native `9e4787906b07` still fails TPC-H/small. README "In progress": idle (15:56Z), newest tracked
+  deafc861cce3; no run yet for `19efa29b1b57`.
 
 ## For the maintainer
 
-- **Pre-release for items 35 / 36 blocked twice by the service gate (main moved).** The core session should dispatch
-  `package=true` from a pinned branch; then the stand reruns the 8-concurrent DC rehearsal ("ITEM 35 DONE").
+- **Stand rerun on `server-1.0.0-19efa29b1b57`:** 8-concurrent DC rehearsal (for "ITEM 35 DONE") and the item 36 (1)
+  cell; expect `distributedComplete=oneStreamPerNode` lines. If copies still stay deleted-open, send the refusal line
+  (now with `deletedOpenFiles=`) plus a `jstack` of the entry node. Note: items 36 (2), (4) land after this build.
 - **Open question (item 35):** default budget `distributedCompletePeerStreams` (one per 128 MiB direct memory).
-- **Open question (item 33):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0; egret check 4 needs it).
-- **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, on by default?
-- **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered.
+- egret FRESH/ACCEPT for `19efa29b1b57` (or the next build with all of item 36) not started.
 
 ## History
 
+- 2026-11-06 16:56Z: pre-release `server-1.0.0-19efa29b1b57` (items 35, 36 (3)/(5), 36 (1) part 1; package Dev CI 42249857195 green, service gate 4/4 green); core (lock 16:41Z) pushed 36 (1) CI cell, 36 (2), 36 (4) part, Dev CI 42255936543 running; marten SERVER deafc861cce3 CHECKED; egret idle.
 - 2026-11-06 15:58Z: core did ITEM 35 + ITEM 36 (3), (5) in code/CI (Dev CI 42241541621 green on 4ca7be01); both package runs (42238168755 fd67ac4a, 42244135498 cd3c0ea6) built green but failed the service gate (main moved) -> no pre-release; core session (lock 15:40Z) on ITEM 36 (1) (ece08961, Dev CI 42247203245 running); egret FRESH deafc861cce3 DONE (speed 1.10-1.15 of upstream 9e4787906b07 on S3 scans, JDBC c1 p50 1.10 flag); marten deafc861cce3 regression lakefs + check 13 PASS, A/B 3,4 running; heron session 137 idle; no stale locks.
 - 2026-11-06 14:58Z: maintainer accepted ITEM 34 on the stand and opened ITEM 36 (0b076bf6: DC small-disk room leak, keytab-only error, Ranger code, log noise, NN timeouts; after item 35); item 35 `package=true` Dev CI 42233371052 cancelled in the new item 35 step, core session (lock 14:41Z) changed the step (fd67ac4a, DuckDB wheel) and re-dispatched Dev CI 42238168755 (running); egret ACCEPT deafc861cce3 SHIP, FRESH 42223833724 still running; marten M4 on deafc861cce3 part 1 (S3 1-9, iceberg pass), pair 2 running; heron session 136 idle; no stale locks.
 - 2026-11-06 13:56Z: maintainer opened ITEM 35 (concurrent distributedComplete scans fail on the Arrow memory limit, 5c93983c) after the ITEM 34 stand check; core session (lock 13:28Z) pushed 2e128c2e (merge admission, RESOURCE_EXHAUSTED), Dev CI 42228594645 + Service hdfs/cluster + Catalogs CI running; egret FRESH deafc861cce3 (42223833724) + ACCEPT (42223763930) running; marten dispatched M4 on deafc861cce3; heron pinned deafc861cce3 for e2e; no stale locks.
@@ -103,4 +99,3 @@ No pre-release for items 35 / 36 yet.
 - 2026-11-04 17:57Z: ALL DONE withdrawn: maintainer opened bug-first ITEM 31 (75edc566, plain-name SASL copies, wrong 0-row join answers); core lock 17:52Z, working; Dev CI on main green, service gate 4/4 green; marten 17:40Z/heron/egret idle; no stale locks.
 - 2026-11-04 16:56Z: ALL DONE written: maintainer accepted FRESH-413485ba80fd as final in egret (dac5040); core session 16:42Z found no open item; locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten 16:41Z/heron session 109 idle.
 - 2026-11-04 15:57Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (15:40Z)/heron (session 109)/egret (15:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
-- 2026-11-04 14:58Z: no change: no core session since 13:42Z, locks free, Dev CI on main green (41770973165), service gate 4/4 green; marten (12:41Z)/heron (session 109)/egret (13:26Z) idle; ALL DONE still waits on the maintainer's FRESH decision.
