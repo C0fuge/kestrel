@@ -1,19 +1,21 @@
 # Orchestration status
 
-Status as of **2026-11-05 21:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 03:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: ITEM 33 is not written DONE. The item 33 pre-release now exists: `package=true` Dev CI 42108450187 on
-`35c15ab2` green, service gate 4/4 green on 35c15ab2 -> **`server-1.0.0-35c15ab226b9`** (21:32Z), carrying all item 33
-work (incl. the flake fix bbc8e7c1). The core lane waits only for the stand / egret re-check and the Open question on
-the `hdfsLocalCopyRoomWaitMillis` default. egret ACCEPT 35c15ab226b9 (run 42113544966, dispatched by the
-maintainer's watcher 21:32Z) is running; its check 4 runs without the room wait (new input `smalldisk-opts` for a
-follow-up with it).
+Not ALL DONE: ITEM 33 is not written DONE, and egret has no final ACCEPT / FRESH for `server-1.0.0-35c15ab226b9`.
+egret ACCEPT 35c15ab226b9 (run 42113544966, 22:33Z) is **PARTIAL / provisional DO NOT SHIP**: checks 1, 2, 3, 5, 6
+pass in all 4 cells and **check 4 now passes in both default cells** (complete `sp-group` / `sp-distinct` batched).
+The speed x 1 / x 3 cells still fail check 4 (partial `part-lineitem-sp` / `part-group-sp` refused, ~52 MB counted as
+copies of other running queries) - that run had **no** `-DhdfsLocalCopyRoomWaitMillis`, so this is the known
+behaviour of the default 0 (the Open question), not a new bug; no bug-first note written. The room-wait run
+(`accept-hdfs.yml`, `smalldisk-opts=-DhdfsLocalCopyRoomWaitMillis=30000`, egret 455033c) waits for the maintainer to
+confirm or dispatch it.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 33: waits for stand / egret re-check of 35c15ab226b9 | e721bb40, 21:41Z (~15 min ago, unlock) | free | Dev CI on main green (42108450187 package on 35c15ab2, 42106064754 on bbc8e7c1) |
+| core (`STATUS.md`) | ITEM 33: waits for the stand / egret room-wait re-check of 35c15ab226b9 | e721bb40, 2026-11-05 21:41Z (~6 h ago, unlock) | free | Dev CI on main green (42108450187 package on 35c15ab2) |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 11:42Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 11:42Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -31,27 +33,29 @@ No stale locks (marten and heron free).
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-35c15ab226b9` (2026-11-05 21:32Z): ITEM 33 complete in code/CI; egret ACCEPT running (42113544966); waits for the stand.
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:47Z): ITEM 33 first cut. egret: DO NOT SHIP (check 4); superseded.
-- `server-1.0.0-5f60db1ee304` (2026-11-05 11:07Z): ITEM 32; accepted by the maintainer for the stand.
+- `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33 complete in code/CI; egret ACCEPT PARTIAL (default cells pass; speed cells need the room-wait run).
+- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut. egret: DO NOT SHIP (check 4); superseded.
+- `server-1.0.0-5f60db1ee304` (2026-11-05 10:40Z): ITEM 32; accepted by the maintainer for the stand.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session unlock 19:40Z: no new server jar, no maintainer items. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 124 (20:50Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 03:41Z: no new server jar, no maintainer items. Lock free.
+- heron: **IMPROVEMENTS DONE**; session 125 (03:51Z): nothing open. Lock free.
 
 ## egret
 
-- Newest FRESH report: `results/FRESH-25aa7eec0f0f.md` / `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
+- Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
   No FRESH for `5f60db1ee304` / `50fe065af50c` / `35c15ab226b9`.
-- Newest acceptance: `results/ACCEPT-50fe065af50c.md` (DO NOT SHIP, check 4). README "In progress": ACCEPT 35c15ab226b9 RUNNING
-  (42113544966, harness 66aed33, check 4 without the room wait; `smalldisk-opts` input added in 455033c).
+- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (PARTIAL, see top). README "In progress": idle 03:40Z, waits
+  for the maintainer to confirm or dispatch the room-wait ACCEPT run; nothing running.
 
 ## For the maintainer
 
-- **New pre-release `server-1.0.0-35c15ab226b9`** for the item 33 stand re-check (use `-DhdfsLocalCopyRoomWaitMillis=30000`
-  for the small-disk speed cells, or answer the Open question). Do not use `50fe065af50c`.
-- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0).
+- **Dispatch (or confirm) egret `accept-hdfs.yml` for `server-1.0.0-35c15ab226b9` with
+  `smalldisk-opts=-DhdfsLocalCopyRoomWaitMillis=30000`** - the only missing check for ITEM 33 (speed partial cells).
+  egret did not dispatch it because its task note forbids another run for this tag.
+- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0); without it
+  the speed partial cells fail check 4 (confirmed by egret 42113544966).
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
   on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
@@ -59,6 +63,7 @@ No stale locks (marten and heron free).
 
 ## History
 
+- 2026-11-06 03:56Z: egret ACCEPT 35c15ab226b9 PARTIAL (42113544966, 22:33Z): checks 1/2/3/5/6 pass all cells, check 4 now passes in both default cells; speed cells still fail check 4 because the run had no room wait -> egret waits for the maintainer to confirm/dispatch the `smalldisk-opts=-DhdfsLocalCopyRoomWaitMillis=30000` run; no kestrel commits since 21:57Z, CI/service gate green on 35c15ab2; marten/heron (session 125) idle; no stale locks.
 - 2026-11-05 21:57Z: core: package Dev CI 42108450187 on 35c15ab2 green, service gate 4/4 green -> pre-release `server-1.0.0-35c15ab226b9` (item 33 complete in code/CI); core unlocked 21:41Z, waits for stand/egret; egret ACCEPT 35c15ab226b9 running (42113544966); marten/heron (session 124) idle; no stale locks.
 - 2026-11-05 20:57Z: core: room wait CI green (70ffac12: Dev CI 42096491904, Service hdfs 42096491844 all cells incl. speed); `package=true` Dev CI 42099508904 on 5092f2c5 red in flaky EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad (not item-33 code); core session (lock 20:41Z) fixed it in bbc8e7c1, Dev CI 42106064754 running - no bug-first note; no new pre-release; marten/heron (session 124)/egret idle; no stale locks.
 - 2026-11-05 19:56Z: core (lock 18:41Z, active) on ITEM 33 speed cells: room wait reworked (95d0234f, 1e82115a, 70ffac12); Dev CI 42093460272 on 1e82115a red in LocalCopyCacheTest.ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying (own new test, fixed by 70ffac12, Dev CI 42096491904 running); Service hdfs plain-speed cell red (known open, reported as such); no new pre-release; marten/heron/egret idle; no stale locks.
