@@ -23,6 +23,33 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-07 02:20 - stand re-check of `6384bc55b173`: ITEM 35 DONE, item 36 (1) (2) (5) done; ITEM 37 =
+> the rest of 36.** No wrong answer in ~24 000 hash-checked answers; DC small disk 12/12 + 8/8, 0 deleted-open copies;
+> 8 DC scans at 512m direct 16/16 + 6935 small 0 failed (waits instead of errors); keytab start with
+> `hdfsKerberos*` + FILE cache answers, KEYRING/KCM fails at start with the cause; NN host crash with the START-NOTES
+> client settings: slowest 26.6 s; regression 6 x 117/117. Egret ACCEPT 6384: SHIP. Item 37:
+> (a) **Ranger denial** still `INTERNAL: Query execution failed: RemoteException: Permission denied: user=flight,
+> access=EXECUTE, inode="/data/parquet/tpch":hdfs:hdfs:drwxr-x---` (SASL) with ERROR + ~109 stack lines, no
+> `query=denied`; on privileged DataNodes it is `INVALID_ARGUMENT: Catalog Error: Table with name lineitem does not
+> exist!` (the views failed) and after the policy is back the node answers only after +45 s. Map a RemoteException
+> unwrapping to AccessControlException (and DuckDB's "Permission denied" IO error) to PERMISSION_DENIED with one WARN
+> `query=denied`; views that failed on permission must be re-created on the next query (not "does not exist").
+> (b) **Node stop under load** (3 servers speed + DC, 32 clients, `podman stop -t 25` of one server): 0
+> `result=stopping` lines, clients only get `UNAVAILABLE: io exception`; the node logs 6-10 Netty WARN
+> `NettyServerHandler$5.operationComplete()` with `RejectedExecutionException ... [Shutting down]`, 5 ERROR
+> `Query execution failed: IOException: Filesystem closed` (Hadoop FileSystem closed before the drain ends) and once
+> `Error closing allocator / IllegalStateException: Memory was leaked by query. Memory leaked: (829)`; 605-655 stack
+> lines per stop. Fix the shutdown order: stop accepting -> drain running queries (answer new ones UNAVAILABLE 'The
+> server is stopping; retry the query') -> close Flight -> close Hadoop FileSystem / allocators; shut gRPC executors
+> without Netty stacks; no allocator leak.
+> (c) Partial-mode multi-table refusal WARN still carries the SQL twice (the rewritten SQL inside `reason='... Can
+> only select from ONE table, but got query: ...'` and then `query='...'`, up to 2.3 kB per line): put only the
+> original SQL once.
+> (d) Keytab-only start without `hdfsKerberos*` (no ticket cache): starts, every query `Table ... does not exist`
+> (log `views=createFailed error='IO Error: Unable to connect to HDFS'`): WARN at start (or fail) when HDFS uses
+> Kerberos and no readable ticket cache is found.
+> CI for each; `package=true`; "ITEM 37 DONE".
+
 > **Item 36 (4) (2026-11-06, core lane): rest of the log noise done in code and CI (`e7b4bfa6`, Dev CI 42264944379 green).** (a) Node stop: a query
 > meeting a stopped pool (`RejectedExecutionException` anywhere in its causes: execution, describe, schema) logs one
 > WARN (`result=stopping`, `query=failed` / `schema=failed`) and answers `UNAVAILABLE 'The server is stopping; retry
