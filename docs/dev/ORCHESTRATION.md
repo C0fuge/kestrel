@@ -1,67 +1,67 @@
 # Orchestration status
 
-Status as of **2026-11-06 13:56 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 14:58 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: the maintainer opened **ITEM 35** (concurrent `distributedComplete` full scans fail with
-INVALID_ARGUMENT on the Arrow memory limit, `5c93983c`). The core session (lock 13:28Z, active) pushed `2e128c2e`
-(node-wide merge admission `PeerStreamAdmission`, memory shortage -> RESOURCE_EXHAUSTED); CI is running. "ITEM 34 DONE"
-is not written yet as such, but the maintainer's item 35 note says it came "after the item 34 stand check".
+Not ALL DONE: **ITEM 35** is done in code/CI but has no pre-release yet, and the maintainer opened **ITEM 36**
+(0b076bf6, to follow item 35). The maintainer wrote **ITEM 34 DONE** (stand: no wrong answer in ~18 000 checked
+answers). The first item 35 `package=true` run (42233371052 on 0ebaf407) was cancelled in its new "Distributed complete
+under concurrency (item 35)" step. The core session (lock 14:41Z, active) switched that step to a DuckDB wheel
+(fd67ac4a) and re-dispatched: Dev CI 42238168755 is running.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 35 done in code, CI running | 655db46e, 2026-11-06 13:50Z | 13:28Z (active) | Dev CI 42228594645, Service hdfs 42228617852, Service cluster 42228613615, Catalogs CI 42228594886 on 2e128c2e: running; previous Dev CI 42207423706 (deafc861) green |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
+| core (`STATUS.md`) | ITEM 35 package run, then ITEM 36 | fd67ac4a, 2026-11-06 14:54Z | 14:41Z (active) | Dev CI 42238168755 (package, fd67ac4a): running; 42233371052 cancelled; last green Dev CI 42228594645 (2e128c2e) |
+| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 18:01Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 18:01Z | free | Catalogs CI 42228594886 (2e128c2e): pass |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
-No stale locks (marten lock 13:50Z and heron lock 13:51Z are active sessions).
+No stale locks (marten lock 13:50Z is an active session with a commit at 14:47Z; heron lock free).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42228613615 | 2e128c2e | queued (prev. 42208920309 on deafc861: pass) |
-| service-hdfs.yml | 42228617852 | 2e128c2e | queued (prev. 42208924919 on deafc861: pass) |
+| service-cluster.yml | 42228613615 | 2e128c2e | pass |
+| service-hdfs.yml | 42228617852 | 2e128c2e | pass (12/12 cells) |
 | service-security.yml | 42208929742 | deafc861 | pass |
 | service-stores.yml | 42208934008 | deafc861 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34 (log hygiene); stand checked, then ITEM 35 found on it.
-- `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand; egret ACCEPT **SHIP** with room wait.
-- `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut; superseded.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:30Z): ITEM 34; **accepted on the stand** (ITEM 34 DONE); egret ACCEPT SHIP.
+- `server-1.0.0-35c15ab226b9` (2026-11-05 21:32Z): ITEM 33; accepted on the stand; egret ACCEPT SHIP with room wait.
+- `server-1.0.0-50fe065af50c` (2026-11-05 14:47Z): ITEM 33 first cut; superseded.
 
-No pre-release for item 35 yet (`package=true` after CI).
+No pre-release for item 35 yet (package run 42238168755 running).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Session (lock 13:50Z) dispatched M4 S3 1-9 and iceberg 1,11,12 on server
-  `deafc861cce3` (7d647e1, asset cache v20).
-- heron: **IMPROVEMENTS DONE**; session 134/135 (lock 13:51Z) pinned server build `deafc861cce3` as e2e/compare default
-  (2275659).
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Session (lock 13:50Z) runs the regression on server `deafc861cce3`:
+  asset check, M4 S3 1-9 and iceberg PASS; pair 2 (lakefs 1,3,4,10 + check 13) running (m4 42236966253 / 42236969873).
+- heron: **IMPROVEMENTS DONE**; session 135 wrote "SERVER deafc861cce3 CHECKED"; session 136: nothing open.
 
 ## egret
 
 - Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`). **FRESH for `deafc861cce3`
-  running** (compare 42223833724, wave `fresh-up-deafc861cce3`, three-way vs fresh upstream), plus ACCEPT
-  `deafc861cce3` (accept-hdfs 42223763930) running.
-- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (run 42196478105): SHIP with `-DhdfsLocalCopyRoomWaitMillis=30000`.
+  still running** (compare 42223833724, dispatched 13:14Z, upstream native `9e4787906b07`).
+- Newest acceptance: `results/ACCEPT-deafc861cce3.md` (run 42223763930): **SHIP**, all 6 checks in all 4 cells (check 4
+  with `-DhdfsLocalCopyRoomWaitMillis=30000`).
 
 ## For the maintainer
 
-- **ITEM 35:** after the `package=true` pre-release, rerun the 8-concurrent distributedComplete rehearsal (expect 0
-  errors, `admissionWait` lines), then "ITEM 35 DONE". New Open question: default budget
+- **ITEM 35:** after the pre-release from Dev CI 42238168755, rerun the 8-concurrent distributedComplete rehearsal
+  (expect 0 errors, `admissionWait` lines), then "ITEM 35 DONE". Open question: default budget
   `distributedCompletePeerStreams` (one per 128 MiB direct memory).
-- If the item 34 stand check passed, "ITEM 34 DONE" is still not written in STATUS.md.
-- **Open question (item 33):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0; egret speed check 4 fails
-  without it).
+- **ITEM 36** is queued behind item 35 in the core lane.
+- **Open question (item 33):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0; egret check 4 needs it).
 - **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, on by default?
 - **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered.
 
 ## History
 
+- 2026-11-06 14:58Z: maintainer accepted ITEM 34 on the stand and opened ITEM 36 (0b076bf6: DC small-disk room leak, keytab-only error, Ranger code, log noise, NN timeouts; after item 35); item 35 `package=true` Dev CI 42233371052 cancelled in the new item 35 step, core session (lock 14:41Z) changed the step (fd67ac4a, DuckDB wheel) and re-dispatched Dev CI 42238168755 (running); egret ACCEPT deafc861cce3 SHIP, FRESH 42223833724 still running; marten M4 on deafc861cce3 part 1 (S3 1-9, iceberg pass), pair 2 running; heron session 136 idle; no stale locks.
 - 2026-11-06 13:56Z: maintainer opened ITEM 35 (concurrent distributedComplete scans fail on the Arrow memory limit, 5c93983c) after the ITEM 34 stand check; core session (lock 13:28Z) pushed 2e128c2e (merge admission, RESOURCE_EXHAUSTED), Dev CI 42228594645 + Service hdfs/cluster + Catalogs CI running; egret FRESH deafc861cce3 (42223833724) + ACCEPT (42223763930) running; marten dispatched M4 on deafc861cce3; heron pinned deafc861cce3 for e2e; no stale locks.
 - 2026-11-06 12:57Z: no change since 11:56Z: core session 12:40Z lock/unlock only (waits for the stand check of ITEM 34 on deafc861cce3); Dev CI/service gate green on deafc861; egret idle (11:28Z), no FRESH for deafc861cce3; marten (12:42Z)/heron (session 133) idle; no stale locks.
 - 2026-11-06 11:56: ITEM 34 done in code/CI, pre-release server-1.0.0-deafc861cce3 (Dev CI 42207423706), all 4 service workflows green on deafc861; waits for the stand; egret ACCEPT 35c15ab226b9 SHIP with room wait; marten/heron idle; no stale locks.
