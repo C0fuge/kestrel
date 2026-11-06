@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Item 34 (2026-11-06 11:10Z, core lane, `85293332`): done in code and CI**, client statuses unchanged. (a)+(b)
+> partial-mode planning refusals (multi-table SQL the partial path cannot read, `An aggregate over DISTINCT values ...
+> several Flight nodes`, complete answers on local-disk clusters) log one WARN `qid=<own id> node= query=refused
+> mode=partial reason='...' query='...'` without a stack, plus (local copies on) `hdfs=reads files=0 shortCircuit=0
+> localCopy=0 copied=0 refused=partialPlan` under the same qid; (c) a copy-disk refusal logs one WARN `execution=failed
+> ... result=noRoom error='No room ...'` instead of an ERROR with the `NoRoomException` stack. Tests assert the log
+> shape; the Service hdfs small-disk stage now fails on a `NoRoomException` stack after a refused join. Dev CI
+> 42205205027, Service hdfs 42205205124 (all cells), Catalogs CI 42205204951 green; `package=true` dispatched on the
+> unlock commit. **For the stand:** check the log shape on that pre-release, then "ITEM 34 DONE". Note: the CI notes'
+> `query=refused` counts now include partial planning refusals.
+
 > **Maintainer, 2026-11-06 13:10 - item 33 accepted on the stand (`35c15ab226b9`); ITEM 34 (minor, log hygiene).**
 > Stand: normal disk 1/3 servers x default/speed/speed+distributedComplete all exact, `hdfs=reads` 525/525, release
 > `inUseBytes=0` after every query, 0 HdfsNetworkException / catalog errors / fallbacks; 64 MiB disk: count(*),
@@ -3521,3 +3532,10 @@ S3 slowdown item below stays open for then).
   green -> pre-release `server-1.0.0-35c15ab226b9` (item 33 complete in code/CI). Item 33 now waits only for the
   stand / egret re-check and the Open question on the `hdfsLocalCopyRoomWaitMillis` default; stopped early. Lock
   released.
+- 2026-11-06 11:10Z (cloud session, core lane): item 34 (log hygiene) done in code/CI (`85293332`): partial planning
+  refusals -> one WARN `query=refused mode=partial` line with its own qid + `hdfs=reads ... refused=partialPlan`;
+  copy-disk refusals -> one WARN `result=noRoom` line, no stack. Tests `FlightSqlProducerTest.
+  partialRefusalsLogOneWarnLineWithQueryIdAndReads`, `copyDiskRefusalLogsOneWarnLine`,
+  `ExecutionServiceTest.refusedQueryLogsItsReadsLine`; small-disk CI stage asserts no NoRoomException stack. Dev CI
+  42205205027, Service hdfs 42205205124, Catalogs CI 42205204951 green. `package=true` dispatched on the unlock
+  commit; waits for the stand check. Lock released.
