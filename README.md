@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -396,7 +396,13 @@ addresses of live cluster members and only by nodes with the setting on (set it 
 setting on, the ticket secret allows impersonating any user from a member's address: protect the cluster
 (Hazelcast) network and the nodes like a keytab.** Over TLS a node trusts its peers with the PEM file
 `distributedCompleteTrustedCertificates` (`FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`), by default its own
-`FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA).
+`FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA). Each merge
+holds its parts' streams open, and every open stream holds batches in direct memory. So the merges of a node
+share `distributedCompletePeerStreams` streams (`FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`, default one per
+128 MiB of direct memory, at least 2). A merge takes room for all its parts before it opens them, and waits in
+arrival order while other merges hold the room. After `distributedCompleteAdmissionWaitMillis` (default 300000)
+it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
+`RESOURCE_EXHAUSTED`.
 
 `shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 20, was 0 before 2026-10-29) drains a node that is stopped (SIGTERM,
 `docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then refuses

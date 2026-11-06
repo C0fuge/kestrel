@@ -160,6 +160,50 @@ jobs:
           -Dairport.it.python="$AIRPORT_IT"
           -Dhadoopfs.it.extension="$HADOOPFS_IT"
 
+      # Item 35: concurrent distributed complete answers on one node, as on the maintainer's benchmark
+      # rehearsal (local Parquet SF1, -Xmx2g -XX:MaxDirectMemorySize=2g, speed + distributedComplete):
+      # 16 full scans + 32 small queries at once must all be exact, with no failed execution in the
+      # server log. 16 scans, not the stand's 8: on a 4-core runner 8 passed even before the fix
+      # (the stand has more cores), 16 failed with the stand's "memory limit" INVALID_ARGUMENT.
+      - name: Distributed complete under concurrency (item 35)
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/dc35"; mkdir -p "$work/data/tpch/lineitem"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet duckdb==1.4.1
+          "$RUNNER_TEMP/py/bin/python" -I -c "
+          import duckdb, sys
+          c = duckdb.connect(); c.execute('INSTALL tpch; LOAD tpch; CALL dbgen(sf=1)')
+          for f in range(8):
+              c.execute(f\"COPY (SELECT * FROM lineitem WHERE l_orderkey % 8 = {f}) TO '{sys.argv[1]}/part-{f}.parquet' (FORMAT PARQUET)\")
+          " "$work/data/tpch/lineitem"
+          ./mvnw -B -q -pl flight-server dependency:build-classpath -Dmdep.outputFile="$work/cp.txt" -Dmdep.includeScope=runtime
+          FLIGHT_ALLOW_INSECURE=true LANG=C.UTF-8 java -Xmx2g -XX:MaxDirectMemorySize=2g \
+            --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED \
+            --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+            -Dio.netty.tryReflectionSetAccessible=true -Dhazelcast.phone.home.enabled=false \
+            -DresourceProfile=speed -DdistributedComplete=true -DresultMode=complete \
+            -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:$(cat "$work/cp.txt")" \
+            pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$work/data" \
+            --localhost 127.0.0.1 --port 32010 --hazelcast-port 5701 --hosts 127.0.0.1:5701 \
+            --metrics-enabled false > "$work/server.log" 2>&1 &
+          server=$!
+          for _ in $(seq 120); do grep -q 'Server Arrow Flight SQL started' "$work/server.log" && break; sleep 1; done
+          grep -q 'Server Arrow Flight SQL started' "$work/server.log" || { tail -n 40 "$work/server.log"; exit 1; }
+          grep -m 1 'distributedComplete peer streams' "$work/server.log" || true
+          rc=0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/distributed-concurrency-check.py 127.0.0.1:32010 \
+            "$work/data/tpch/lineitem" 16 32 > "$work/client.log" 2>&1 || rc=$?
+          grep -v '^  warnings.warn\|Warning: Cannot disable autocommit' "$work/client.log"
+          kill "$server" || true
+          failed=$(grep -c 'execution=failed' "$work/server.log" || true)
+          merged=$(grep -c 'distributedComplete=merged' "$work/server.log" || true)
+          fallback=$(grep -c 'distributedComplete=fallback' "$work/server.log" || true)
+          waits=$(grep -c 'distributedComplete=admissionWait' "$work/server.log" || true)
+          echo "item 35: $(grep -m 1 '^done' "$work/client.log"); merged $merged, fallback $fallback, admission waits $waits, failed executions $failed" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$failed" -eq 0 ] || { grep -m 3 'execution=failed' "$work/server.log" | cut -c1-400; exit 1; }
+          [ "$merged" -ge 48 ] || { echo "only $merged of 48 answers merged from endpoint answers"; exit 1; }
+          exit "$rc"
+
       - name: Test summary
         if: always()
         run: |

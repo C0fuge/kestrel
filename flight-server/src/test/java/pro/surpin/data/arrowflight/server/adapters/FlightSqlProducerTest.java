@@ -632,6 +632,74 @@ class FlightSqlProducerTest {
         assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
     }
 
+    /**
+     * Verifies a stream that runs out of Arrow memory is RESOURCE_EXHAUSTED, never
+     * INVALID_ARGUMENT, and logs one WARN line without a stack (item 35: the stand's exact error,
+     * Arrow's memory limit wrapped by the stream reader in an IllegalArgumentException).
+     */
+    @Test
+    void arrowMemoryLimitIsResourceExhausted() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        ByteString handle = ByteString.copyFromUtf8("memory-query");
+        HandleState state = new HandleState(
+                "select * from tpch.lineitem", new String[]{"part.parquet"}, null, 0L);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        doThrow(new IllegalArgumentException("Could not load buffers for field l_partkey: Int(64, true)."
+                + " error message: Unable to allocate buffer of size 524288 due to memory limit. Current"
+                + " allocation: 2146995016",
+                new org.apache.arrow.memory.OutOfMemoryException("Unable to allocate buffer of size 524288 due"
+                        + " to memory limit. Current allocation: 2146995016")))
+                .when(executionService).readParquet(eq(allocator), eq(state.query()),
+                        eq(state.filePaths()), eq(listener), anyBoolean(),
+                        any(ExecutionPathTracker.class));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                    .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class),
+                    listener);
+        } finally {
+            System.setErr(err);
+        }
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).error(error.capture());
+        FlightRuntimeException reported = assertInstanceOf(
+                FlightRuntimeException.class, error.getValue());
+        assertEquals(FlightStatusCode.RESOURCE_EXHAUSTED, reported.status().code());
+        assertTrue(reported.getMessage().contains("due to memory limit"), reported.getMessage());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        List<String> failed = text.lines().filter(l -> l.contains("execution=failed")).toList();
+        assertEquals(1, failed.size(), text);
+        assertTrue(failed.get(0).contains("WARN") && failed.get(0).contains("result=resourceExhausted"),
+                failed.get(0));
+        assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
+    }
+
+    /** Verifies only real memory shortages are taken for one. */
+    @Test
+    void memoryShortageIsFoundAmongTheCauses() {
+        assertNotNull(FlightSqlProducer.memoryShortage(new java.sql.SQLException("Invalid Input Error:"
+                + " arrow_scan: Unable to allocate buffer of size 65536 due to memory limit. Current allocation: 9")));
+        assertNotNull(FlightSqlProducer.memoryShortage(new RuntimeException("wrapped",
+                new org.apache.arrow.memory.OutOfMemoryException("no room"))));
+        assertNotNull(FlightSqlProducer.memoryShortage(CallStatus.RESOURCE_EXHAUSTED.withDescription("busy")
+                .toRuntimeException()));
+        assertNull(FlightSqlProducer.memoryShortage(new IllegalArgumentException("Invalid SQL query")));
+        assertNull(FlightSqlProducer.memoryShortage(CallStatus.INVALID_ARGUMENT.withDescription("bad")
+                .toRuntimeException()));
+    }
+
     /** Verifies key metadata requests are answered with an empty result. */
     @Test
     void keysAreEmpty() {

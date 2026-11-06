@@ -59,6 +59,8 @@ import java.util.function.Function;
  * answer alone); a failure after the first batch fails the query: with {@code UNAVAILABLE} when an
  * endpoint answer was lost (the peer's stream ended with {@code UNAVAILABLE} or a transport error),
  * so that clients retry and the retry plans without the lost member, else as the merge failed.
+ * Before it opens its endpoint streams a merge takes room for them in the node's
+ * {@link PeerStreamAdmission}, waiting while other merges hold it (item 35).
  */
 public final class DistributedComplete implements AutoCloseable {
 
@@ -75,6 +77,7 @@ public final class DistributedComplete implements AutoCloseable {
     private final ExecutionService execution;
     private final BufferAllocator allocator;
     private final Function<Location, FlightClient> clientFactory;
+    private final PeerStreamAdmission admission;
     private final Map<URI, FlightClient> clients = new ConcurrentHashMap<>();
     private final AtomicLong merged = new AtomicLong();
     private final AtomicLong fallbacks = new AtomicLong();
@@ -94,6 +97,26 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public DistributedComplete(QueryPlanner planner, ClusterService cluster, ExecutionService execution,
             BufferAllocator allocator, Function<Location, FlightClient> clientFactory) {
+        this(planner, cluster, execution, allocator, clientFactory, new PeerStreamAdmission(
+                PeerStreamAdmission.defaultPermits(
+                        pro.surpin.data.arrowflight.server.adapters.OutboundBudget.maxDirectMemory()),
+                PeerStreamAdmission.DEFAULT_WAIT_MILLIS));
+    }
+
+    /**
+     * Creates the distributed path of complete answers with an admission of its merges (item 35).
+     *
+     * @param planner plans the endpoints of a query
+     * @param cluster signs the caller identity and releases endpoint loads
+     * @param execution merges the endpoint answers in DuckDB
+     * @param allocator allocator of the peer streams
+     * @param clientFactory opens a Flight client to a peer location
+     * @param admission bounds the endpoint streams the merges of this node hold open at once
+     */
+    public DistributedComplete(QueryPlanner planner, ClusterService cluster, ExecutionService execution,
+            BufferAllocator allocator, Function<Location, FlightClient> clientFactory,
+            PeerStreamAdmission admission) {
+        this.admission = Objects.requireNonNull(admission, "admission");
         this.planner = Objects.requireNonNull(planner, "planner");
         this.cluster = Objects.requireNonNull(cluster, "cluster");
         this.execution = Objects.requireNonNull(execution, "execution");
@@ -169,6 +192,14 @@ public final class DistributedComplete implements AutoCloseable {
             releaseLoads(endpoints);
             return false;
         }
+        PeerStreamAdmission.Admitted admitted;
+        try {
+            // Waits while the merges running here hold their endpoint streams' memory (item 35).
+            admitted = admission.admit(endpoints.size(), listener::isCancelled, query);
+        } catch (InterruptedException | RuntimeException e) {
+            releaseLoads(endpoints);
+            throw e;
+        }
         long start = System.nanoTime();
         DeferredStart client = new DeferredStart(listener);
         List<FlightStream> streams = new ArrayList<>(endpoints.size());
@@ -232,7 +263,17 @@ public final class DistributedComplete implements AutoCloseable {
             return false;
         } finally {
             closeAll(streams);
+            admitted.close();
         }
+    }
+
+    /**
+     * Returns the admission of this node's merges.
+     *
+     * @return admission
+     */
+    public PeerStreamAdmission admission() {
+        return admission;
     }
 
     /**

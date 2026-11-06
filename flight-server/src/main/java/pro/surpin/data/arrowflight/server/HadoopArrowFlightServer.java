@@ -29,6 +29,7 @@ import pro.surpin.data.arrowflight.server.adapters.InternalCallAuthenticator;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
 import pro.surpin.data.arrowflight.server.services.InternalCallIdentity;
+import pro.surpin.data.arrowflight.server.services.PeerStreamAdmission;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
@@ -395,9 +396,16 @@ public class HadoopArrowFlightServer {
     private InternalCallIdentity startDistributedComplete() {
         String trusted = ConfigAdapter.distributedCompleteTrustedCertificates(ConfigSource.system());
         File certificates = trusted != null ? new File(trusted) : flightSecurity.certificate();
+        int configured = ConfigAdapter.distributedCompletePeerStreams(ConfigSource.system());
+        PeerStreamAdmission admission = new PeerStreamAdmission(configured > 0 ? configured
+                : PeerStreamAdmission.defaultPermits(OutboundBudget.maxDirectMemory()),
+                ConfigAdapter.distributedCompleteAdmissionWaitMillis(ConfigSource.system()));
+        LOGGER.info("distributedComplete peer streams: {} ({}), a merge waits at most {} ms for room",
+                admission.permits(), configured > 0 ? "set" : "one per 128 MiB of direct memory",
+                ConfigAdapter.distributedCompleteAdmissionWaitMillis(ConfigSource.system()));
         distributedComplete = new DistributedComplete(component.queryPlanner(),
                 component.clusterService(), component.executionService(), component.allocator(),
-                DistributedComplete.clientFactory(component.allocator(), certificates));
+                DistributedComplete.clientFactory(component.allocator(), certificates), admission);
         component.producer().useDistributedComplete(distributedComplete);
         LOGGER.warn("distributedComplete=true: complete answers are merged from endpoint answers read"
                 + " from the nodes as the client's user; the cluster's ticket secret now allows"

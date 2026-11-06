@@ -273,6 +273,22 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void distributedCompleteAdmissionDefaultsAndRefusesNegativeValues() throws IOException {
+        assertEquals(0, ConfigAdapter.distributedCompletePeerStreams(source(Map.of(), Map.of())));
+        assertEquals(12, ConfigAdapter.distributedCompletePeerStreams(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS", "12"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompletePeerStreams(
+                source(Map.of("distributedCompletePeerStreams", "-1"), Map.of())));
+        assertEquals(300_000L, ConfigAdapter.distributedCompleteAdmissionWaitMillis(source(Map.of(), Map.of())));
+        assertEquals(5000L, ConfigAdapter.distributedCompleteAdmissionWaitMillis(
+                source(Map.of("distributedCompleteAdmissionWaitMillis", " 5000 "), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteAdmissionWaitMillis(
+                source(Map.of("distributedCompleteAdmissionWaitMillis", "-5"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteAdmissionWaitMillis(
+                source(Map.of("distributedCompleteAdmissionWaitMillis", "soon"), Map.of())));
+    }
+
+    @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));
         assertEquals(500_000_000L, ConfigAdapter.hdfsLocalCopyMaxBytes(

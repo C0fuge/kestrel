@@ -56,7 +56,7 @@ public final class OutboundBudget implements ServerInterceptor {
      *
      * @return limit in bytes
      */
-    static long maxDirectMemory() {
+    public static long maxDirectMemory() {
         try {
             com.sun.management.HotSpotDiagnosticMXBean hotspot = ManagementFactory
                     .getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);

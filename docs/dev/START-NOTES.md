@@ -283,6 +283,8 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `flightLoadReservationSeconds` (`arrowflight.cluster.loadReservationSeconds`, `FLIGHT_LOAD_RESERVATION_SECONDS`) | 600 | how long an unread planned endpoint counts as node load |
 | `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
 | `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
+| `distributedCompletePeerStreams` (`arrowflight.cluster.distributedCompletePeerStreams`, `FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`) | 0 = one per 128 MiB of direct memory, at least 2 | endpoint streams the distributed complete merges of a node hold open at once; a merge waits for room (item 35) |
+| `distributedCompleteAdmissionWaitMillis` (`arrowflight.cluster.distributedCompleteAdmissionWaitMillis`, `FLIGHT_DISTRIBUTED_COMPLETE_ADMISSION_WAIT_MILLIS`) | 300000 | longest wait of a merge for room, then `RESOURCE_EXHAUSTED` |
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
 
 **New plugin settings (all off by default)**

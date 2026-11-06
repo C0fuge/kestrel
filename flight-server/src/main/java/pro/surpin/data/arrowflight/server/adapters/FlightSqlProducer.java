@@ -744,7 +744,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     && fe.status().code() == org.apache.arrow.flight.FlightStatusCode.CANCELLED;
             pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException noRoom =
                     pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException.in(e);
-            if (noRoom != null) {
+            String memory = memoryShortage(e);
+            if (memory != null) {
+                // Direct memory ran short (item 35): RESOURCE_EXHAUSTED, one line, no stack.
+                failureReason = memory;
+                LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=resourceExhausted error='{}'",
+                        qid, LogUtil.node(), Thread.currentThread().getName(),
+                        serverUri, elapsed, filePaths.length, memory);
+            } else if (noRoom != null) {
                 // The copy disk is full for now: an expected RESOURCE_EXHAUSTED, one line, no stack.
                 failureReason = String.valueOf(noRoom.getMessage());
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=noRoom error='{}'",
@@ -760,7 +767,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         qid, LogUtil.node(), Thread.currentThread().getName(),
                         serverUri, elapsed, filePaths.length, failure, e);
             }
-            if (e instanceof FlightRuntimeException flightException) {
+            if (memory != null && !(e instanceof FlightRuntimeException)) {
+                // Not the client's fault (Arrow reports its memory limit as a bad argument).
+                listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(memory)
+                        .withCause(e).toRuntimeException());
+            } else if (e instanceof FlightRuntimeException flightException) {
                 listener.error(flightException);
             } else if (e instanceof IllegalArgumentException) {
                 listener.error(CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage())
@@ -788,6 +799,36 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             }
             clusterService.releaseEndpointLoad(handle.toByteArray(), state);
         }
+    }
+
+    /** Arrow's text when an allocation would pass its memory limit. */
+    private static final java.util.regex.Pattern ARROW_MEMORY_LIMIT =
+            java.util.regex.Pattern.compile("Unable to allocate buffer of size \\d+ due to memory limit[^\\n]*");
+
+    /**
+     * Finds a shortage of Arrow memory among the causes of a failure (item 35): Arrow's
+     * {@link org.apache.arrow.memory.OutOfMemoryException}, or its message carried in another
+     * exception's text (a stream reader wraps it in an IllegalArgumentException, DuckDB in a
+     * SQLException); a RESOURCE_EXHAUSTED status counts as one too.
+     *
+     * @param e failure
+     * @return description for the client, or null when memory did not run short
+     */
+    static String memoryShortage(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof FlightRuntimeException flight
+                    && flight.status().code() == org.apache.arrow.flight.FlightStatusCode.RESOURCE_EXHAUSTED) {
+                return flight.getMessage();
+            }
+            if (t instanceof org.apache.arrow.memory.OutOfMemoryException) {
+                return "The node ran out of Arrow memory: " + t.getMessage() + "; retry later";
+            }
+            java.util.regex.Matcher matcher = ARROW_MEMORY_LIMIT.matcher(String.valueOf(t.getMessage()));
+            if (matcher.find()) {
+                return "The node ran out of Arrow memory: " + matcher.group() + "; retry later";
+            }
+        }
+        return null;
     }
 
     private static boolean isFileNotFound(Throwable e) {

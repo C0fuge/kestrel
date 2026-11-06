@@ -50,6 +50,8 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `flightLoadReservationSeconds` (`arrowflight.cluster.loadReservationSeconds`, `FLIGHT_LOAD_RESERVATION_SECONDS`) | 600 | how long an unread planned endpoint counts as node load |
 | `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
 | `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
+| `distributedCompletePeerStreams` (`arrowflight.cluster.distributedCompletePeerStreams`, `FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`) | 0 = one per 128 MiB of direct memory, at least 2 | endpoint streams the distributed complete merges of a node hold open at once; a merge waits for room (item 35) |
+| `distributedCompleteAdmissionWaitMillis` (`arrowflight.cluster.distributedCompleteAdmissionWaitMillis`, `FLIGHT_DISTRIBUTED_COMPLETE_ADMISSION_WAIT_MILLIS`) | 300000 | longest wait of a merge for room, then `RESOURCE_EXHAUSTED` |
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
 | `hdfsLocalCopyThreads` (`arrowflight.hdfs.localCopyThreads`, `HDFS_LOCAL_COPY_THREADS`) | 4 | files a node copies at the same time |
@@ -98,6 +100,29 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Fixed - concurrent distributed complete answers failed on the Arrow memory limit (STATUS item 35)
+
+- With `distributedComplete=true`, concurrent full scans no longer fail with `INVALID_ARGUMENT: Could not load
+  buffers ... Unable to allocate buffer ... due to memory limit`. Every merge opened all of its endpoint streams at
+  once, and each open stream holds batches in direct memory. Merges now take room for their endpoint streams in one
+  node-wide budget before they open any (`PeerStreamAdmission`). The budget is `distributedCompletePeerStreams`,
+  by default one stream per 128 MiB of direct memory (16 at 2 GiB: four merges of four endpoints). A merge that
+  finds too little room waits, in arrival order, for running merges to end (`distributedComplete=admissionWait`,
+  then `distributedComplete=admitted waitedMs=`). After `distributedCompleteAdmissionWaitMillis` (default 5 min)
+  it is refused with `RESOURCE_EXHAUSTED ... retry later`. A merge of more endpoints than the budget runs alone.
+  Startup line: `distributedComplete peer streams: N (...)`.
+- An Arrow memory shortage anywhere in a query's failure is now reported as `RESOURCE_EXHAUSTED`, never as
+  `INVALID_ARGUMENT` (Arrow's stream reader wraps its memory limit in an IllegalArgumentException). It is logged
+  as one WARN line `execution=failed ... result=resourceExhausted` without a stack.
+- Reproduced on one node with the stand's settings (local Parquet, 6M rows, `-Xmx2g -XX:MaxDirectMemorySize=2g`,
+  speed + distributedComplete, 4 cores): 16 concurrent full scans + 32 small queries failed 7 of 48 before the change.
+  After it, 48/48 and 56/56 (24 scans) were exact, with 0 failed executions and 0 fallbacks.
+- Tests: `PeerStreamAdmissionTest` (7), `DistributedCompleteIntegrationTest`
+  `concurrentMergesWaitForRoomAndStayExact` / `mergeWithoutRoomIsRefusedAsResourceExhausted`, `FlightSqlProducerTest`
+  `arrowMemoryLimitIsResourceExhausted` / `memoryShortageIsFoundAmongTheCauses`. Dev CI step "Distributed complete
+  under concurrency (item 35)": one node as on the stand with TPC-H SF1 lineitem, 16 full scans + 32 small queries at
+  once, every answer exact, no failed execution, all 48 merged (`tools/ci/distributed-concurrency-check.py`).
 
 ### Changed - log hygiene for expected refusals (STATUS item 34)
 

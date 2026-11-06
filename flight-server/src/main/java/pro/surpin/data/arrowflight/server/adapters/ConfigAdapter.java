@@ -602,6 +602,53 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompletePeerStreams} ({@code FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS}):
+     * how many endpoint answer streams the distributed complete merges of a node may hold open at
+     * once (item 35); a merge waits for room before it opens its streams. 0 (default) derives it
+     * from the direct memory limit: one stream per 128 MiB, at least 2.
+     *
+     * @param props configuration source
+     * @return streams, 0 = derived
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int distributedCompletePeerStreams(ConfigSource props) {
+        int streams = getIntWithEnv("distributedCompletePeerStreams",
+                "arrowflight.cluster.distributedCompletePeerStreams", "FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS",
+                0, props);
+        if (streams < 0) {
+            throw new IllegalArgumentException("distributedCompletePeerStreams must not be negative: " + streams);
+        }
+        return streams;
+    }
+
+    /**
+     * Resolves {@code distributedCompleteAdmissionWaitMillis}
+     * ({@code FLIGHT_DISTRIBUTED_COMPLETE_ADMISSION_WAIT_MILLIS}): how long a distributed complete
+     * merge waits for room among the node's endpoint streams before it is refused with
+     * {@code RESOURCE_EXHAUSTED} (item 35); default 300000 (five minutes).
+     *
+     * @param props configuration source
+     * @return milliseconds
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static long distributedCompleteAdmissionWaitMillis(ConfigSource props) {
+        String raw = getStringWithEnv("distributedCompleteAdmissionWaitMillis",
+                "arrowflight.cluster.distributedCompleteAdmissionWaitMillis",
+                "FLIGHT_DISTRIBUTED_COMPLETE_ADMISSION_WAIT_MILLIS", "300000", props).trim();
+        long millis;
+        try {
+            millis = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid long for distributedCompleteAdmissionWaitMillis: " + raw, e);
+        }
+        if (millis < 0) {
+            throw new IllegalArgumentException("distributedCompleteAdmissionWaitMillis must not be negative: "
+                    + millis);
+        }
+        return millis;
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own
