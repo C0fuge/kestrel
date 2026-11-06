@@ -1,63 +1,68 @@
 # Orchestration status
 
-Status as of **2026-11-06 12:57 UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-06 13:56 UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 34 (log hygiene) is done in code and CI; pre-release `server-1.0.0-deafc861cce3` carries it**
-(package Dev CI 42207423706 green, all four service workflows green on deafc861). The core lane waits for the stand
-check of the log shape -> "ITEM 34 DONE". egret ACCEPT 35c15ab226b9: SHIP with `-DhdfsLocalCopyRoomWaitMillis=30000`
-(check 4 in the speed cells fails without it, watcher run 42113544966).
+Not ALL DONE: the maintainer opened **ITEM 35** (concurrent `distributedComplete` full scans fail with
+INVALID_ARGUMENT on the Arrow memory limit, `5c93983c`). The core session (lock 13:28Z, active) pushed `2e128c2e`
+(node-wide merge admission `PeerStreamAdmission`, memory shortage -> RESOURCE_EXHAUSTED); CI is running. "ITEM 34 DONE"
+is not written yet as such, but the maintainer's item 35 note says it came "after the item 34 stand check".
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 34 done in code/CI, waits for the stand | d6fd33e9 (lock/unlock only), 2026-11-06 12:41Z | free | Dev CI 42207423706 (package, deafc861) green; Dev CI 42205205027 + Catalogs 42205204951 green on 85293332 |
+| core (`STATUS.md`) | ITEM 35 done in code, CI running | 655db46e, 2026-11-06 13:50Z | 13:28Z (active) | Dev CI 42228594645, Service hdfs 42228617852, Service cluster 42228613615, Catalogs CI 42228594886 on 2e128c2e: running; previous Dev CI 42207423706 (deafc861) green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-05 14:57Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
-No stale locks (marten and heron free).
+No stale locks (marten lock 13:50Z and heron lock 13:51Z are active sessions).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42208920309 | deafc861 | pass |
-| service-hdfs.yml | 42208924919 | deafc861 | pass |
+| service-cluster.yml | 42228613615 | 2e128c2e | queued (prev. 42208920309 on deafc861: pass) |
+| service-hdfs.yml | 42228617852 | 2e128c2e | queued (prev. 42208924919 on deafc861: pass) |
 | service-security.yml | 42208929742 | deafc861 | pass |
 | service-stores.yml | 42208934008 | deafc861 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34 (log hygiene); waits for the stand check.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): ITEM 34 (log hygiene); stand checked, then ITEM 35 found on it.
 - `server-1.0.0-35c15ab226b9` (2026-11-05 20:59Z): ITEM 33; accepted on the stand; egret ACCEPT **SHIP** with room wait.
 - `server-1.0.0-50fe065af50c` (2026-11-05 14:15Z): ITEM 33 first cut; superseded.
 
+No pre-release for item 35 yet (`package=true` after CI).
+
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03). Finish mode; last session 12:42Z: no new server jar, no maintainer items. Lock free.
-- heron: **IMPROVEMENTS DONE**; session 133 (12:53Z): nothing open. Lock free.
+- marten: **IMPROVEMENTS DONE** (2026-11-03). Session (lock 13:50Z) dispatched M4 S3 1-9 and iceberg 1,11,12 on server
+  `deafc861cce3` (7d647e1, asset cache v20).
+- heron: **IMPROVEMENTS DONE**; session 134/135 (lock 13:51Z) pinned server build `deafc861cce3` as e2e/compare default
+  (2275659).
 
 ## egret
 
-- Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`), accepted as final for item 30.
-  No FRESH for the newer pre-releases (`35c15ab226b9`, `deafc861cce3`).
-- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (run 42196478105): **SHIP with
-  `-DhdfsLocalCopyRoomWaitMillis=30000`**, checks 1-6 pass in all 4 cells; without room wait speed check 4 fails
-  (42113544966). README: idle 11:40Z, newest tracked 35c15ab226b9.
+- Newest FRESH report: `results/FRESH-413485ba80fd.md` (upstream `6e264c10f403`). **FRESH for `deafc861cce3`
+  running** (compare 42223833724, wave `fresh-up-deafc861cce3`, three-way vs fresh upstream), plus ACCEPT
+  `deafc861cce3` (accept-hdfs 42223763930) running.
+- Newest acceptance: `results/ACCEPT-35c15ab226b9.md` (run 42196478105): SHIP with `-DhdfsLocalCopyRoomWaitMillis=30000`.
 
 ## For the maintainer
 
-- **Stand check of ITEM 34** on `server-1.0.0-deafc861cce3` (one-line WARN for partial-mode refusals and copy-disk
-  NoRoom, qid + `hdfs=reads` on refusals), then write "ITEM 34 DONE".
-- **Open question (item 33, speed cells):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0). The stand
-  says speed partial passes with and without room wait; egret says speed check 4 fails without it - worth deciding.
-- **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, and
-  on by default?
-- **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered; free-disk guard is the bound.
+- **ITEM 35:** after the `package=true` pre-release, rerun the 8-concurrent distributedComplete rehearsal (expect 0
+  errors, `admissionWait` lines), then "ITEM 35 DONE". New Open question: default budget
+  `distributedCompletePeerStreams` (one per 128 MiB direct memory).
+- If the item 34 stand check passed, "ITEM 34 DONE" is still not written in STATUS.md.
+- **Open question (item 33):** default of `hdfsLocalCopyRoomWaitMillis` (opt-in, default 0; egret speed check 4 fails
+  without it).
+- **Open question (item 31):** honour the client's Flight `SCHEMA` header as the first schema for plain names, on by default?
+- **Item 30 Open question (copies of joins / non-mergeable answers):** unanswered.
 
 ## History
 
+- 2026-11-06 13:56Z: maintainer opened ITEM 35 (concurrent distributedComplete scans fail on the Arrow memory limit, 5c93983c) after the ITEM 34 stand check; core session (lock 13:28Z) pushed 2e128c2e (merge admission, RESOURCE_EXHAUSTED), Dev CI 42228594645 + Service hdfs/cluster + Catalogs CI running; egret FRESH deafc861cce3 (42223833724) + ACCEPT (42223763930) running; marten dispatched M4 on deafc861cce3; heron pinned deafc861cce3 for e2e; no stale locks.
 - 2026-11-06 12:57Z: no change since 11:56Z: core session 12:40Z lock/unlock only (waits for the stand check of ITEM 34 on deafc861cce3); Dev CI/service gate green on deafc861; egret idle (11:28Z), no FRESH for deafc861cce3; marten (12:42Z)/heron (session 133) idle; no stale locks.
 - 2026-11-06 11:56: ITEM 34 done in code/CI, pre-release server-1.0.0-deafc861cce3 (Dev CI 42207423706), all 4 service workflows green on deafc861; waits for the stand; egret ACCEPT 35c15ab226b9 SHIP with room wait; marten/heron idle; no stale locks.
 - 2026-11-06 10:58Z: maintainer accepted ITEM 33 on the stand (d94e4068) and opened ITEM 34 (log hygiene); core session (lock 10:41Z) pushed 85293332, Dev CI 42205205027 running, Service hdfs/Catalogs green; egret ACCEPT 35c15ab226b9 (42196478105) SHIP, all cells; marten (10:41Z)/heron (session 131) idle; no stale locks.
