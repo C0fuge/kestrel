@@ -3383,6 +3383,27 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
     }
 
+    /**
+     * Runs a periodic check, or skips it when the scheduler is stopping: a stream that starts
+     * while the server stops then runs without its cancel check instead of failing with a
+     * RejectedExecutionException stack (item 36 (4)).
+     *
+     * @param scheduler scheduler of the check
+     * @param check the check
+     * @param periodMillis delay before the first and between two checks
+     * @return the scheduled check, or null when the scheduler no longer takes tasks
+     */
+    static java.util.concurrent.ScheduledFuture<?> scheduleOrSkip(ScheduledExecutorService scheduler,
+            Runnable check, long periodMillis) {
+        try {
+            return scheduler.scheduleWithFixedDelay(check, periodMillis, periodMillis,
+                    TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            LOGGER.debug("node={} cancelWatch=skipped reason=stopping", LogUtil.node());
+            return null;
+        }
+    }
+
     /** Maintains one readiness signal and callback registration for a Flight stream. */
     private static final class ListenerReadiness {
         private final org.apache.arrow.flight.FlightProducer.ServerStreamListener listener;
@@ -3431,11 +3452,11 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (running != null && scheduler != null) {
                 // gRPC runs the cancel callback on the thread of this call, which is busy in DuckDB
                 // until the first batch; the cancelled flag itself is visible at once.
-                watch = scheduler.scheduleWithFixedDelay(() -> {
+                watch = scheduleOrSkip(scheduler, () -> {
                     if (listener.isCancelled()) {
                         onCancel();
                     }
-                }, CANCEL_POLL_MILLIS, CANCEL_POLL_MILLIS, TimeUnit.MILLISECONDS);
+                }, CANCEL_POLL_MILLIS);
             }
         }
 

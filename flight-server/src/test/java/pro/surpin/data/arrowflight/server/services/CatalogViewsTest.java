@@ -305,4 +305,15 @@ class CatalogViewsTest {
             }
         }
     }
+
+    /**
+     * Item 36 (4): with node-local copies a table no file of which this node holds whole is
+     * still answered, so its log line says so instead of announcing failing complete answers.
+     */
+    @Test
+    void unreadableTableNoteNamesCopiesWhenTheyAnswer() {
+        assertTrue(CatalogViews.unreadableTableNote(true).contains("local copies"));
+        assertTrue(!CatalogViews.unreadableTableNote(true).contains("fails"));
+        assertTrue(CatalogViews.unreadableTableNote(false).contains("a complete answer here fails"));
+    }
 }

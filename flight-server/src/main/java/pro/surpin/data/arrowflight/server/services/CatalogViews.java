@@ -430,11 +430,29 @@ public final class CatalogViews {
             String reason = QueryPlanner.unreadableFilesMessage(unreadableFiles,
                     "this node holds no file of " + schema + "." + table + " whole; its");
             data = unreadableView(view, names, types, reason);
-            LOGGER.warn("node={} views=unreadableTable table={}.{} files={}: queries in parts read it"
-                    + " on the nodes holding its files; a complete answer here fails",
-                    LogUtil.node(), schema, table, files.size());
+            boolean copies = parquetAdapter.localCopies();
+            if (copies) {
+                // Queries read node-local copies of its files: nothing fails (item 36 (4)).
+                LOGGER.info("node={} views=unreadableTable table={}.{} files={}: {}",
+                        LogUtil.node(), schema, table, files.size(), unreadableTableNote(true));
+            } else {
+                LOGGER.warn("node={} views=unreadableTable table={}.{} files={}: {}",
+                        LogUtil.node(), schema, table, files.size(), unreadableTableNote(false));
+            }
         }
         return new TableViews(fingerprint, data, empty);
+    }
+
+    /**
+     * Says how queries read a table no file of which this node holds whole.
+     *
+     * @param localCopies whether this node reads node-local copies of files it does not hold
+     * @return the end of the views=unreadableTable log line
+     */
+    static String unreadableTableNote(boolean localCopies) {
+        return localCopies
+                ? "queries read node-local copies of its files"
+                : "queries in parts read it on the nodes holding its files; a complete answer here fails";
     }
 
     /**

@@ -16,8 +16,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import pro.surpin.data.arrowflight.server.LogUtil;
@@ -144,60 +142,7 @@ public final class ServerModule {
     ExecutorService ioPool(AppConfig config) {
         int parallelism = config.ioParallelism();
         LOGGER.info("node={} pool=create threads={}", LogUtil.node(), parallelism);
-        return new java.util.concurrent.AbstractExecutorService() {
-            private final ExecutorService delegate = Executors.newFixedThreadPool(parallelism, r -> {
-                Thread t = new Thread(r, "parquet-io");
-                t.setDaemon(true);
-                return t;
-            });
-            private final java.util.concurrent.atomic.AtomicInteger activeTasks = new java.util.concurrent.atomic.AtomicInteger(0);
-            private final java.util.concurrent.atomic.AtomicLong submittedTasks = new java.util.concurrent.atomic.AtomicLong(0);
-
-            @Override
-            public void execute(Runnable command) {
-                long submitTime = System.nanoTime();
-                long taskId = submittedTasks.incrementAndGet();
-                int active = activeTasks.incrementAndGet();
-                if (active > parallelism) {
-                    LOGGER.warn("node={} pool=queueGrowth active={} max={} queued={}",
-                            LogUtil.node(), active, parallelism, active - parallelism);
-                }
-                delegate.execute(() -> {
-                    long queueDelay = System.nanoTime() - submitTime;
-                    if (queueDelay > 1_000_000_000L) {
-                        LOGGER.warn("qid={} node={} pool=starvation taskId={} queueDelay={} active={}",
-                                LogUtil.qid(), LogUtil.node(), taskId,
-                                LogUtil.elapsedNanos(submitTime), activeTasks.get());
-                    }
-                    try {
-                        command.run();
-                    } finally {
-                        activeTasks.decrementAndGet();
-                    }
-                });
-            }
-
-            @Override
-            public void shutdown() {
-                delegate.shutdown();
-            }
-            @Override
-            public List<Runnable> shutdownNow() {
-                return delegate.shutdownNow();
-            }
-            @Override
-            public boolean isShutdown() {
-                return delegate.isShutdown();
-            }
-            @Override
-            public boolean isTerminated() {
-                return delegate.isTerminated();
-            }
-            @Override
-            public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-                return delegate.awaitTermination(timeout, unit);
-            }
-        };
+        return new IoPool(parallelism);
     }
 
     /**

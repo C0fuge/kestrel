@@ -778,6 +778,66 @@ class FlightSqlProducerTest {
         assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
     }
 
+    /**
+     * Verifies a query whose execution meets a thread pool stopped by a node stop is sent to the
+     * client as UNAVAILABLE, with one WARN line and no stack (item 36 (4): ~200 lines of
+     * RejectedExecutionException stacks per node stop).
+     */
+    @Test
+    void executionUnderNodeStopIsUnavailableWithOneWarnLine() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        ByteString handle = ByteString.copyFromUtf8("stopping-query");
+        HandleState state = new HandleState(
+                "select * from tpch.lineitem", new String[]{"part.parquet"}, null, 0L);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        doThrow(new IllegalStateException("copy", new java.util.concurrent.RejectedExecutionException(
+                "Task rejected from java.util.concurrent.ThreadPoolExecutor[Shutting down]")))
+                .when(executionService).readParquet(eq(allocator), eq(state.query()),
+                        eq(state.filePaths()), eq(listener), anyBoolean(),
+                        any(ExecutionPathTracker.class));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                    .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class),
+                    listener);
+        } finally {
+            System.setErr(err);
+        }
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).error(error.capture());
+        FlightRuntimeException reported = assertInstanceOf(
+                FlightRuntimeException.class, error.getValue());
+        assertEquals(FlightStatusCode.UNAVAILABLE, reported.status().code());
+        assertEquals(FlightSqlProducer.STOPPING_MESSAGE, reported.status().description());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        List<String> failed = text.lines().filter(l -> l.contains("execution=failed")).toList();
+        assertEquals(1, failed.size(), text);
+        assertTrue(failed.get(0).contains("WARN") && failed.get(0).contains("result=stopping"),
+                failed.get(0));
+        assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
+    }
+
+    /** Verifies only a refused task among the causes is taken for a node stop. */
+    @Test
+    void stoppingIsFoundAmongTheCauses() {
+        assertEquals(FlightSqlProducer.STOPPING_MESSAGE, FlightSqlProducer.stopping(
+                new java.io.IOException("x", new java.util.concurrent.RejectedExecutionException())));
+        assertNull(FlightSqlProducer.stopping(new IllegalStateException("other")));
+        assertNull(FlightSqlProducer.stopping(null));
+    }
+
     /** Verifies only UNAUTHORIZED statuses among the causes are taken for a denial. */
     @Test
     void denialIsFoundAmongTheCauses() {

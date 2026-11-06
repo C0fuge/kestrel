@@ -746,6 +746,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     pro.surpin.data.arrowflight.server.storage.LocalCopyCache.NoRoomException.in(e);
             String memory = memoryShortage(e);
             FlightRuntimeException denied = memory == null ? denial(e) : null;
+            String stopping = denied == null && memory == null && noRoom == null ? stopping(e) : null;
             if (denied != null) {
                 // Access denied: the client's permissions, not a server fault (item 36 (3)).
                 failureReason = denied.status().description();
@@ -764,6 +765,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=noRoom error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
                         serverUri, elapsed, filePaths.length, LogUtil.oneLine(failureReason));
+            } else if (stopping != null) {
+                // The node stops while the query runs (item 36 (4)): one line, no stack.
+                failureReason = stopping;
+                LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=stopping error='{}'",
+                        qid, LogUtil.node(), Thread.currentThread().getName(),
+                        serverUri, elapsed, filePaths.length, stopping);
             } else if (cancelled || e instanceof IllegalArgumentException) {
                 // The client went away, or its query or values are wrong: not a server fault.
                 LOGGER.info("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result={} error='{}'",
@@ -777,6 +784,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             }
             if (denied != null) {
                 listener.error(denied);
+            } else if (stopping != null) {
+                listener.error(CallStatus.UNAVAILABLE.withDescription(stopping)
+                        .withCause(e).toRuntimeException());
             } else if (memory != null && !(e instanceof FlightRuntimeException)) {
                 // Not the client's fault (Arrow reports its memory limit as a bad argument).
                 listener.error(CallStatus.RESOURCE_EXHAUSTED.withDescription(memory)
@@ -854,6 +864,25 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             if (t instanceof FlightRuntimeException flight
                     && flight.status().code() == org.apache.arrow.flight.FlightStatusCode.UNAUTHORIZED) {
                 return flight;
+            }
+        }
+        return null;
+    }
+
+    /** What a client is told when a query fails because the node stops under it. */
+    static final String STOPPING_MESSAGE = "The server is stopping; retry the query";
+
+    /**
+     * Finds a task refused by a stopped thread pool among the causes of a failure: the node
+     * stops while the query runs (item 36 (4)), which is no server fault and needs no stack.
+     *
+     * @param e failure
+     * @return description for the client, or null when the failure is not one
+     */
+    static String stopping(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.util.concurrent.RejectedExecutionException) {
+                return STOPPING_MESSAGE;
             }
         }
         return null;
@@ -1121,6 +1150,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 logDenial(denied, query);
                 throw denied;
             }
+            String stopping = stopping(e);
+            if (stopping != null) {
+                LOGGER.warn("node={} query=failed reason='{}' query='{}'", LogUtil.node(), stopping,
+                        LogUtil.oneLine(query));
+                throw CallStatus.UNAVAILABLE.withDescription(stopping).withCause(e).toRuntimeException();
+            }
             LOGGER.error("Error describing query: {}", query, e);
             throw CallStatus.INTERNAL.withDescription(failureDescription(e))
                     .withCause(e).toRuntimeException();
@@ -1362,6 +1397,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             if (denied != null) {
                 logDenial(denied, query);
                 throw denied;
+            }
+            String stopping = stopping(e);
+            if (stopping != null) {
+                LOGGER.warn("node={} schema=failed reason='{}' query='{}'", LogUtil.node(), stopping,
+                        LogUtil.oneLine(query));
+                throw CallStatus.UNAVAILABLE.withDescription(stopping).withCause(e).toRuntimeException();
             }
             LOGGER.error("Error getting Arrow schema for query: {}", query, e);
             if (isFileNotFound(e)) {

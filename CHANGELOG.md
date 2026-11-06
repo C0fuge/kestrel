@@ -101,6 +101,18 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - log noise on node stop, pool queueing and copy-answered tables (STATUS item 36 (4))
+
+- A query that meets a thread pool already stopped by a node stop (`RejectedExecutionException` under the execution,
+  the description or the schema of a query) logs one WARN line (`execution=failed ... result=stopping`,
+  `query=failed` / `schema=failed reason='The server is stopping; retry the query'`) instead of an ERROR with a stack,
+  and the client gets `UNAVAILABLE` (as during the drain) instead of `INTERNAL`. A stream that starts while the node
+  stops runs without its client-cancel check instead of failing.
+- `pool=queueGrowth` is logged at most once per 10 s per node, with `peakQueued=` and `suppressed=` (lines held back).
+  Fixed: a task refused by the stopped I/O pool stayed counted as active.
+- `views=unreadableTable` is INFO, not WARN, when the node reads node-local copies (`hdfsLocalCopyDir`): such tables
+  are answered (`queries read node-local copies of its files`).
+
 ### Fixed - Kerberos keytab start on a host whose krb5 default ticket cache is a keyring (STATUS item 36 (2))
 
 - With `hdfsKerberosPrincipal` + `hdfsKerberosKeytab` set and neither `KRB5CCNAME` nor

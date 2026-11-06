@@ -2320,4 +2320,21 @@ class DuckDbAdapterTest {
             assertFalse(reason.contains("pending query result"), reason);
         }
     }
+
+    /**
+     * Regression (item 36 (4)): a stream starting while the node stops scheduled its cancel
+     * check on the stopped scheduler and failed with a RejectedExecutionException stack; the
+     * check is now skipped.
+     */
+    @Test
+    void cancelCheckIsSkippedOnAStoppedScheduler() throws Exception {
+        java.util.concurrent.ScheduledExecutorService scheduler =
+                Executors.newSingleThreadScheduledExecutor();
+        java.util.concurrent.ScheduledFuture<?> running =
+                DuckDbAdapter.scheduleOrSkip(scheduler, () -> { }, 1000);
+        assertNotNull(running);
+        running.cancel(false);
+        scheduler.shutdownNow();
+        assertNull(DuckDbAdapter.scheduleOrSkip(scheduler, () -> { }, 1000));
+    }
 }
