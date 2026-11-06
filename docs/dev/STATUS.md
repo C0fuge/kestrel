@@ -23,6 +23,29 @@
 
 ## Next steps (one per session)
 
+> **Item 36 (1) part 1 (2026-11-06 16:10Z, core lane, `ece08961`, Dev CI 42247203245 green): one cause found and fixed; the leak of
+> deleted-open copies is not reproduced yet.** Found by reading the DC path: a merge reads its endpoint answers one
+> after the other (`EndpointAnswers`), but it opened every endpoint stream at once and waited for each schema, which an
+> endpoint sends with its first batch. So every endpoint copied its first batch of files and then held that copy room
+> while its answer waited to be read. Under `speed` (`endpointsPerServer=4`), two endpoints of one node on a 64 MiB
+> copy disk then waited for each other's room until one was refused with `No room ... needs all its copies at once`.
+> This matches the stand's first refusal on fresh servers. Fix: with local copies on, a merge opens one endpoint per
+> node at a time, and opens the node's next endpoint as soon as its earlier answer has been read, so nodes still work
+> in parallel (`distributedComplete=oneStreamPerNode`). One-row aggregates and clusters without copies are unchanged.
+> Copy-room refusals and `hdfs=localCopyNoSpace` now also report `deletedOpenFiles=` / `deletedOpenBytes=` (copies
+> this server deleted but still holds open).
+> **What was ruled out for the leak (local DuckDB 1.5.6 JDBC checks, scratch programs, not committed):** DuckDB does
+> not hold a deleted Parquet file open after its result, statement and Arrow reader are closed. This was checked
+> after a partial read, after `cancel()`, with `enable_external_file_cache` on and off, on duplicated
+> (shared-database) connections, and with exported Arrow buffers still retained (the zero-copy write case).
+> `LocalCopyCache` deletes only unpinned copies; DuckDB is the only reader of copies. So a deleted-open copy needs
+> a DuckDB query still running after its lease was released, or a process outside this cache's bookkeeping.
+> **For the stand:** rerun the item 36 (1) cell on a `package=true` build of this commit. Expect the 8 queries to
+> answer and `distributedComplete=oneStreamPerNode` lines. If copies still stay deleted-open, the refusal now
+> counts them: send that line plus a thread dump (`jstack`) of the entry node, so the reader that still holds them
+> can be found. **Next for item 36:** the CI cell (DC + small copy disk, no deleted-open files after each query),
+> then (2) keytab-only start error, then (4) log noise.
+
 > **Item 36 (2026-11-06 15:35Z, core lane, `4ca7be01`): (3) and (5) done in code and CI; (1), (2), (4) open.**
 > (3) A denial (UNAUTHORIZED = gRPC PERMISSION_DENIED) raised under another failure while a query is described
 > (`Error getting Arrow schema` / `Error describing query`) or executed is no longer wrapped into INTERNAL with an
@@ -3654,3 +3677,10 @@ S3 slowdown item below stays open for then).
   (denials keep UNAUTHORIZED / PERMISSION_DENIED, one WARN line) and (5) (START-NOTES NameNode client settings) done
   in `4ca7be01`, Dev CI 42241541621 green (item 35 step 65 s). Item 36 (1), (2), (4) open, leads for (1) in Next
   steps. `package=true` dispatched on the unlock commit. Lock released.
+- 2026-11-06 (cloud session, core lane): item 36 (1) part 1 in `ece08961`, Dev CI 42247203245 green. With local
+  copies, DC merges open one endpoint per node at a time, so sibling endpoints of one node no longer hold copy room
+  while they wait to be read (the cause of the stand's first `No room` refusal under `speed`). Copy-room refusals
+  now count copies deleted while still open. The deleted-open leak is not reproduced: local DuckDB 1.5.6 checks
+  rule out DuckDB holding files after close (see Next steps). The previous `package=true` run 42244135498 built
+  green, but its service gate failed again because `main` moved. `package=true` dispatched on this unlock commit.
+  Lock released.
