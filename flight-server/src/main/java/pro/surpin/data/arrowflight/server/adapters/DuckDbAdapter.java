@@ -3162,13 +3162,24 @@ public final class DuckDbAdapter implements AutoCloseable {
                             Math.max(CREATE_VIEW.length(), statement.indexOf(" AS ")));
                     LOGGER.warn("node={} views=createFailed view={} error='{}': queries of this table"
                             + " fail, other tables are unaffected", LogUtil.node(), name,
-                            firstLine(String.valueOf(e.getMessage())));
+                            viewFailure(e));
                 }
             }
         }
         return drops;
     }
 
+    /**
+     * Returns the reason a catalog view could not be created: DuckDB's own error, not the JDBC
+     * driver's pending-result line in front of it (a keytab-only start on the maintainer's stand
+     * logged only "Attempting to execute an unsuccessful or closed pending query result").
+     *
+     * @param e the failure of the CREATE VIEW statement
+     * @return one line naming the error
+     */
+    static String viewFailure(java.sql.SQLException e) {
+        return pro.surpin.data.arrowflight.server.duckdb.DuckDbErrors.errorLine(e.getMessage());
+    }
 
     /**
      * Refuses anything but a read-only query: its first word must be a query keyword and DuckDB

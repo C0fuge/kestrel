@@ -2302,4 +2302,22 @@ class DuckDbAdapterTest {
                     List.of("CREATE SCHEMA s"), List.of()), "other statements still fail");
         }
     }
+
+    /**
+     * Item 36 (2): the views=createFailed line names DuckDB's error, not the driver's pending-result
+     * line in front of it.
+     *
+     * @throws Exception when DuckDB fails otherwise
+     */
+    @Test
+    void aViewFailureNamesDuckDbsError() throws Exception {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            java.sql.SQLException e = assertThrows(java.sql.SQLException.class, () -> s.execute(
+                    "CREATE OR REPLACE VIEW bad AS SELECT * FROM read_parquet(['/nonexistent/f.parquet'])"));
+            String reason = DuckDbAdapter.viewFailure(e);
+            assertTrue(reason.startsWith("IO Error"), reason);
+            assertFalse(reason.contains("pending query result"), reason);
+        }
+    }
 }

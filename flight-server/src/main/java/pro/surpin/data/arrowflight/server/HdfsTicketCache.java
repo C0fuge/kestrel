@@ -99,7 +99,8 @@ final class HdfsTicketCache implements AutoCloseable {
      */
     static Optional<HdfsTicketCache> start(ConfigSource props, Map<String, String> libhdfs3) {
         Optional<Settings> settings = settings(props, libhdfs3,
-                props.environment("KRB5CCNAME").orElse(null), currentUid());
+                props.environment("KRB5CCNAME").orElse(null),
+                krb5DefaultCacheName(props.environment("KRB5_CONFIG").orElse(null)), currentUid());
         if (settings.isEmpty()) {
             return Optional.empty();
         }
@@ -137,6 +138,25 @@ final class HdfsTicketCache implements AutoCloseable {
      */
     static Optional<Settings> settings(ConfigSource props, Map<String, String> libhdfs3,
             String krb5ccname, long uid) {
+        return settings(props, libhdfs3, krb5ccname, null, uid);
+    }
+
+    /**
+     * Resolves the settings as {@link #settings(ConfigSource, Map, String, long)} does, where the
+     * krb5 configuration may name the default ticket cache the extension reads when neither
+     * LIBHDFS3_CONF nor {@code KRB5CCNAME} names one.
+     *
+     * @param props configuration source
+     * @param libhdfs3 properties of the LIBHDFS3_CONF file
+     * @param krb5ccname the KRB5CCNAME environment value, or null
+     * @param krb5Default default_ccache_name of the krb5 configuration, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @return settings, empty when no principal and keytab are set
+     * @throws IllegalArgumentException when the settings are incomplete or the extension reads a
+     *         cache that is not a file
+     */
+    static Optional<Settings> settings(ConfigSource props, Map<String, String> libhdfs3,
+            String krb5ccname, String krb5Default, long uid) {
         String principal = props.lookup(List.of("hdfsKerberosPrincipal",
                 "arrowflight.hdfs.kerberos.principal"), List.of("HDFS_KERBEROS_PRINCIPAL")).orElse(null);
         String keytab = props.lookup(List.of("hdfsKerberosKeytab",
@@ -155,7 +175,7 @@ final class HdfsTicketCache implements AutoCloseable {
             throw new IllegalArgumentException("hdfsKerberosPrincipal and hdfsKerberosKeytab must be"
                     + " set together");
         }
-        Path extension = extensionCache(libhdfs3.get(LIBHDFS3_TICKET_CACHE), krb5ccname, uid);
+        Path extension = extensionCache(libhdfs3.get(LIBHDFS3_TICKET_CACHE), krb5ccname, krb5Default, uid);
         Path target = cache != null ? fileCache(cache, "hdfsKerberosTicketCache") : extension;
         if (target == null) {
             throw new IllegalArgumentException("Set hdfsKerberosTicketCache: the user id is unknown,"
@@ -173,13 +193,147 @@ final class HdfsTicketCache implements AutoCloseable {
      * @return the cache file, null when it cannot be named
      */
     static Path extensionCache(String configured, String krb5ccname, long uid) {
+        return extensionCache(configured, krb5ccname, null, uid);
+    }
+
+    /**
+     * Names the ticket cache libhdfs3 reads: LIBHDFS3_CONF's path, else {@code KRB5CCNAME}, else
+     * the krb5 configuration's default_ccache_name, else {@code /tmp/krb5cc_<uid>}.
+     *
+     * @param configured LIBHDFS3_CONF's ticket cache path, or null
+     * @param krb5ccname the KRB5CCNAME environment value, or null
+     * @param krb5Default default_ccache_name of the krb5 configuration, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @return the cache file, null when it cannot be named
+     * @throws IllegalArgumentException when the cache the extension reads is not a file (a
+     *         keyring, KCM, ...), so a keytab login written by this server would never reach it
+     */
+    static Path extensionCache(String configured, String krb5ccname, String krb5Default, long uid) {
         if (configured != null && !configured.isBlank()) {
             return fileCache(configured, LIBHDFS3_TICKET_CACHE);
         }
         if (krb5ccname != null && !krb5ccname.isBlank()) {
             return fileCache(krb5ccname, "KRB5CCNAME");
         }
+        String expanded = expandCacheName(krb5Default, uid);
+        if (expanded != null) {
+            try {
+                return fileCache(expanded, "default_ccache_name");
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("hdfsKerberosKeytab is set, but the hadoopfs extension"
+                        + " reads the krb5 default ticket cache " + krb5Default + " (default_ccache_name of"
+                        + " KRB5_CONFIG or /etc/krb5.conf), which is not a file this server can write, so"
+                        + " every HDFS read would fail: set KRB5CCNAME=FILE:<path> for the server process,"
+                        + " or " + LIBHDFS3_TICKET_CACHE + " in the LIBHDFS3_CONF file", e);
+            }
+        }
         return uid < 0 ? null : Path.of("/tmp/krb5cc_" + uid);
+    }
+
+    /**
+     * Expands the krb5 parameters of a default ticket cache name that name the process's user.
+     *
+     * @param name default_ccache_name, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @return the expanded name, null when there is none or it keeps a parameter this server
+     *         cannot expand
+     */
+    static String expandCacheName(String name, long uid) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        String value = name.trim().replace("%{TEMP}", "/tmp");
+        if (uid >= 0) {
+            String id = Long.toString(uid);
+            value = value.replace("%{uid}", id).replace("%{euid}", id).replace("%{USERID}", id)
+                    .replace("%{EUID}", id);
+        }
+        return value.contains("%{") ? null : value;
+    }
+
+    /**
+     * Reads default_ccache_name from the [libdefaults] of the krb5 configuration libkrb5 reads:
+     * the files of {@code KRB5_CONFIG} (colon-separated), else {@code /etc/krb5.conf}, following
+     * {@code include} and {@code includedir}. The first value found wins, as in libkrb5.
+     *
+     * @param krb5Config the KRB5_CONFIG environment value, or null
+     * @return the value, null when no file sets it or none can be read
+     */
+    static String krb5DefaultCacheName(String krb5Config) {
+        String files = krb5Config == null || krb5Config.isBlank() ? "/etc/krb5.conf" : krb5Config;
+        for (String file : files.split(":")) {
+            if (!file.isBlank()) {
+                String value = defaultCacheName(Path.of(file.trim()), 0);
+                if (value != null) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads default_ccache_name from one krb5 configuration file and the files it includes.
+     *
+     * @param file the file
+     * @param depth include depth, bounded to stop include loops
+     * @return the value, null when not set or unreadable
+     */
+    private static String defaultCacheName(Path file, int depth) {
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+        boolean libdefaults = false;
+        for (String raw : lines) {
+            String line = raw.strip();
+            String value = null;
+            if (line.startsWith("include ") && depth < 8) {
+                value = defaultCacheName(Path.of(line.substring("include ".length()).strip()), depth + 1);
+            } else if (line.startsWith("includedir ") && depth < 8) {
+                value = includedCacheName(Path.of(line.substring("includedir ".length()).strip()), depth + 1);
+            } else if (line.startsWith("[")) {
+                libdefaults = line.startsWith("[libdefaults]");
+            } else if (libdefaults && line.startsWith("default_ccache_name")) {
+                String rest = line.substring("default_ccache_name".length()).strip();
+                if (rest.startsWith("=") && !rest.substring(1).isBlank()) {
+                    value = rest.substring(1).strip();
+                }
+            }
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads default_ccache_name from the files of an includedir in name order (libkrb5 reads names
+     * of letters, digits, dashes and underscores, or ending in .conf).
+     *
+     * @param dir the directory
+     * @param depth include depth
+     * @return the value, null when not set or unreadable
+     */
+    private static String includedCacheName(Path dir, int depth) {
+        List<Path> files;
+        try (java.util.stream.Stream<Path> listing = Files.list(dir)) {
+            files = listing.filter(f -> {
+                String name = f.getFileName().toString();
+                return name.matches("[A-Za-z0-9_-]+") || name.endsWith(".conf");
+            }).sorted().toList();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+        for (Path f : files) {
+            String value = defaultCacheName(f, depth);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /**
