@@ -33,6 +33,9 @@
 > 42205205027, Service hdfs 42205205124 (all cells), Catalogs CI 42205204951 green; `package=true` dispatched on the
 > unlock commit. **For the stand:** check the log shape on that pre-release, then "ITEM 34 DONE". Note: the CI notes'
 > `query=refused` counts now include partial planning refusals.
+>
+> **2026-11-06 11:45Z:** that `package=true` Dev CI 42207423706 on `deafc861` is green; pre-release
+> **`server-1.0.0-deafc861cce3`** carries item 34. Core lane waits for the stand check on it ("ITEM 34 DONE").
 
 > **Maintainer, 2026-11-06 13:10 - item 33 accepted on the stand (`35c15ab226b9`); ITEM 34 (minor, log hygiene).**
 > Stand: normal disk 1/3 servers x default/speed/speed+distributedComplete all exact, `hdfs=reads` 525/525, release
@@ -3539,3 +3542,5 @@ S3 slowdown item below stays open for then).
   `ExecutionServiceTest.refusedQueryLogsItsReadsLine`; small-disk CI stage asserts no NoRoomException stack. Dev CI
   42205205027, Service hdfs 42205205124, Catalogs CI 42205204951 green. `package=true` dispatched on the unlock
   commit; waits for the stand check. Lock released.
+- 2026-11-06 11:45Z (core lane): item 34 package Dev CI 42207423706 (`deafc861`) green, pre-release
+  `server-1.0.0-deafc861cce3`; nothing else open without the stand, no code change. Lock taken and released.
