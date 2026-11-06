@@ -36,7 +36,9 @@
 > (2) Any Arrow memory shortage is now RESOURCE_EXHAUSTED, logged as one WARN line
 > `execution=failed ... result=resourceExhausted`.
 > Dev CI has a new step "Distributed complete under concurrency (item 35)": one node as on the stand, TPC-H SF1,
-> 16 scans + 32 small queries, exact, 0 failed executions, 48 merged. CI run ids are in the Log.
+> 16 scans + 32 small queries, exact, 0 failed executions, 48 merged. Green on `2e128c2e`: Dev CI 42228594645
+> (item 35 step: 48/48 exact in 28.3 s, 44 admission waits), Service cluster 42228613615, Service hdfs 42228617852
+> (12/12 cells), Catalogs CI 42228594886. `package=true` dispatched on the unlock commit.
 > **For the stand:** rerun the 8-concurrent rehearsal on the `package=true` pre-release. Expect 0 errors; with 8
 > scans on 2 GiB, four of them wait (`admissionWait` lines). Then "ITEM 35 DONE". See Open questions for the
 > default budget.
@@ -3584,3 +3586,10 @@ S3 slowdown item below stays open for then).
   commit; waits for the stand check. Lock released.
 - 2026-11-06 11:45Z (core lane): item 34 package Dev CI 42207423706 (`deafc861`) green, pre-release
   `server-1.0.0-deafc861cce3`; nothing else open without the stand, no code change. Lock taken and released.
+- 2026-11-06 14:40Z (core lane): item 35 done in code and CI (`2e128c2e`). Merges of distributedComplete take room in
+  a node-wide budget of endpoint streams (`PeerStreamAdmission`; new settings `distributedCompletePeerStreams` and
+  `distributedCompleteAdmissionWaitMillis`) and wait instead of failing. Arrow memory shortages are reported as
+  RESOURCE_EXHAUSTED. Reproduced locally: before the change 16 + 32 concurrent failed 7/48; after it 48/48 and 56/56
+  were exact. Dev CI 42228594645 (new step 48/48), Service cluster 42228613615, Service hdfs 42228617852, Catalogs CI
+  42228594886 green. Open question added on the default budget. `package=true` dispatched on the unlock commit.
+  Lock released.
