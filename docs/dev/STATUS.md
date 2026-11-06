@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-06 17:00 - ITEM 35 (after the item 34 stand check): concurrent full scans with
+> `distributedComplete=true` fail on the Arrow memory limit instead of waiting.** Found by the benchmark package
+> rehearsal on `deafc861cce3` (one node, local Parquet SF1, `-Xmx2g -XX:MaxDirectMemorySize=2g`, speed +
+> `-DdistributedComplete=true`): 8 concurrent `SELECT * FROM tpch.lineitem` (raw Flight, one endpoint each): 2 of 8
+> fail `INVALID_ARGUMENT: Could not load buffers for field l_partkey: Int(64, true). error message: Unable to allocate
+> buffer of size 524288 due to memory limit. Current allocation: 2146995016` (also `l_comment: Utf8`); the server logs
+> 8x `execution=failed ... result=cancelled error='Query execution failed: FlightRuntimeException: Flight client
+> cancelled while waiting for readiness'`. The same 8 scans pass in default and `speed` without distributedComplete
+> (2578 / 2786 MB/s); 4 concurrent pass. On `413485ba80fd` 4 and 8 both failed, so item 31 (7) helped single scans but
+> not concurrency. Expected: the merging node shares one bounded budget across concurrent merges (admission or
+> backpressure: a merge waits for buffer room, peers' streams pause), never INVALID_ARGUMENT for memory; the error
+> code for a real memory shortage is RESOURCE_EXHAUSTED. CI: distributed cell with 2 GiB direct, 8 concurrent full
+> scans + 32 concurrent small queries, 0 errors, exact row counts. `package=true`, "ITEM 35 DONE".
+
 > **Item 34 (2026-11-06 11:10Z, core lane, `85293332`): done in code and CI**, client statuses unchanged. (a)+(b)
 > partial-mode planning refusals (multi-table SQL the partial path cannot read, `An aggregate over DISTINCT values ...
 > several Flight nodes`, complete answers on local-disk clusters) log one WARN `qid=<own id> node= query=refused
