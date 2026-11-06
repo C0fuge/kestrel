@@ -23,6 +23,24 @@
 
 ## Next steps (one per session)
 
+> **Item 35 (2026-11-06 14:00Z, core lane, `2e128c2e`): done in code and CI**, waiting for the stand. Reproduced
+> locally on one node with the stand's settings (6M-row lineitem-shaped Parquet, `-Xmx2g -XX:MaxDirectMemorySize=2g`,
+> speed + distributedComplete, 4 cores). Before the change, 8 scans + 32 small queries passed on 4 cores, but 16 + 32
+> failed 7 of 48 with the stand's exact `INVALID_ARGUMENT ... due to memory limit`. After it, 16 + 32 and 24 + 32
+> were all exact, with 0 failed executions and 0 fallbacks (96 admission waits).
+> (1) Merges take room for their endpoint streams in a node-wide budget before they open any (`PeerStreamAdmission`).
+> New settings: `distributedCompletePeerStreams` (default one per 128 MiB of direct memory, so 16 at 2 GiB = four
+> merges of four endpoints) and `distributedCompleteAdmissionWaitMillis` (default 300000). Merges wait in arrival
+> order (`distributedComplete=admissionWait`, then `admitted waitedMs=`). After the wait they are refused with
+> RESOURCE_EXHAUSTED `... retry later`.
+> (2) Any Arrow memory shortage is now RESOURCE_EXHAUSTED, logged as one WARN line
+> `execution=failed ... result=resourceExhausted`.
+> Dev CI has a new step "Distributed complete under concurrency (item 35)": one node as on the stand, TPC-H SF1,
+> 16 scans + 32 small queries, exact, 0 failed executions, 48 merged. CI run ids are in the Log.
+> **For the stand:** rerun the 8-concurrent rehearsal on the `package=true` pre-release. Expect 0 errors; with 8
+> scans on 2 GiB, four of them wait (`admissionWait` lines). Then "ITEM 35 DONE". See Open questions for the
+> default budget.
+
 > **Maintainer, 2026-11-06 17:00 - ITEM 35 (after the item 34 stand check): concurrent full scans with
 > `distributedComplete=true` fail on the Arrow memory limit instead of waiting.** Found by the benchmark package
 > rehearsal on `deafc861cce3` (one node, local Parquet SF1, `-Xmx2g -XX:MaxDirectMemorySize=2g`, speed +
@@ -1541,6 +1559,14 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 35: default budget of distributed complete merges (2026-11-06, core lane, review wanted).** With
+  `distributedComplete=true`, merges now wait for room instead of all running at once. The default is one endpoint
+  stream per 128 MiB of direct memory, taken from the stand's numbers (32 streams failed at 2 GiB, 16 passed). On
+  small nodes this runs merges one at a time: the CI cluster cells have 1 GiB direct and 6 endpoints per query, so
+  each node runs one merge at a time, and small aggregate merges also wait behind full scans. A finer budget, such
+  as charging small-answer shapes less, can follow if the stand's throughput numbers call for it. Set
+  `distributedCompletePeerStreams` to raise it per node.
 
 - **Item 33, speed cells: copy refusals between tickets of one query (2026-11-05, core lane, decision needed).**
   With `endpointsPerServer > 1` on a small copy disk, the tickets of one partial query run in parallel on a node and
