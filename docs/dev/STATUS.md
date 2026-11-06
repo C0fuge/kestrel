@@ -23,6 +23,21 @@
 
 ## Next steps (one per session)
 
+> **Item 36 (4) (2026-11-06, core lane): rest of the log noise done in code and CI (`e7b4bfa6`, Dev CI 42264944379 green).** (a) Node stop: a query
+> meeting a stopped pool (`RejectedExecutionException` anywhere in its causes: execution, describe, schema) logs one
+> WARN (`result=stopping`, `query=failed` / `schema=failed`) and answers `UNAVAILABLE 'The server is stopping; retry
+> the query'` instead of ERROR + stack + INTERNAL; a stream starting during stop skips its cancel check instead of
+> failing (`DuckDbAdapter.scheduleOrSkip`). Which pool threw on the stand is not known (no stand log); the mapping is
+> generic, so every source is covered. (b) `pool=queueGrowth` at most once per 10 s per node (`LogRateLimit`), with
+> `peakQueued=` / `suppressed=`; the I/O pool is now its own class `IoPool`, and a task it refuses after stop no
+> longer stays counted as active. (c) `views=unreadableTable` is INFO with "queries read node-local copies of its
+> files" when `hdfsLocalCopyDir` copies are on. (d) Not done: "SQL twice" in the refusal WARN - the `first=true`
+> refusal line carries the exception stack, whose DuckDB message repeats the SQL; now on one line apart from the
+> stack. Needs one stand log line to confirm which record it is. **For the stand:** stop a node under load: expect
+> `result=stopping` WARN lines, no `RejectedExecutionException` stacks; 32 clients: <= 1 `pool=queueGrowth` per 10 s.
+> **Next for item 36:** stand rerun of the `package=true` build ((1) leak, (2) keytab start, (4) logs), then "ITEM 36
+> DONE" from the maintainer.
+
 > **Item 36 (2026-11-06 17:40Z, core lane, `9b9875c0` / `06e3c0e5` / `ba8b5d82`): (1) CI cell done and green, (2)
 > done in code, (4) one-line part done; Dev CI 42255936543 green.** (1) Service hdfs 42255067021 (all 10 cells green) has a new
 > last stage in the sasl-cluster speed cell: three servers as on the stand (`resourceProfile=speed`,
@@ -3710,3 +3725,9 @@ S3 slowdown item below stays open for then).
   fails the start with the cause (`06e3c0e5`; changes start behaviour only where every HDFS read failed anyway, as the
   maintainer asked). (4) one-line refusal / failure log lines (`ba8b5d82`). Dev CI 42255936543 green. `package=true`
   dispatched on the unlock commit. Lock released.
+- 2026-11-06 (cloud session, core lane): item 36 (4) rest (`e7b4bfa6`, Dev CI 42264944379 green): a query failing on a
+  pool stopped by a node stop logs one WARN (`result=stopping`) and answers UNAVAILABLE instead of an ERROR stack
+  and INTERNAL (status change for stop-time failures only, same as the drain's refusals); a stream starting during
+  stop skips its cancel check; `pool=queueGrowth` at most once per 10 s with `peakQueued`/`suppressed` (new
+  `IoPool`, refused tasks no longer counted active); `views=unreadableTable` INFO when local copies answer. "SQL
+  twice" still needs a stand log line. `package=true` dispatched on the unlock commit. Lock released.
