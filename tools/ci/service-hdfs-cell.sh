@@ -28,6 +28,9 @@
 #           and GROUP BY; under speed the copy cache is below one file, so scans go in batches (part 2b).
 #           Under balanced a last stage runs one server whose copy disk (a tmpfs) is smaller than
 #           chunks.lineitem: batches sized by the disk, a join needing every copy refused (part 2b).
+#   ha-krb, ha-krb-sasl (balanced): a last stage stops the server under load and starts one with
+#           tpch.nation's files unreadable for the server's principal (item 37 (a), (b);
+#           tools/ci/service-hdfs-deny-stop-check.py).
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
@@ -657,6 +660,44 @@ dcSmallDisk() {
   checkReadsPerQid $(for i in $(seq "$n"); do echo "srvc$i"; done)
   return 0
 }
+# Item 37 (a), (b): a node stop under load, then a server started while tpch.nation's files are
+# readable by their owner only (the server's principal flight is not the owner). Kerberos cells
+# with one server, balanced only. Fails on: a load failure other than UNAVAILABLE, 'Filesystem
+# closed', a Netty RejectedExecutionException or an allocator leak in the stopping server's log, a
+# denied query answered as an internal error or a missing table, or the table not answering
+# again (without a restart) once its files are readable.
+denyAndStop() {
+  local rcl rcd rcr stopLog bad
+  "$py" -I tools/ci/service-hdfs-deny-stop-check.py load "$(dnIp 1):32010" 40 > "$work/stop-load.log" 2>&1 &
+  local loader=$!
+  sleep 10
+  docker stop -t 25 "$srv" > /dev/null
+  wait "$loader"; rcl=$?
+  cat "$work/stop-load.log"
+  docker logs "$srv" > "$work/srv-stop.log" 2>&1 || true
+  stopLog=$(sed -n '/Shutting down server/,$p' "$work/srv-stop.log")
+  bad=$(echo "$stopLog" | grep -cE 'Filesystem closed|RejectedExecutionException|Memory was leaked|Error closing' || true)
+  note "item 37 (b) stop under load: $(grep -m 1 '^load: ' "$work/stop-load.log" || echo 'no load line'); $(echo "$stopLog" | grep -m 1 -oE 'shutdownDrain=(done|timeout).*' || echo 'no shutdownDrain line'); bad lines $bad, log lines after the stop began $(echo "$stopLog" | wc -l)"
+  [ "$bad" -eq 0 ] || { echo "$stopLog" | grep -E 'Filesystem closed|RejectedExecutionException|Memory was leaked|Error closing' | head -n 10 | cut -c1-300; finish fail "item 37 (b): $bad 'Filesystem closed' / RejectedExecutionException / leak line(s) while the server stopped"; }
+  echo "$stopLog" | grep -q 'shutdownDrain=started' || finish fail "item 37 (b): no shutdownDrain=started line (the stop did not drain through the gate)"
+  [ "$rcl" -eq 0 ] || finish fail "item 37 (b): $(grep -m 1 '^result fail' "$work/stop-load.log" | cut -c13- || echo 'load client failed')"
+
+  docker exec "${kenv[@]}" "$admin" hdfs dfs -chmod 600 '/data/tpch/nation/*' || finish fail "item 37 (a): chmod failed"
+  mkdir -p "$work/copiesp" && chmod 777 "$work/copiesp"
+  startSmallDiskServer srvp "$work/copiesp" ""
+  sleep 3
+  "$py" -I tools/ci/service-hdfs-deny-stop-check.py denied "$(dnIp 1):32010" > "$work/deny.log" 2>&1; rcd=$?
+  cat "$work/deny.log"
+  docker exec "${kenv[@]}" "$admin" hdfs dfs -chmod 644 '/data/tpch/nation/*' || finish fail "item 37 (a): chmod back failed"
+  "$py" -I tools/ci/service-hdfs-deny-stop-check.py restored "$(dnIp 1):32010" > "$work/restored.log" 2>&1; rcr=$?
+  cat "$work/restored.log"
+  docker stop -t 25 srvp > /dev/null; docker logs srvp > "$work/srvp.log" 2>&1 || true
+  note "item 37 (a): denied $(grep -m 1 '^result ' "$work/deny.log" || echo '?'), restored $(grep -m 1 '^result ' "$work/restored.log" || echo '?'); views=createFailed $(grep -c 'views=createFailed' "$work/srvp.log"), views=created $(grep -c 'views=created ' "$work/srvp.log"), denied lines $(grep -cE 'query=denied|result=denied' "$work/srvp.log"); $(grep -m 1 -oE '(query|result)=denied.{0,200}' "$work/srvp.log" || echo 'no denied line')"
+  [ "$rcd" -eq 0 ] || finish fail "item 37 (a): $(grep -m 1 '^result fail' "$work/deny.log" | cut -c13- || echo 'denied client failed')"
+  [ "$rcr" -eq 0 ] || finish fail "item 37 (a): $(grep -m 1 '^result fail' "$work/restored.log" | cut -c13- || echo 'restored client failed')"
+  grep -E ' ERROR ' "$work/srvp.log" | grep -qi 'nation' && finish fail "item 37 (a): an ERROR line names the denied table: $(grep -E ' ERROR ' "$work/srvp.log" | grep -i -m 1 nation | cut -c1-250)"
+  return 0
+}
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
@@ -667,6 +708,7 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
   if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
+  if $krb && [ "$n" -eq 1 ] && [ "$profile" = balanced ]; then denyAndStop; fi
   finish pass ""
 fi
 detail=${result#result fail }

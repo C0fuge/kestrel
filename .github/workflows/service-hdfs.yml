@@ -42,6 +42,7 @@ on:
       - tools/ci/service-hdfs-smalldisk-check.py
       - tools/ci/service-hdfs-lowdirect-check.py
       - tools/ci/service-hdfs-dcsmalldisk-check.py
+      - tools/ci/service-hdfs-deny-stop-check.py
 
 permissions:
   contents: read

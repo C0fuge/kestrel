@@ -113,6 +113,10 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
 - The stop runs as a Hadoop shutdown hook ahead of Hadoop's own hook that closes every cached `FileSystem` (JVM
   shutdown hooks run at the same time, so running queries failed with `IOException: Filesystem closed` during the
   drain); without Hadoop on the class path it stays a plain JVM hook.
+- CI: the ha-krb / ha-krb-sasl balanced cells of Service hdfs end with a stage that stops the server under 8 query
+  threads (no `Filesystem closed`, Netty `RejectedExecutionException` or allocator leak line; every client failure
+  UNAVAILABLE) and starts a server while tpch.nation's files are readable by their owner only (queries denied, never
+  INTERNAL or "does not exist"; answers again after `chmod` back, without a restart).
 - gRPC's Netty logger (`io.grpc.netty`) is set to SEVERE when the stop begins, so calls cut by the stop no longer log
   a `RejectedExecutionException ... [Shutting down]` WARN stack each.
 
