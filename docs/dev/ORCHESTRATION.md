@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-07 15:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 16:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). egret
 ACCEPT 06c5adc7d7c9: **SHIP** (run 42351380956). Only the maintainer's stand re-check ("ITEM 37 DONE") is missing.
@@ -10,7 +10,7 @@ The core lane's 13:40Z session (lock/unlock only): "item 37 still waits for the 
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | b937ad42 (lock/unlock), 13:41Z (~135 min); last real commit 07:42Z | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
+| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | b937ad42 (lock/unlock), 13:41Z (~195 min); last real commit 07:42Z | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -34,9 +34,9 @@ No stale locks (marten and heron locks free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 15:40Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 16:41Z "finish mode, nothing new".
   Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 149 (15:51Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 150 (16:51Z): nothing open.
 - Neither has checked a server build newer than `deafc861cce3` (their `e2e-assets`/`m4-assets` were not refreshed).
 
 ## egret
@@ -58,6 +58,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-07 16:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (16:41Z)/heron (session 150)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 15:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (15:40Z)/heron (session 149)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 14:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (14:41Z)/heron (session 148)/egret (13:27Z) idle; no stale locks.
 - 2026-11-07 13:56Z: no change: core session 13:40Z only re-confirmed item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9; no new CI runs or pre-releases; marten (13:41Z)/heron (session 147)/egret (13:27Z) idle; no stale locks.
@@ -97,4 +98,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-05 17:56Z: core lane analysed the egret check-4 failure: no pin leak (18219b9c, the refusal counted the query's own reused copies; Dev CI 42073731097 + Service hdfs 42073730677 green); maintainer gave the exact SQL of the 4 unbatched queries (cb29d02f: avg, two count DISTINCT, speed partial per-ticket); core session (lock 17:40Z) pushed 5b84e0a7, Dev CI 42078627145 running; ITEM 33 not done; marten/heron/egret idle; no stale locks.
 - 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
 - 2026-11-05 15:57Z: core session 15:41Z made no code change (ITEM 33 waits for the stand re-check of 50fe065af50c); Dev CI on main green (42041121733, package 42043316941), service gate 4/4 green on 50fe065a; egret ACCEPT 50fe065af50c running (42055012677); marten (15:41Z)/heron (session 123) idle; no stale locks.
-- 2026-11-05 14:58Z: core ITEM 33 done in code and CI ((A)-(D) a744ef50/75de58bc, (E) aeb87cdf/8e60638e/9dbde204; Dev CI 42041121733 green); `package=true` Dev CI 42043316941 green, service gate 4/4 green on 50fe065a -> pre-release `server-1.0.0-50fe065af50c`, waits for the stand re-check; core lock released 14:48Z; egret has no ACCEPT/FRESH for 50fe065af50c yet; marten (14:40Z)/heron (session 123) idle; no stale locks.
