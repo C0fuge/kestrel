@@ -31,6 +31,8 @@ public final class StopGate implements ServerInterceptor {
             "GetSchema", "DoPut", "DoExchange");
 
     private final AtomicInteger running = new AtomicInteger();
+    /** Method of every running call, by the call's end flag. */
+    private final java.util.Map<AtomicBoolean, String> methods = new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicLong refused = new AtomicLong();
     private volatile boolean closed;
 
@@ -45,8 +47,10 @@ public final class StopGate implements ServerInterceptor {
         }
         running.incrementAndGet();
         AtomicBoolean ended = new AtomicBoolean();
+        methods.put(ended, String.valueOf(call.getMethodDescriptor().getBareMethodName()));
         Runnable end = () -> {
             if (ended.compareAndSet(false, true)) {
+                methods.remove(ended);
                 running.decrementAndGet();
             }
         };
@@ -99,6 +103,19 @@ public final class StopGate implements ServerInterceptor {
      */
     public int running() {
         return running.get();
+    }
+
+    /**
+     * Names the methods of the calls that run now, for the drain's log line.
+     *
+     * @return method names with their counts, e.g. {@code DoGet=2}, in name order
+     */
+    public String runningMethods() {
+        java.util.Map<String, Integer> counts = new java.util.TreeMap<>();
+        for (String method : methods.values()) {
+            counts.merge(method, 1, Integer::sum);
+        }
+        return counts.toString();
     }
 
     /**

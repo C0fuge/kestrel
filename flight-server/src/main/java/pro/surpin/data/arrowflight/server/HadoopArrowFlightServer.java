@@ -96,6 +96,22 @@ public class HadoopArrowFlightServer {
     private final StopGate stopGate = new StopGate();
     /** gRPC's Netty logger, kept so its level set at stop stays (JUL holds loggers weakly). */
     private java.util.logging.Logger grpcNettyLogger;
+    /**
+     * Executor of the Flight server's calls, owned here (item 37 (b)): FlightServer.shutdown()
+     * would shut its own executor down while calls still run, so their callbacks were refused
+     * (RejectedExecutionException) and their streams reset (RST_STREAM INTERNAL_ERROR). This one
+     * is shut down only once the server has terminated.
+     */
+    private final java.util.concurrent.ExecutorService flightExecutor =
+            java.util.concurrent.Executors.newCachedThreadPool(new java.util.concurrent.ThreadFactory() {
+                private final java.util.concurrent.atomic.AtomicInteger next =
+                        new java.util.concurrent.atomic.AtomicInteger();
+
+                @Override
+                public Thread newThread(Runnable r) {
+                    return new Thread(r, "flight-server-default-executor-" + next.getAndIncrement());
+                }
+            });
 
     /**
      * Reads the stream compression settings and logs them.
@@ -269,6 +285,7 @@ public class HadoopArrowFlightServer {
                     component.producer())
                     .maxInboundMessageSize(config.grpcMaxInboundMessageSize())
                     .backpressureThreshold(config.flightBackpressureThresholdBytes())
+                    .executor(flightExecutor)
                     .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                     .middleware(StreamCompression.KEY, streamCompression())
                     .middleware(FlightSessions.KEY, ConfigAdapter.flightSessions().factory())
@@ -325,6 +342,7 @@ public class HadoopArrowFlightServer {
                 server.shutdown();
             }
             terminate(server);
+            flightExecutor.shutdown();
             LOGGER.info("Flight SQL server stopped");
         }
         if (distributedComplete != null) {
@@ -425,9 +443,9 @@ public class HadoopArrowFlightServer {
             LOGGER.info("shutdownDrain={} after {} ms (at most {} s)", drained ? "done" : "timeout",
                     (System.nanoTime() - t0) / 1_000_000, seconds);
         } else {
-            LOGGER.info("shutdownDrain={} after {} ms (at most {} s) refusedQueries={} runningCalls={}",
+            LOGGER.info("shutdownDrain={} after {} ms (at most {} s) refusedQueries={} runningCalls={} methods={}",
                     drained ? "done" : "timeout", (System.nanoTime() - t0) / 1_000_000, seconds,
-                    gate.refused(), gate.running());
+                    gate.refused(), gate.running(), gate.runningMethods());
         }
         return drained;
     }

@@ -110,6 +110,10 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   Flight server down, cut what still runs and give its threads up to 3 s -> close DuckDB, stores, cluster member,
   allocator. Log: `shutdownDrain=started runningCalls=<n>` and `shutdownDrain=done|timeout after <ms> ms ...
   refusedQueries=<n> runningCalls=<n>`.
+- The Flight server's call executor belongs to the server process and is shut down only after the Flight server has
+  terminated: `FlightServer.shutdown()` shut its own executor down while calls still ran, so their callbacks were
+  refused (`RejectedExecutionException`) and their streams reset (`RST_STREAM INTERNAL_ERROR`, seen by a client as
+  INTERNAL). The drain's last line names the methods of calls still running at a timeout (`methods={DoGet=1}`).
 - The stop runs as a Hadoop shutdown hook ahead of Hadoop's own hook that closes every cached `FileSystem` (JVM
   shutdown hooks run at the same time, so running queries failed with `IOException: Filesystem closed` during the
   drain); without Hadoop on the class path it stays a plain JVM hook.
