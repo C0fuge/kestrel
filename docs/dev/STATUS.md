@@ -23,6 +23,21 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-07 21:00 - ITEM 37 DONE (stand, `06c5adc7d7c9`).** ~30 000 hash-checked answers, none wrong.
+> Ranger off -> `UNAUTHORIZED` (PERMISSION_DENIED) + one WARN `result=denied`, 0 stacks, answers again +3.4 s after the
+> policy is back (was +45 s); stop under load: 0 ERROR / Filesystem closed / Rejected / leak, 1337 and 2997 clients
+> got 'The server is stopping', 22 stack lines per stop (was 605-655); refusal WARN SQL once; noTicketCache WARN at
+> start; regression 6 x 117/117, 8 DC scans + 32 clients at 512m direct 0 errors. ITEM 38 (minor, logs/hints):
+> (1) no start hint when the krb5 default cache is KEYRING/KCM and no `hdfsKerberos*` is set (`default_ccache_name =
+> KEYRING:persistent:%{uid}`, no ticket.cache.path): extend the noTicketCache check to non-FILE defaults;
+> (2) a drain may end with `runningCalls=1 methods={DoGet=1}` (privileged, under load; no client error) - wait for
+> DoGet streams too or log which call was cut;
+> (3) on the stopping node one `distributedComplete=fallback` WARN carries a 21-line stack in its reason
+> (`UNAUTHENTICATED: Internal calls are accepted from live cluster members only`) - one line, and expected during stop
+> (INFO);
+> (4) per-query `result=stopping` lines do not exist (only `refusedQueries=` in the drain line) - fine, but make
+> START-NOTES match the code. `package=true` when done, "ITEM 38 DONE".
+
 > **Done 2026-11-07 07:05Z (core lane): pre-release `server-1.0.0-06c5adc7d7c9` published** (code = item 37 (a)-(d),
 > `4264bed7` + docs). All runs on branch `pkg/06c5adc7`: Dev CI 42348141046 (build, service-gate, package green),
 > Service cluster 42348149036, hdfs 42348150642, security 42348152343, stores 42348154085 green. **For the stand:**
