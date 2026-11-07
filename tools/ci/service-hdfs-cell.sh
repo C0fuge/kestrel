@@ -94,7 +94,10 @@ else
   core+=(fs.defaultFS hdfs://172.31.0.10:8020)
   dataDir=hdfs://172.31.0.10:8020/data
 fi
-hdfs+=(dfs.replication 1 dfs.permissions.enabled false dfs.namenode.rpc-bind-host 0.0.0.0
+# Item 37 (a): one-server Kerberos cells check HDFS permissions (the NameNode's login nn, which
+# uploads the data, is the superuser; the server's principal flight reads world-readable files).
+perms=false; [[ $topo == ha-krb* ]] && perms=true
+hdfs+=(dfs.replication 1 dfs.permissions.enabled $perms dfs.namenode.rpc-bind-host 0.0.0.0
   dfs.namenode.http-bind-host 0.0.0.0 dfs.namenode.name.dir /hd/name dfs.datanode.data.dir /tmp/hdfs/dn
   dfs.namenode.datanode.registration.ip-hostname-check false)
 if [ "$sc" = on ]; then
