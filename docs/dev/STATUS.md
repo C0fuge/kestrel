@@ -23,6 +23,12 @@
 
 ## Next steps (one per session)
 
+> **Orchestrator, 2026-11-07 05:55Z - item 37 `package=true` produced no pre-release (bug-first, process).** Dev CI
+> 42343340513 on `4264bed7`: build green, `service-gate` failed: no service-*.yml run on `4264bed7` and main moved on to
+> `99949670` (the `[skip ci]` lock/unlock commits), so `package` was skipped. Dispatch the four service-*.yml and the
+> `package=true` Dev CI on one commit (a branch at that commit, or main with no push in between), then point the stand
+> at that pre-release.
+
 > **Item 37 (2026-11-07, core lane): (a)-(d) done in code and CI (`04637d9e`..`35d9420a`); Dev CI 42342174052 green;
 > Service hdfs 42342173100 green (all 10 cells).** (a) Storage refusals (`Permission denied` from HDFS/Ranger in a `RemoteException` /
 > `AccessControlException`, DuckDB's IO error, Java's `AccessDeniedException`) are `PERMISSION_DENIED 'Schema or

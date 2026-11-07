@@ -1,22 +1,19 @@
 # Orchestration status
 
-Status as of **2026-11-07 04:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 05:55Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: the core lane is on **ITEM 37** (rest of item 36 after the 2026-11-07 02:20 stand re-check). The core
-session (lock 03:41Z, last commit 04:44Z, active) pushed (b) own Flight call executor + drain report (761bad23),
-(a) failed views retried by queries that name them (691cd394) and an undescribed storage-refused table as
-PERMISSION_DENIED (d9e6449b), plus a new item 37 stage in the Kerberos one-server cells of Service hdfs (88ccac09,
-602c1927). Dev CI green on 88ccac09, 761bad23, 602c1927; Dev CI 42339761044 on d9e6449b running. Service hdfs is red
-on the lane's own new stage (ha-krb / ha-krb-sasl balanced cells, 3 runs: 42336170913, 42337610848, 42338931140; the
-stop-under-load part passes, the cell then fails) and the session is iterating on it (run 42339761143 on d9e6449b
-running) - no bug-first note, the lane is working on exactly this. No new pre-release yet. No bug-first notes in any
-lane.
+Not ALL DONE: the core lane finished **ITEM 37** (a)-(d) in code and CI (Dev CI 42342174052 green, Service hdfs
+42342173100 green in all 10 cells on 35d9420a) and unlocked at 05:41Z "waiting for the stand". **But there is no item
+37 pre-release:** the `package=true` Dev CI 42343340513 on `4264bed7` built green and then failed in `service-gate`
+(no service-*.yml run on `4264bed7`, and main had moved on to `99949670` with the lane's own `[skip ci]` lock/unlock
+commits), so `package` was skipped. Newest pre-release is still `server-1.0.0-6384bc55b173`. Orchestrator wrote a
+bug-first (process) note at the top of core Next steps; not rerun (a rerun fails the same gate).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 37 (a)-(d) in code; Service hdfs item 37 stage being fixed; `package=true` + stand re-check pending | d9e6449b, 2026-11-07 04:44Z | 03:41Z (active, not stale) | Dev CI green 42338931197 (602c1927); 42339761044 (d9e6449b) running; Service hdfs red x3 on the new stage, 42339761143 running; Catalogs CI green |
+| core (`STATUS.md`) | ITEM 37 (a)-(d) done in code/CI; package + stand re-check pending (package failed at the gate) | 99949670, 2026-11-07 05:41Z (unlock) | free | Dev CI green 42342174052 (35d9420a); `package=true` 42343340513 (4264bed7) **red: service gate, no pre-release**; Service hdfs green 42342173100 |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | Catalogs CI 42339761145 green |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -28,7 +25,7 @@ No stale locks (marten and heron locks free).
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 42269501072 | 6384bc55 | pass |
-| service-hdfs.yml | 42339761143 | d9e6449b | running (previous 42338931140 on 602c1927: fail, ha-krb / ha-krb-sasl balanced, item 37 stage) |
+| service-hdfs.yml | 42342173100 | 35d9420a | pass (all 10 cells incl. the item 37 stage) |
 | service-security.yml | 42269591550 | 6384bc55 | pass |
 | service-stores.yml | 42269597085 | 6384bc55 | pass |
 
@@ -36,35 +33,39 @@ No stale locks (marten and heron locks free).
 
 - `server-1.0.0-6384bc55b173` (2026-11-06 18:04Z): items 35, 36 (1)-(5); stand re-checked 2026-11-07: item 35 done, rest -> item 37.
 - `server-1.0.0-5a8e831eade2` (2026-11-06 17:02Z): items 35, 36 (1) part 1 + CI cell, (2), (3), (5), (4) one-line part.
-- `server-1.0.0-19efa29b1b57` (2026-11-06 16:10Z): items 35, 36 (3), (5), 36 (1) part 1; egret ACCEPT SHIP.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): item 34.
+- (`server-1.0.0-19efa29b1b57`, 2026-11-06 16:10Z, no longer listed among the newest 3 by the releases API.)
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; last session 2026-11-06 17:41Z "finish mode,
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; last session 2026-11-07 05:41Z "finish mode,
   nothing new". Open question (no decision needed to continue): fix TPC-H q16 SF1 ~0.5 s slowdown from the join-key
   IN-list pushdown or leave it.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 138 (2026-11-07 04:51Z): nothing open.
-- Neither has checked `19efa29b1b57` / `5a8e831eade2` / `6384bc55b173`.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 139 (2026-11-07 05:51Z): nothing open.
+- Neither has checked `5a8e831eade2` / `6384bc55b173`.
 
 ## egret
 
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **EGRET ACCEPT 6384bc55b173 DONE** (run 42278048164): **SHIP**, all 6 checks in all 4 cells (check 4 with room wait).
-- README "In progress": idle 2026-11-07 03:26Z, newest tracked `6384bc55b173`; next ACCEPT on the item 37 pre-release.
+- **EGRET ACCEPT 6384bc55b173 DONE** (run 42278048164): **SHIP**, all 6 checks in all 4 cells.
+- README "In progress": idle 2026-11-07 05:27Z, newest tracked `6384bc55b173`; next ACCEPT on the item 37 pre-release (none yet).
 
 ## For the maintainer
 
-- Nothing blocks you now: ITEM 37 is in progress in the core lane; after its `package=true` pre-release, re-check on
-  the stand: Ranger denial (expect PERMISSION_DENIED + one `query=denied` WARN, node answers right after the policy is
-  back), node stop under load (expect `result=stopping`, no Netty/`Filesystem closed` stacks, no allocator leak),
-  refusal WARN with the SQL once, keytab-only start without ticket cache (WARN at start). Then "ITEM 37 DONE".
+- **Item 37 has no pre-release yet**: the core lane's package run was refused by the service gate (main moved).
+  The next core session should re-package (note at the top of core Next steps); you can also dispatch the four
+  service-*.yml + `package=true` Dev CI on one commit yourself. Then re-check on the stand: Ranger denial
+  (PERMISSION_DENIED + one `query=denied` WARN, answers again after the policy is back), node stop under load
+  (`result=stopping`, no Netty/`Filesystem closed` stacks, no allocator leak), refusal WARN with the SQL once,
+  keytab-only start without ticket cache (WARN at start). Then "ITEM 37 DONE".
 - **Open question (item 35):** default budget `distributedCompletePeerStreams` (one per 128 MiB direct memory).
 - **marten open question:** TPC-H q16 SF1 slowdown from join-key pushdown - fix or leave.
 - ALL DONE criterion note: this routine's original items 26/27 are long done; the core lane is now on item 37.
 
 ## History
 
+- 2026-11-07 05:55Z: core did item 37 (a)-(d) in code/CI (33347f10, 35d9420a; Dev CI 42342174052 + Service hdfs 42342173100 green, all 10 cells) and unlocked 05:41Z waiting for the stand; but its `package=true` Dev CI 42343340513 on 4264bed7 failed at the service gate (no service runs on 4264bed7, main moved) -> no pre-release; orchestrator bug-first note at the top of core Next steps; marten (05:41Z)/heron (session 139)/egret idle; no stale locks.
 - 2026-11-07 04:57Z: core session (lock 03:41Z, active) pushed 761bad23 (item 37 (b) Flight call executor), 88ccac09/602c1927 (Service hdfs item 37 stage), d9e6449b (item 37 (a) storage-refused table); Dev CI green on 602c1927, 42339761044 running; Service hdfs red x3 on the lane's own new stage (ha-krb/ha-krb-sasl balanced), being fixed, 42339761143 running; no new pre-release; marten/heron (session 138)/egret idle; no stale locks.
 - 2026-11-07 03:58Z: maintainer accepted items 35 and 36 (1)(2)(5) on the stand and opened ITEM 37 (b9277a77: Ranger denial code + view retry, node stop order under load, refusal SQL once, keytab-without-ticket-cache WARN); core session (lock 03:41Z) pushed 04637d9e, e04ba1ef, 691cd394 (all four parts in code), Dev CI 42336009247 running (2 earlier runs cancelled by newer pushes); no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-06 21:56Z: no change: core session 21:41Z lock/unlock only (waits for the stand on `server-1.0.0-6384bc55b173`); Dev CI/service gate green on 6384bc55; egret idle (21:26Z README, newest tracked 6384bc55b173); marten (17:41Z)/heron (session 137) idle; no stale locks.
@@ -104,4 +105,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-05 06:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (06:41Z)/heron (session 116)/egret (05:27Z) idle; no locks held.
 - 2026-11-05 05:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (05:40Z)/heron (session 115)/egret (05:27Z) idle; no locks held.
 - 2026-11-05 04:56Z: no change: no commits on kestrel main since 21:41Z; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten (04:40Z)/heron (session 115)/egret idle; no locks held.
-- 2026-11-05 03:56Z: no change since 21:57Z: no commits on kestrel main; ITEM 31 still waits for the stand re-check of `server-1.0.0-8060179bce0c`; CI and service matrix green on 8060179b; marten/heron (session 114)/egret idle; no locks held.
