@@ -126,7 +126,7 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   parts maps it the same way. A failed Kerberos login (`AccessControlException: Client cannot authenticate via ...`)
   stays a server error. Status change for storage refusals only.
 - A catalog view DuckDB could not create (its first file refused or unreachable) is created again on the next query
-  of that thread's DuckDB (`views=created view=... after='...'`), so a table answers on the first query after its
+  that names it in that thread's DuckDB, and every 30 s on any query (`views=created view=... after='...'`), so a table answers on the first query after its
   permission is back instead of after the next catalog change; until then a query of it is told
   `Table <view> cannot be read now: <DuckDB's error>` (a storage denial: PERMISSION_DENIED) instead of
   `Catalog Error: Table with name ... does not exist!`.

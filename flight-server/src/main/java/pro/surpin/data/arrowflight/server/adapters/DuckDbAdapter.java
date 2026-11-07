@@ -2566,7 +2566,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        syncViews(session, views);
+        syncViews(session, views, sql);
         // Parse first: preparing a text with several statements runs all but the last one.
         checkSingleQuery(session, sql);
         if (readsLocalCopies(sql)) {
@@ -2606,7 +2606,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = session();
         try {
-            syncViews(session, views);
+            syncViews(session, views, sql);
             requireNoSessionCatalog(requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
             try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
                 requireQuery(sql, ps);
@@ -3202,9 +3202,25 @@ public final class DuckDbAdapter implements AutoCloseable {
      *               others keep their latest error
      */
     static void retryFailedViews(Connection conn, Map<String, FailedView> failed) {
-        for (java.util.Iterator<Map.Entry<String, FailedView>> it = failed.entrySet().iterator();
-                it.hasNext();) {
+        retryFailedViews(conn, failed, null);
+    }
+
+    /**
+     * Creates the views that failed before once more, only those a query names when it is given
+     * (a view whose storage is unreachable may take a connect timeout to fail again, which the
+     * queries of other tables should not wait for).
+     *
+     * @param conn   DuckDB connection
+     * @param failed views that could not be created, by name
+     * @param sql    the query about to run, or null to try every failed view
+     */
+    static void retryFailedViews(Connection conn, Map<String, FailedView> failed, String sql) {
+        String text = sql == null ? null : sql.replace("\"", "").toLowerCase(java.util.Locale.ROOT);
+        for (Iterator<Map.Entry<String, FailedView>> it = failed.entrySet().iterator(); it.hasNext();) {
             Map.Entry<String, FailedView> entry = it.next();
+            if (text != null && !text.contains(lastNamePart(entry.getKey()))) {
+                continue;
+            }
             try (Statement one = conn.createStatement()) {
                 one.execute(entry.getValue().statement());
                 it.remove();
@@ -3269,22 +3285,43 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the table part of a view name.
+     *
+     * @param view view name, possibly quoted and qualified
+     * @return its last part, unquoted, in lower case
+     */
+    private static String lastNamePart(String view) {
+        String name = unquoted(view.strip());
+        return name.substring(name.lastIndexOf('.') + 1);
+    }
+
+    /** How often a session tries every failed view, also those its queries do not name (ns). */
+    private static final long RETRY_ALL_VIEWS_NANOS = TimeUnit.SECONDS.toNanos(30);
+
+    /**
      * Brings a session's data views to the current definitions, and creates the views that
      * failed before once more.
      *
      * @param session this thread's session
      * @param views   current view definitions
+     * @param sql     the query about to run: failed views it names are tried at once, the
+     *                others every {@link #RETRY_ALL_VIEWS_NANOS}
      * @throws java.sql.SQLException when a drop or a statement other than CREATE VIEW fails
      */
     private static void syncViews(Session session,
-            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views, String sql)
             throws java.sql.SQLException {
         if (session.viewsVersion != views.version()) {
             session.viewDrops = applyViews(session.conn, session.viewDrops,
                     views.dataStatements(), views.dropStatements(), session.failedViews);
             session.viewsVersion = views.version();
+            session.viewsTriedNanos = System.nanoTime();
         } else if (!session.failedViews.isEmpty()) {
-            retryFailedViews(session.conn, session.failedViews);
+            boolean all = System.nanoTime() - session.viewsTriedNanos > RETRY_ALL_VIEWS_NANOS;
+            retryFailedViews(session.conn, session.failedViews, all ? null : sql);
+            if (all) {
+                session.viewsTriedNanos = System.nanoTime();
+            }
         }
     }
 
@@ -3365,6 +3402,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         private List<String> viewDrops = List.of();
         /** Data views that could not be created, by name; tried again on each query. */
         private final Map<String, FailedView> failedViews = new LinkedHashMap<>();
+        /** When every failed view was last tried (System.nanoTime()). */
+        private long viewsTriedNanos;
         /**
          * DuckDB connection with empty views for describing queries, its own DuckDB or one to the
          * node's describe DuckDB; opened on first use.

@@ -2341,7 +2341,9 @@ class DuckDbAdapterTest {
             try (Statement s = conn.createStatement()) {
                 s.execute("COPY (SELECT 42 AS x) TO '" + file + "' (FORMAT parquet)");
             }
-            DuckDbAdapter.retryFailedViews(conn, failed);
+            DuckDbAdapter.retryFailedViews(conn, failed, "SELECT * FROM s.orders");
+            assertEquals(1, failed.size(), "a query of another table does not try the view");
+            DuckDbAdapter.retryFailedViews(conn, failed, "SELECT x FROM S.\"LineItem\"");
             assertTrue(failed.isEmpty());
             try (Statement s = conn.createStatement(); ResultSet rows = s.executeQuery(
                     "SELECT x FROM s.lineitem")) {
