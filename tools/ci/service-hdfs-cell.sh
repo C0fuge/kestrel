@@ -455,6 +455,7 @@ startSmallDiskServer() {
     sleep 1
   done
   docker logs "$name" 2>&1 | grep -q 'Server Arrow Flight SQL started' \
+    || { docker logs "$name" 2>&1 | grep -E 'ERROR|Exception|Caused by' | head -n 40 | cut -c1-400; false; } \
     || finish fail "small disk: server $name did not start: $(docker logs "$name" 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
 }
 # Item 30 part 2b (4): a copy disk smaller than a query's input. After the cluster checks (sasl-cluster,

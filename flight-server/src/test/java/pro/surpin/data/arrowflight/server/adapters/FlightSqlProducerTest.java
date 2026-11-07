@@ -193,6 +193,30 @@ class FlightSqlProducerTest {
         verify(queryPlanner, never()).plan(anyString());
     }
 
+    /**
+     * Item 37 (a): a complete-mode query of a table whose first file the storage refused (no
+     * view, "cannot be described") is denied, not UNAVAILABLE as a catalog outage.
+     */
+    @Test
+    void undescribedTableRefusedByTheStorageIsDenied() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "SELECT count(*) FROM tpch.nation";
+        when(executionService.completeSchema(allocator, query, null)).thenThrow(
+                new java.io.UncheckedIOException(new java.io.IOException("Table tpch.nation cannot be"
+                        + " described from its first file: Permission denied: user=flight, access=READ")));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                mock(ClusterService.class), "complete");
+        FlightRuntimeException error = org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class, () -> producer.getFlightInfoStatement(
+                        FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build(),
+                        mock(FlightProducer.CallContext.class), FlightDescriptor.command(new byte[]{1})));
+        assertEquals(FlightStatusCode.UNAUTHORIZED, error.status().code(), error.getMessage());
+        assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, error.status().description());
+    }
+
     /** Lists catalog views as VIEW when the caller may read them and every table they read. */
     @Test
     @SuppressWarnings("unchecked")

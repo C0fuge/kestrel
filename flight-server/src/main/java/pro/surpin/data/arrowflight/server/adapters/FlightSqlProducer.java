@@ -1185,6 +1185,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
             throw status.withDescription(message).withCause(e).toRuntimeException();
         } catch (java.io.UncheckedIOException e) {
+            FlightRuntimeException denied = denial(e);
+            if (denied != null) {
+                // A table whose first file the storage refused (item 37 (a)).
+                logDenial(denied, query);
+                throw denied;
+            }
             // A table catalog (Hive Metastore, Iceberg REST) cannot be read now.
             LOGGER.warn("node={} query=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
                     e.getCause().getMessage(), query);
@@ -1430,6 +1436,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
         } catch (ExecutionService.CatalogUnavailableException e) {
+            FlightRuntimeException denied = denial(e);
+            if (denied != null) {
+                // A table whose first file the storage refused (item 37 (a)).
+                logDenial(denied, query);
+                throw denied;
+            }
             // A table catalog (Hive Metastore, Iceberg REST) cannot be read now.
             LOGGER.warn("node={} schema=catalogUnavailable error='{}' query='{}'", LogUtil.node(),
                     e.getCause().getMessage(), query);

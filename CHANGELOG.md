@@ -131,7 +131,9 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   `PERMISSION_DENIED 'Schema or table access denied: the storage refused to read the table's files'` instead of
   `INTERNAL: Query execution failed: RemoteException: ...`, and logs one WARN line (`execution=failed ...
   result=denied error='storage: ...'` or `query=denied reason='storage: ...'`) without a stack; planning a query in
-  parts maps it the same way. A failed Kerberos login (`AccessControlException: Client cannot authenticate via ...`)
+  parts maps it the same way, and so does a table whose first file the storage refused when its view was built
+  (`Table ... cannot be described from its first file: ... Permission denied`, before: UNAVAILABLE as a catalog
+  outage). A failed Kerberos login (`AccessControlException: Client cannot authenticate via ...`)
   stays a server error. Status change for storage refusals only.
 - A catalog view DuckDB could not create (its first file refused or unreachable) is created again on the next query
   that names it in that thread's DuckDB, and every 30 s on any query (`views=created view=... after='...'`), so a table answers on the first query after its
