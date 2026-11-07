@@ -23,6 +23,32 @@
 
 ## Next steps (one per session)
 
+> **Item 37 (2026-11-07, core lane): (a)-(d) done in code and CI (`04637d9e`..`35d9420a`); Dev CI RUN_DEV green;
+> Service hdfs RUN_HDFS.** (a) Storage refusals (`Permission denied` from HDFS/Ranger in a `RemoteException` /
+> `AccessControlException`, DuckDB's IO error, Java's `AccessDeniedException`) are `PERMISSION_DENIED 'Schema or
+> table access denied: the storage refused to read the table's files'` with one WARN `query=denied` /
+> `result=denied` line naming the storage's reason (not sent to the client); a failed Kerberos login
+> (`AccessControlException: Client cannot authenticate`) stays a server error. A view that failed to be created is
+> created again by the next query naming it (all every 30 s), and meanwhile its queries get the view's error instead
+> of "does not exist". Found and fixed by the new CI stage: one table with unreadable files **failed the server's
+> start** (catalog load read every footer; now `catalog=footerUnreadable` WARN, table stays listed and denied), and
+> such a table stayed denied for up to 60 s after its permission was back (views now refresh every 5 s while a table
+> cannot be described). (b) Stop order: leave the pool -> `StopGate` (gRPC interceptor) answers new GetFlightInfo /
+> PollFlightInfo / GetSchema / DoPut / DoExchange `UNAVAILABLE 'The server is stopping; retry the query'` while the
+> running calls finish -> Flight shutdown -> close (shutdownNow after 3 s) -> DuckDB, stores, allocator. The stop
+> runs as a Hadoop shutdown hook ahead of Hadoop's FileSystem close (`Filesystem closed`). The Flight call executor
+> is ours and shut down after termination (FlightServer.shutdown() shut its own down under running calls:
+> `RejectedExecutionException` + `RST_STREAM INTERNAL_ERROR`, found by the CI stage). `io.grpc.netty` JUL logger at
+> SEVERE from the stop on. (c) Multi-table refusal reason is `Can only select from ONE table, but got <n> tables`
+> (no SQL), so the WARN carries the SQL once. (d) WARN `hdfs=noTicketCache` at start when LIBHDFS3_CONF says
+> Kerberos, no `hdfsKerberos*` is set and the ticket cache the extension reads is missing (keyring/KCM not checked).
+> **CI stage** (Service hdfs, ha-krb / ha-krb-sasl balanced, HDFS permissions now on in those cells): stop under 8
+> query threads (stand: 0 `result=stopping`; CI: 74 stopping answers, drain done in ~0.3 s, 0 bad lines, every
+> failure UNAVAILABLE) and a server started with tpch.nation `chmod 600` (denied with one WARN, other tables answer,
+> answers again after `chmod 644` without a restart). **For the stand:** rerun 37 (a)-(d) on the `package=true`
+> build; one `stop` note: a DoAction call may still count as running when the drain ends (`methods={DoAction=1}`
+> once in CI, harmless).
+
 > **Maintainer, 2026-11-07 02:20 - stand re-check of `6384bc55b173`: ITEM 35 DONE, item 36 (1) (2) (5) done; ITEM 37 =
 > the rest of 36.** No wrong answer in ~24 000 hash-checked answers; DC small disk 12/12 + 8/8, 0 deleted-open copies;
 > 8 DC scans at 512m direct 16/16 + 6935 small 0 failed (waits instead of errors); keytab start with
