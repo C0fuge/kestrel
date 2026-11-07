@@ -603,7 +603,18 @@ public class ParquetAdapter {
         tables.forEach((schemaName, tablesMap) -> {
             Map<String, String> schemaDdls = new HashMap<>();
             tablesMap.forEach((tableName, path) -> {
-                Schema schema = getTableSchema(schemaName, tableName);
+                Schema schema;
+                try {
+                    schema = getTableSchema(schemaName, tableName);
+                } catch (UncheckedIOException e) {
+                    // One table whose footer cannot be read (its files refused by the storage,
+                    // item 37 (a)) must not fail the start or every other table: it stays listed
+                    // without a DDL line, and its queries are told why.
+                    LOGGER.warn("node={} catalog=footerUnreadable table={}.{} error='{}'",
+                            LogUtil.node(), schemaName, tableName,
+                            LogUtil.oneLine(String.valueOf(e.getCause().getMessage())));
+                    return;
+                }
                 String ddl = arrowSchemaToDDL(schemaName, tableName, schema);
                 schemaDdls.put(tableName, ddl);
                 ddlBuilder.append(ddl).append(";\n");

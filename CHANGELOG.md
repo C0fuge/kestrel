@@ -140,6 +140,10 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   permission is back instead of after the next catalog change; until then a query of it is told
   `Table <view> cannot be read now: <DuckDB's error>` (a storage denial: PERMISSION_DENIED) instead of
   `Catalog Error: Table with name ... does not exist!`.
+- A table whose footer the storage refuses no longer fails the catalog load: the server failed to start (and a
+  later catalog refresh failed) with `UncheckedIOException: AccessControlException: Permission denied` when one
+  table's files were unreadable for it. The table stays listed (WARN `catalog=footerUnreadable table=...`) and its
+  queries are denied; every other table answers. Found by the new Service hdfs stage.
 - The multi-table refusal reason is `Can only select from ONE table, but got <n> tables`, without the rewritten SQL,
   so the `query=refused mode=partial` WARN line carries the SQL once (in `query='...'`).
 - A server with no keytab login of its own (`hdfsKerberos*` unset) whose LIBHDFS3_CONF sets

@@ -104,6 +104,34 @@ class ParquetAdapterTest {
                 .containsKey("second_table"));
     }
 
+    /**
+     * Item 37 (a): a table whose footer the storage refuses does not fail the catalog (the
+     * server's start): it stays listed without a DDL line, the other tables are unaffected.
+     */
+    @Test
+    void unreadableFooterKeepsTheCatalog() throws Exception {
+        Path root = new Path("/data");
+        Path schema = new Path(root, "s");
+        Path good = new Path(schema, "good_table");
+        Path denied = new Path(schema, "denied_table");
+        FileSystem fileSystem = mock(FileSystem.class);
+        when(fileSystem.exists(root)).thenReturn(true);
+        when(fileSystem.listStatus(root)).thenReturn(new FileStatus[]{directory(schema)});
+        when(fileSystem.listStatus(schema)).thenReturn(new FileStatus[]{directory(good), directory(denied)});
+        AppConfig config = new AppConfig(
+                3, 4096, 4, 65536, 2, 2, 2, null, false,
+                null, null, null, null, null, false, 2_147_483_648L,
+                67108864, 67108864, 30000L,
+                root.toString(), null, 31001, 5701, 120, 3, 500, 0);
+
+        ParquetAdapter adapter = new CatalogTestParquetAdapter(config, fileSystem);
+
+        assertTrue(adapter.getTables("s", null).containsKey("good_table"));
+        assertTrue(adapter.getTables("s", null).containsKey("denied_table"));
+        assertTrue(adapter.tableDdlCache().get("s").containsKey("good_table"));
+        assertFalse(adapter.tableDdlCache().get("s").containsKey("denied_table"));
+    }
+
     /** Verifies full Arrow schemas and footer row counts are reused from metadata caches. */
     @Test
     void cachesArrowSchemaAndParquetFooterStatistics() throws IOException {
@@ -240,6 +268,10 @@ class ParquetAdapterTest {
 
         @Override
         public Schema getTableSchema(String schema, String table) {
+            if (table.equals("denied_table")) {
+                throw new java.io.UncheckedIOException(new IOException(
+                        "Permission denied: user=flight, access=READ"));
+            }
             Field id = new Field("id",
                     FieldType.nullable(new ArrowType.Int(32, true)), null);
             return new Schema(List.of(id));
