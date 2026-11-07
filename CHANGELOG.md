@@ -101,6 +101,12 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Added - CI: `tools/ci/package-release.sh`, a `package=true` pre-release on a fixed commit (STATUS item 37, process)
+
+- Pushes a branch `pkg/<short sha>` at the commit (default `origin/main`) and dispatches every `service-*.yml` and
+  Dev CI `package=true` on it at once. A dispatch on `main` failed its `service-gate` whenever `main` moved before the
+  gate dispatched the service runs (item 37: the `[skip ci]` unlock commit, Dev CI 42343340513).
+
 ### Fixed - node stop under load: shutdown order (STATUS item 37 (b))
 
 - The drain (`shutdownDrainSeconds`) now runs in order: leave the pool -> answer new queries (GetFlightInfo,
