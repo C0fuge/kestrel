@@ -101,6 +101,21 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - node stop under load: shutdown order (STATUS item 37 (b))
+
+- The drain (`shutdownDrainSeconds`) now runs in order: leave the pool -> answer new queries (GetFlightInfo,
+  PollFlightInfo, GetSchema, DoPut, DoExchange) `UNAVAILABLE 'The server is stopping; retry the query'` while the
+  server still accepts calls (before, the Flight server shut down at once and new calls failed with `UNAVAILABLE: io
+  exception` at the transport) -> wait for the running calls (DoGet of queries planned here still runs) -> shut the
+  Flight server down, cut what still runs and give its threads up to 3 s -> close DuckDB, stores, cluster member,
+  allocator. Log: `shutdownDrain=started runningCalls=<n>` and `shutdownDrain=done|timeout after <ms> ms ...
+  refusedQueries=<n> runningCalls=<n>`.
+- The stop runs as a Hadoop shutdown hook ahead of Hadoop's own hook that closes every cached `FileSystem` (JVM
+  shutdown hooks run at the same time, so running queries failed with `IOException: Filesystem closed` during the
+  drain); without Hadoop on the class path it stays a plain JVM hook.
+- gRPC's Netty logger (`io.grpc.netty`) is set to SEVERE when the stop begins, so calls cut by the stop no longer log
+  a `RejectedExecutionException ... [Shutting down]` WARN stack each.
+
 ### Fixed - storage permission denials, views refused by the storage, refusal SQL twice, keytab-less Kerberos start (STATUS item 37 (a), (c), (d))
 
 - A query whose files the storage refuses (HDFS / Ranger `Permission denied: user=..., access=...`, carried by Hadoop's

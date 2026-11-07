@@ -92,6 +92,10 @@ public class HadoopArrowFlightServer {
     private FlightSecurity flightSecurity;
     private HdfsTicketCache hdfsTicketCache;
     private DistributedComplete distributedComplete;
+    /** Refuses new queries while the server stops and counts the running calls (item 37 (b)). */
+    private final StopGate stopGate = new StopGate();
+    /** gRPC's Netty logger, kept so its level set at stop stays (JUL holds loggers weakly). */
+    private java.util.logging.Logger grpcNettyLogger;
 
     /**
      * Reads the stream compression settings and logs them.
@@ -244,7 +248,8 @@ public class HadoopArrowFlightServer {
             System.setProperty("grpc.netty.server.flowControlWindow", "1048576");
 
             Location location = flightSecurity.location(localhost, port);
-            java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpc = grpcOptions(outboundBudget);
+            java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpc = grpcOptions(outboundBudget)
+                    .andThen(builder -> builder.intercept(stopGate));
             InternalCallIdentity internal = null;
             if (ConfigAdapter.distributedComplete()) {
                 internal = startDistributedComplete();
@@ -287,10 +292,10 @@ public class HadoopArrowFlightServer {
                 LOGGER.info("Prometheus metrics are disabled");
             }
 
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            addShutdownHook(() -> {
                 LOGGER.info("Shutting down server...");
                 stop();
-            }));
+            });
 
             server.awaitTermination();
         } catch (Exception e) {
@@ -309,12 +314,17 @@ public class HadoopArrowFlightServer {
             LOGGER.info("Prometheus metrics stopped");
         }
         if (server != null) {
+            // Calls cut by the stop make gRPC's Netty handler log a WARN stack per write
+            // (RejectedExecutionException [Shutting down]); the drain's summary line says it all.
+            grpcNettyLogger = java.util.logging.Logger.getLogger("io.grpc.netty");
+            grpcNettyLogger.setLevel(java.util.logging.Level.SEVERE);
             int drainSeconds = ConfigAdapter.shutdownDrainSeconds();
             if (drainSeconds > 0 && component != null) {
-                drain(server, component.clusterService(), drainSeconds);
+                drain(server, component.clusterService(), stopGate, drainSeconds);
             } else {
                 server.shutdown();
             }
+            terminate(server);
             LOGGER.info("Flight SQL server stopped");
         }
         if (distributedComplete != null) {
@@ -376,19 +386,84 @@ public class HadoopArrowFlightServer {
      * @return true when every running call ended in time
      */
     static boolean drain(FlightServer server, ClusterService cluster, int seconds) {
+        return drain(server, cluster, null, seconds);
+    }
+
+    /**
+     * Drains a stopping server in this order (item 37 (b)): takes it out of the cluster's pool,
+     * answers new queries {@code UNAVAILABLE 'The server is stopping; retry the query'} through
+     * the gate while the server still accepts calls, waits for the running calls, and only then
+     * shuts the Flight server down; without a gate the server shuts down at once and refuses new
+     * calls at the transport.
+     *
+     * @param server  Flight server
+     * @param cluster cluster service of the server
+     * @param gate    the server's stop gate, or null
+     * @param seconds longest wait for the running calls
+     * @return true when every running call ended in time
+     */
+    static boolean drain(FlightServer server, ClusterService cluster, StopGate gate, int seconds) {
         long t0 = System.nanoTime();
+        long deadline = t0 + TimeUnit.SECONDS.toNanos(seconds);
         cluster.deregister();
-        server.shutdown();
         boolean drained;
         try {
-            drained = server.awaitTermination(seconds, TimeUnit.SECONDS);
+            if (gate != null) {
+                gate.close();
+                LOGGER.info("shutdownDrain=started runningCalls={} (new queries are answered UNAVAILABLE)",
+                        gate.running());
+                gate.awaitIdle(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+            }
+            server.shutdown();
+            drained = server.awaitTermination(Math.max(0, deadline - System.nanoTime()),
+                    TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             drained = false;
         }
-        LOGGER.info("shutdownDrain={} after {} ms (at most {} s)", drained ? "done" : "timeout",
-                (System.nanoTime() - t0) / 1_000_000, seconds);
+        if (gate == null) {
+            LOGGER.info("shutdownDrain={} after {} ms (at most {} s)", drained ? "done" : "timeout",
+                    (System.nanoTime() - t0) / 1_000_000, seconds);
+        } else {
+            LOGGER.info("shutdownDrain={} after {} ms (at most {} s) refusedQueries={} runningCalls={}",
+                    drained ? "done" : "timeout", (System.nanoTime() - t0) / 1_000_000, seconds,
+                    gate.refused(), gate.running());
+        }
         return drained;
+    }
+
+    /**
+     * Ends a shut-down Flight server: calls still running after the drain are cut, and the
+     * server's threads are given a few seconds to end before DuckDB, the stores and the
+     * allocator close under them (item 37 (b): "Memory was leaked by query").
+     *
+     * @param server Flight server, already shut down
+     */
+    private static void terminate(FlightServer server) {
+        try {
+            server.close();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Registers the server's stop with Hadoop's shutdown hooks, ahead of Hadoop's own hook that
+     * closes every cached FileSystem (item 37 (b)): JVM shutdown hooks run at the same time, so
+     * running queries met "IOException: Filesystem closed" during the drain. Without Hadoop on
+     * the class path, a plain JVM hook.
+     *
+     * @param stop the stop
+     */
+    static void addShutdownHook(Runnable stop) {
+        try {
+            long timeoutSeconds = ConfigAdapter.shutdownDrainSeconds() + 30L;
+            org.apache.hadoop.util.ShutdownHookManager.get().addShutdownHook(stop,
+                    org.apache.hadoop.fs.FileSystem.SHUTDOWN_HOOK_PRIORITY + 20, timeoutSeconds,
+                    TimeUnit.SECONDS);
+        } catch (NoClassDefFoundError e) {
+            Runtime.getRuntime().addShutdownHook(new Thread(stop, "flight-shutdown"));
+        }
     }
 
     /**

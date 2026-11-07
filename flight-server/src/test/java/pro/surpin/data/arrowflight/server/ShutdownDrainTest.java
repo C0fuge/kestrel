@@ -109,6 +109,43 @@ class ShutdownDrainTest {
     }
 
     /**
+     * Item 37 (b): with the stop gate, the drain answers new queries {@code UNAVAILABLE 'The
+     * server is stopping; retry the query'} while the server still accepts calls (not a
+     * transport error), lets a running answer finish, and ends once the last call has ended.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void gatedDrainRefusesNewQueriesWithTheStoppingMessage() throws Exception {
+        FlightInfo info = helper.sqlClient().execute(QUERY);
+        long rows = 0;
+        CompletableFuture<Boolean> drained;
+        try (FlightStream stream = helper.sqlClient().getStream(info.getEndpoints().get(0).getTicket())) {
+            assertTrue(stream.next(), "first batch");
+            rows += stream.getRoot().getRowCount();
+            drained = CompletableFuture.supplyAsync(() -> HadoopArrowFlightServer.drain(
+                    helper.server, helper.clusterService, helper.stopGate, 30));
+            long t0 = System.nanoTime();
+            while (!helper.stopGate.isClosed() && System.nanoTime() - t0 < TimeUnit.SECONDS.toNanos(10)) {
+                Thread.sleep(10);
+            }
+            assertTrue(helper.stopGate.isClosed(), "gate closed");
+            FlightRuntimeException refused = assertThrows(FlightRuntimeException.class,
+                    () -> helper.sqlClient().execute(QUERY));
+            assertEquals(FlightStatusCode.UNAVAILABLE, refused.status().code(), refused.getMessage());
+            assertEquals(StopGate.STOPPING_MESSAGE, refused.status().description());
+            assertFalse(drained.isDone(), "the drain ended while an answer was still being read");
+            while (stream.next()) {
+                rows += stream.getRoot().getRowCount();
+            }
+        }
+        assertEquals((long) FILES * ROWS, rows, "the running answer arrived in full");
+        assertTrue(drained.get(10, TimeUnit.SECONDS), "drained in time");
+        assertEquals(0, helper.stopGate.running());
+        assertEquals(1, helper.stopGate.refused());
+    }
+
+    /**
      * Verifies a drain without running calls returns at once.
      */
     @Test

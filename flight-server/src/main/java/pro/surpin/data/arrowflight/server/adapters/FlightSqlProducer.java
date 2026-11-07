@@ -914,7 +914,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /** What a client is told when a query fails because the node stops under it. */
-    static final String STOPPING_MESSAGE = "The server is stopping; retry the query";
+    static final String STOPPING_MESSAGE = pro.surpin.data.arrowflight.server.StopGate.STOPPING_MESSAGE;
 
     /**
      * Finds a task refused by a stopped thread pool among the causes of a failure: the node

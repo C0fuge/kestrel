@@ -48,6 +48,8 @@ public class TestFlightServerHelper implements AutoCloseable {
     public final ExecutionService executionService;
     public final FlightSqlProducer flightSqlProducer;
     public final FlightServer server;
+    /** The server's stop gate, as HadoopArrowFlightServer installs it. */
+    public final StopGate stopGate = new StopGate();
     public final FlightClient flightClient;
     public final FlightSqlClient sqlClient;
     public final Location location;
@@ -141,7 +143,9 @@ public class TestFlightServerHelper implements AutoCloseable {
         FlightServer.Builder serverBuilder = FlightServer.builder(allocator, location, flightSqlProducer)
                 .middleware(ResultModeMiddleware.KEY, new ResultModeMiddleware.Factory())
                 .middleware(StreamCompression.KEY, new StreamCompression.Factory(b.compression))
-                .middleware(FlightSessions.KEY, new FlightSessions(3600, 1000).factory());
+                .middleware(FlightSessions.KEY, new FlightSessions(3600, 1000).factory())
+                .transportHint("grpc.builderConsumer",
+                        (java.util.function.Consumer<io.grpc.netty.NettyServerBuilder>) nb -> nb.intercept(stopGate));
         if (b.password != null) {
             // Basic login once, then a bearer token whose peer identity is the user name.
             String password = b.password;

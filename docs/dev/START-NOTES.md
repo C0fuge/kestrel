@@ -40,7 +40,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 ```
 
 - Stopping a node (SIGTERM): since 2026-10-29 it drains for up to 20 s by default (`shutdownDrainSeconds` /
-  `FLIGHT_SHUTDOWN_DRAIN_SECONDS`, was 0): it leaves the cluster's pool, refuses new calls with `UNAVAILABLE` and
+  `FLIGHT_SHUTDOWN_DRAIN_SECONDS`, was 0): it leaves the cluster's pool, answers new queries `UNAVAILABLE 'The server is
+  stopping; retry the query'` (since item 37) and
   lets its running answers finish. `docker stop` waits only 10 s before SIGKILL: use `docker stop -t 25` (or more,
   or `--stop-timeout 25` on the container); systemd's default `TimeoutStopSec` (90 s) and Kubernetes' grace period
   (30 s) are enough. `0` restores the immediate stop (running answers fail with `INTERNAL`).

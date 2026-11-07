@@ -405,10 +405,12 @@ it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow mem
 `RESOURCE_EXHAUSTED`.
 
 `shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 20, was 0 before 2026-10-29) drains a node that is stopped (SIGTERM,
-`docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then refuses
-new calls with `UNAVAILABLE` (clients retry on another node, partial-mode clients read the endpoint's next
-location) and waits up to that many seconds for its running answers before it closes DuckDB and its cluster
-member; a node without running answers stops at once. With 0 the node stops at once and the answers it is still
+`docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then answers
+new queries with `UNAVAILABLE 'The server is stopping; retry the query'` (clients retry on another node,
+partial-mode clients read the endpoint's next location; DoGet calls of queries already planned on it still run)
+and waits up to that many seconds for its running calls; only then it shuts the Flight server down and closes
+DuckDB, its cluster member and Hadoop's FileSystems (the stop runs as a Hadoop shutdown hook ahead of Hadoop's own
+`FileSystem` close); a node without running answers stops at once. With 0 the node stops at once and the answers it is still
 sending fail with `INTERNAL` (an HTTP/2 stream reset), which clients do not retry. Keep it below the stop timeout of
 the service manager: Kubernetes' grace period is 30 s; `docker stop` waits only 10 s by default, so use `docker stop
 -t 25` (or more), or `--stop-timeout` on the container.
