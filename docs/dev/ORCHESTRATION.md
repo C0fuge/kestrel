@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-07 16:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 17:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). egret
 ACCEPT 06c5adc7d7c9: **SHIP** (run 42351380956). Only the maintainer's stand re-check ("ITEM 37 DONE") is missing.
@@ -44,6 +44,10 @@ No stale locks (marten and heron locks free).
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
 - **EGRET ACCEPT 06c5adc7d7c9 DONE: SHIP** (08:27Z, run 42351380956): checks 1-6 pass in all 4 cells (default/speed x 1/3).
+- Second ACCEPT run 42390647941 (16:18Z, not session-dispatched) overwrote `results/ACCEPT-06c5adc7d7c9.md` with
+  **DO NOT SHIP**, but its 3 failed speed cells failed only the harness layout setup (a spread file left whole on one
+  DataNode; no server query ran) - harness flake, not a server bug. Harness fix fcf1eb3; `only` reruns 42396888303 and
+  42398263063 in progress; new egret task: make the spread layout deterministic.
   No FRESH for 06c5adc7d7c9 (the ALL DONE rule asks for one on the newest pre-release; egret tracks FRESH only on speed-relevant builds).
 
 ## For the maintainer
@@ -58,6 +62,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-07 17:58Z: egret: ACCEPT 06c5adc7d7c9 rerun 42390647941 lost 3 speed cells to a harness layout flake (report file now says DO NOT SHIP, setup-only); harness fix fcf1eb3, reruns 42396888303/42398263063 running. Kestrel unchanged since 13:41Z (item 37 waits for the stand); no new CI/pre-releases; marten (17:41Z)/heron (session 151) idle; no stale locks.
 - 2026-11-07 16:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (16:41Z)/heron (session 150)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 15:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (15:40Z)/heron (session 149)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 14:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (14:41Z)/heron (session 148)/egret (13:27Z) idle; no stale locks.
@@ -97,4 +102,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-05 18:57Z: core batched sp-group (avg) / sp-distinct (2x count DISTINCT) (ed4b26d1; Dev CI 42082455680 + Service hdfs 42082455107 green); package run 42084966934 refused at service gate (main moved); speed cells as opt-in hdfsLocalCopyRoomWaitMillis (f53b9709, CI running); new Open question on its default.
 - 2026-11-05 17:56Z: core lane analysed the egret check-4 failure: no pin leak (18219b9c, the refusal counted the query's own reused copies; Dev CI 42073731097 + Service hdfs 42073730677 green); maintainer gave the exact SQL of the 4 unbatched queries (cb29d02f: avg, two count DISTINCT, speed partial per-ticket); core session (lock 17:40Z) pushed 5b84e0a7, Dev CI 42078627145 running; ITEM 33 not done; marten/heron/egret idle; no stale locks.
 - 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
-- 2026-11-05 15:57Z: core session 15:41Z made no code change (ITEM 33 waits for the stand re-check of 50fe065af50c); Dev CI on main green (42041121733, package 42043316941), service gate 4/4 green on 50fe065a; egret ACCEPT 50fe065af50c running (42055012677); marten (15:41Z)/heron (session 123) idle; no stale locks.
