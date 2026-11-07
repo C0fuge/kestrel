@@ -1,67 +1,64 @@
 # Orchestration status
 
-Status as of **2026-11-07 17:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 18:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). egret
-ACCEPT 06c5adc7d7c9: **SHIP** (run 42351380956). Only the maintainer's stand re-check ("ITEM 37 DONE") is missing.
-The core lane's 13:40Z session (lock/unlock only): "item 37 still waits for the stand, nothing else open"; last code/docs commit 07:42Z.
+Not ALL DONE: **ITEM 37 DONE** (maintainer, stand, `06c5adc7d7c9`). The maintainer opened **ITEM 38** (minor logs/hints:
+KEYRING/KCM ticket-cache start hint, drain waits for late DoGet calls, one-line fallback reason, START-NOTES). Core
+session (lock 18:41Z) pushed b69660b9 with all four parts and dispatched the `package=true` runs on `pkg/b69660b9`; all
+running. Remaining for ALL DONE: ITEM 38 pre-release + "ITEM 38 DONE"; the routine's original criterion (items 26/27,
+marten/heron IMPROVEMENTS DONE) is long met; no egret FRESH on the newest pre-release (egret runs ACCEPT, not FRESH, on
+log-only builds).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | b937ad42 (lock/unlock), 13:41Z (~195 min); last real commit 07:42Z | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
+| core (`STATUS.md`) | ITEM 38 (1)-(4) in code (b69660b9), packaging | b69660b9, 18:47Z (~10 min) | taken 18:41Z (active) | main Dev CI 42403022881 running; package Dev CI 42403052289 (pkg/b69660b9) running |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
 
-No stale locks (marten and heron locks free).
+No stale locks (marten and heron locks free). Newest completed Dev CI on main: 42343340513 (4264bed7) red at the service
+gate (process; resolved by the `pkg/` branch flow, already noted); 42403022881 on b69660b9 running.
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42348149036 | 06c5adc7 (pkg) | pass |
-| service-hdfs.yml | 42348150642 | 06c5adc7 (pkg) | pass |
-| service-security.yml | 42348152343 | 06c5adc7 (pkg) | pass |
-| service-stores.yml | 42348154085 | 06c5adc7 (pkg) | pass |
+| service-cluster.yml | 42403042241 | b69660b9 (pkg) | running (prev 42348149036 06c5adc7 pass) |
+| service-hdfs.yml | 42403044908 | b69660b9 (pkg) | running (prev 42348150642 pass) |
+| service-security.yml | 42403047248 | b69660b9 (pkg) | running (prev 42348152343 pass) |
+| service-stores.yml | 42403049750 | b69660b9 (pkg) | running (prev 42348154085 pass) |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-06c5adc7d7c9` (2026-11-07 07:02Z): item 37 (a)-(d); stand re-check pending; egret ACCEPT SHIP.
-- `server-1.0.0-6384bc55b173` (2026-11-06 18:36Z): items 35, 36 (1)-(5); stand: item 35 done, rest -> item 37; egret ACCEPT SHIP.
-- `server-1.0.0-5a8e831eade2` (2026-11-06 17:35Z): items 35, 36 partial.
+- `server-1.0.0-06c5adc7d7c9` (2026-11-07 07:02Z): item 37 (a)-(d); **ITEM 37 DONE on the stand**; egret ACCEPT SHIP (twice).
+- `server-1.0.0-6384bc55b173` (2026-11-06 18:36Z): items 35, 36; egret ACCEPT SHIP.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:30Z): item 34; egret FRESH + ACCEPT done.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 16:41Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 18:40Z "finish mode, nothing new".
   Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 150 (16:51Z): nothing open.
-- Neither has checked a server build newer than `deafc861cce3` (their `e2e-assets`/`m4-assets` were not refreshed).
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 152 (18:51Z): nothing open.
+- Neither has checked a server build newer than `deafc861cce3`.
 
 ## egret
 
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **EGRET ACCEPT 06c5adc7d7c9 DONE: SHIP** (08:27Z, run 42351380956): checks 1-6 pass in all 4 cells (default/speed x 1/3).
-- Second ACCEPT run 42390647941 (16:18Z, not session-dispatched) overwrote `results/ACCEPT-06c5adc7d7c9.md` with
-  **DO NOT SHIP**, but its 3 failed speed cells failed only the harness layout setup (a spread file left whole on one
-  DataNode; no server query ran) - harness flake, not a server bug. Harness fix fcf1eb3; `only` reruns 42396888303 and
-  42398263063 in progress; new egret task: make the spread layout deterministic.
-  No FRESH for 06c5adc7d7c9 (the ALL DONE rule asks for one on the newest pre-release; egret tracks FRESH only on speed-relevant builds).
+- **ACCEPT 06c5adc7d7c9 recheck DONE: SHIP** (rerun 42396888303 after harness layout fix fcf1eb3): all checks pass in
+  all 4 cells; the earlier DO NOT SHIP file was a harness flake. Open egret task: make the spread layout deterministic.
 
 ## For the maintainer
 
-- **Re-check `server-1.0.0-06c5adc7d7c9` on the stand** (item 37): Ranger denial -> PERMISSION_DENIED + one
-  `query=denied` WARN, answers again after the policy is back; node stop under load (`result=stopping`, no
-  Netty/`Filesystem closed` stacks, no allocator leak); refusal WARN with the SQL once; keytab start without ticket
-  cache -> WARN at start. Then "ITEM 37 DONE".
+- Nothing blocking. Core lane is packaging ITEM 38; after the pre-release, a short stand check and "ITEM 38 DONE".
 - **Open question (item 35):** default budget `distributedCompletePeerStreams` (one per 128 MiB direct memory).
 - **marten open question:** TPC-H q16 SF1 slowdown from join-key pushdown - fix or leave.
-- ALL DONE criterion note: this routine's items 26/27 are long done; the core lane is now on item 37.
 
 ## History
 
+- 2026-11-07 18:57Z: maintainer wrote ITEM 37 DONE (stand, 06c5adc7d7c9, ~30k answers none wrong) and opened ITEM 38 (minor log/hint follow-ups); core session (lock 18:41Z, active) pushed b69660b9 (item 38 (1)-(4)) and dispatched package runs on pkg/b69660b9 (Dev CI 42403052289 + 4 service runs) plus main Dev CI 42403022881, all running; egret ACCEPT 06c5adc7d7c9 recheck SHIP (42396888303, after harness fix fcf1eb3); marten (18:40Z)/heron (session 152) idle; no stale locks.
 - 2026-11-07 17:58Z: egret: ACCEPT 06c5adc7d7c9 rerun 42390647941 lost 3 speed cells to a harness layout flake (report file now says DO NOT SHIP, setup-only); harness fix fcf1eb3, reruns 42396888303/42398263063 running. Kestrel unchanged since 13:41Z (item 37 waits for the stand); no new CI/pre-releases; marten (17:41Z)/heron (session 151) idle; no stale locks.
 - 2026-11-07 16:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (16:41Z)/heron (session 150)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 15:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (15:40Z)/heron (session 149)/egret (15:26Z) idle; no stale locks.
@@ -101,4 +98,3 @@ No stale locks (marten and heron locks free).
 - 2026-11-05 19:56Z: core (lock 18:41Z, active) on ITEM 33 speed cells: room wait reworked (95d0234f, 1e82115a, 70ffac12); Dev CI 42093460272 on 1e82115a red in LocalCopyCacheTest.ticketsOfOneQueryTakeTheRoomInTurnsWhileCopying (own new test, fixed by 70ffac12, Dev CI 42096491904 running); Service hdfs plain-speed cell red (known open, reported as such); no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-05 18:57Z: core batched sp-group (avg) / sp-distinct (2x count DISTINCT) (ed4b26d1; Dev CI 42082455680 + Service hdfs 42082455107 green); package run 42084966934 refused at service gate (main moved); speed cells as opt-in hdfsLocalCopyRoomWaitMillis (f53b9709, CI running); new Open question on its default.
 - 2026-11-05 17:56Z: core lane analysed the egret check-4 failure: no pin leak (18219b9c, the refusal counted the query's own reused copies; Dev CI 42073731097 + Service hdfs 42073730677 green); maintainer gave the exact SQL of the 4 unbatched queries (cb29d02f: avg, two count DISTINCT, speed partial per-ticket); core session (lock 17:40Z) pushed 5b84e0a7, Dev CI 42078627145 running; ITEM 33 not done; marten/heron/egret idle; no stale locks.
-- 2026-11-05 16:56Z: egret ACCEPT 50fe065af50c DONE: DO NOT SHIP (check 4 fails in all 4 cells: copies of finished queries stay pinned, sp-group/sp-distinct refused, speed partial 1-copy queries regress) -> orchestrator bug-first note at the top of core Next steps; core idle since 15:41Z unlock; Dev CI on main green, service gate 4/4 green on 50fe065a; marten/heron idle; no stale locks.
