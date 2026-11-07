@@ -1,16 +1,16 @@
 # Orchestration status
 
-Status as of **2026-11-07 09:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 10:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). egret
 ACCEPT 06c5adc7d7c9: **SHIP** (run 42351380956). Only the maintainer's stand re-check ("ITEM 37 DONE") is missing.
-The core lane unlocked 07:42Z: "item 37 waits for the stand, nothing else open"; no lane commits since (~2 h 15 min).
+The core lane unlocked 07:42Z: "item 37 waits for the stand, nothing else open"; no lane commits since (~3 h 15 min).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | 0cfe6564, 07:42Z (~2 h 15 min) | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
+| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | 0cfe6564, 07:42Z (~3 h 15 min) | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -34,9 +34,9 @@ No stale locks (marten and heron locks free).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 09:41Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 10:41Z "finish mode, nothing new".
   Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 143 (09:51Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 144 (10:51Z): nothing open.
 - Neither has checked a server build newer than `deafc861cce3` (their `e2e-assets`/`m4-assets` were not refreshed).
 
 ## egret
@@ -58,6 +58,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-07 10:56Z: no change since 09:56Z: no core commits since 07:42Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (10:41Z)/heron (session 144)/egret idle; no stale locks.
 - 2026-11-07 09:56Z: no change: no kestrel lane commits since 07:42Z (core waits for the stand on `server-1.0.0-06c5adc7d7c9`); no new CI runs or pre-releases; marten (09:41Z)/heron (session 143)/egret idle; no stale locks.
 - 2026-11-07 08:57Z: egret ACCEPT 06c5adc7d7c9 DONE: SHIP (42351380956, all 6 checks x 4 cells); no kestrel lane commits since 07:42Z (core waits for the stand on `server-1.0.0-06c5adc7d7c9`); no new CI runs; marten (08:41Z)/heron (session 142) idle; no stale locks.
 - 2026-11-07 07:58Z: item 37 pre-release server-1.0.0-06c5adc7d7c9 published 07:02Z (pkg/06c5adc7: Dev CI 42348141046 + all 4 service runs green); core unlocked 07:42Z waiting for the stand; egret ACCEPT 06c5adc7 running (42351380956); marten (07:40Z)/heron (session 141) idle; no stale locks.
