@@ -1,16 +1,16 @@
 # Orchestration status
 
-Status as of **2026-11-07 07:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-07 08:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). Waiting
-for the maintainer's stand re-check ("ITEM 37 DONE") and egret ACCEPT 06c5adc7d7c9 (run 42351380956, running).
-The core lane unlocked 07:42Z: "item 37 waits for the stand, nothing else open".
+Not ALL DONE: item 37 pre-release **`server-1.0.0-06c5adc7d7c9` is published** (07:02Z, all package runs green). egret
+ACCEPT 06c5adc7d7c9: **SHIP** (run 42351380956). Only the maintainer's stand re-check ("ITEM 37 DONE") is missing.
+The core lane unlocked 07:42Z: "item 37 waits for the stand, nothing else open"; no commits since.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | 0cfe6564, 07:42Z (~15 min) | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
+| core (`STATUS.md`) | ITEM 37 (a)-(d) done and packaged; waits for the stand | 0cfe6564, 07:42Z (~75 min) | free | newest main Dev CI 42343340513 (4264bed7) red at service gate (process, already noted and resolved via `pkg/` branch); package Dev CI 42348141046 (pkg/06c5adc7) green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -28,22 +28,23 @@ No stale locks (marten and heron locks free).
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-06c5adc7d7c9` (2026-11-07 07:02Z): item 37 (a)-(d); stand re-check pending; egret ACCEPT running.
+- `server-1.0.0-06c5adc7d7c9` (2026-11-07 07:02Z): item 37 (a)-(d); stand re-check pending; egret ACCEPT SHIP.
 - `server-1.0.0-6384bc55b173` (2026-11-06 18:36Z): items 35, 36 (1)-(5); stand: item 35 done, rest -> item 37; egret ACCEPT SHIP.
 - `server-1.0.0-5a8e831eade2` (2026-11-06 17:35Z): items 35, 36 partial.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 07:40Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; sessions to 08:41Z "finish mode, nothing new".
   Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 141 (07:51Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED (session 135); session 142 (08:51Z): nothing open.
 - Neither has checked a server build newer than `deafc861cce3` (their `e2e-assets`/`m4-assets` were not refreshed).
 
 ## egret
 
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **EGRET ACCEPT 06c5adc7d7c9 RUNNING** (07:28Z, run 42351380956, in progress). Previous: ACCEPT 6384bc55b173 SHIP.
+- **EGRET ACCEPT 06c5adc7d7c9 DONE: SHIP** (08:27Z, run 42351380956): checks 1-6 pass in all 4 cells (default/speed x 1/3).
+  No FRESH for 06c5adc7d7c9 (the ALL DONE rule asks for one on the newest pre-release; egret tracks FRESH only on speed-relevant builds).
 
 ## For the maintainer
 
@@ -57,6 +58,7 @@ No stale locks (marten and heron locks free).
 
 ## History
 
+- 2026-11-07 08:57Z: egret ACCEPT 06c5adc7d7c9 DONE: SHIP (42351380956, all 6 checks x 4 cells); no kestrel lane commits since 07:42Z (core waits for the stand on `server-1.0.0-06c5adc7d7c9`); no new CI runs; marten (08:41Z)/heron (session 142) idle; no stale locks.
 - 2026-11-07 07:58Z: item 37 pre-release server-1.0.0-06c5adc7d7c9 published 07:02Z (pkg/06c5adc7: Dev CI 42348141046 + all 4 service runs green); core unlocked 07:42Z waiting for the stand; egret ACCEPT 06c5adc7 running (42351380956); marten (07:40Z)/heron (session 141) idle; no stale locks.
 - 2026-11-07 06:57Z: core session (lock 06:41Z) answered the gate note: package-release.sh on a fixed pkg/<sha> branch (aaefbd08), item 37 package dispatched on pkg/06c5adc7 (Dev CI 42348141046 running; cluster/stores green, hdfs/security running); no new pre-release; marten (06:40Z)/heron (session 140)/egret idle; no stale locks.
 - 2026-11-07 05:55Z: core did item 37 (a)-(d) in code/CI (33347f10, 35d9420a; Dev CI 42342174052 + Service hdfs 42342173100 green, all 10 cells) and unlocked 05:41Z waiting for the stand; but its `package=true` Dev CI 42343340513 on 4264bed7 failed at the service gate (no service runs on 4264bed7, main moved) -> no pre-release; orchestrator bug-first note at the top of core Next steps; marten (05:41Z)/heron (session 139)/egret idle; no stale locks.
