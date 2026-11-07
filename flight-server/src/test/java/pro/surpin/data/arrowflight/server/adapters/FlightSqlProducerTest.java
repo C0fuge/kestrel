@@ -778,6 +778,101 @@ class FlightSqlProducerTest {
         assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
     }
 
+    /** Stands in for Hadoop's RemoteException (an IOException). */
+    static final class RemoteException extends java.io.IOException {
+        private static final long serialVersionUID = 1L;
+
+        RemoteException(String message) {
+            super(message);
+        }
+    }
+
+    /** Stands in for Hadoop's AccessControlException (an IOException). */
+    static final class AccessControlException extends java.io.IOException {
+        private static final long serialVersionUID = 1L;
+
+        AccessControlException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Item 37 (a): storage refusals (Hadoop's RemoteException / AccessControlException, DuckDB's
+     * "Permission denied" IO error) are denials; other failures are not.
+     */
+    @Test
+    void storageRefusalsAreDenials() {
+        String hdfs = "Permission denied: user=flight, access=EXECUTE, inode=\"/data\":hdfs:hdfs:drwxr-x---";
+        FlightRuntimeException remote = FlightSqlProducer.denial(new RuntimeException("wrapped",
+                new RemoteException(hdfs)));
+        assertNotNull(remote);
+        assertEquals(FlightStatusCode.UNAUTHORIZED, remote.status().code());
+        assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, remote.status().description());
+        assertEquals("RemoteException: " + hdfs, FlightSqlProducer.storageDenial(remote.getCause()));
+        assertNotNull(FlightSqlProducer.denial(new AccessControlException(hdfs)));
+        assertNull(FlightSqlProducer.denial(new AccessControlException(
+                "Client cannot authenticate via:[TOKEN, KERBEROS]")), "a failed login is the server's");
+        assertNotNull(FlightSqlProducer.denial(new IllegalStateException("x", new java.sql.SQLException(
+                "Table s.t cannot be read now: IO Error: hdfs open failed: Permission denied"))));
+        assertNotNull(FlightSqlProducer.denial(new java.nio.file.AccessDeniedException("/data/f")));
+        assertNull(FlightSqlProducer.denial(new java.io.IOException("Connection refused")));
+        assertNull(FlightSqlProducer.denial(new IllegalArgumentException("Permission denied")),
+                "client errors are not storage refusals");
+        assertNull(FlightSqlProducer.storageDenial(null));
+    }
+
+    /**
+     * Item 37 (a): a query whose files the storage refuses (HDFS under Ranger) is sent to the
+     * client as PERMISSION_DENIED, not INTERNAL, and logs one WARN line naming the storage's
+     * reason, without a stack.
+     */
+    @Test
+    void storageRefusalOfAnExecutionIsUnauthorizedWithOneWarnLine() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        ClusterService clusterService = mock(ClusterService.class);
+        FlightProducer.ServerStreamListener listener =
+                mock(FlightProducer.ServerStreamListener.class);
+        ByteString handle = ByteString.copyFromUtf8("storage-denied-query");
+        HandleState state = new HandleState(
+                "select * from tpch.lineitem", new String[]{"part.parquet"}, null, 0L);
+        when(clusterService.resolveEndpointHandle(handle.toByteArray())).thenReturn(state);
+        doThrow(new RuntimeException("open failed", new RemoteException(
+                "Permission denied: user=flight, access=EXECUTE, inode=\"/data/parquet/tpch\"")))
+                .when(executionService).readParquet(eq(allocator), eq(state.query()),
+                        eq(state.filePaths()), eq(listener), anyBoolean(),
+                        any(ExecutionPathTracker.class));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                clusterService);
+
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
+                    .setStatementHandle(handle).build(), mock(FlightProducer.CallContext.class),
+                    listener);
+        } finally {
+            System.setErr(err);
+        }
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(listener).error(error.capture());
+        FlightRuntimeException reported = assertInstanceOf(
+                FlightRuntimeException.class, error.getValue());
+        assertEquals(FlightStatusCode.UNAUTHORIZED, reported.status().code());
+        assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, reported.status().description());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        List<String> failed = text.lines().filter(l -> l.contains("execution=failed")).toList();
+        assertEquals(1, failed.size(), text);
+        assertTrue(failed.get(0).contains("WARN") && failed.get(0).contains("result=denied")
+                && failed.get(0).contains("error='storage: RemoteException: Permission denied"),
+                failed.get(0));
+        assertTrue(!text.contains("\tat ") && !text.contains("ERROR"), text);
+    }
+
     /**
      * Verifies a query whose execution meets a thread pool stopped by a node stop is sent to the
      * client as UNAVAILABLE, with one WARN line and no stack (item 36 (4): ~200 lines of

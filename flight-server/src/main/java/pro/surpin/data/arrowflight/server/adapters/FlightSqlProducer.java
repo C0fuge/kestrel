@@ -749,7 +749,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             String stopping = denied == null && memory == null && noRoom == null ? stopping(e) : null;
             if (denied != null) {
                 // Access denied: the client's permissions, not a server fault (item 36 (3)).
-                failureReason = denied.status().description();
+                String storage = storageDenial(denied.getCause());
+                failureReason = storage == null ? denied.status().description() : "storage: " + storage;
                 LOGGER.warn("qid={} node={} thread={} execution=failed server={} elapsedMs={} files={} result=denied error='{}'",
                         qid, LogUtil.node(), Thread.currentThread().getName(),
                         serverUri, elapsed, filePaths.length, LogUtil.oneLine(failureReason));
@@ -866,6 +867,49 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 return flight;
             }
         }
+        if (storageDenial(e) != null) {
+            // The storage refused the server's read (Ranger / HDFS permissions, item 37 (a)): the
+            // client is told it may not read the table; the log line names the storage's reason.
+            return CallStatus.UNAUTHORIZED.withDescription(STORAGE_DENIED_MESSAGE).withCause(e)
+                    .toRuntimeException();
+        }
+        return null;
+    }
+
+    /** What a client is told when the storage refuses to read a table's files. */
+    static final String STORAGE_DENIED_MESSAGE =
+            "Schema or table access denied: the storage refused to read the table's files";
+
+    /** A storage's permission denial in an error text (HDFS, DuckDB's IO errors, local files). */
+    private static final java.util.regex.Pattern PERMISSION_DENIED_TEXT =
+            java.util.regex.Pattern.compile("Permission denied", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Finds a storage's refusal to read files among the causes of a failure (item 37 (a)):
+     * Java's {@code AccessDeniedException}, or a "Permission denied" text in a storage or DuckDB
+     * error: Hadoop's {@code AccessControlException}, the {@code RemoteException} that carries
+     * it from the NameNode (both IOExceptions), an HDFS read through the hadoopfs extension.
+     *
+     * @param e failure
+     * @return the storage's reason on one line, or null when the failure is not one
+     */
+    static String storageDenial(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof FlightRuntimeException) {
+                continue;
+            }
+            String message = String.valueOf(t.getMessage());
+            // Hadoop's AccessControlException (an IOException) also reports a failed Kerberos
+            // login ("Client cannot authenticate via ..."): a server fault, not the client's
+            // permissions, so only its "Permission denied" text counts.
+            boolean storageError = t instanceof IOException || t instanceof java.sql.SQLException
+                    || message.contains("IO Error");
+            if (t instanceof java.nio.file.AccessDeniedException
+                    || storageError && PERMISSION_DENIED_TEXT.matcher(message).find()) {
+                return t.getClass().getSimpleName() + ": "
+                        + LogUtil.oneLine(DuckDbErrors.errorLine(message));
+            }
+        }
         return null;
     }
 
@@ -895,8 +939,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      * @param query client SQL
      */
     private static void logDenial(FlightRuntimeException denial, String query) {
+        String storage = storageDenial(denial.getCause());
         LOGGER.warn("qid={} node={} query=denied reason='{}' query='{}'", LogUtil.qid(), LogUtil.node(),
-                denial.status().description(), LogUtil.oneLine(query));
+                storage == null ? denial.status().description() : "storage: " + storage,
+                LogUtil.oneLine(query));
     }
 
     private static boolean isFileNotFound(Throwable e) {
@@ -1226,6 +1272,12 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     .withDescription(e.getMessage())
                     .withCause(e).toRuntimeException();
         } catch (IOException e) {
+            FlightRuntimeException denied = denial(e);
+            if (denied != null) {
+                // The storage refused to list the table's files (item 37 (a)).
+                logDenial(denied, query);
+                throw denied;
+            }
             // Name the cause: cluster state the client may wait out (UNAVAILABLE), a table
             // without files (NOT_FOUND), anything else (INTERNAL).
             String message = String.valueOf(e.getMessage());

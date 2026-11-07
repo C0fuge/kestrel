@@ -287,4 +287,42 @@ class HdfsTicketCacheTest {
         assertEquals(0, process.exitValue(), String.join(" ", command) + ": " + output);
         return output;
     }
+
+    /**
+     * Item 37 (d): a server without a keytab login of its own warns at start when libhdfs3 uses
+     * Kerberos and the ticket cache the extension reads is missing; it is quiet when the cache
+     * is there, when HDFS does not use Kerberos, and for a keyring cache it cannot check.
+     *
+     * @param dir temporary directory
+     * @throws IOException when the cache file cannot be written
+     */
+    @Test
+    void warnsWhenKerberosHdfsHasNoTicketCache(@org.junit.jupiter.api.io.TempDir Path dir)
+            throws IOException {
+        Path cache = dir.resolve("krb5cc_test");
+        Map<String, String> kerberos = new HashMap<>(Map.of(
+                HdfsTicketCache.LIBHDFS3_AUTHENTICATION, "Kerberos",
+                HdfsTicketCache.LIBHDFS3_TICKET_CACHE, cache.toString()));
+
+        Optional<String> warning = HdfsTicketCache.missingTicketCache(kerberos, null, null, 1000);
+        assertTrue(warning.isPresent());
+        assertTrue(warning.get().startsWith("hdfs=noTicketCache"), warning.get());
+        assertTrue(warning.get().contains(cache.toString()), warning.get());
+        assertTrue(warning.get().contains("hdfsKerberosKeytab"), warning.get());
+
+        Files.write(cache, new byte[] {5, 4});
+        assertTrue(HdfsTicketCache.missingTicketCache(kerberos, null, null, 1000).isEmpty());
+
+        Map<String, String> simple = Map.of(HdfsTicketCache.LIBHDFS3_AUTHENTICATION, "simple");
+        assertTrue(HdfsTicketCache.missingTicketCache(simple, null, null, 1000).isEmpty());
+        assertTrue(HdfsTicketCache.missingTicketCache(Map.of(), null, null, 1000).isEmpty());
+
+        Map<String, String> keyring = Map.of(HdfsTicketCache.LIBHDFS3_AUTHENTICATION, "kerberos");
+        assertTrue(HdfsTicketCache.missingTicketCache(keyring, null, "KEYRING:persistent:%{uid}", 1000)
+                .isEmpty());
+        Optional<String> byEnv = HdfsTicketCache.missingTicketCache(keyring,
+                "FILE:" + dir.resolve("absent"), null, 1000);
+        assertTrue(byEnv.isPresent() && byEnv.get().contains(dir.resolve("absent").toString()),
+                byEnv.toString());
+    }
 }

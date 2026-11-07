@@ -101,6 +101,27 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - storage permission denials, views refused by the storage, refusal SQL twice, keytab-less Kerberos start (STATUS item 37 (a), (c), (d))
+
+- A query whose files the storage refuses (HDFS / Ranger `Permission denied: user=..., access=...`, carried by Hadoop's
+  `RemoteException` / `AccessControlException`, or DuckDB's `IO Error ... Permission denied`) is answered
+  `PERMISSION_DENIED 'Schema or table access denied: the storage refused to read the table's files'` instead of
+  `INTERNAL: Query execution failed: RemoteException: ...`, and logs one WARN line (`execution=failed ...
+  result=denied error='storage: ...'` or `query=denied reason='storage: ...'`) without a stack; planning a query in
+  parts maps it the same way. A failed Kerberos login (`AccessControlException: Client cannot authenticate via ...`)
+  stays a server error. Status change for storage refusals only.
+- A catalog view DuckDB could not create (its first file refused or unreachable) is created again on the next query
+  of that thread's DuckDB (`views=created view=... after='...'`), so a table answers on the first query after its
+  permission is back instead of after the next catalog change; until then a query of it is told
+  `Table <view> cannot be read now: <DuckDB's error>` (a storage denial: PERMISSION_DENIED) instead of
+  `Catalog Error: Table with name ... does not exist!`.
+- The multi-table refusal reason is `Can only select from ONE table, but got <n> tables`, without the rewritten SQL,
+  so the `query=refused mode=partial` WARN line carries the SQL once (in `query='...'`).
+- A server with no keytab login of its own (`hdfsKerberos*` unset) whose LIBHDFS3_CONF sets
+  `hadoop.security.authentication=kerberos` logs a WARN `hdfs=noTicketCache` at start when the ticket cache the
+  hadoopfs extension reads does not exist or cannot be read (every HDFS read through DuckDB would fail with
+  `Unable to connect to HDFS`), naming the cache and the fix. Keyring / KCM caches are not checked.
+
 ### Changed - log noise on node stop, pool queueing and copy-answered tables (STATUS item 36 (4))
 
 - A query that meets a thread pool already stopped by a node stop (`RejectedExecutionException` under the execution,

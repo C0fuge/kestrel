@@ -151,4 +151,23 @@ class ParquetQueryParserTest {
         assertNotNull(p.duckDbSql, "JOIN query should have duckDbSql");
         assertFalse(p.duckDbSql.isBlank(), "duckDbSql should not be blank");
     }
+
+    /**
+     * Verifies the multi-table refusal does not repeat the (rewritten) SQL in its reason: the
+     * refusal log line carries the client's SQL once (item 37 (c)).
+     */
+    @Test
+    void multiTableRefusalDoesNotRepeatTheSql() {
+        RuntimeException e = assertThrows(RuntimeException.class,
+                () -> ParquetQueryParser.parse("SELECT count(*) FROM tpch.lineitem l, tpch.orders o"
+                        + " WHERE l.l_orderkey = o.o_orderkey"));
+        Throwable root = e;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        String reason = String.valueOf(root.getMessage());
+        assertTrue(reason.startsWith("Can only select from ONE table"), reason);
+        assertFalse(reason.toLowerCase(java.util.Locale.ROOT).contains("count("), reason);
+        assertFalse(reason.contains("lineitem"), reason);
+    }
 }

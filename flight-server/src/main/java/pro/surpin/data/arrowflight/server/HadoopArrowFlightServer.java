@@ -173,6 +173,11 @@ public class HadoopArrowFlightServer {
         LOGGER.info("Storage: kind={} shared={} locality={}",
                 store.kind(), store.shared(), store.hasLocality());
         if ("hdfs".equals(store.kind())) {
+            if (hdfsTicketCache == null) {
+                // No keytab login of the server's own: the extension needs a ticket from kinit.
+                HdfsTicketCache.missingTicketCache(ConfigSource.system(),
+                        libhdfs3Properties(System.getenv("LIBHDFS3_CONF"))).ifPresent(LOGGER::warn);
+            }
             HdfsShortCircuit.Settings shortCircuit = HdfsShortCircuit.resolve(
                     config.duckDbHdfsShortcircuit(), config.duckDbHdfsDomainSocketPath(),
                     libhdfs3Properties(System.getenv("LIBHDFS3_CONF")), hadoopConfig);

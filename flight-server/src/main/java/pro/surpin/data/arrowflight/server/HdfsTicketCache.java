@@ -122,6 +122,57 @@ final class HdfsTicketCache implements AutoCloseable {
         return Optional.of(cache);
     }
 
+    /** The libhdfs3 setting that turns Kerberos on for HDFS. */
+    static final String LIBHDFS3_AUTHENTICATION = "hadoop.security.authentication";
+
+    /**
+     * Checks, for a server that writes no ticket cache itself, that the hadoopfs extension finds
+     * one when libhdfs3 uses Kerberos (item 37 (d)): without it the server starts and every
+     * table's view fails with "Unable to connect to HDFS".
+     *
+     * @param props configuration source
+     * @param libhdfs3 properties of the LIBHDFS3_CONF file
+     * @return the warning to log, empty when the check passes or does not apply
+     */
+    static Optional<String> missingTicketCache(ConfigSource props, Map<String, String> libhdfs3) {
+        return missingTicketCache(libhdfs3, props.environment("KRB5CCNAME").orElse(null),
+                krb5DefaultCacheName(props.environment("KRB5_CONFIG").orElse(null)), currentUid());
+    }
+
+    /**
+     * Checks that the ticket cache libhdfs3 reads exists and is readable when libhdfs3 uses
+     * Kerberos; caches that are not files (keyring, KCM) are not checked.
+     *
+     * @param libhdfs3 properties of the LIBHDFS3_CONF file
+     * @param krb5ccname the KRB5CCNAME environment value, or null
+     * @param krb5Default default_ccache_name of the krb5 configuration, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @return the warning to log, empty when the check passes or does not apply
+     */
+    static Optional<String> missingTicketCache(Map<String, String> libhdfs3, String krb5ccname,
+            String krb5Default, long uid) {
+        if (!"kerberos".equalsIgnoreCase(String.valueOf(libhdfs3.get(LIBHDFS3_AUTHENTICATION)).trim())) {
+            return Optional.empty();
+        }
+        Path cache;
+        try {
+            cache = extensionCache(libhdfs3.get(LIBHDFS3_TICKET_CACHE), krb5ccname, krb5Default, uid);
+        } catch (IllegalArgumentException e) {
+            // A keyring or KCM cache filled by kinit: libkrb5 reads it, this server cannot check it.
+            return Optional.empty();
+        }
+        if (cache != null && Files.isReadable(cache)) {
+            return Optional.empty();
+        }
+        return Optional.of("hdfs=noTicketCache: HDFS uses Kerberos (" + LIBHDFS3_AUTHENTICATION
+                + "=kerberos in LIBHDFS3_CONF), but the ticket cache the hadoopfs extension reads ("
+                + (cache == null ? "unknown: the user id is unknown" : cache)
+                + ") does not exist or cannot be read, so every HDFS read through DuckDB fails"
+                + " ('Unable to connect to HDFS'): set hdfsKerberosPrincipal and hdfsKerberosKeytab"
+                + " so the server logs in and keeps that cache fresh, or run kinit for the server's"
+                + " user before the start");
+    }
+
     /**
      * Resolves the settings. Without principal and keytab the writer is off; the cache file
      * defaults to the one the extension reads: LIBHDFS3_CONF's

@@ -2304,6 +2304,54 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Item 37 (a): a view that could not be created (its files refused by the storage) is created
+     * on the next query once its files can be read, and a query of it meanwhile learns why the
+     * table cannot be read instead of "Table ... does not exist".
+     *
+     * @param dir temporary directory
+     * @throws Exception when DuckDB fails otherwise
+     */
+    @Test
+    void aFailedViewIsCreatedAgainAndExplained(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path file = dir.resolve("f.parquet");
+        String create = "CREATE OR REPLACE VIEW \"s\".\"lineitem\" AS SELECT * FROM read_parquet(['"
+                + file + "'])";
+        java.util.Map<String, DuckDbAdapter.FailedView> failed = new java.util.LinkedHashMap<>();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
+            DuckDbAdapter.applyViews(conn, List.of(), List.of("CREATE SCHEMA IF NOT EXISTS s", create),
+                    List.of("DROP SCHEMA IF EXISTS s CASCADE"), failed);
+            assertEquals(List.of("\"s\".\"lineitem\""), List.copyOf(failed.keySet()));
+
+            java.sql.SQLException missing;
+            try (Statement s = conn.createStatement()) {
+                missing = assertThrows(java.sql.SQLException.class,
+                        () -> s.executeQuery("SELECT count(*) FROM s.lineitem"));
+            }
+            Exception explained = DuckDbAdapter.explainMissingView(failed, missing);
+            assertTrue(explained.getMessage().startsWith("Table \"s\".\"lineitem\" cannot be read now: IO Error"),
+                    explained.getMessage());
+            assertNull(explained.getCause());
+            Exception other = new java.sql.SQLException("Catalog Error: Table with name orders does not exist!");
+            assertSame(other, DuckDbAdapter.explainMissingView(failed, other));
+
+            DuckDbAdapter.retryFailedViews(conn, failed);
+            assertEquals(1, failed.size(), "still unreadable");
+
+            try (Statement s = conn.createStatement()) {
+                s.execute("COPY (SELECT 42 AS x) TO '" + file + "' (FORMAT parquet)");
+            }
+            DuckDbAdapter.retryFailedViews(conn, failed);
+            assertTrue(failed.isEmpty());
+            try (Statement s = conn.createStatement(); ResultSet rows = s.executeQuery(
+                    "SELECT x FROM s.lineitem")) {
+                assertTrue(rows.next());
+                assertEquals(42, rows.getInt(1));
+            }
+        }
+    }
+
+    /**
      * Item 36 (2): the views=createFailed line names DuckDB's error, not the driver's pending-result
      * line in front of it.
      *

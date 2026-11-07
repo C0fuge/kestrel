@@ -2544,7 +2544,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                     startListener));
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
-            throw e;
+            throw explainMissingView(session.failedViews, e);
         }
     }
 
@@ -2566,11 +2566,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        if (session.viewsVersion != views.version()) {
-            session.viewDrops = applyViews(session.conn, session.viewDrops,
-                    views.dataStatements(), views.dropStatements());
-            session.viewsVersion = views.version();
-        }
+        syncViews(session, views);
         // Parse first: preparing a text with several statements runs all but the last one.
         checkSingleQuery(session, sql);
         if (readsLocalCopies(sql)) {
@@ -2610,11 +2606,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = session();
         try {
-            if (session.viewsVersion != views.version()) {
-                session.viewDrops = applyViews(session.conn, session.viewDrops,
-                        views.dataStatements(), views.dropStatements());
-                session.viewsVersion = views.version();
-            }
+            syncViews(session, views);
             requireNoSessionCatalog(requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
             try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
                 requireQuery(sql, ps);
@@ -2628,7 +2620,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
-            throw e;
+            throw explainMissingView(session.failedViews, e);
         }
     }
 
@@ -3144,6 +3136,25 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     static List<String> applyViews(Connection conn, List<String> oldDrops,
             List<String> statements, List<String> drops) throws java.sql.SQLException {
+        return applyViews(conn, oldDrops, statements, drops, new LinkedHashMap<>());
+    }
+
+    /**
+     * Replaces the catalog views of a connection and remembers the views that could not be
+     * created, so the next query creates them again (item 37 (a)).
+     *
+     * @param conn       DuckDB connection
+     * @param oldDrops   statements that remove the previous views
+     * @param statements CREATE SCHEMA / CREATE VIEW statements
+     * @param drops      statements that remove what the new statements create
+     * @param failed     filled with the views that could not be created, by view name
+     * @return the drop statements now in force
+     * @throws java.sql.SQLException when a drop or a statement other than CREATE VIEW fails
+     */
+    static List<String> applyViews(Connection conn, List<String> oldDrops,
+            List<String> statements, List<String> drops, Map<String, FailedView> failed)
+            throws java.sql.SQLException {
+        failed.clear();
         try (Statement s = conn.createStatement()) {
             for (String drop : oldDrops) {
                 s.execute(drop);
@@ -3160,13 +3171,121 @@ public final class DuckDbAdapter implements AutoCloseable {
                     // item 29) must not take every other table's view with it.
                     String name = statement.substring(CREATE_VIEW.length(),
                             Math.max(CREATE_VIEW.length(), statement.indexOf(" AS ")));
+                    String error = viewFailure(e);
+                    failed.put(name, new FailedView(statement, error));
                     LOGGER.warn("node={} views=createFailed view={} error='{}': queries of this table"
-                            + " fail, other tables are unaffected", LogUtil.node(), name,
-                            viewFailure(e));
+                            + " fail until it can be created (tried again on each query), other"
+                            + " tables are unaffected", LogUtil.node(), name, error);
                 }
             }
         }
         return drops;
+    }
+
+    /**
+     * A catalog view DuckDB could not create (its first file unreadable: storage permissions,
+     * HDFS unreachable).
+     *
+     * @param statement its CREATE VIEW statement
+     * @param error the reason of its last failure, on one line
+     */
+    record FailedView(String statement, String error) {
+    }
+
+    /**
+     * Creates the views that failed before once more (item 37 (a)): a view refused by the
+     * storage's permissions (Ranger) answers again on the first query after the permission is
+     * back, not "Table ... does not exist" until the catalog changes.
+     *
+     * @param conn   DuckDB connection
+     * @param failed views that could not be created, by name; created ones are removed, the
+     *               others keep their latest error
+     */
+    static void retryFailedViews(Connection conn, Map<String, FailedView> failed) {
+        for (java.util.Iterator<Map.Entry<String, FailedView>> it = failed.entrySet().iterator();
+                it.hasNext();) {
+            Map.Entry<String, FailedView> entry = it.next();
+            try (Statement one = conn.createStatement()) {
+                one.execute(entry.getValue().statement());
+                it.remove();
+                LOGGER.info("node={} views=created view={} after='{}'", LogUtil.node(),
+                        entry.getKey(), entry.getValue().error());
+            } catch (java.sql.SQLException e) {
+                entry.setValue(new FailedView(entry.getValue().statement(), viewFailure(e)));
+                LOGGER.debug("node={} views=createFailedAgain view={} error='{}'", LogUtil.node(),
+                        entry.getKey(), entry.getValue().error());
+            }
+        }
+    }
+
+    /** DuckDB's error for a missing table, with the table's name. */
+    private static final java.util.regex.Pattern MISSING_TABLE =
+            java.util.regex.Pattern.compile("Catalog Error: Table with name ([^ !]+) does not exist");
+
+    /**
+     * Replaces DuckDB's "Table with name ... does not exist" by the reason the table's view
+     * could not be created, when that view failed (item 37 (a)): the client learns that the
+     * table cannot be read now (a storage denial maps to PERMISSION_DENIED), not that it is
+     * missing.
+     *
+     * @param failed views that could not be created, by name
+     * @param error  error of a query
+     * @return the error to report
+     */
+    static Exception explainMissingView(Map<String, FailedView> failed, Exception error) {
+        if (failed.isEmpty()) {
+            return error;
+        }
+        for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            java.util.regex.Matcher m = MISSING_TABLE.matcher(String.valueOf(t.getMessage()));
+            if (!m.find()) {
+                continue;
+            }
+            String table = unquoted(m.group(1));
+            for (Map.Entry<String, FailedView> entry : failed.entrySet()) {
+                String view = unquoted(entry.getKey().strip());
+                if (view.equals(table) || view.endsWith("." + table)) {
+                    // Not the cause: the client's description names the deepest cause.
+                    java.sql.SQLException unreadable = new java.sql.SQLException("Table "
+                            + entry.getKey().strip() + " cannot be read now: "
+                            + entry.getValue().error());
+                    unreadable.addSuppressed(error);
+                    return unreadable;
+                }
+            }
+            return error;
+        }
+        return error;
+    }
+
+    /**
+     * Returns a possibly quoted, possibly qualified name in lower case without its quotes.
+     *
+     * @param name name as DuckDB or a view statement writes it
+     * @return the name without double quotes, in lower case
+     */
+    private static String unquoted(String name) {
+        return name.replace("\"", "").toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * Brings a session's data views to the current definitions, and creates the views that
+     * failed before once more.
+     *
+     * @param session this thread's session
+     * @param views   current view definitions
+     * @throws java.sql.SQLException when a drop or a statement other than CREATE VIEW fails
+     */
+    private static void syncViews(Session session,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
+            throws java.sql.SQLException {
+        if (session.viewsVersion != views.version()) {
+            session.viewDrops = applyViews(session.conn, session.viewDrops,
+                    views.dataStatements(), views.dropStatements(), session.failedViews);
+            session.viewsVersion = views.version();
+        } else if (!session.failedViews.isEmpty()) {
+            retryFailedViews(session.conn, session.failedViews);
+        }
     }
 
     /**
@@ -3244,6 +3363,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         /** Table secrets installed in this session's own DuckDB, by name. */
         private final Map<String, String> tableSecrets = new HashMap<>();
         private List<String> viewDrops = List.of();
+        /** Data views that could not be created, by name; tried again on each query. */
+        private final Map<String, FailedView> failedViews = new LinkedHashMap<>();
         /**
          * DuckDB connection with empty views for describing queries, its own DuckDB or one to the
          * node's describe DuckDB; opened on first use.

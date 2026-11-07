@@ -682,8 +682,9 @@ public class ParquetQueryParser {
                 new Settings().withRenderQuotedNames(RenderQuotedNames.NEVER));
 
         if (fromTables.size() > 1) {
+            // The client knows its SQL and the refusal log line carries it once (item 37 (c)).
             throw new IllegalArgumentException(
-                    "Can only select from ONE table, but got query: " + select.getSQL());
+                    "Can only select from ONE table, but got " + fromTables.size() + " tables");
         }
         rejectUnsupportedClauses(select, originalSql);
 
@@ -857,7 +858,8 @@ public class ParquetQueryParser {
             List<? extends Table<?>> fromTables, DSLContext noQuoteCtx) {
 
         if (fromTables.size() != 1) {
-            throw new IllegalArgumentException("Can only select from ONE table, but got query: " + select.getSQL());
+            throw new IllegalArgumentException(
+                    "Can only select from ONE table, but got " + fromTables.size() + " tables");
         }
 
         String schema = Optional.ofNullable(fromTables.get(0).getSchema()).map(Schema::getName).orElse(null);
