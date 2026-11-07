@@ -23,8 +23,8 @@
 
 ## Next steps (one per session)
 
-> **Item 37 (2026-11-07, core lane): (a)-(d) done in code and CI (`04637d9e`..`35d9420a`); Dev CI RUN_DEV green;
-> Service hdfs RUN_HDFS.** (a) Storage refusals (`Permission denied` from HDFS/Ranger in a `RemoteException` /
+> **Item 37 (2026-11-07, core lane): (a)-(d) done in code and CI (`04637d9e`..`35d9420a`); Dev CI 42342174052 green;
+> Service hdfs 42342173100 green (all 10 cells).** (a) Storage refusals (`Permission denied` from HDFS/Ranger in a `RemoteException` /
 > `AccessControlException`, DuckDB's IO error, Java's `AccessDeniedException`) are `PERMISSION_DENIED 'Schema or
 > table access denied: the storage refused to read the table's files'` with one WARN `query=denied` /
 > `result=denied` line naming the storage's reason (not sent to the client); a failed Kerberos login
@@ -43,10 +43,10 @@
 > (no SQL), so the WARN carries the SQL once. (d) WARN `hdfs=noTicketCache` at start when LIBHDFS3_CONF says
 > Kerberos, no `hdfsKerberos*` is set and the ticket cache the extension reads is missing (keyring/KCM not checked).
 > **CI stage** (Service hdfs, ha-krb / ha-krb-sasl balanced, HDFS permissions now on in those cells): stop under 8
-> query threads (stand: 0 `result=stopping`; CI: 74 stopping answers, drain done in ~0.3 s, 0 bad lines, every
+> query threads (stand: 0 `result=stopping`; CI: 59 / 27 stopping answers, drain done in ~0.35 s, 0 bad lines, every
 > failure UNAVAILABLE) and a server started with tpch.nation `chmod 600` (denied with one WARN, other tables answer,
 > answers again after `chmod 644` without a restart). **For the stand:** rerun 37 (a)-(d) on the `package=true`
-> build; one `stop` note: a DoAction call may still count as running when the drain ends (`methods={DoAction=1}`
+> build of this unlock commit, then "ITEM 37 DONE"; one `stop` note: a DoAction call may still count as running when the drain ends (`methods={DoAction=1}`
 > once in CI, harmless).
 
 > **Maintainer, 2026-11-07 02:20 - stand re-check of `6384bc55b173`: ITEM 35 DONE, item 36 (1) (2) (5) done; ITEM 37 =
@@ -3788,3 +3788,11 @@ S3 slowdown item below stays open for then).
   `server-1.0.0-6384bc55b173` (package Dev CI 42267369022 green; service gate Service cluster 42269501072, hdfs
   42269586098, matrix (security) 42269591550, stores 42269597085 all green). Waiting for the stand rerun ((1) leak,
   (2) keytab start, (4) logs plus one log line for "SQL twice") and "ITEM 36 DONE". Lock released.
+- 2026-11-07 (cloud session 03:40-05:40Z, core lane): item 37 (a)-(d) done in code and CI (`04637d9e`..`35d9420a`):
+  storage denials PERMISSION_DENIED with one WARN (status change for storage refusals only, as the maintainer asked),
+  failed views retried, refusal reason without SQL, `hdfs=noTicketCache` WARN, stop order through `StopGate` +
+  Hadoop shutdown hook + own Flight executor. New Service hdfs stage (ha-krb / ha-krb-sasl balanced, HDFS
+  permissions on) found two more bugs, fixed: one unreadable table failed the server's start; such a table stayed
+  denied up to 60 s after its permission was back. Earlier stage runs 42336170913, 42337610848, 42338931140,
+  42339761143, 42340849900 failed on those findings; final Dev CI 42342174052 and Service hdfs 42342173100 green.
+  `package=true` dispatched on the unlock commit. Lock released.
