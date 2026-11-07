@@ -53,6 +53,11 @@ public final class CatalogViews {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CatalogViews.class);
     private static final long REFRESH_NANOS = TimeUnit.SECONDS.toNanos(60);
+    /**
+     * Refresh interval while a table could not be described (item 37 (a)): a table refused by
+     * the storage answers within seconds once its permission is back, not after a minute.
+     */
+    static final long FAILED_REFRESH_NANOS = TimeUnit.SECONDS.toNanos(5);
     /** Schema names DuckDB uses itself; tables in such schemas are not exposed. */
     private static final Set<String> RESERVED_SCHEMAS = Set.of(
             "main", "information_schema", "pg_catalog", "temp", "system");
@@ -188,7 +193,8 @@ public final class CatalogViews {
     }
 
     /**
-     * Returns the current view definitions, refreshing them at most once a minute or at once when
+     * Returns the current view definitions, refreshing them at most once a minute (every few
+     * seconds while a table could not be described) or at once when
      * the store reports a new data version (for example a new commit on a lakeFS branch). All
      * tables of one refresh are listed in one read scope of the store, so the views never mix
      * versions.
@@ -200,7 +206,8 @@ public final class CatalogViews {
     public synchronized Snapshot current() throws IOException, SQLException {
         long now = System.nanoTime();
         DataStore store = parquetAdapter.dataStore();
-        if (snapshot != null && now - refreshedAtNanos < REFRESH_NANOS
+        long interval = failedTables.isEmpty() ? REFRESH_NANOS : FAILED_REFRESH_NANOS;
+        if (snapshot != null && now - refreshedAtNanos < interval
                 && Objects.equals(dataVersion, store == null ? null : store.dataVersion())) {
             return snapshot;
         }
