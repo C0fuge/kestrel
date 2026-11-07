@@ -273,8 +273,15 @@ public final class DistributedComplete implements AutoCloseable {
                 }
                 throw e;
             }
-            LOGGER.warn("node={} distributedComplete=fallback reason='{}' endpoints={} query='{}'",
-                    LogUtil.node(), e.getMessage(), endpoints.size(), query);
+            String reason = LogUtil.firstLine(e.getMessage());
+            if (cluster.isDeregistered()) {
+                // This node is stopping: the other nodes refuse its internal calls (item 38 (3)).
+                LOGGER.info("node={} distributedComplete=fallback stopping=true reason='{}' endpoints={}"
+                        + " query='{}'", LogUtil.node(), reason, endpoints.size(), LogUtil.oneLine(query));
+            } else {
+                LOGGER.warn("node={} distributedComplete=fallback reason='{}' endpoints={} query='{}'",
+                        LogUtil.node(), reason, endpoints.size(), LogUtil.oneLine(query));
+            }
             releaseLoads(endpoints);
             fallbacks.incrementAndGet();
             return false;

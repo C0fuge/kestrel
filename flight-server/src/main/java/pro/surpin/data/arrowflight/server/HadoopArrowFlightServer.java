@@ -52,6 +52,9 @@ public class HadoopArrowFlightServer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HadoopArrowFlightServer.class);
 
+    /** Least wait for the gate's count after the Flight server ended (item 38 (2)). */
+    private static final long END_GRACE_NANOS = TimeUnit.SECONDS.toNanos(1);
+
     /**
      * Initializes SLF4J log level from properties, system properties, or env var.
      */
@@ -435,6 +438,13 @@ public class HadoopArrowFlightServer {
             server.shutdown();
             drained = server.awaitTermination(Math.max(0, deadline - System.nanoTime()),
                     TimeUnit.NANOSECONDS);
+            if (gate != null) {
+                // A DoGet may start between the gate's idle and the shutdown, and a call's end
+                // reaches the gate on the call executor after its transport ended (item 38 (2)):
+                // wait for those too, at least a short grace past the deadline.
+                drained &= gate.awaitIdle(Math.max(deadline - System.nanoTime(), END_GRACE_NANOS),
+                        TimeUnit.NANOSECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             drained = false;
@@ -442,9 +452,13 @@ public class HadoopArrowFlightServer {
         if (gate == null) {
             LOGGER.info("shutdownDrain={} after {} ms (at most {} s)", drained ? "done" : "timeout",
                     (System.nanoTime() - t0) / 1_000_000, seconds);
-        } else {
-            LOGGER.info("shutdownDrain={} after {} ms (at most {} s) refusedQueries={} runningCalls={} methods={}",
+        } else if (gate.running() == 0) {
+            LOGGER.info("shutdownDrain={} after {} ms (at most {} s) refusedQueries={} runningCalls=0",
                     drained ? "done" : "timeout", (System.nanoTime() - t0) / 1_000_000, seconds,
+                    gate.refused());
+        } else {
+            LOGGER.warn("shutdownDrain=timeout after {} ms (at most {} s) refusedQueries={} runningCalls={}"
+                    + " methods={}: these calls are cut", (System.nanoTime() - t0) / 1_000_000, seconds,
                     gate.refused(), gate.running(), gate.runningMethods());
         }
         return drained;

@@ -85,7 +85,7 @@ public final class ClusterService implements AutoCloseable {
     private final AtomicBoolean heartbeatDeferred = new AtomicBoolean();
     private final AtomicLong deferredWrites = new AtomicLong();
     private boolean registered;
-    private boolean deregistered;
+    private volatile boolean deregistered;
     private final EndpointTicketCodec endpointTicketCodec;
     private volatile byte[] currentSecret;
     private final InternalCallIdentity internalCallIdentity =
@@ -1202,6 +1202,16 @@ public final class ClusterService implements AutoCloseable {
         } catch (Exception e) {
             LOGGER.warn("Failed to deregister server from cluster: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Tells whether this server has left the cluster's pool ({@link #deregister()}): it is
+     * stopping, and the other nodes refuse its internal calls.
+     *
+     * @return true once deregistered
+     */
+    public boolean isDeregistered() {
+        return deregistered;
     }
 
     @Override

@@ -136,7 +136,8 @@ final class HdfsTicketCache implements AutoCloseable {
      */
     static Optional<String> missingTicketCache(ConfigSource props, Map<String, String> libhdfs3) {
         return missingTicketCache(libhdfs3, props.environment("KRB5CCNAME").orElse(null),
-                krb5DefaultCacheName(props.environment("KRB5_CONFIG").orElse(null)), currentUid());
+                krb5DefaultCacheName(props.environment("KRB5_CONFIG").orElse(null)), currentUid(),
+                HdfsTicketCache::klistValid);
     }
 
     /**
@@ -151,6 +152,25 @@ final class HdfsTicketCache implements AutoCloseable {
      */
     static Optional<String> missingTicketCache(Map<String, String> libhdfs3, String krb5ccname,
             String krb5Default, long uid) {
+        return missingTicketCache(libhdfs3, krb5ccname, krb5Default, uid, name -> Optional.of(true));
+    }
+
+    /**
+     * Checks that the ticket cache libhdfs3 reads holds a ticket when libhdfs3 uses Kerberos: a
+     * file cache must exist and be readable; a cache that is not a file (KEYRING, KCM, ...) is
+     * asked with {@code klist -s} (item 38 (1)), and the warning says so when that cannot tell.
+     *
+     * @param libhdfs3 properties of the LIBHDFS3_CONF file
+     * @param krb5ccname the KRB5CCNAME environment value, or null
+     * @param krb5Default default_ccache_name of the krb5 configuration, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @param ticketCheck tells whether a non-file cache holds a valid ticket; empty when it cannot
+     *        tell
+     * @return the warning to log, empty when the check passes or does not apply
+     */
+    static Optional<String> missingTicketCache(Map<String, String> libhdfs3, String krb5ccname,
+            String krb5Default, long uid,
+            java.util.function.Function<String, Optional<Boolean>> ticketCheck) {
         if (!"kerberos".equalsIgnoreCase(String.valueOf(libhdfs3.get(LIBHDFS3_AUTHENTICATION)).trim())) {
             return Optional.empty();
         }
@@ -158,8 +178,21 @@ final class HdfsTicketCache implements AutoCloseable {
         try {
             cache = extensionCache(libhdfs3.get(LIBHDFS3_TICKET_CACHE), krb5ccname, krb5Default, uid);
         } catch (IllegalArgumentException e) {
-            // A keyring or KCM cache filled by kinit: libkrb5 reads it, this server cannot check it.
-            return Optional.empty();
+            // A keyring or KCM cache: only libkrb5 (klist) can tell whether kinit filled it.
+            String name = nonFileCacheName(libhdfs3.get(LIBHDFS3_TICKET_CACHE), krb5ccname, krb5Default, uid);
+            Optional<Boolean> valid = ticketCheck.apply(name);
+            if (valid.orElse(false)) {
+                return Optional.empty();
+            }
+            return Optional.of("hdfs=noTicketCache cache=" + name + " checked=" + valid.isPresent()
+                    + ": HDFS uses Kerberos (" + LIBHDFS3_AUTHENTICATION + "=kerberos in LIBHDFS3_CONF),"
+                    + " and the ticket cache the hadoopfs extension reads is not a file ("
+                    + (valid.isPresent() ? "klist -s finds no valid ticket in it"
+                            : "this server cannot check whether it holds a ticket: no klist")
+                    + "), so unless kinit for the server's user filled it, every HDFS read through DuckDB"
+                    + " fails ('Unable to connect to HDFS'): set hdfsKerberosPrincipal and"
+                    + " hdfsKerberosKeytab with KRB5CCNAME=FILE:<path> (or " + LIBHDFS3_TICKET_CACHE
+                    + " in the LIBHDFS3_CONF file) so the server logs in and keeps that cache fresh");
         }
         if (cache != null && Files.isReadable(cache)) {
             return Optional.empty();
@@ -171,6 +204,55 @@ final class HdfsTicketCache implements AutoCloseable {
                 + " ('Unable to connect to HDFS'): set hdfsKerberosPrincipal and hdfsKerberosKeytab"
                 + " so the server logs in and keeps that cache fresh, or run kinit for the server's"
                 + " user before the start");
+    }
+
+    /**
+     * Names the ticket cache libhdfs3 reads when it is not a file, in the order of
+     * {@link #extensionCache(String, String, String, long)}.
+     *
+     * @param configured LIBHDFS3_CONF's ticket cache path, or null
+     * @param krb5ccname the KRB5CCNAME environment value, or null
+     * @param krb5Default default_ccache_name of the krb5 configuration, or null
+     * @param uid user id of the process, or -1 when unknown
+     * @return the cache name, with the user id expanded where it can be
+     */
+    static String nonFileCacheName(String configured, String krb5ccname, String krb5Default, long uid) {
+        if (configured != null && !configured.isBlank()) {
+            return configured.trim();
+        }
+        if (krb5ccname != null && !krb5ccname.isBlank()) {
+            return krb5ccname.trim();
+        }
+        String expanded = expandCacheName(krb5Default, uid);
+        return expanded != null ? expanded : String.valueOf(krb5Default).trim();
+    }
+
+    /**
+     * Asks {@code klist -s} whether a ticket cache holds a valid ticket, at most 5 s.
+     *
+     * @param name the cache name, e.g. {@code KEYRING:persistent:1000}
+     * @return true or false from klist's exit status, empty when klist is missing or does not
+     *         answer in time
+     */
+    static Optional<Boolean> klistValid(String name) {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("klist", "-s", name).redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                return Optional.empty();
+            }
+            return Optional.of(process.exitValue() == 0);
+        } catch (IOException e) {
+            return Optional.empty();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
     }
 
     /**

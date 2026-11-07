@@ -101,6 +101,19 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - stop and Kerberos start hints in the log (STATUS item 38)
+
+- Without `hdfsKerberos*`, a keyring or KCM ticket cache (e.g. `default_ccache_name = KEYRING:persistent:%{uid}`) is
+  checked with `klist -s` at start: WARN `hdfs=noTicketCache cache=<name> checked=true|false` when it holds no valid
+  ticket or klist is missing (was silent).
+- The drain also waits (at least 1 s) for calls the stop gate still counts after the Flight server ended (a DoGet
+  that started late, or whose end reached the gate late); calls still running then are named in a WARN
+  `shutdownDrain=timeout ... methods={DoGet=<n>}: these calls are cut` (was `shutdownDrain=done ... runningCalls=1`).
+  The `done` line now ends with `runningCalls=0`.
+- `distributedComplete=fallback` keeps only the first line of its reason (`(+<n> lines)`), and on a stopping node is
+  INFO with `stopping=true` (expected: peers refuse internal calls of a node that left the pool).
+- START-NOTES describe the stop log as the code writes it (refused queries are only counted in the drain line).
+
 ### Added - CI: `tools/ci/package-release.sh`, a `package=true` pre-release on a fixed commit (STATUS item 37, process)
 
 - Pushes a branch `pkg/<short sha>` at the commit (default `origin/main`) and dispatches every `service-*.yml` and

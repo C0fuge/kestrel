@@ -325,4 +325,56 @@ class HdfsTicketCacheTest {
         assertTrue(byEnv.isPresent() && byEnv.get().contains(dir.resolve("absent").toString()),
                 byEnv.toString());
     }
+
+    /**
+     * Item 38 (1): without a keytab login of its own, a server whose extension reads a keyring or
+     * KCM cache asks klist whether it holds a ticket, and warns when it does not or klist cannot
+     * tell, naming the cache with the user id expanded.
+     */
+    @Test
+    void warnsWhenAKeyringCacheHoldsNoTicketOrCannotBeChecked() {
+        Map<String, String> kerberos = Map.of(HdfsTicketCache.LIBHDFS3_AUTHENTICATION, "kerberos");
+        String keyring = "KEYRING:persistent:%{uid}";
+        List<String> asked = new java.util.ArrayList<>();
+
+        assertTrue(HdfsTicketCache.missingTicketCache(kerberos, null, keyring, 1000, name -> {
+            asked.add(name);
+            return Optional.of(true);
+        }).isEmpty());
+        assertEquals(List.of("KEYRING:persistent:1000"), asked);
+
+        Optional<String> noTicket = HdfsTicketCache.missingTicketCache(kerberos, null, keyring, 1000,
+                name -> Optional.of(false));
+        assertTrue(noTicket.isPresent());
+        assertTrue(noTicket.get().startsWith("hdfs=noTicketCache cache=KEYRING:persistent:1000 checked=true"),
+                noTicket.get());
+        assertTrue(noTicket.get().contains("klist -s finds no valid ticket"), noTicket.get());
+        assertTrue(noTicket.get().contains("KRB5CCNAME=FILE:"), noTicket.get());
+
+        Optional<String> unknown = HdfsTicketCache.missingTicketCache(kerberos, "KCM:", null, 1000,
+                name -> Optional.empty());
+        assertTrue(unknown.isPresent());
+        assertTrue(unknown.get().startsWith("hdfs=noTicketCache cache=KCM: checked=false"), unknown.get());
+        assertFalse(unknown.get().contains("\n"), unknown.get());
+
+        Map<String, String> simple = Map.of(HdfsTicketCache.LIBHDFS3_AUTHENTICATION, "simple");
+        assertTrue(HdfsTicketCache.missingTicketCache(simple, null, keyring, 1000,
+                name -> Optional.of(false)).isEmpty());
+    }
+
+    /**
+     * Item 38 (1): the non-file cache is named in the extension's order: LIBHDFS3_CONF, then
+     * KRB5CCNAME, then the krb5 default; klist that is not installed cannot tell.
+     */
+    @Test
+    void nonFileCacheNamesFollowTheExtensionsOrder() {
+        assertEquals("KEYRING:a", HdfsTicketCache.nonFileCacheName("KEYRING:a", "KCM:", "DIR:/x", 7));
+        assertEquals("KCM:", HdfsTicketCache.nonFileCacheName(null, "KCM:", "DIR:/x", 7));
+        assertEquals("KEYRING:persistent:7", HdfsTicketCache.nonFileCacheName(" ", null,
+                "KEYRING:persistent:%{uid}", 7));
+        assertEquals("KEYRING:persistent:%{uid}", HdfsTicketCache.nonFileCacheName(null, null,
+                "KEYRING:persistent:%{uid}", -1));
+        Optional<Boolean> answer = HdfsTicketCache.klistValid("KEYRING:no-such-cache-" + System.nanoTime());
+        assertTrue(answer.isEmpty() || !answer.get(), answer.toString());
+    }
 }

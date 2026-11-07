@@ -45,6 +45,13 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   lets its running answers finish. `docker stop` waits only 10 s before SIGKILL: use `docker stop -t 25` (or more,
   or `--stop-timeout 25` on the container); systemd's default `TimeoutStopSec` (90 s) and Kubernetes' grace period
   (30 s) are enough. `0` restores the immediate stop (running answers fail with `INTERNAL`).
+  Log of a stop: `shutdownDrain=started runningCalls=<n>`, then one `shutdownDrain=done after <ms> ms ...
+  refusedQueries=<n> runningCalls=0` line. Queries refused while the node stops are only counted there
+  (`refusedQueries=`): there is no per-query line for them. A per-query WARN `result=stopping` appears only for a query
+  that met an already stopped pool (rare). When calls still run at the end, the line is a WARN `shutdownDrain=timeout
+  ... runningCalls=<n> methods={DoGet=<n>}: these calls are cut`. On the stopping node a distributed-complete merge that
+  falls back logs INFO `distributedComplete=fallback stopping=true` (the other nodes refuse its internal calls once it
+  left the pool; expected).
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
   checks the extension versions at startup. The jdbc plugin (`catalog=jdbc`) also needs `postgres_scanner` and/or
   `mysql_scanner` v1.5.6 in the extension directory; every function they add is refused in client queries, and each
@@ -96,6 +103,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   says when it is not the cache the extension reads (`KRB5CCNAME` / `hadoop.security.kerberos.ticket.cache.path`).
   Without either, the extension reads krb5's `default_ccache_name` (`KRB5_CONFIG` / `/etc/krb5.conf`): a `FILE:`
   default is used; a keyring or KCM default (RHEL-like hosts) fails the start - set `KRB5CCNAME=FILE:/path` then.
+  Without `hdfsKerberos*` (an external `kinit`), a WARN `hdfs=noTicketCache` at start says the cache the extension reads
+  is missing; for a keyring or KCM cache the server asks `klist -s <cache>` and warns (`hdfs=noTicketCache
+  cache=KEYRING:... checked=true|false`) when it holds no valid ticket or klist is not installed.
 - HDFS short-circuit and the native Hadoop library (libhadoop): all data reads go through the hadoopfs extension
   (libhdfs3), which reads short-circuit without libhadoop. Only the server's own Java HDFS client (Parquet footers and
   metadata, about one block per file) needs libhadoop for short-circuit; without it those few reads go over TCP, and on

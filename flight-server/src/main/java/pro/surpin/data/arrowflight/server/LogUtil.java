@@ -192,4 +192,30 @@ public final class LogUtil {
         return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n");
     }
 
+    /**
+     * Returns the first line of a text for a log line, with the number of lines left out: an
+     * error message that carries a remote stack trace stays one short line (item 38 (3)).
+     *
+     * @param text text, e.g. an exception message, or null
+     * @return the first non-blank line, with {@code " (+<n> lines)"} when lines were left out
+     */
+    public static String firstLine(String text) {
+        if (text == null) {
+            return null;
+        }
+        String[] lines = text.split("\\r?\\n|\\r");
+        int first = 0;
+        while (first < lines.length - 1 && lines[first].isBlank()) {
+            first++;
+        }
+        int left = 0;
+        for (int i = first + 1; i < lines.length; i++) {
+            if (!lines[i].isBlank()) {
+                left++;
+            }
+        }
+        String line = lines.length == 0 ? "" : lines[first].trim();
+        return left == 0 ? line : line + " (+" + left + " lines)";
+    }
+
 }

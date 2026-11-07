@@ -155,4 +155,62 @@ class ShutdownDrainTest {
         assertTrue(System.nanoTime() - t0 < TimeUnit.SECONDS.toNanos(10), "drain took too long");
         assertFalse(helper.clusterService.liveServerUris().contains(helper.location.getUri().toString()));
     }
+
+    /**
+     * Item 38 (2): a call that still counts in the stop gate when the Flight server has ended (a
+     * DoGet that started after the gate went idle, or whose end reaches the gate late) is waited
+     * for a short grace, and one that never ends makes the drain report a timeout instead of
+     * "done" with a running call.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void gatedDrainWaitsForCallsTheGateStillCounts() throws Exception {
+        io.grpc.ServerCall.Listener<Object> late = startGateCall("DoGet");
+        assertEquals(1, helper.stopGate.running());
+        assertFalse(helper.clusterService.isDeregistered());
+        java.util.concurrent.ScheduledExecutorService ender =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        try {
+            ender.schedule(late::onComplete, 300, TimeUnit.MILLISECONDS);
+            long t0 = System.nanoTime();
+            HadoopArrowFlightServer.drain(helper.server, helper.clusterService, helper.stopGate, 0);
+            assertTrue(System.nanoTime() - t0 >= TimeUnit.MILLISECONDS.toNanos(250), "did not wait for the call");
+            assertEquals(0, helper.stopGate.running(), "the call's end was not waited for");
+            assertTrue(helper.clusterService.isDeregistered());
+        } finally {
+            ender.shutdownNow();
+        }
+    }
+
+    /**
+     * Item 38 (2): a call that never ends is reported, and the drain is not "done".
+     */
+    @Test
+    void gatedDrainReportsACallThatNeverEnds() {
+        io.grpc.ServerCall.Listener<Object> stuck = startGateCall("DoGet");
+        try {
+            assertFalse(HadoopArrowFlightServer.drain(helper.server, helper.clusterService, helper.stopGate, 0));
+            assertEquals(1, helper.stopGate.running());
+            assertEquals("{DoGet=1}", helper.stopGate.runningMethods());
+        } finally {
+            stuck.onCancel();
+        }
+        assertEquals(0, helper.stopGate.running());
+    }
+
+    @SuppressWarnings("unchecked")
+    private io.grpc.ServerCall.Listener<Object> startGateCall(String method) {
+        io.grpc.MethodDescriptor<Object, Object> descriptor = io.grpc.MethodDescriptor.newBuilder()
+                .setType(io.grpc.MethodDescriptor.MethodType.SERVER_STREAMING)
+                .setFullMethodName(io.grpc.MethodDescriptor.generateFullMethodName("arrow.flight.protocol.FlightService",
+                        method))
+                .setRequestMarshaller(org.mockito.Mockito.mock(io.grpc.MethodDescriptor.Marshaller.class))
+                .setResponseMarshaller(org.mockito.Mockito.mock(io.grpc.MethodDescriptor.Marshaller.class))
+                .build();
+        io.grpc.ServerCall<Object, Object> call = org.mockito.Mockito.mock(io.grpc.ServerCall.class);
+        org.mockito.Mockito.when(call.getMethodDescriptor()).thenReturn(descriptor);
+        return helper.stopGate.interceptCall(call, new io.grpc.Metadata(),
+                (c, h) -> new io.grpc.ServerCall.Listener<>() { });
+    }
 }
