@@ -23,6 +23,19 @@
 
 ## Next steps (one per session)
 
+> **Item 38 (2026-11-07, core lane): (1)-(4) done in code and CI (`b69660b9`); pre-release `server-1.0.0-b69660b9260a`
+> published** (branch `pkg/b69660b9`: Dev CI 42403052289 incl. package, Service cluster 42403042241, hdfs 42403044908,
+> security 42403047248, stores 42403049750 green; push Dev CI on main 42403022881 green). (1) Without `hdfsKerberos*`
+> a KEYRING/KCM cache is checked with `klist -s <cache>`: WARN `hdfs=noTicketCache cache=<name> checked=true|false`
+> when it holds no valid ticket or klist is missing. (2) The drain waits (>= 1 s grace) for calls the stop gate
+> still counts after Flight terminated; still-running calls -> WARN `shutdownDrain=timeout ... methods={DoGet=n}:
+> these calls are cut`; the done line ends `runningCalls=0`. Root cause not proven on the stand (likely a DoGet
+> started after the gate went idle, or its end reached the gate on the call executor after the transport closed).
+> (3) `distributedComplete=fallback` reason is its first line (`(+n lines)`); on a stopping (deregistered) node INFO
+> `stopping=true`. (4) START-NOTES describe the stop log as written (no per-query line for refused queries).
+> **For the stand:** rerun the item 37 stop-under-load and keytab-less KEYRING start on `server-1.0.0-b69660b9260a`;
+> expect no `runningCalls=1` on a `done` line, the KEYRING WARN, a one-line INFO fallback; then "ITEM 38 DONE".
+
 > **Maintainer, 2026-11-07 21:00 - ITEM 37 DONE (stand, `06c5adc7d7c9`).** ~30 000 hash-checked answers, none wrong.
 > Ranger off -> `UNAUTHORIZED` (PERMISSION_DENIED) + one WARN `result=denied`, 0 stacks, answers again +3.4 s after the
 > policy is back (was +45 s); stop under load: 0 ERROR / Filesystem closed / Rejected / leak, 1337 and 2997 clients
@@ -3828,3 +3841,9 @@ S3 slowdown item below stays open for then).
   longer fail the service-gate): Dev CI 42348141046, Service cluster 42348149036, hdfs 42348150642, security
   42348152343, stores 42348154085, all green. New `tools/ci/package-release.sh` does this in one command. Item 37 now
   waits for the stand. Lock released.
+- 2026-11-07 18:40-19:30Z (cloud session, core lane): item 38 (1)-(4) in `b69660b9` (keyring/KCM ticket-cache hint
+  via `klist -s`, drain waits for late gate calls and names cut ones, one-line / INFO-while-stopping fallback reason,
+  START-NOTES stop log). Tests: HdfsTicketCacheTest (+2), ShutdownDrainTest (+2), LogUtilFirstLineTest. CI green:
+  Dev CI 42403022881 (push), package run on `pkg/b69660b9`: Dev CI 42403052289, Service cluster 42403042241, hdfs
+  42403044908, security 42403047248, stores 42403049750. Pre-release `server-1.0.0-b69660b9260a`. Item 38 waits for
+  the stand. Lock released.
