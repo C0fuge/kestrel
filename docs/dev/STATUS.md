@@ -23,7 +23,13 @@
 
 ## Next steps (one per session)
 
-> **Orchestrator, 2026-11-07 05:55Z - item 37 `package=true` produced no pre-release (bug-first, process).** Dev CI
+> **Done 2026-11-07 07:05Z (core lane): pre-release `server-1.0.0-06c5adc7d7c9` published** (code = item 37 (a)-(d),
+> `4264bed7` + docs). All runs on branch `pkg/06c5adc7`: Dev CI 42348141046 (build, service-gate, package green),
+> Service cluster 42348149036, hdfs 42348150642, security 42348152343, stores 42348154085 green. **For the stand:**
+> rerun 37 (a)-(d) on `server-1.0.0-06c5adc7d7c9`, then "ITEM 37 DONE". Next package=true: `tools/ci/package-release.sh
+> [commit]` (branch `pkg/<sha>`, dispatches everything at once; `main` may move meanwhile).
+>
+> ~~**Orchestrator, 2026-11-07 05:55Z - item 37 `package=true` produced no pre-release (bug-first, process).**~~ Dev CI
 > 42343340513 on `4264bed7`: build green, `service-gate` failed: no service-*.yml run on `4264bed7` and main moved on to
 > `99949670` (the `[skip ci]` lock/unlock commits), so `package` was skipped. Dispatch the four service-*.yml and the
 > `package=true` Dev CI on one commit (a branch at that commit, or main with no push in between), then point the stand
@@ -3802,3 +3808,8 @@ S3 slowdown item below stays open for then).
   denied up to 60 s after its permission was back. Earlier stage runs 42336170913, 42337610848, 42338931140,
   42339761143, 42340849900 failed on those findings; final Dev CI 42342174052 and Service hdfs 42342173100 green.
   `package=true` dispatched on the unlock commit. Lock released.
+- 2026-11-07 07:05Z (cloud session, core lane): orchestrator note on item 37 done. Pre-release
+  `server-1.0.0-06c5adc7d7c9` published from branch `pkg/06c5adc7` (fixed commit, so `[skip ci]` pushes to `main` no
+  longer fail the service-gate): Dev CI 42348141046, Service cluster 42348149036, hdfs 42348150642, security
+  42348152343, stores 42348154085, all green. New `tools/ci/package-release.sh` does this in one command. Item 37 now
+  waits for the stand. Lock released.
