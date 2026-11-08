@@ -1,6 +1,6 @@
 # Orchestration status
 
-Status as of **2026-11-07 21:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-08 03:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: **ITEM 38** (minor logs/hints) is done in code/CI and packaged as pre-release `server-1.0.0-b69660b9260a`
 (19:05Z); it waits for the maintainer's stand check and "ITEM 38 DONE". The routine's original criterion (items 26/27,
@@ -11,7 +11,7 @@ log-only builds; **ACCEPT b69660b9260a SHIP**).
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 38 done in CI, waits for the stand | 05584fe7, 21:41Z lock/unlock only (~15 min) | free (released 21:41Z) | main Dev CI 42403022881 (b69660b9) green; package Dev CI 42403052289 (pkg/b69660b9) green |
+| core (`STATUS.md`) | ITEM 38 done in CI, waits for the stand | 585eeda4, 03:41Z lock/unlock only (~15 min) | free (released 03:41Z) | main Dev CI 42403022881 (b69660b9) green; package Dev CI 42403052289 (pkg/b69660b9) green |
 | plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
 | lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
@@ -35,9 +35,9 @@ No stale locks (marten and heron locks free). Newest Dev CI on main green, nothi
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 21:40Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 03:40Z "finish mode, nothing new".
   Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 155 (21:51Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 156 (03:51Z): nothing open.
 - Neither has checked a server build newer than `deafc861cce3`.
 
 ## egret
@@ -55,6 +55,7 @@ No stale locks (marten and heron locks free). Newest Dev CI on main green, nothi
 
 ## History
 
+- 2026-11-08 03:57Z: no change: core session 03:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (03:40Z)/heron (session 156)/egret (03:27Z README, idle) idle; no stale locks.
 - 2026-11-07 21:56Z: no change: core session 21:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (21:40Z)/heron (session 155)/egret (21:27Z README, idle) idle; no stale locks.
 - 2026-11-07 20:57Z: egret ACCEPT b69660b9260a DONE: SHIP (42406253240); core session 20:40Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (20:40Z)/heron (session 154) idle; no stale locks.
 - 2026-11-07 19:58Z: item 38 packaged: pre-release `server-1.0.0-b69660b9260a` (pkg/b69660b9: Dev CI 42403052289 + 4 service runs green; main Dev CI 42403022881 green); core unlocked 19:05Z, waits for the stand ("ITEM 38 DONE"); egret ACCEPT b69660b9260a running (42406253240); marten (19:41Z)/heron (session 153) idle; no stale locks.
@@ -94,4 +95,3 @@ No stale locks (marten and heron locks free). Newest Dev CI on main green, nothi
 - 2026-11-06 04:56Z: no change since 03:56Z: no kestrel lane commits since 21:41Z, Dev CI/service gate green on 35c15ab2, no new pre-release; egret still idle waiting for the maintainer's room-wait ACCEPT dispatch for 35c15ab226b9; marten (04:40Z)/heron (session 126) idle; no stale locks.
 - 2026-11-06 03:56Z: egret ACCEPT 35c15ab226b9 PARTIAL (42113544966, 22:33Z): checks 1/2/3/5/6 pass all cells, check 4 now passes in both default cells; speed cells still fail check 4 because the run had no room wait -> egret waits for the maintainer to confirm/dispatch the `smalldisk-opts=-DhdfsLocalCopyRoomWaitMillis=30000` run; no kestrel commits since 21:57Z, CI/service gate green on 35c15ab2; marten/heron (session 125) idle; no stale locks.
 - 2026-11-05 21:57Z: core: package Dev CI 42108450187 on 35c15ab2 green, service gate 4/4 green -> pre-release `server-1.0.0-35c15ab226b9` (item 33 complete in code/CI); core unlocked 21:41Z, waits for stand/egret; egret ACCEPT 35c15ab226b9 running (42113544966); marten/heron (session 124) idle; no stale locks.
-- 2026-11-05 20:57Z: core: room wait CI green (70ffac12: Dev CI 42096491904, Service hdfs 42096491844 all cells incl. speed); `package=true` Dev CI 42099508904 on 5092f2c5 red in flaky EndpointFailoverIntegrationTest.ticketPlannedForAnotherNodeGivesTheSameAnswerAndMovesItsLoad (not item-33 code); core session (lock 20:41Z) fixed it in bbc8e7c1, Dev CI 42106064754 running - no bug-first note; no new pre-release; marten/heron (session 124)/egret idle; no stale locks.
