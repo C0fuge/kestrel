@@ -5,6 +5,13 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
+> with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
+> `fix/39b-memory` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
+> then merge into `main` (pull --rebase, keep both sides of CHANGELOG conflicts) and write "ITEM 39(b) DONE <merge sha>"
+> in this file's Log. Maintainer exception to this lane's scope limits for this item only. No `package=true` here: the
+> core lane packages when all four parts are merged.
+
 > **Maintainer, 2026-11-02 18:30 - FINISH MODE lifted for this item: SERVICE MATRIX, plugins part (take it first).**
 > A real Hadoop cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real
 > services end to end. Add `.github/workflows/service-security.yml`: **LDAP** login (OpenLDAP container, a user + a

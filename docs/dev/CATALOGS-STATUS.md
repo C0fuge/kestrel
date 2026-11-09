@@ -4,6 +4,13 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(c).** balanced point/small-query collapse on HDFS and the speed point-query rate (item 39 (c)); the small-query path, ExecutionService, DuckDbAdapter and catalog views are allowed for this item. Full description
+> with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
+> `fix/39c-point` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
+> then merge into `main` (pull --rebase, keep both sides of CHANGELOG conflicts) and write "ITEM 39(c) DONE <merge sha>"
+> in this file's Log. Maintainer exception to this lane's scope limits for this item only. No `package=true` here: the
+> core lane packages when all four parts are merged.
+
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
 > end. Add `.github/workflows/service-stores.yml`: **S3** (MinIO, s3 plugin, 2 stores), **lakeFS** (branch + commit),

@@ -4,6 +4,13 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(d).** dc small-query p99 tails and the 2 GiB allocator cap on concurrent dc scans (item 39 (d)). Full description
+> with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
+> `lane/distributed` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
+> then merge into `main` (pull --rebase, keep both sides of CHANGELOG conflicts) and write "ITEM 39(d) DONE <merge sha>"
+> in this file's Log. Maintainer exception to this lane's scope limits for this item only. No `package=true` here: the
+> core lane packages when all four parts are merged.
+
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, cluster part (take it first; this item goes straight to main, no
 > branch).** A real Hadoop cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it). Add
 > `.github/workflows/service-cluster.yml`: a **3-node cluster** of the server on **HDFS** (NameNode + 3 DataNodes, each

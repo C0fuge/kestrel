@@ -23,6 +23,20 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-09 16:30 - ITEM 39 IS SPLIT ACROSS FOUR LANES, worked in parallel (maintainer exception to the
+> lane scope limits for this item only).** Each part on its own branch, each branch merged into `main` by its lane when
+> its CI is green (rebase on `origin/main` first, small commits, keep both sides of CHANGELOG conflicts, never rewrite
+> another lane's commits):
+> - **(a) core lane (this file), on `main`:** plain names via a default schema + clear ambiguity error.
+> - **(b) plugins lane (`PLUGINS-STATUS.md`), branch `fix/39b-memory`:** speed / dc memory budget from the cgroup limit.
+> - **(c) catalogs lane (`CATALOGS-STATUS.md`), branch `fix/39c-point`:** balanced point/small-query collapse on HDFS +
+>   speed point-query rate (may touch the small-query path, ExecutionService, DuckDbAdapter, catalog views).
+> - **(d) lane 3 (`LANE3-STATUS.md`), branch `lane/distributed`:** dc small-query tails + the 2 GiB allocator cap on
+>   concurrent dc scans.
+> Each lane writes "ITEM 39(x) DONE" (x = a/b/c/d) in its own STATUS Log with the merge commit. When all four are on
+> `main`, the core lane runs Dev CI `package=true` and writes "ITEM 39 DONE". Details of every part: the item 39 note
+> below.
+
 > **Maintainer, 2026-11-09 16:00 - BUG FIRST, ITEM 39: results of the real-cluster benchmark (build `35c15ab226b9`).**
 > Cluster: 3 DataNodes (80 cores, 754 GB each; server pinned to 16 cores, 48 GB cgroup scope, -Xmx8g, 8g direct),
 > HDFS with `dfs.data.transfer.protection=authentication,privacy`, Kerberos, short-circuit; first node holds 100 % of
