@@ -23,6 +23,38 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-09 16:00 - BUG FIRST, ITEM 39: results of the real-cluster benchmark (build `35c15ab226b9`).**
+> Cluster: 3 DataNodes (80 cores, 754 GB each; server pinned to 16 cores, 48 GB cgroup scope, -Xmx8g, 8g direct),
+> HDFS with `dfs.data.transfer.protection=authentication,privacy`, Kerberos, short-circuit; first node holds 100 % of
+> the blocks (0 copies needed: 441k / 1.3M / 1.7M files short-circuit in bal / speed / dc). Data root has several
+> schemas: `tpch` (SF10), a 1.27 TB single table `events.events`, and other schemas whose table names collide with
+> TPC-H (`orders.orders` next to `tpch.orders`). Upstream for reference: TPC-H 0/22, dies under load.
+> (a) **Plain names that exist in two schemas fail as "does not exist":** TPC-H with plain names 10/22 in every fork
+> variant; q03 q04 q05 q07 q08 q09 q10 q12 q13 q18 q21 q22 fail `NOT_FOUND: Catalog Error: Table with name orders does
+> not exist!` (prepare). Resolve plain names through a default schema (session/connection property, e.g. Flight SQL
+> `catalog`/`schema` connection options or `SET schema`, plus a server setting `defaultSchema`); if a plain name is
+> ambiguous without one, refuse with `INVALID_ARGUMENT: table orders exists in schemas orders, tpch: qualify it or set
+> a default schema` - never "does not exist". CI: a second schema with an `orders` table.
+> (b) **speed / dc ignore the cgroup memory limit:** on the 1.27 TB table (`SELECT count(id), min(id), max(id),
+> sum(id) FROM events.events`, filtered sums, GROUP BY) the speed server grew to 49.4 GB RSS (dc 50.5 GB on all three
+> nodes) and was killed by the 48 GB budget; balanced answered all 6 (b03 1236 s, b04 2924 s, b05 2604 s) at 4.6 GB.
+> The node-wide DuckDB memory limit of speed is derived from host RAM (754 GB) instead of the cgroup / container limit
+> (`/sys/fs/cgroup/memory.max` of the process, cgroup v1 `memory.limit_in_bytes`) and MaxDirectMemory/heap. Derive it
+> from the effective limit; log `memoryBudget source=cgroup|host`. CI: a cell with a cgroup limit far below host RAM
+> and an aggregate over data larger than the limit (spill, no OOM kill).
+> (c) **balanced small/point queries collapse on HDFS:** closed-loop point queries (`point_orders`, `point_lineitem`,
+> `count_filter` on tpch SF10) bal 24.5 / 22.6 / 27.2 / 25.8 / 13.1 q/s at 1 / 8 / 32 / 64 / 128 clients, p95 14.8 s at
+> 128, server CPU only 2-6 cores busy (not CPU-bound: a lock or per-query HDFS metadata/view work); speed 31-192 q/s,
+> dc 35-245 q/s; upstream 32 / 192 / 468 / 462 / 448 q/s (with 2-10 % errors from 32 clients). Small-query classes:
+> bal c32 p95 2.6 s / p99 6.0 s vs speed 0.38 / 1.0 s. Profile where balanced waits (thread dumps under 32 clients on
+> HDFS), and bring speed's point-query rate towards upstream's (~460 q/s on 16 cores) - per-query HDFS listing /
+> footer / view work is the suspect; reuse it across queries.
+> (d) dc (speed + distributedComplete): small-query p99 1.3 s at 8 and 8.2 s at 32 clients (speed 0.17 / 1.0 s);
+> 8 concurrent full scans: 2 errors (`Unable to allocate buffer ... Current allocation: 2147231193` - a 2 GiB
+> allocator cap although direct memory is 8g - and `INTERRUPT Error: Interrupted!`) - check item 35's fix covers the
+> 2 GiB cap.
+> Each with tests + CI, `package=true`, "ITEM 39 DONE".
+
 > **Item 38 (2026-11-07, core lane): (1)-(4) done in code and CI (`b69660b9`); pre-release `server-1.0.0-b69660b9260a`
 > published** (branch `pkg/b69660b9`: Dev CI 42403052289 incl. package, Service cluster 42403042241, hdfs 42403044908,
 > security 42403047248, stores 42403049750 green; push Dev CI on main 42403022881 green). (1) Without `hdfsKerberos*`
