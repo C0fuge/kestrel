@@ -34,7 +34,7 @@ D15 DONE 7c54dfde + ace241be (2026-11-09, see Log): distributed complete merges 
     (they all fell back to one node). For the stand: TPC-H with plain names + `-DdefaultSchema=tpch` under dc should
     log `distributedComplete=merged` for q01 / q06 and no `fallback reason='Name the table with its schema'`.
 
-D16 DONE 03881fa6 (2026-11-09, see Log): the core lane's standby retry (`2429782f`) holds in the hdfs-ha loss
+D16 DONE 97a2b7bb (2026-11-09, see Log): the core lane's standby retry (`2429782f`) holds in the hdfs-ha loss
     cell, which now fails over twice and logs per-server retry counts; run 42642657223 shows one refusal retried
     (500 ms) and answered, 0 errors. Watch: a `retry failed` count > 0 or a red hdfs-ha loss cell in later runs.
 
@@ -523,7 +523,7 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   catalogs lane's dispatch 42635429611 on 63a3ec52 (includes D15) **green**; Service cluster 42635146358 on ace241be
   **12/12 green** (hdfs-ha loss passed there: the failover bug is intermittent, 2 of 3 runs).
   Next: D16 (after the core lane), D14 (stand results), D12, D13 (c).
-- 2026-11-09 15:05-15:30Z (lane 3 session): **D16 DONE 03881fa6** (b52bf72f + 03881fa6, rebase-merged into `main`).
+- 2026-11-09 15:05-15:30Z (lane 3 session): **D16 DONE 97a2b7bb** (c1e68574 + 97a2b7bb, rebase-merged into `main`).
   The core lane's green run 42638482163 did not show whether `retryOnStandby` fired (notes had no server-log
   counts; artifacts are not downloadable from the session). `service-cluster.yml` hdfs-ha loss: a second NameNode
   failover (nn1 -> nn2, 12 s after the first) in the same 60 s load, and per server `standby: retried N, retry
@@ -531,5 +531,5 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   213, 0 errors, retried 0 - both windows missed the queries; the 1 standby line per server was the Java client's
   `RetryInvocationHandler` failover), 42642657223 12/12 green (hdfs-ha loss: ok 189, 0 errors, srv1 `standbyRetry
   run=2 delayMs=500` once, answered). With the core run: 3 green runs, 5 failover windows, 0 errors (before the fix
-  red in 2 of 3). Workflow-only change (no Dev CI needed); the push to `main` runs Service cluster again.
+  red in 2 of 3). Workflow-only change (no Dev CI needed); the merge push to `main` ended on a `[skip ci]` commit, so no push run.
   Next: D14 (stand results), D12, D13 (c).

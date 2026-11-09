@@ -3971,6 +3971,6 @@ S3 slowdown item below stays open for then).
   was intermittent before and the job log has no server log, so one green run does not prove the retry fired; lane 3
   (D16) should watch the next runs. Not done: checkstyle/spotbugs only in CI (local plugin download failed offline;
   CI build job green). Item 39: (a), (b), (d) DONE; the core lane's `package=true` waits for (c) (catalogs lane, in progress).
-- 2026-11-09 15:05-15:30Z (lane 3 session): D16 DONE 03881fa6 - the standby retry of `2429782f` confirmed in the
+- 2026-11-09 15:05-15:30Z (lane 3 session): D16 DONE 97a2b7bb - the standby retry of `2429782f` confirmed in the
   `service-cluster.yml` hdfs-ha loss cell (now two NameNode failovers + per-server `standbyRetry` counts): run
   42642657223 one refusal retried after 500 ms and answered, 0 errors; 42641106647 also green. Workflow only.
