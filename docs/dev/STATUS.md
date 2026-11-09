@@ -23,6 +23,19 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-10 00:10 - ITEM 39, last step before `package=true` (core lane).** All four parts are on `main`
+> (39(c) DONE bf72114c). Before packaging:
+> (1) **hadoopfs `51b7220-afc4`** (extension repo release, DuckDB v1.5.6; file-status + located-blocks cache, lazy open
+> from cached blocks, correct mtimes; NameNode RPCs per repeated point query measured down there) is in `ci-assets` as
+> `hadoopfs-v1.5.6-afc4.duckdb_extension` (sha256 64a97a6b08e1f725c980d46f25d664a1c3edde8a73b624ac31bdc75f9095942c).
+> Make it the CI / release default instead of afc3.
+> (2) New optional server setting `hdfsMetadataCacheTtlMs` (`arrowflight.hdfs.metadataCacheTtlMs`, env) -> DuckDB
+> `SET hdfs_metadata_cache_ttl_ms` on every connection; **default 30000 when the data dir is hdfs://**, 0 = off; start
+> line `hdfs=metadataCache ttlMs=...`. Measure `hdfs-point-perf.yml` opens / RPCs per query again.
+> (3) **Answer Q11: yes** - `duckDbExternalFileCache=true` becomes the balanced default on HDFS, provided the afc4 mtime
+> check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
+> Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
+
 > **HDFS NameNode failover bug (2026-11-09, found by lane 3, fixed by the core lane in `2429782f`: Dev CI 42638389703 green, Service cluster 42638482163 13/13 incl. hdfs-ha loss).** Cause
 > (libhdfs3 source, `NamenodeProxy.cpp` `NAMENODE_HA_RETRY_*`): on a standby NameNode libhdfs3 switches to the other
 > one and tries again at most `dfs.client.failover.max.attempts` (15) times **without pausing**, so while `haadmin
