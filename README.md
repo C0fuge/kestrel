@@ -303,7 +303,8 @@ inputs and the chosen values.
 
 `fileStatsPruningMaxFiles` (default 1024, 0 = off): a complete answer of a plain single-table query over a directory
 table reads only the Parquet files whose footer min/max of signed integer and date columns its WHERE clause can match
-(`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` with literals, under AND / OR); other filters read every file as before.
+(`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` with literals, under AND / OR), with or without a table alias
+(`FROM s.t x WHERE x.k = 5`); other filters read every file as before.
 Footers are read once per file version through the store; tables with more files than the bound are not pruned.
 
 `duckDbParquetMetadataCache=true` (default false) lets every DuckDB keep the Parquet footers it read, so repeated
