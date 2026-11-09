@@ -103,6 +103,13 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Added - CI: a node kill inside a streaming merged answer (lane 3, D13 (c))
+
+- `service-cluster.yml` loss cells: one more load client streams a merged scan of all `lineitem` rows
+  (`distributedComplete`) at 150 000 rows/s while node 3 is killed; each scan must be exact (rows and sums against
+  the reference) or `UNAVAILABLE` "peer lost during distributed complete answer; retry" whose retry is exact. The
+  notes count `distributedComplete=peerLost` per server. Test only; no server change.
+
 ### Fixed - queries failed `INTERNAL` during an HDFS NameNode failover (service matrix `hdfs-ha loss`)
 
 - libhdfs3 (in the hadoopfs extension) tries the NameNodes of an HA nameservice in turn without pausing; while a

@@ -38,6 +38,10 @@ D16 DONE 97a2b7bb (2026-11-09, see Log): the core lane's standby retry (`2429782
     cell, which now fails over twice and logs per-server retry counts; run 42642657223 shows one refusal retried
     (500 ms) and answered, 0 errors. Watch: a `retry failed` count > 0 or a red hdfs-ha loss cell in later runs.
 
+D13 (c) DONE 74971b9a + 60c36431 (2026-11-09, see Log): the loss cells stream a slow merged scan across the node
+    kill; `peerLost` UNAVAILABLE after the first batch is now seen in CI (2 of 3 loss cells per run), every retry
+    exact. Watch: a red loss cell, or `scan_peer_lost=0` in all three loss cells of several runs.
+
 D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
     behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
     Optional (Open question material, changes a default): derive `arrowAllocatorLimitBytes` from direct memory.
@@ -64,8 +68,9 @@ D13. Follow-ups of the service matrix (cluster), optional:
       ~30 s into the load) saw 0 errors, but the cell does not show that a query planned after it reached the
       NameNode (speed caches file listings) - count NameNode RPCs per NameNode (JMX) after the failover, or fail
       over under `balanced`.
-    - (c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
-      a longer load or a kill timed inside a merged answer would exercise `peerLost`.
+    - ~~(c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
+      a longer load or a kill timed inside a merged answer would exercise `peerLost`.~~ *done 2026-11-09 (D13 (c)
+      DONE above).*
     - ~~(d) HDFS cells with `-Darrowflight.duckdb.extensionDir` only~~ *done 2026-11-02 (ff4b3310, see Log):* the gate
       now fails `server-1.0.0-fca6512a8046` (start refused) and passes `server-1.0.0-c4cd985f37e3`.
 
@@ -122,7 +127,11 @@ D10. ~~Found in D7: `AVG` is not mergeable (`AggFunc` has COUNT/SUM/MIN/MAX only
 
 D11. ~~Q2 answered (maintainer 2026-10-29): `shutdownDrainSeconds` default 20 s, START-NOTES, `docker stop -t 25`.~~
     *Done 2026-10-29 (see Log).*
-D12. Candidate (found in D9, needs no approval: test/infra only unless it changes behaviour): mixed-version clusters
+D12. *Decided 2026-11-09 (lane 3): acceptable, no change* - `LoadReservations` is in every pre-release since
+    2026-10-29 (the stand runs November builds), so only an upgrade from a build of 2026-10-23..28 crosses it, and
+    there only identical concurrent plans write the new value; the old node then fails to read that key until it is
+    restarted with the new build (one rolling-upgrade window). Reopen if a cluster still runs an October build.
+    Original candidate (found in D9, needs no approval: test/infra only unless it changes behaviour): mixed-version clusters
     during a rolling upgrade - a node before `LoadReservations` cannot read a reservation key holding several
     reservations (only identical concurrent plans produce one); measure with the restart workflow across two
     builds, or decide it is acceptable for an upgrade window (loads then expire after `flightLoadReservationSeconds`
@@ -533,3 +542,13 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   run=2 delayMs=500` once, answered). With the core run: 3 green runs, 5 failover windows, 0 errors (before the fix
   red in 2 of 3). Workflow-only change (no Dev CI needed); the merge push to `main` ended on a `[skip ci]` commit, so no push run.
   Next: D14 (stand results), D12, D13 (c).
+- 2026-11-09 19:03-19:50Z (lane 3 session): lock 19:03Z. D14 waits for the stand (item 39 rerun), so took D13 (c).
+  **D13 (c) DONE** (74971b9a + 60c36431, rebase-merged into `main`): `service-cluster-check.py loss` runs one more
+  client that streams `SELECT l_orderkey, l_linenumber FROM tpch.lineitem` (merged under dc) at a fixed row rate
+  and checks rows + sums against `expected/scan.txt` (new, `service-cluster-data.py`); `peer lost` UNAVAILABLE after
+  the first batch is counted (`scan_peer_lost`) and retried on the other node. Service cluster on the branch:
+  42680042903 (250k rows/s) 12/12 green, peerLost in hdfs loss only (after 5767168 of 6001215 rows, retry exact);
+  42681427105 (150k rows/s) 12/12 green, peerLost in s3 and hdfs-ha loss (after 4325376 / 4259840 rows, retries
+  exact; first time CI saw the D6 path outside unit tests), hdfs loss had read node 3's endpoints before the kill.
+  0 wrong, 0 non-retryable over both runs. Test/workflow only (no Dev CI needed, no `package=true`). D12 decided
+  acceptable (see D12). Lock released. Next: D14 (stand results).
