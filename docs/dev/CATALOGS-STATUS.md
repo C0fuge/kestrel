@@ -49,11 +49,13 @@ ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2
   **The HDFS cell did not show it** (run 42684276829: ~20 opens per query as before): `service-cluster-data.py`
   split orders / lineitem by `key % 4`, so every file spans every key. It now takes `range` (hdfs-point-perf uses it,
   default of the other workflows stays `mod`) and the cell runs `*-nopruning` variants; first run 42689843600.
-- Next, in this order: (1) read run 42689843600 (or its successor): expected point_orders / point_lineitem opens per
-  query ~20 -> ~5-6 (count_filter still reads all files: `o_custkey` spans every file) and higher q/s than the
-  `-nopruning` variants; if not, find out why from the server log (`views=prunedFiles` is DEBUG; `pruning.files`
-  timing). Then decide "ITEM 39(c) DONE" (the maintainer's item is the point-query collapse; pruning + parts 1-2 are
-  the server-side levers; the rest is hadoopfs P1 / Q9). (2) Prune aliased single-table queries too (the filter of
+- Measured (HDFS point perf 42689843600, range-split data, SF1, mix point_orders / point_lineitem / count_filter):
+  NameNode opens per query ~20 -> ~11 with pruning (count_filter still reads every file; speed c32 ~10 -> ~5.7);
+  q/s c32 runner a/b: balanced 65.6/52.8 vs `-nopruning` 58.6/45.7 (+12-16 %), balanced + file cache 75.9/60.6,
+  speed 106.3/82.5 vs 97.9/77.9; no errors. Still CPU-bound on the 2-CPU cell (cpu ~205 %).
+- Next, in this order: (1) Decide "ITEM 39(c) DONE": the server-side levers are in (parts 1-3); the rest of the
+  per-query RPCs is hadoopfs (P1 / Q9) and the fd requests are a default question (Q10, and (4) below). Without a
+  maintainer word, do (2) first and then write DONE with the merge sha. (2) Prune aliased single-table queries too (the filter of
   `FROM s.t x WHERE x.k = 5`: make `singleTableFilter` accept the alias). (3) Q9 answer: when the hadoopfs build
   `51b7220-afc4` appears in `ci-assets` (not there on 2026-11-09 20:00Z: only afc3), take it, set
   `hdfs_metadata_cache_ttl_ms` from a new server setting and measure opens per query again. (4) Balanced fd
@@ -703,5 +705,5 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   `ExecutionService.readComplete`, `ConfigAdapter`. Tests `FileStatsPrunerTest` (5), `ConfigAdapterTest` (+1).
   Branch `fix/39c-point` (merged origin/main, no force push): Dev CI 42684272737 green, HDFS point perf 42684276829
   green but no change in opens (mod-split data, see Next steps); data script `range` split + `-nopruning` variants,
-  HDFS point perf 42689843600 running at session end. Cherry-picked into `main` (b0f82a47, 32ebda26); Dev CI on
-  main 42690037660 running at session end. Not DONE. Lock released.
+  HDFS point perf 42689843600 green (opens per query ~20 -> ~11, balanced c32 +12-16 % q/s; see Next steps).
+  Cherry-picked into `main` (b0f82a47, 32ebda26); Dev CI on main 42690037660 green. Not DONE yet. Lock released.
