@@ -1,30 +1,33 @@
 # Orchestration status
 
-Status as of **2026-11-09 13:59Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-09 14:59Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Not ALL DONE: **ITEM 39** (bug first, real-cluster benchmark of build `35c15ab226b9`) is split across four lanes.
-Done so far: **39(b) DONE 39f84617** (plugins lane), **39(d) DONE a952f415** (lane 3). Open: 39(a) part 2 (core,
-per-session schema, `53647b1a` pushed, Dev CI running) and 39(c) (catalogs, branch `fix/39c-point`, part 1 green,
-not merged yet). ITEM 38 still waits for the stand check on `server-1.0.0-b69660b9260a`. The routine's original
-criterion (items 26/27, marten/heron IMPROVEMENTS DONE) is long met.
+Done: **39(a) DONE** (core, `53647b1a` + `655bec3a`, Dev CI 42630578494), **39(b) DONE 39f84617** (plugins),
+**39(d) DONE a952f415** (lane 3). Open: **39(c)** (catalogs): part 1 merged to `main` (Dev CI 42635429611 green),
+part 2 on `fix/39c-point` (b08fdb19, CI running); not "ITEM 39(c) DONE" yet. New **bug first** (lane 3 service
+matrix, top of core `STATUS.md` Next steps): HDFS NameNode failover answers `INTERNAL ... in state standby`
+(intermittent); the core lane pushed a retry fix `2429782f`, CI running. ITEM 38 still waits for the stand check on
+`server-1.0.0-b69660b9260a`. The routine's original criterion (items 26/27, marten/heron IMPROVEMENTS DONE) is long met.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 39(a) part 2: per-session schema (session option / header, `search_path`) | 2026-11-09 13:49Z (53647b1a) | held 13:41:42Z (fresh) | main Dev CI 42628870401 (53647b1a) running; previous main Dev CI 42624035293 (a952f415) green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open (ITEM 39(b) DONE 39f84617, finish mode) | 2026-11-09 13:19Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 39(c) balanced HDFS point/small-query collapse, part 1 on `fix/39c-point` (3b5512be), not merged | 2026-11-09 13:37Z (branch) | held 12:53:44Z (fresh, branch active) | Dev CI 42627268633 + hdfs-point-perf 42627272084 on 3b5512be green (earlier perf runs 42621322306/42621870860 red during the work, since green) |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 39(d) DONE a952f415; next D14 (stand results), D12, D13 (c) | 2026-11-09 13:17Z | free | Dev CI 42621419498 (branch) + 42624035293 (main) green |
+| core (`STATUS.md`) | bug first: HDFS standby NameNode failover -> retry before anything was sent (`2429782f`) | 2026-11-09 14:49Z (2429782f) | held 14:41:00Z (fresh) | main Dev CI 42638389703 + Service cluster 42638482163 (2429782f) running; newest completed main Dev CI 42635429611 (63a3ec52) green |
+| plugins (`PLUGINS-STATUS.md`) | nothing open (39(b) DONE, finish mode) | 2026-11-09 14:18Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 39(c) part 2 on `fix/39c-point` (b08fdb19: footer stubs of sample files kept across describes) | 2026-11-09 14:48Z (main), 14:45Z (branch) | held 14:36:22Z (fresh) | part 1 green on main (42635429611, Catalogs CI 42635146385); branch Dev CI 42637718051 + HDFS point perf 42637704787 running |
+| lane 3 (`LANE3-STATUS.md`) | D15 DONE 7c54dfde (+ace241be); found the hdfs-ha failover bug (handed to core) | 2026-11-09 14:48Z | free | Service cluster 42632461815 (branch) red on `hdfs-ha loss` (the bug); main push run 42635146358 green |
 
-No stale locks (marten and heron locks free). No red Dev CI on main; nothing to rerun. No new bug-first notes in the
-paused-lane STATUS files beyond item 39.
+No stale locks (marten and heron locks free). No red Dev CI on main (42635146361 on ace241be was cancelled by a
+newer push, not failed); nothing to rerun. Bug-first note in a paused-lane file: the hdfs-ha failover bug (lane 3,
+written into core `STATUS.md`), being fixed by the core lane.
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42403042241 | b69660b9 (pkg) | pass |
+| service-cluster.yml | 42638482163 | 2429782f (main) | running (previous: 42635146358 ace241be main pass; 42632461815 lane/distributed fail, hdfs-ha loss) |
 | service-hdfs.yml | 42403044908 | b69660b9 (pkg) | pass |
 | service-security.yml | 42403047248 | b69660b9 (pkg) | pass |
 | service-stores.yml | 42403049750 | b69660b9 (pkg) | pass |
@@ -35,32 +38,37 @@ paused-lane STATUS files beyond item 39.
 - `server-1.0.0-06c5adc7d7c9` (2026-11-07 05:57Z): item 37; ITEM 37 DONE on the stand.
 - `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): egret FRESH DONE; marten/heron CHECKED.
 
-No item 39 pre-release yet (the core lane runs `package=true` once 39(a)-(d) are all on `main`).
+No item 39 pre-release yet (the core lane runs `package=true` once 39(c) is DONE on `main`).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 13:40Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 14:41Z "finish mode, nothing new".
   Open question: TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 185 (13:53Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 186 (14:52Z): nothing open.
 
 ## egret
 
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- New task (maintainer 2026-11-09): GizmoSQL v1.42.2 as a fourth server in the compare harness; compare run
-  42629228261 (wave `fresh-gizmo-deafc861cce3`, 07200bd) running.
+- GizmoSQL v1.42.2 as a fourth server: smoke run 42629228261 green (gizmo 22/22; speed vs gizmo TPC-H SF1 S3 ADBC
+  1.08, local SF1/SF10 1.10/1.00, i.e. about even); full wave `fresh-gizmo-deafc861cce3` run 42632367579 running
+  (~2.5 h from 14:12Z), then `results/FRESH-gizmo-deafc861cce3.md`.
 - ACCEPT b69660b9260a DONE: SHIP.
 
 ## For the maintainer
 
-- ITEM 39: (b) and (d) DONE on `main`; (a) part 2 in CI; (c) on `fix/39c-point`, waiting to merge. Then the core
-  lane's `package=true` and "ITEM 39 DONE". For the stand now: `-DdefaultSchema=tpch` (item 39 (a) part 1).
+- ITEM 39: (a), (b), (d) DONE on `main`; (c) part 1 on `main`, part 2 in CI on `fix/39c-point`. Then the core lane's
+  `package=true` and "ITEM 39 DONE". For the stand now: JDBC `...?schema=tpch` or `-DdefaultSchema=tpch`.
+- HDFS NameNode failover bug (intermittent `INTERNAL ... in state standby`): core fix `2429782f` (retry when nothing
+  was sent yet) in CI. If it is not enough, the lane proposes answering `UNAVAILABLE` - a status-code change that
+  would need your decision (Open question).
 - Stand check of `server-1.0.0-b69660b9260a` for ITEM 38, then "ITEM 38 DONE".
 - **Open questions:** item 35 default `distributedCompletePeerStreams`; item 33 default `hdfsLocalCopyRoomWaitMillis`
   (0 vs 30000); marten q16 SF1 pushdown slowdown.
 
 ## History
 
+- 2026-11-09 14:59Z: ITEM 39(a) DONE (Dev CI 42630578494); 39(c) part 1 merged to main (42635429611 green), part 2 b08fdb19 in CI on fix/39c-point; lane 3 D15 DONE 7c54dfde, found intermittent hdfs-ha NameNode failover bug (42632461815 red), core fix 2429782f with Dev CI 42638389703 + Service cluster 42638482163 running; egret GizmoSQL wave 42632367579 running; no red CI on main, no stale locks.
 - 2026-11-09 13:59Z: ITEM 39(b) DONE 39f84617 and 39(d) DONE a952f415 on main; core 39(a) part 2 53647b1a pushed, main Dev CI 42628870401 running (42624035293 green); catalogs 39(c) part 1 green on fix/39c-point (42627268633, 42627272084), not merged; egret compare run 42629228261 (GizmoSQL fourth server) running; no red CI on main, no stale locks.
 - 2026-11-09 12:58Z: ITEM 39 (real-cluster bugs, maintainer 2026-11-09) split across all four lanes; all four locks held (12:44-12:54Z); 39(a) ffe0b1d2 and 39(b) 39f84617 pushed to main by the core lane, main Dev CI 42620776092 running; lane3 Dev CI 42621419498 queued; catalogs hdfs-point-perf 42621322306 running on fix/39c-point; no red CI, no stale locks.
 - 2026-11-09 11:56Z: no change: no core session since 10:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (11:41Z)/heron (session 183)/egret (11:26Z README, idle) idle; no stale locks.
@@ -100,4 +108,3 @@ No item 39 pre-release yet (the core lane runs `package=true` once 39(a)-(d) are
 - 2026-11-07 15:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (15:40Z)/heron (session 149)/egret (15:26Z) idle; no stale locks.
 - 2026-11-07 14:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (14:41Z)/heron (session 148)/egret (13:27Z) idle; no stale locks.
 - 2026-11-07 13:56Z: no change: core session 13:40Z only re-confirmed item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9; no new CI runs or pre-releases; marten (13:41Z)/heron (session 147)/egret (13:27Z) idle; no stale locks.
-- 2026-11-07 12:57Z: no change: no core commits since 07:42Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (12:40Z)/heron (session 146)/egret (11:27Z) idle; no stale locks.
