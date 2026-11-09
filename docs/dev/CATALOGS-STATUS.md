@@ -415,6 +415,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- **Answer Q9 (maintainer, 2026-11-09 18:20): yes.** The hadoopfs side is now its own item in the extension's repo
+  (P1: process-wide file-status + located-blocks cache with a TTL setting `hdfs_metadata_cache_ttl_ms`, reuse of the
+  open stream across row-group reads, correct modification times; build for DuckDB v1.5.6 as `51b7220-afc4`,
+  published as a release there). Do both: the server-side file pruning by footer statistics here (your next step 1)
+  now, and when the afc4 build exists, take it into `ci-assets`, set `hdfs_metadata_cache_ttl_ms` from a server
+  setting (default e.g. 30 s on HDFS) and measure opens/RPCs per query again on the cell.
 - Q9 (2026-11-09, item 39 (c)): DuckDB's hadoopfs extension does one NameNode `getfileinfo` and one `open`
   (getBlockLocations) per Parquet file per row-group scan (~5 per file per point query in the HDFS cell, run
   42637704787). Should the extension (our build in `ci-assets`) cache file status and located blocks per file for a
