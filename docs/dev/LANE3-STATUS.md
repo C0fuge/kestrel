@@ -4,6 +4,11 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+ITEM 39(d) DONE a952f415 (2026-11-09, see Log): merge budget from min(direct memory, Arrow allocator limit);
+one-row merges skip the queue. For the stand: rerun the dc small-query classes (8 / 32 clients) and the 8
+concurrent full scans on the core lane's item 39 pre-release; expect `peer streams: 16 (... Arrow allocator limit
+2048 MiB)` at start, 0 allocation errors, and `permits=0` on the count/sum merges.
+
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(d).** dc small-query p99 tails and the 2 GiB allocator cap on concurrent dc scans (item 39 (d)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
 > `lane/distributed` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
@@ -24,6 +29,10 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 > into that lane's STATUS). Then write "SERVICE MATRIX <lane> DONE" at the start of a line.
 
 SERVICE MATRIX lane 3 DONE (2026-11-02, see Log): `.github/workflows/service-cluster.yml`, 8 cells green (run 41469353046).
+
+D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
+    behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
+    Optional (Open question material, changes a default): derive `arrowAllocatorLimitBytes` from direct memory.
 
 D13. Follow-ups of the service matrix (cluster), optional:
     - (a) short-circuit reads: *measured 2026-11-02 (see Log)* - **not used**. *(a1) done 2026-11-02 (19th session):
@@ -468,3 +477,22 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   nn2=standby; locality as on plain HDFS (balanced 11/11 endpoints local-only); short-circuit still unused (warning).
   Dev CI 41500837154 on 1646ed4f was running at session end (workflow-only change). Next: D12, D13 (c), the hdfs-ha
   failover follow-up.
+- 2026-11-09 (lane 3 session, 22nd): lock 12:53Z. **ITEM 39(d) DONE a952f415** (rebase-merged into `main`; no
+  `package=true`, the core lane packages item 39). `lane/distributed` had no common history with `main` (main was
+  rewritten after 2026-10-29): its old tip 50038cc9 is kept as `archive/lane-distributed-2026-10-29`, the lane
+  branch was recreated from `origin/main` (force-with-lease). Cause of the 2 GiB cap: item 35's admission sized its
+  budget from direct memory only (8 GiB -> 64 endpoint streams), but peer streams are read into the root Arrow
+  allocator, `arrowAllocatorLimitBytes` default 2 GiB, so eight concurrent full scans of several endpoints filled it
+  (`Current allocation: 2147231193`); item 35's CI ran with 2g direct = 2 GiB allocator and could not see it. Fix:
+  default budget one stream per 128 MiB of min(direct memory, effective allocator limit incl. parents) - 16 on the
+  cluster; start line names both limits. Small-query tails: every merge took one permit per endpoint and queued
+  FIFO behind full scans; one-row merges (aggregates without GROUP BY / DISTINCT, AVG included) now take no permits
+  and never wait (`admitUnmetered`, `merged ... permits=0`). Not changed: row-returning point queries
+  (`point_orders`) still take permits - their size is unknown before they run; if the stand still shows dc tails for
+  them, a per-shape charge or a local-execution threshold is the next step (D14). The `INTERRUPT Error:
+  Interrupted!` of the stand was not reproduced; it is most likely the cancel that follows an allocation failure (the
+  merge cancels its endpoint streams) - recheck on the stand. Tests: `PeerStreamAdmissionTest` (+2),
+  `DistributedCompleteIntegrationTest.oneRowMergesDoNotWaitForRoom` (room held, 3 one-row merges exact, 0 waits).
+  Dev CI concurrency step now also runs with `-XX:MaxDirectMemorySize=8g` and asserts budget 16: Dev CI
+  42621419498 green on the branch (2g and 8g each 48/48 exact, 0 failed executions); push Dev CI 42624035293 on
+  a952f415 was running at session end. Next: D14 (stand results), D12, D13 (c).
