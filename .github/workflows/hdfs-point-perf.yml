@@ -1,0 +1,140 @@
+# Item 39 (c), lane 4 (only this lane edits this file): point / small queries on a single-node HDFS
+# (short-circuit reads), closed loop, balanced vs speed, with thread dumps of the server at the
+# largest client count (tools/ci/hdfs-point-cell.sh). The maintainer's real cluster showed balanced
+# flat at ~25 q/s from 1 to 128 clients with 2-6 cores busy; this run shows where its threads wait.
+# Manual, not part of Dev CI; also on push to a fix/39c-* branch touching its files.
+name: HDFS point perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      clients:
+        description: "client counts"
+        type: string
+        default: "1,8,32"
+      seconds:
+        description: "seconds per client count"
+        type: string
+        default: "30"
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+      extra:
+        description: "extra -D options of the server in every cell"
+        type: string
+        default: ""
+  push:
+    branches: ["fix/39c-*"]
+    paths:
+      - .github/workflows/hdfs-point-perf.yml
+      - tools/ci/hdfs-point-cell.sh
+      - tools/ci/point-query-load.py
+      - tools/ci/thread-dump-summary.py
+      - flight-server/src/main/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hdfs-point-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+  DUCKDB_VERSION: v1.5.6
+  HADOOP_IMAGE: apache/hadoop:3.4.1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+      - name: Server (this commit)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/in/app"; mkdir -p "$out/plugins"
+          ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$out/arrow-flight-server.jar"
+          cp -r flight-server/target/libs "$out/"
+      - name: DuckDB hadoopfs extension (ci-assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
+            --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/all-ext" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64"
+          tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
+          f=$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)
+          test -n "$f" || { echo "no hadoopfs for ${DUCKDB_VERSION} in ci-assets"; exit 1; }
+          cp "$f" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64/"
+      - name: TPC-H data
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" 4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hdfs-point-input
+          path: ${{ runner.temp }}/in
+          compression-level: 0
+          retention-days: 1
+
+  cell:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [balanced, speed]
+    name: ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hdfs-point-input
+          path: ${{ runner.temp }}/in
+      - name: Client and server image
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          # The hadoopfs build links libssl.so.1.1: an Ubuntu 20.04 base, the runner's JDK 21 mounted.
+          mkdir -p "$RUNNER_TEMP/img"
+          printf '%s\n' 'FROM eclipse-temurin:17-jdk-focal' \
+            'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libxml2 libkrb5-3 libgssapi-krb5-2 libgsasl7 libuuid1 > /dev/null && rm -rf /var/lib/apt/lists/*' \
+            > "$RUNNER_TEMP/img/Dockerfile"
+          docker build -q -t sc-server "$RUNNER_TEMP/img"
+      - name: Measure
+        run: |
+          keys=$(( 1500000 * ${{ inputs.sf || '1' }} ))
+          tools/ci/hdfs-point-cell.sh "${{ matrix.profile }}" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work" \
+            "${{ inputs.clients || '1,8,32' }}" "${{ inputs.seconds || '30' }}" "$keys" "${{ inputs.extra }}"
+      - name: Report
+        if: always()
+        run: |
+          w="$RUNNER_TEMP/work"; mkdir -p "$w"
+          {
+            echo "### ${{ matrix.profile }}"; echo '```'
+            cat "$w/notes.txt" "$w/result.txt" 2>/dev/null
+            echo; head -n 80 "$w/threads.txt" 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: hdfs-point-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/work
+            !${{ runner.temp }}/work/hnative
+          retention-days: 7
