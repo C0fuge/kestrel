@@ -1038,3 +1038,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   server process, dc nodes included, sizes itself through `HostLimits.detect()` (ServerModule / ConfigAdapter), so dc
   is covered. Dev CI run 42620776092 (39f84617): green, incl. step "Server in a memory-limited systemd scope (item 39
   (b))". No `package=true` (the core lane packages when all four parts are on `main`). Lock released.
+- 2026-11-09 13:20Z (plugins lane): nothing open (ITEM 39(b) DONE, SERVICE MATRIX plugins DONE, FINISH MODE). The
+  11-02 follow-up is answered: package run 41500117177 (7fa1c246) was cancelled and published nothing, but later
+  pre-releases contain those commits (latest `server-1.0.0-b69660b9260a`, 2026-11-07, has 7fa1c246 as an
+  ancestor). No new release needed. Lock not taken (docs only).
