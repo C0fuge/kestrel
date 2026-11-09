@@ -15,7 +15,14 @@ profile=$1 in=$2 work=$3 clients=$4 seconds=$5 keys=$6 extra=${7:-}
 image=${HADOOP_IMAGE:-apache/hadoop:3.4.1}
 mkdir -p "$work"
 res="$work/result.txt"; : > "$res"
-fail() { echo "$profile|setup|$*" >> "$res"; for c in nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done; exit 1; }
+fail() {
+  echo "$profile|setup|$*" | tee -a "$res"
+  for c in nn1 dn1 srv; do
+    docker logs "$c" > "$work/$c.log" 2>&1 || true
+    echo "--- $c (last lines)"; tail -n 25 "$work/$c.log" | cut -c1-400
+  done
+  exit 1
+}
 case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) fail "unknown profile $profile" ;; esac
 opts="$opts $extra"
 

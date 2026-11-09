@@ -127,7 +127,7 @@ jobs:
           {
             echo "### ${{ matrix.profile }}"; echo '```'
             cat "$w/notes.txt" "$w/result.txt" 2>/dev/null
-            echo; head -n 80 "$w/threads.txt" 2>/dev/null
+            echo; head -n 80 "$w/threads.txt" 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
