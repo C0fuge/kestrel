@@ -35,7 +35,7 @@ that answer must be exact. A wrong (e.g. partial) answer or a non-retryable erro
 ``load start`` when the load runs, one ``event`` line per answer and the same ``result`` line.
 When <dir>/expected/scan.txt exists, one more client streams ``SCAN`` (a merged answer of all
 lineitem rows under ``distributedComplete``) on the first node, read at ``SC_SCAN_ROWS_PER_S`` rows
-per second (default 250000, ~24 s at SF1), so that the kill lands inside a merged answer whose
+per second (default 150000, ~40 s at SF1; at the kill, 15 s in, ~2/3 of the rows are unread), so that the kill lands inside a merged answer whose
 first batch the client already holds (D13 c). Each scan must end with exactly the reference's rows
 and sums, or with UNAVAILABLE whose retry on the other node is exact; ``scan`` events say after how
 many rows an error came and whether it was the server's "peer lost" status. The summary counts
@@ -438,7 +438,7 @@ def loss(servers, base, seconds, clients):
         with open(scan_ref, encoding="utf-8") as fh:
             want = tuple(int(v) for v in fh.read().split())
         threads.append(threading.Thread(target=scanner,
-                                        args=(want, float(os.environ.get("SC_SCAN_ROWS_PER_S", "250000")))))
+                                        args=(want, float(os.environ.get("SC_SCAN_ROWS_PER_S", "150000")))))
     for t in threads:
         t.start()
     for t in threads:
