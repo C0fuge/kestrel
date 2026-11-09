@@ -11,6 +11,25 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > in this file's Log. Maintainer exception to this lane's scope limits for this item only. No `package=true` here: the
 > core lane packages when all four parts are merged.
 
+ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2026-11-09:
+- Part 1 merged into `main`: `CatalogViews.current()` no longer makes every query wait for the minute-ly listing of
+  all tables (one query refreshes, the others use the views of before; first views and a new data version are still
+  waited for) - the likeliest cause of the real cluster's p95 14.8 s with 2-6 busy cores (a 1.27 TB table and several
+  schemas listed under one lock once a minute). Opt-in `duckDbParquetMetadataCache` (default off).
+- Measuring: `.github/workflows/hdfs-point-perf.yml` (+ `tools/ci/hdfs-point-cell.sh`, `point-query-load.py`,
+  `thread-dump-summary.py`). On 2-CPU single-node HDFS cells both profiles are CPU-bound inside
+  `duckdb_jdbc_execute` (thread dumps): the real cluster's not-CPU-bound collapse is NOT reproduced there yet.
+- Next, in this order: (1) read run 42626810469's `opensPerQuery` / `fdRequestsPerQuery` per variant (balanced opens
+  every file of the table per query in each per-thread DuckDB; speed shares one DuckDB) - if balanced needs a NameNode
+  open + fd request per file per query, that is the HDFS metadata work to reuse. (2) Make the cell look like the
+  cluster: several schemas with many files (e.g. 2000 small files in a second schema, `orders.orders` next to
+  `tpch.orders`), so the view refresh and per-query listing (`QueryPlanner.tableFiles` lists every file with block
+  locations up to four times per query; `ExecutionService` 1875 / 2139) cost what they cost there; compare a build
+  of the commit before part 1 with the branch on the same runner. (3) Cache the per-query
+  `tableFiles` listing per table for the views' refresh interval (same staleness as the views) if (1)/(2) show it;
+  check whether hadoopfs reports file modification times (DuckDB's footer cache relies on them) before proposing
+  `duckDbParquetMetadataCache` as a default. (4) speed's rate: compare with upstream on the same cell.
+
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
 > end. Add `.github/workflows/service-stores.yml`: **S3** (MinIO, s3 plugin, 2 stores), **lakeFS** (branch + commit),
@@ -608,3 +627,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   server-1.0.0-fca6512a8046, 16/16). Catalogs CI's `paimon-hudi` job broke on the runners' Python 3.14
   (`backports.zstd` has no 3.14 build; fastavro uses the stdlib `compression.zstd` there): requirement marker,
   Catalogs CI 41471784761 green. No server, plugin or SPI change. Lock released.
+- 2026-11-09: **ITEM 39(c) part 1** (branch `fix/39c-point`, merged into `main`): catalog views refresh without
+  blocking other queries; setting `duckDbParquetMetadataCache` (default off); workflow `hdfs-point-perf.yml`. Unit
+  tests `CatalogViewsTest.oldViewsServeOtherQueriesWhileOneRefreshes`, `ConfigAdapterTest.duckDbParquetMetadataCache*`.
+  Dev CI 42623741690 green on the branch (6bc58cda). HDFS point perf: 42621322306 / 42621870860 (cell setup: the
+  server JVM crashed with the native Hadoop library, cell runs without it), 42622519461 (baseline: balanced 42/57/53,
+  speed 71/111/119 q/s at c1/c8/c32, both CPU-bound on 2 CPUs), 42623710991 (one runner per variant: too noisy),
+  42624683955 (every variant on two runners, c32 a/b: balanced 42.2/49.4, +file cache 50.1/60.4, +metadata cache
+  45.8/53.5, speed 72.5/84.9, +metadata cache 76.9/88.3), 42626810469 (with per-query HDFS counters; read next
+  session). Not DONE: see the ITEM 39(c) note in Next steps. Lock released.

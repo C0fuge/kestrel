@@ -3934,3 +3934,8 @@ S3 slowdown item below stays open for then).
   answers for a mixed-case name and a join with an unqualified name); test fixed, Dev CI 42630578494 green. Existing
   behaviour, not changed: partial answers find a table's files by its name as written (`FROM Orders` -> NOT_FOUND
   `Could not find Arrow schema`, case-sensitive paths) and need every name qualified. No package run yet: waits for 39 (c). Lock released.
+- 2026-11-09 (lane 4, item 39 (c) part 1, merged from `fix/39c-point`): core change for the core lane to know -
+  `CatalogViews.current()` is no longer one lock for every query: when the views are only old (same data version)
+  one query refreshes them and the others use the views of before (`refreshIfDue()` keeps the old synchronized body;
+  counter `servedDuringRefresh()`). New opt-in setting `duckDbParquetMetadataCache` (DuckDbAdapter.configureConnection).
+  Workflow `hdfs-point-perf.yml` (lane 4 only). Dev CI 42623741690 green on the branch. Details: CATALOGS-STATUS Log.

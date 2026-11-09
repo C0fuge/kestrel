@@ -31,6 +31,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `duckDbParquetMetadataCache` (`arrowflight.duckdb.parquetMetadataCache`, `DUCKDB_PARQUET_METADATA_CACHE`) | `false` | every DuckDB keeps the Parquet footers it read (DuckDB `parquet_metadata_cache`); re-read only when the file system reports a newer modification time (item 39 (c)) |
 | `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table (item 39 (a)) |
 | `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |
 | `duckDbMemoryConnections` (`arrowflight.duckdb.memoryConnections`, `DUCKDB_MEMORY_CONNECTIONS`) | 0 = cores / (cores / 4 between 2 and 16), at least 2 | connections the default `memory_limit` is split between |
@@ -136,6 +137,22 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   refused `INVALID_ARGUMENT ... qualify it (schema.table)` instead of reading another schema. An unknown schema is
   INVALID_VALUE on SetSessionOptions and `INVALID_ARGUMENT: Unknown schema ...` with the header. Without the option
   or header nothing changes.
+
+### Fixed - queries no longer wait for the minute-ly refresh of the catalog views (STATUS item 39 (c), part 1)
+
+- Every query asked the catalog views for their current definitions under one lock; once a minute (every 5 s while a
+  table could not be described) the query that found them old listed every table of the data directory, and every
+  other query of the node waited for that listing (seconds on HDFS with many schemas and files). Now, when only their
+  age is due (the store's data version unchanged), one query refreshes them and the queries arriving meanwhile use
+  the views of before. The first views and a new data version (lakeFS commit) are still waited for.
+- New setting `duckDbParquetMetadataCache` (default `false`, behaviour unchanged): every DuckDB of the node keeps the
+  Parquet footers it read (re-read only when the file system reports a newer modification time; not yet checked for
+  hadoopfs, so not for files rewritten in place). Start line `duckdb=threads ... parquetMetadataCache=true|false`.
+- CI: `.github/workflows/hdfs-point-perf.yml` (manual, and on push to `fix/39c-*`): closed-loop point queries on a
+  single-node HDFS with short-circuit reads, balanced and speed with and without the caches, every variant on each of
+  two runners, server thread dumps at the largest client count and NameNode opens / short-circuit fd requests per
+  query. On 2-CPU cells (SF1, c32) the file cache gives balanced +19-22 %, the metadata cache balanced +8-9 % and
+  speed +4-6 % (run 42624683955).
 
 ### Fixed - memory of a server in a systemd scope / non-root cgroup (STATUS item 39 (b))
 

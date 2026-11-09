@@ -731,8 +731,8 @@ public class ConfigAdapter {
      * Resolves {@code duckDbParquetMetadataCache} ({@code DUCKDB_PARQUET_METADATA_CACHE}): whether
      * every DuckDB of the node keeps the Parquet footers it read (DuckDB's
      * {@code parquet_metadata_cache}) instead of reading and parsing them again on each query
-     * (item 39 (c): point queries); default false. DuckDB checks a cached footer against the
-     * file's modification time on every read, so a rewritten file is read again.
+     * (item 39 (c): point queries); default false. DuckDB reads a cached footer again only when
+     * the file system reports a newer modification time for the file.
      *
      * @param props configuration source
      * @return true when on

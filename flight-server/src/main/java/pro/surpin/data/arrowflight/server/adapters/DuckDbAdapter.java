@@ -1031,8 +1031,8 @@ public final class DuckDbAdapter implements AutoCloseable {
                 s.execute("SET streaming_buffer_size = " + sqlStringLiteral(streamingBuffer));
             }
             if (parquetMetadataCache) {
-                // Footers kept per DuckDB, checked against the file's modification time on each
-                // read: point queries no longer read and parse every file's footer (item 39 (c)).
+                // Footers kept per DuckDB, read again when the file system reports a newer
+                // modification time: point queries do not parse every footer again (item 39 (c)).
                 s.execute("SET parquet_metadata_cache = true");
             }
             if (!fileCache) {
