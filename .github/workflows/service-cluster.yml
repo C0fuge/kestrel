@@ -6,7 +6,8 @@
 # mounted for short-circuit reads when the image's native Hadoop library loads), HDFS HA (hdfs-ha: the
 # same with an HA nameservice ns1 of two NameNodes, nn1 standby / nn2 active, shared edits, manual
 # failover; data dir hdfs://ns1/data, so the servers' Java client and hadoopfs must fail over to nn2;
-# in the loss cell the NameNodes also fail over nn2 -> nn1 and back under load) and S3 (a MinIO
+# in the loss cell the NameNodes also fail over nn2 -> nn1 and back under load; the notes count the reads
+# each NameNode answered per failover window, D13 b) and S3 (a MinIO
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
 # SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
@@ -357,6 +358,9 @@ jobs:
             "$py" -I tools/ci/service-cluster-check.py loss "$nodes" "$in" 60 3 > "$RUNNER_TEMP/client.log" 2>&1 &
             client=$!
             for _ in $(seq 60); do grep -q '^load start' "$RUNNER_TEMP/client.log" && break; sleep 1; done
+            # D13 (b): client reads each NameNode answered, snapshots at each failover (service-cluster-check.py nnreads).
+            nnSnap() { if [ "$STORE" = hdfs-ha ]; then "$py" -I tools/ci/service-cluster-check.py nnsnap 172.30.0.9:9870,172.30.0.10:9870; fi; }
+            snap0=$(nnSnap)
             sleep 15
             note "node 3 killed (docker kill -s KILL) at $(date -u +%T) under load of 3 clients on nodes 1-2"
             docker kill -s KILL srv3 > /dev/null
@@ -366,13 +370,21 @@ jobs:
               sleep 15
               docker exec nn2 hdfs haadmin -failover nn2 nn1 2>&1 | tail -n 1
               note "NameNode failover nn2 -> nn1 at $(date -u +%T): $(haState)"
+              snap1=$(nnSnap)
               # D16: a second failover window (nn1 -> nn2) in the same load, so each run exercises the
               # standby retry (DuckDbAdapter.retryOnStandby) twice.
               sleep 12
               docker exec nn1 hdfs haadmin -failover nn1 nn2 2>&1 | tail -n 1
               note "NameNode failover nn1 -> nn2 at $(date -u +%T): $(haState)"
+              snap2=$(nnSnap)
             fi
             wait "$client"; rc=$?
+            if [ "$STORE" = hdfs-ha ]; then
+              "$py" -I tools/ci/service-cluster-check.py nnreads "$snap0" "${snap1:-?|?}" "${snap2:-?|?}" "$(nnSnap)" > "$RUNNER_TEMP/nn.log"
+              while read -r l; do note "$l"; done < <(grep '^NameNode reads' "$RUNNER_TEMP/nn.log")
+              # Not a failure (the client checks the answers): queries planned after a failover never reached the new active NameNode.
+              w=$(grep -m 1 '^warn ' "$RUNNER_TEMP/nn.log") && echo "::warning title=NameNode not reached::$STORE $CELL: ${w#warn }"
+            fi
             grep -E '^(summary|result)' "$RUNNER_TEMP/client.log"
             grep -E '^event .* (unavailable|wrong|error|retry)' "$RUNNER_TEMP/client.log" | head -n 20
             note "$(grep '^summary' "$RUNNER_TEMP/client.log")"

@@ -43,6 +43,7 @@ many rows an error came and whether it was the server's "peer lost" status. The 
 (any UNAVAILABLE) and ``scan_retried_ok``; a wrong scan or a non-retryable error fails as above.
 """
 import decimal
+import json
 import math
 import os
 import re
@@ -450,7 +451,58 @@ def loss(servers, base, seconds, clients):
     return 1 if failures else 0
 
 
+NN_OPS = ("FileInfoOps", "GetBlockLocations", "GetListingOps")
+
+
+def nn_snapshot(namenodes):
+    """D13 (b): successful client reads each NameNode answered so far (a standby refuses reads before
+    counting them), one "fi gbl gl" group per NameNode joined by "|", "?" for a NameNode without JMX."""
+    groups = []
+    for nn in namenodes:
+        try:
+            url = f"http://{nn}/jmx?qry=Hadoop:service=NameNode,name=NameNodeActivity"
+            with urllib.request.urlopen(url, timeout=5) as r:
+                bean = json.load(r)["beans"][0]
+            groups.append(" ".join(str(int(bean[k])) for k in NN_OPS))
+        except Exception:  # noqa: BLE001 - diagnostic only
+            groups.append("?")
+    return "|".join(groups)
+
+
+def nn_reads(snapshots):
+    """Reads per NameNode in each window between snapshots (nn1 standby / nn2 active at start, failing over
+    nn2 -> nn1 and back): one line per window, and "warn ..." when the active NameNode of a window after a
+    failover answered no read at all."""
+    names = ("before failover 1", "after failover 1", "after failover 2")
+    active = (1, 0, 1)
+    parsed = [[None if g == "?" else [int(v) for v in g.split()] for g in s.split("|")] for s in snapshots]
+    silent = []
+    for w, (a, b) in enumerate(zip(parsed, parsed[1:])):
+        cells, total = [], None
+        for i in (active[w], 1 - active[w]):
+            x = a[i] if i < len(a) else None
+            y = b[i] if i < len(b) else None
+            if x is None or y is None or len(x) != len(NN_OPS) or len(y) != len(NN_OPS):
+                cells.append(f"nn{i + 1}=?")
+                continue
+            d = [q - p for p, q in zip(x, y)]
+            cells.append(f"nn{i + 1}{'(active)' if i == active[w] else ''}=" + "/".join(map(str, d)))
+            if i == active[w]:
+                total = sum(d)
+        print(f"NameNode reads {names[w]} ({'/'.join(NN_OPS)}): {' '.join(cells)}")
+        if w > 0 and total == 0:
+            silent.append(names[w])
+    if silent:
+        print("warn the active NameNode answered no read " + "; ".join(silent))
+
+
 def main():
+    if sys.argv[1] == "nnsnap":
+        print(nn_snapshot(sys.argv[2].split(",")))
+        return
+    if sys.argv[1] == "nnreads":
+        nn_reads(sys.argv[2:])
+        return
     mode, servers, base = sys.argv[1], sys.argv[2].split(","), sys.argv[3]
     if mode == "check":
         sys.exit(check(servers, base))
