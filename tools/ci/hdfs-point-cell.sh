@@ -103,6 +103,7 @@ for c in "${counts[@]}"; do
   fi
   # Per-query HDFS work: NameNode opens (audit cmd=open, one per file a DuckDB or the Java client
   # opens) and DataNode short-circuit fd requests (one per block a client without the fds cached reads).
+  nnlines0=$(docker logs nn1 2>&1 | wc -l)
   opens0=$(docker logs nn1 2>&1 | grep -c 'cmd=open')
   fds0=$(docker logs dn1 2>&1 | grep -c 'op: REQUEST_SHORT_CIRCUIT_FDS')
   line=$(taskset -c 2,3 "$py" -I tools/ci/point-query-load.py 172.31.0.12:32010 "$c" "$seconds" "$keys" 2> "$work/client-c$c.log") || status=1
@@ -113,6 +114,18 @@ for c in "${counts[@]}"; do
   per=$(awk -v o="$opens" -v f="$fds" -v q="${queries:-0}" 'BEGIN { if (q > 0) printf "opensPerQuery=%.2f fdRequestsPerQuery=%.2f", o / q, f / q; else print "opensPerQuery=? fdRequestsPerQuery=?" }')
   cpu=$(sed 's/%//' "$work/cpu-c$c.txt" | awk '{ s += $1; n++ } END { if (n) printf "%.0f", s / n; else print "?" }')
   echo "${LABEL:-$profile}|$line cpu=${cpu}% $per" | tee -a "$res"
+  # Which NameNode calls and which files: audit commands per query, opens per file (the table's
+  # first file is the describe's sample file).
+  docker logs nn1 2>&1 | tail -n +$(( nnlines0 + 1 )) > "$work/audit-c$c.txt"
+  {
+    printf '%s|c%s audit per query:' "${LABEL:-$profile}" "$c"
+    grep -oE 'cmd=[A-Za-z]+' "$work/audit-c$c.txt" | sort | uniq -c \
+      | awk -v q="${queries:-0}" '{ printf " %s=%.2f", substr($2, 5), (q > 0 ? $1 / q : 0) }'
+    printf ' | opens per file:'
+    grep 'cmd=open' "$work/audit-c$c.txt" | grep -oE 'src=[^ ]+' | sed 's|.*/data/tpch/||' | sort | uniq -c \
+      | awk -v q="${queries:-0}" '{ printf " %s=%.2f", $2, (q > 0 ? $1 / q : 0) }'
+    echo
+  } | tee -a "$res"
 done
 python3 -I tools/ci/thread-dump-summary.py "$work"/dump-*.txt > "$work/threads.txt" 2>&1 || true
 head -n 60 "$work/threads.txt"

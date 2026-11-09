@@ -108,6 +108,8 @@ public final class ExecutionService {
     private final boolean widenUnsigned;
     /** Node-local copies of files only whole-file holders read; made on first use. */
     private LocalCopyCache localCopyCache;
+    /** Footer stubs of sample files kept across describes; made on first use. */
+    private pro.surpin.data.arrowflight.server.duckdb.FooterStubCache footerStubCache;
 
     /**
      * Creates ExecutionService.
@@ -780,19 +782,78 @@ public final class ExecutionService {
         pro.surpin.data.arrowflight.server.storage.DataStore store = parquetAdapter.dataStore();
         String location = store.duckDbUri(sample);
         // HDFS under SASL: a file without every block here cannot be read by DuckDB; describe
-        // its footer, read through the Java client, instead (item 29).
-        try (pro.surpin.data.arrowflight.server.duckdb.FooterStub stub = store.wholeFileReadsOnly()
-                && !store.readableHere(sample)
-                ? pro.surpin.data.arrowflight.server.duckdb.FooterStub.write(store.inputFile(sample),
-                        duckDbAdapter.footerStubRoot(), location) : null) {
+        // its footer, read through the Java client, instead (item 29). On other remote stores a
+        // stub kept across queries saves DuckDB's open of the sample file per query (item 39 (c)).
+        boolean mustStub = store.wholeFileReadsOnly() && !store.readableHere(sample);
+        try (pro.surpin.data.arrowflight.server.duckdb.FooterStubCache.Lease lease =
+                describeStub(sample, location, store, mustStub)) {
             String from = "(SELECT * FROM " + tableSource(pq.schema, pq.table, List.of(
-                    stub == null ? location : stub.file().toString()))
+                    lease == null ? location : lease.file().toString()))
                     + " LIMIT 0)";
             String duckSql = pq.hasAggregation
                     ? DuckDbAdapter.buildDuckSqlWithFilter(pq, from, false)
                     : DuckDbAdapter.buildSelectSql(pq, from);
             return duckDbAdapter.describeSql(allocator, duckSql);
         }
+    }
+
+    /**
+     * Returns the kept footer stub of a table's sample file for a describe, when one is used.
+     *
+     * @param sample   sample file
+     * @param location its DuckDB location
+     * @param store    data store
+     * @param mustStub whether DuckDB cannot read the file itself (HDFS under SASL)
+     * @return stub lease, or null to describe against the file itself
+     * @throws IOException when a needed stub cannot be written
+     */
+    private pro.surpin.data.arrowflight.server.duckdb.FooterStubCache.Lease describeStub(
+            DataFile sample, String location,
+            pro.surpin.data.arrowflight.server.storage.DataStore store, boolean mustStub)
+            throws IOException {
+        // Without a modification time a rewritten file of the same length would keep its stub.
+        if (!mustStub && (sample.modificationTime() <= 0
+                || !pro.surpin.data.arrowflight.server.duckdb.FooterStubCache.remote(location))) {
+            return null;
+        }
+        pro.surpin.data.arrowflight.server.duckdb.FooterStubCache cache = footerStubCache();
+        if (cache == null) {
+            if (mustStub) {
+                throw new IOException("No footer stub directory to describe " + location);
+            }
+            return null;
+        }
+        try {
+            return cache.lease(location, sample.size(),
+                    mustStub && sample.modificationTime() <= 0 ? System.nanoTime()
+                            : sample.modificationTime(),
+                    () -> store.inputFile(sample));
+        } catch (IOException e) {
+            if (mustStub) {
+                throw e;
+            }
+            // Encrypted or unusual footers: DuckDB reads the file itself, as before.
+            LOGGER.debug("node={} schema=footerStubSkipped file={} error='{}'", LogUtil.node(),
+                    location, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Returns the footer stubs kept for describes, made on first use.
+     *
+     * @return stub cache, or null when DuckDB has no stub directory
+     */
+    private synchronized pro.surpin.data.arrowflight.server.duckdb.FooterStubCache footerStubCache() {
+        if (footerStubCache == null) {
+            java.nio.file.Path root = duckDbAdapter.footerStubRoot();
+            if (root != null) {
+                footerStubCache = new pro.surpin.data.arrowflight.server.duckdb.FooterStubCache(
+                        root.resolve("kept"),
+                        pro.surpin.data.arrowflight.server.duckdb.FooterStubCache.DEFAULT_CAPACITY);
+            }
+        }
+        return footerStubCache;
     }
 
     /**

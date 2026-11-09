@@ -519,7 +519,72 @@ class ExecutionServiceTest {
         assertTrue(described.get().contains(stubs.toString()), described.get());
         assertFalse(described.get().contains("hdfs://"), described.get());
         try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.walk(stubs)) {
-            assertEquals(0, left.filter(java.nio.file.Files::isRegularFile).count(), "stub removed");
+            assertEquals(1, left.filter(java.nio.file.Files::isRegularFile).count(),
+                    "stub kept for the next describe");
+        }
+    }
+
+    /**
+     * Item 39 (c): describes of a remote table's queries (a new literal each time, so no
+     * schema cache hit) read the sample file's footer from storage once, then a kept stub; a
+     * rewritten sample file gets a new stub, and local files are described directly.
+     *
+     * @param dir temporary directory
+     * @throws Exception when the test file cannot be written
+     */
+    @Test
+    void describesOfRemoteTablesReuseOneFooterStub(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path local = dir.resolve("a.parquet");
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement st = conn.createStatement()) {
+            st.execute("COPY (SELECT 1::BIGINT AS k) TO '" + local + "' (FORMAT parquet)");
+        }
+        long size = java.nio.file.Files.size(local);
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        DuckDbAdapter duckDb = mock(DuckDbAdapter.class);
+        DataFile first = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet", size, 1L, Set.of());
+        DataFile rewritten = new DataFile("s/t/a.parquet", "hdfs://ns/data/s/t/a.parquet", size, 2L, Set.of());
+        DataFile onDisk = new DataFile("s/u/a.parquet", local.toString(), size, 1L, Set.of());
+        when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(first));
+        when(parquet.sampleFile("s", "u")).thenReturn(Optional.of(onDisk));
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getTableSchema(anyString(), anyString())).thenReturn(new Schema(List.of()));
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> ((DataFile) inv.getArgument(0)).location());
+        when(store.inputFile(any(DataFile.class))).thenAnswer(inv -> new org.apache.parquet.io.LocalInputFile(local));
+        java.nio.file.Path stubs = java.nio.file.Files.createDirectories(dir.resolve("stubs"));
+        when(duckDb.footerStubRoot()).thenReturn(stubs);
+        Schema schema = new Schema(List.of(Field.nullable("k", new ArrowType.Int(64, true))));
+        List<String> described = new java.util.concurrent.CopyOnWriteArrayList<>();
+        when(duckDb.describeSql(any(), anyString())).thenAnswer(inv -> {
+            described.add(inv.getArgument(1));
+            return schema;
+        });
+        ExecutionService service = new ExecutionService(parquet, duckDb,
+                mock(MetadataService.class), null, null);
+
+        try (RootAllocator allocator = new RootAllocator()) {
+            for (int k = 0; k < 5; k++) {
+                assertEquals(schema, service.resultSchema(allocator, "SELECT * FROM s.t WHERE k = " + k));
+            }
+            org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).inputFile(first);
+            for (String sql : described) {
+                assertTrue(sql.contains(stubs.toString()), sql);
+                assertFalse(sql.contains("hdfs://"), sql);
+            }
+            when(parquet.sampleFile("s", "t")).thenReturn(Optional.of(rewritten));
+            service.resultSchema(allocator, "SELECT * FROM s.t WHERE k = 99");
+            org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).inputFile(rewritten);
+            try (java.util.stream.Stream<java.nio.file.Path> left = java.nio.file.Files.walk(stubs)) {
+                assertEquals(1, left.filter(java.nio.file.Files::isRegularFile).count(),
+                        "the stub of the old version is removed");
+            }
+            described.clear();
+            service.resultSchema(allocator, "SELECT * FROM s.u WHERE k = 1");
+            assertTrue(described.get(0).contains(local.toString()), described.get(0));
+            org.mockito.Mockito.verify(store, org.mockito.Mockito.never()).inputFile(onDisk);
         }
     }
 
