@@ -31,6 +31,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table (item 39 (a)) |
 | `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |
 | `duckDbMemoryConnections` (`arrowflight.duckdb.memoryConnections`, `DUCKDB_MEMORY_CONNECTIONS`) | 0 = cores / (cores / 4 between 2 and 16), at least 2 | connections the default `memory_limit` is split between |
 | `duckDbThreadsWhenIdle` (`arrowflight.duckdb.threadsWhenIdle`, `DUCKDB_THREADS_WHEN_IDLE`) | 0 = off | threads of a query that starts alone on the node |
@@ -100,6 +101,17 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Fixed - plain table names that several schemas have (STATUS item 39 (a))
+
+- A table name written without a schema that two or more schemas have (`orders` with `tpch.orders` and
+  `orders.orders`) was refused `NOT_FOUND: Catalog Error: Table with name orders does not exist!`. It is now
+  `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch: qualify it (schema.orders) or set a default schema
+  (setting defaultSchema)`, on prepare and on execute.
+- New setting `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`): such a name reads that schema's table (the `main` alias view
+  points there); names only one schema has read it as before. Start log `views=defaultSchema schema=<s>`, WARN
+  `found=false` when no table of that schema exists. A per-session schema (Flight SQL session option / connection
+  property) is a later step.
 
 ### Changed - stop and Kerberos start hints in the log (STATUS item 38)
 

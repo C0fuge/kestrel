@@ -458,7 +458,10 @@ used. Before, the three session actions were UNIMPLEMENTED.
 - **complete** (default): the node that receives a query runs the whole SQL in DuckDB over views
   of all tables and returns one endpoint with the complete answer. Any single read-only query
   DuckDB accepts works: subqueries, `WITH`, `UNION`, window functions, any aggregate. A table can
-  be named without its schema when no other schema has a table of that name. This is what stock
+  be named without its schema when no other schema has a table of that name, or when
+  `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`, default unset) names one of the schemas that have it;
+  otherwise such a name is refused `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
+  qualify it ...` (never "does not exist"). This is what stock
   JDBC/ODBC/ADBC drivers and BI tools need on a cluster. It needs storage every node can read
   (HDFS, S3); a cluster on local disks refuses it. A local data directory that every node mounts
   (NFS and the like, the same files at the same path) can be declared shared with `dataDirShared=true`

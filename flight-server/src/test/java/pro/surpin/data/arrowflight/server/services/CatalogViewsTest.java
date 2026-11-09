@@ -79,6 +79,56 @@ class CatalogViewsTest {
     }
 
     /**
+     * Verifies the default schema gives a name in several schemas its alias view (item 39 (a)),
+     * and that without one DuckDB's "does not exist" for that name is explained as ambiguous.
+     */
+    @Test
+    void theDefaultSchemaResolvesANameInSeveralSchemas(@TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path file = dir.resolve("f.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT 1 AS x) TO '" + file + "' (FORMAT parquet)");
+        }
+        DataFile status = new DataFile("f.parquet", file.toUri().toString(),
+                java.nio.file.Files.size(file), 0, null);
+        DataStore store = mock(DataStore.class);
+        when(store.duckDbUri(any(DataFile.class))).thenReturn(file.toString());
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("a", "/a", "b", "/b"));
+        when(parquet.getTables(eq("a"), any())).thenReturn(Map.of("only", "/a/only", "Both", "/a/Both"));
+        when(parquet.getTables(eq("b"), any())).thenReturn(Map.of("Both", "/b/Both"));
+        when(parquet.tableFiles(any(), any())).thenReturn(List.of(status));
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            CatalogViews withDefault = new CatalogViews(parquet, duck, true, " B ");
+            assertTrue(withDefault.current().dataStatements().contains(
+                    "CREATE OR REPLACE VIEW main.\"Both\" AS SELECT * FROM \"b\".\"Both\""));
+            assertTrue(withDefault.current().dataStatements().contains(
+                    "CREATE OR REPLACE VIEW main.\"only\" AS SELECT * FROM \"a\".\"only\""));
+            assertEquals("b", withDefault.plainOwner("BOTH"));
+            assertNull(withDefault.ambiguousTable(
+                    "Catalog Error: Table with name both does not exist!"));
+
+            CatalogViews without = new CatalogViews(parquet, duck, true, null);
+            assertNull(without.plainOwner("both"));
+            assertEquals("Table Both exists in schemas a, b: qualify it (schema.Both) or set a"
+                    + " default schema (setting defaultSchema)", without.ambiguousTable(
+                    "Catalog Error: Table with name Both does not exist!\nDid you mean \"a.Both\"?"));
+            assertNull(without.ambiguousTable("Catalog Error: Table with name only2 does not exist!"));
+            assertNull(without.ambiguousTable("Catalog Error: Table with name c.Both does not exist!"));
+            // A default schema without that name leaves it ambiguous.
+            CatalogViews other = new CatalogViews(parquet, duck, true, "c");
+            assertNull(other.plainOwner("both"));
+            assertTrue(other.ambiguousTable(
+                    "Catalog Error: Table with name both does not exist!").startsWith("Table both"));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies a new data version of the store (a lakeFS branch moved to another commit) rebuilds
      * the views at once, not after the minute, and that each rebuild lists in one read scope.
      */

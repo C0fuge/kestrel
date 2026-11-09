@@ -159,6 +159,12 @@ public final class CatalogViews {
      * alias view of (a name in several schemas has none and must be written with its schema).
      */
     private volatile Map<String, String> plainOwners = Map.of();
+    /** Table name in lower case -> the schemas that have it, for names without an alias view. */
+    private volatile Map<String, List<String>> ambiguousOwners = Map.of();
+    /** Schema a plain name in several schemas resolves to (setting defaultSchema), or null. */
+    private final String defaultSchema;
+    /** Last refresh's verdict on the default schema, logged when it changes. */
+    private Boolean defaultSchemaFound;
     private Snapshot snapshot;
     private long refreshedAtNanos;
     /** Data version of the store the snapshot was built from (null when unknown). */
@@ -173,9 +179,58 @@ public final class CatalogViews {
      */
     public CatalogViews(ParquetAdapter parquetAdapter, DuckDbAdapter duckDbAdapter,
             boolean widenUnsigned) {
+        this(parquetAdapter, duckDbAdapter, widenUnsigned, null);
+    }
+
+    /**
+     * Creates the catalog of views with a default schema for plain table names.
+     *
+     * @param parquetAdapter source of schemas, tables and their files
+     * @param duckDbAdapter DuckDB used to read the column types
+     * @param widenUnsigned whether unsigned integer columns are widened
+     * @param defaultSchema schema a table name written without one reads when several schemas
+     *        have that table (item 39 (a)), or null for none
+     */
+    public CatalogViews(ParquetAdapter parquetAdapter, DuckDbAdapter duckDbAdapter,
+            boolean widenUnsigned, String defaultSchema) {
         this.parquetAdapter = parquetAdapter;
         this.duckDbAdapter = duckDbAdapter;
         this.widenUnsigned = widenUnsigned;
+        this.defaultSchema = defaultSchema == null || defaultSchema.isBlank() ? null
+                : defaultSchema.strip();
+    }
+
+    /**
+     * Explains DuckDB's "table does not exist" for a table name written without a schema that
+     * several schemas have (item 39 (a)): such a name has no alias view, so DuckDB cannot find
+     * it, and the client must learn that the name is ambiguous, not that the table is missing.
+     *
+     * @param message DuckDB error message
+     * @return the explanation, or null when the missing name is not such a name
+     */
+    public String ambiguousTable(String message) {
+        if (ambiguousOwners.isEmpty() || message == null) {
+            return null;
+        }
+        java.util.regex.Matcher missing = java.util.regex.Pattern.compile(
+                "Table with name (\\S+) does not exist").matcher(message);
+        if (!missing.find()) {
+            return null;
+        }
+        String name = missing.group(1).replace("\"", "");
+        if (name.endsWith("!")) {
+            name = name.substring(0, name.length() - 1);
+        }
+        if (name.contains(".")) {
+            return null;   // a qualified name is not resolved through main
+        }
+        List<String> schemas = ambiguousOwners.get(name.toLowerCase(Locale.ROOT));
+        if (schemas == null) {
+            return null;
+        }
+        return "Table " + name + " exists in schemas " + String.join(", ", schemas)
+                + ": qualify it (schema." + name + ") or set a default schema (setting"
+                + " defaultSchema)";
     }
 
     /**
@@ -341,14 +396,21 @@ public final class CatalogViews {
             }
         }
         Map<String, String> unique = new HashMap<>();
+        Map<String, List<String>> ambiguous = new HashMap<>();
+        boolean defaultFound = false;
         for (Map.Entry<String, List<String>> owner : owners.entrySet()) {
-            if (owner.getValue().size() != 1) {
-                continue;   // ambiguous: the schema has to be named
+            String chosen = plainSchema(owner.getValue(), defaultSchema);
+            defaultFound |= defaultSchema != null && owner.getValue().stream()
+                    .anyMatch(defaultSchema::equalsIgnoreCase);
+            if (chosen == null) {
+                // Ambiguous without a default schema: the schema has to be named.
+                ambiguous.put(owner.getKey(), owner.getValue().stream().sorted().toList());
+                continue;
             }
-            unique.put(owner.getKey(), owner.getValue().get(0));
+            unique.put(owner.getKey(), chosen);
             String table = DuckDbAdapter.quoteIdentifier(spelling.get(owner.getKey()));
             String alias = "CREATE OR REPLACE VIEW main." + table + " AS SELECT * FROM "
-                    + DuckDbAdapter.quoteIdentifier(owner.getValue().get(0)) + "." + table;
+                    + DuckDbAdapter.quoteIdentifier(chosen) + "." + table;
             data.add(alias);
             empty.add(alias);
             drops.add(0, "DROP VIEW IF EXISTS main." + table);   // before the schemas they read
@@ -357,6 +419,17 @@ public final class CatalogViews {
         tables.putAll(seen);
         failedTables = Map.copyOf(undescribed);
         plainOwners = Map.copyOf(unique);
+        ambiguousOwners = Map.copyOf(ambiguous);
+        if (defaultSchema != null && !Boolean.valueOf(defaultFound).equals(defaultSchemaFound)) {
+            defaultSchemaFound = defaultFound;
+            if (defaultFound) {
+                LOGGER.info("node={} views=defaultSchema schema={}", LogUtil.node(), defaultSchema);
+            } else {
+                LOGGER.warn("node={} views=defaultSchema schema={} found=false: no table of that"
+                        + " schema, plain names in several schemas stay ambiguous", LogUtil.node(),
+                        defaultSchema);
+            }
+        }
         streamTables = Map.copyOf(streams);
         long version = (data.hashCode() * 31L) + empty.hashCode();
         if (snapshot == null || snapshot.version() != version) {
@@ -367,6 +440,28 @@ public final class CatalogViews {
         }
         refreshedAtNanos = now;
         LogUtil.logTiming(t, "views.refresh", "tables=" + seen.size());
+    }
+
+    /**
+     * Picks the schema a table name written without one reads: the only schema with that name,
+     * else the default schema when it has the name, else none.
+     *
+     * @param schemas schemas that have a table of that name
+     * @param defaultSchema default schema, or null
+     * @return schema name as stored, or null when the name stays ambiguous
+     */
+    static String plainSchema(List<String> schemas, String defaultSchema) {
+        if (schemas.size() == 1) {
+            return schemas.get(0);
+        }
+        if (defaultSchema != null) {
+            for (String schema : schemas) {
+                if (schema.equalsIgnoreCase(defaultSchema)) {
+                    return schema;
+                }
+            }
+        }
+        return null;
     }
 
     /**

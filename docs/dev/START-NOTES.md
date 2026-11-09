@@ -299,6 +299,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `flightSessionMax` (`arrowflight.flight.sessionMax`) | 10000 | sessions per node |
 | `plainFlightCommands` (`arrowflight.plainFlightCommands`, `FLIGHT_PLAIN_COMMANDS`) | false | plain Arrow Flight clients (SQL command / `schema.table` path descriptors, e.g. ClickHouse) |
 | `flightLoadReservationSeconds` (`arrowflight.cluster.loadReservationSeconds`, `FLIGHT_LOAD_RESERVATION_SECONDS`) | 600 | how long an unread planned endpoint counts as node load |
+| `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table; unset = such a name is refused `INVALID_ARGUMENT ... exists in schemas ...` (item 39 (a)) |
 | `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
 | `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
 | `distributedCompletePeerStreams` (`arrowflight.cluster.distributedCompletePeerStreams`, `FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`) | 0 = one per 128 MiB of direct memory, at least 2 | endpoint streams the distributed complete merges of a node hold open at once; a merge waits for room (item 35) |

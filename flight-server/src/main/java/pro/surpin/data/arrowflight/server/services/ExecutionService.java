@@ -127,7 +127,8 @@ public final class ExecutionService {
         this.appConfig = appConfig;
         this.ioPool = ioPool;
         this.widenUnsigned = appConfig == null || appConfig.widenUnsignedTypes();
-        this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter, widenUnsigned);
+        this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter, widenUnsigned,
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.defaultSchema());
     }
 
     /**
@@ -420,7 +421,8 @@ public final class ExecutionService {
     }
 
     /**
-     * Turns DuckDB's "table does not exist" for a schema whose catalog could not be read into
+     * Turns DuckDB's "table does not exist" for a plain name several schemas have into an
+     * ambiguity error (INVALID_ARGUMENT), for a schema whose catalog could not be read into
      * that catalog's error, and for a data table whose first file could not be described into
      * that error, so that neither is reported as a missing table.
      *
@@ -428,10 +430,16 @@ public final class ExecutionService {
      * @param message DuckDB error message
      * @param cause DuckDB error
      * @throws UncheckedIOException when a catalog the query names is unavailable
+     * @throws IllegalArgumentException when the missing name is in several schemas
      */
     private void unavailableCatalog(String query, String message, Exception cause) {
         if (!message.contains("Catalog Error")) {
             return;
+        }
+        String ambiguous = catalogViews.ambiguousTable(message);
+        if (ambiguous != null) {
+            // Not a missing table: the name is in several schemas (item 39 (a)).
+            throw new IllegalArgumentException(ambiguous, cause);
         }
         String unavailable = catalogViews.unavailableCatalog(query);
         if (unavailable == null) {

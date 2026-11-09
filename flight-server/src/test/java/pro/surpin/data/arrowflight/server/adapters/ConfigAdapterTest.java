@@ -258,6 +258,17 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("shutdownDrainSeconds"), e.getMessage());
     }
 
+    /** Verifies defaultSchema is unset by default and read from the key and the environment. */
+    @Test
+    void defaultSchemaIsUnsetByDefault() throws IOException {
+        assertEquals(null, ConfigAdapter.defaultSchema(source(Map.of(), Map.of())));
+        assertEquals(null, ConfigAdapter.defaultSchema(source(Map.of("defaultSchema", " "), Map.of())));
+        assertEquals("tpch", ConfigAdapter.defaultSchema(
+                source(Map.of("defaultSchema", " tpch "), Map.of())));
+        assertEquals("tpch", ConfigAdapter.defaultSchema(
+                source(Map.of(), Map.of("FLIGHT_DEFAULT_SCHEMA", "tpch"))));
+    }
+
     @Test
     void distributedCompleteIsOffByDefaultAndRefusesOtherValues() throws IOException {
         assertFalse(ConfigAdapter.distributedComplete(source(Map.of(), Map.of())));

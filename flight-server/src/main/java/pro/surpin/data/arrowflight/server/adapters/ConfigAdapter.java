@@ -340,6 +340,30 @@ public class ConfigAdapter {
         return Boolean.parseBoolean(value);
     }
 
+    /**
+     * Returns defaultSchema from the system configuration.
+     *
+     * @return the default schema of plain table names, or null for none
+     */
+    public static String defaultSchema() {
+        return defaultSchema(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code defaultSchema} ({@code FLIGHT_DEFAULT_SCHEMA}): the schema a table name
+     * written without a schema reads when several schemas have a table of that name (item 39
+     * (a)); a name only one schema has reads that schema as before. Default none: such a name
+     * is refused as ambiguous.
+     *
+     * @param props configuration source
+     * @return schema name, or null for none
+     */
+    public static String defaultSchema(ConfigSource props) {
+        String value = getStringWithEnv("defaultSchema", "arrowflight.defaultSchema",
+                "FLIGHT_DEFAULT_SCHEMA", "", props).strip();
+        return value.isEmpty() ? null : value;
+    }
+
     /** Default of {@code hdfsLocalCopyMaxBytes}: 32 GiB (item 30). */
     public static final long DEFAULT_HDFS_LOCAL_COPY_MAX_BYTES = 32L << 30;
 
