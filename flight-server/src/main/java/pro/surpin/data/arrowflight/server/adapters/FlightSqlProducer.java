@@ -77,6 +77,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             new java.util.concurrent.atomic.AtomicBoolean();
     /** Counts stream executions, for query ids in the log. */
     private static final java.util.concurrent.atomic.AtomicLong EXECUTIONS = new java.util.concurrent.atomic.AtomicLong();
+    /** Flight SQL session option naming the schema of plain table names (item 39 (a)). */
+    static final String SESSION_SCHEMA = "schema";
     private static final String SCHEMA_NOT_FOUND_MESSAGE = "Could not find Arrow schema for query";
     /** Description of the BeginTransaction refusal. */
     static final String TRANSACTIONS_UNSUPPORTED = "This server has no transactions (SqlInfo"
@@ -409,10 +411,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     @Override
     public FlightInfo getFlightInfo(FlightProducer.CallContext context, FlightDescriptor descriptor) {
-        String query = plainQuery(descriptor);
-        if (query == null) {
+        String plain = plainQuery(descriptor);
+        if (plain == null) {
             return super.getFlightInfo(context, descriptor);
         }
+        String query = withSessionSchema(plain, context);
         String user = context == null ? null : context.peerIdentity();
         boolean restricted = checkQuery(user, query).restricted();
         LOGGER.info("node={} query=plainDescriptor user={} query='{}'", LogUtil.node(), user, query);
@@ -430,10 +433,11 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     @Override
     public SchemaResult getSchema(FlightProducer.CallContext context, FlightDescriptor descriptor) {
-        String query = plainQuery(descriptor);
-        if (query == null) {
+        String plain = plainQuery(descriptor);
+        if (plain == null) {
             return super.getSchema(context, descriptor);
         }
+        String query = withSessionSchema(plain, context);
         boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
                 .restricted();
         return new SchemaResult(restricted || plainCompleteAnswer(context)
@@ -517,9 +521,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
-     * Sets Flight SQL session options; the only option is {@code arrow-compression} (none, zstd
-     * or lz4: the stream codec of the session's DoGet calls without the header), an empty value
-     * unsets it. Sessions live on this node only (cookie {@code arrow_flight_session_id}).
+     * Sets Flight SQL session options: {@code arrow-compression} (none, zstd or lz4: the stream
+     * codec of the session's DoGet calls without the header) and {@code schema} (the schema of
+     * table names its queries write without one, item 39 (a)); an empty value unsets an option. Sessions live on this node only (cookie {@code arrow_flight_session_id}).
      *
      * @param request options to set
      * @param context call context
@@ -537,6 +541,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         Map<String, SetSessionOptionsResult.Error> errors = new java.util.HashMap<>();
         Map<String, SessionOptionValue> accepted = new java.util.HashMap<>();
         for (Map.Entry<String, SessionOptionValue> option : request.getSessionOptions().entrySet()) {
+            if (SESSION_SCHEMA.equals(option.getKey())) {
+                SetSessionOptionsResult.ErrorValue refused = checkSessionSchema(option.getValue());
+                if (refused == null) {
+                    accepted.put(option.getKey(), option.getValue().isEmpty() ? null : option.getValue());
+                } else {
+                    errors.put(option.getKey(), new SetSessionOptionsResult.Error(refused));
+                }
+                continue;
+            }
             if (!StreamCompression.HEADER.equals(option.getKey())) {
                 errors.put(option.getKey(),
                         new SetSessionOptionsResult.Error(SetSessionOptionsResult.ErrorValue.INVALID_NAME));
@@ -569,6 +582,35 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 errors.keySet());
         listener.onNext(new SetSessionOptionsResult(errors));
         listener.onCompleted();
+    }
+
+    /**
+     * Checks a value of the session option {@code schema}: a schema of the data store, or empty.
+     *
+     * @param value option value
+     * @return null when accepted, INVALID_VALUE for a non-string or unknown schema, ERROR when
+     *         the schemas cannot be listed
+     */
+    private SetSessionOptionsResult.ErrorValue checkSessionSchema(SessionOptionValue value) {
+        if (value.isEmpty()) {
+            return null;
+        }
+        String text = stringOption(value);
+        if (text == null || text.isBlank()) {
+            return SetSessionOptionsResult.ErrorValue.INVALID_VALUE;
+        }
+        try {
+            if (executionService.knownSchema(text) == null) {
+                LOGGER.info("node={} setSessionOptions schema={} refused=unknownSchema",
+                        LogUtil.node(), text.strip());
+                return SetSessionOptionsResult.ErrorValue.INVALID_VALUE;
+            }
+            return null;
+        } catch (java.io.UncheckedIOException e) {
+            LOGGER.warn("node={} setSessionOptions schema={} error='{}'", LogUtil.node(),
+                    text.strip(), e.getCause().getMessage());
+            return SetSessionOptionsResult.ErrorValue.ERROR;
+        }
     }
 
     /**
@@ -1022,7 +1064,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         long t = LogUtil.mark();
         ByteString handle = copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8));
-        String query = command.getQuery();
+        String query = withSessionSchema(command.getQuery(), context);
         boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
                 .restricted();
         String qid = qid(handle);
@@ -1212,6 +1254,55 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INTERNAL.withDescription(failureDescription(e))
                     .withCause(e).toRuntimeException();
         }
+    }
+
+    /**
+     * Writes the call's schema in front of the plain table names of a query (item 39 (a)): the
+     * {@code schema} header, else the {@code schema} option of the call's Flight SQL session
+     * ({@link ExecutionService#qualifyForSchema(String, String)}).
+     *
+     * @param query client SQL
+     * @param context call context, or null
+     * @return the qualified query, or the query itself when the call names no schema
+     * @throws FlightRuntimeException INVALID_ARGUMENT for an unknown schema or a name of that
+     *         schema that cannot be qualified, UNAVAILABLE when the schemas cannot be listed
+     */
+    private String withSessionSchema(String query, FlightProducer.CallContext context) {
+        String schema = callSchema(context);
+        if (schema == null || query == null) {
+            return query;
+        }
+        try {
+            return executionService.qualifyForSchema(query, schema);
+        } catch (IllegalArgumentException e) {
+            throw CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage()).withCause(e)
+                    .toRuntimeException();
+        } catch (java.io.UncheckedIOException e) {
+            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
+                    .toRuntimeException();
+        }
+    }
+
+    /**
+     * Returns the schema a call names for plain table names: its {@code schema} header, else
+     * the {@code schema} option of its Flight SQL session.
+     *
+     * @param context call context, or null
+     * @return schema name, or null for none
+     */
+    private static String callSchema(FlightProducer.CallContext context) {
+        if (context == null) {
+            return null;
+        }
+        ResultModeMiddleware headers = context.getMiddleware(ResultModeMiddleware.KEY);
+        if (headers != null && headers.schema() != null) {
+            return headers.schema();
+        }
+        FlightSessions.Call call = context.getMiddleware(FlightSessions.KEY);
+        FlightSessions.Session session = call == null ? null : call.session(context.peerIdentity());
+        SessionOptionValue value = session == null ? null : session.option(SESSION_SCHEMA);
+        String text = value == null ? null : stringOption(value);
+        return text == null || text.isBlank() ? null : text.strip();
     }
 
     /**
@@ -1506,7 +1597,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     public void createPreparedStatement(FlightSql.ActionCreatePreparedStatementRequest request,
             FlightProducer.CallContext context, FlightProducer.StreamListener<Result> listener) {
         try {
-            String query = request.getQuery();
+            String query = withSessionSchema(request.getQuery(), context);
             boolean complete = checkQuery(context == null ? null : context.peerIdentity(), query)
                     .restricted() || completeAnswer(context);
             Schema arrowSchema = complete ? completeSchemaFor(query) : schemaForQuery(query);
@@ -1659,7 +1750,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     @Override
     public SchemaResult getSchemaStatement(FlightSql.CommandStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
-        String query = command.getQuery();
+        String query = withSessionSchema(command.getQuery(), context);
         boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
                 .restricted();
         LOGGER.debug("getSchemaStatement: {}", query);

@@ -328,6 +328,89 @@ public final class ExecutionService {
     }
 
     /**
+     * Writes a session schema in front of the table names a query gives without one (item 39
+     * (a)): the Flight SQL session option or call header {@code schema}. A plain name that
+     * schema has reads that schema's table; any other plain name reads what it reads without a
+     * session schema (the one schema with that name, or the default schema). The text is
+     * rewritten here, before access checks and planning, so tickets, prepared statement handles
+     * and calls to other nodes carry the qualified names. DuckDB's own parse of the result then
+     * checks that no name of that schema stayed plain: such a name would read another schema's
+     * table, so the query is refused instead.
+     *
+     * @param query client SQL
+     * @param schema session schema, or null for none
+     * @return the query with its plain names of that schema qualified, or the query itself
+     * @throws IllegalArgumentException when the schema has no tables or a name of that schema
+     *         cannot be qualified
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public String qualifyForSchema(String query, String schema) {
+        if (query == null || schema == null || schema.isBlank()) {
+            return query;
+        }
+        String stored = knownSchema(schema);
+        if (stored == null) {
+            throw new IllegalArgumentException("Unknown schema " + schema.strip()
+                    + " (session option or header schema): no table of the data store belongs to it");
+        }
+        String qualified = TableReferences.qualifyPlainNames(query,
+                name -> catalogViews.sessionOwner(name, stored));
+        String missed = missedPlainName(qualified, stored);
+        if (missed != null) {
+            throw new IllegalArgumentException("Table " + missed + " cannot be read from schema "
+                    + stored + " (session option or header schema) as written: qualify it ("
+                    + stored + "." + missed + ")");
+        }
+        if (!qualified.equals(query)) {
+            LOGGER.debug("node={} query=sessionSchema schema={} query='{}'", LogUtil.node(), stored,
+                    qualified);
+        }
+        return qualified;
+    }
+
+    /**
+     * Names a schema of the data store that has described tables, spelled as stored.
+     *
+     * @param schema schema name in any case
+     * @return the stored name, or null when no table belongs to such a schema
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public String knownSchema(String schema) {
+        try {
+            return catalogViews.knownSchema(schema);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        } catch (java.sql.SQLException e) {
+            throw new java.io.UncheckedIOException(new IOException(e.getMessage(), e));
+        }
+    }
+
+    /**
+     * Finds a table name of a schema that a qualified query still gives without a schema: from
+     * DuckDB's parse when it names the query's tables, else (a table function, several
+     * statements) from any identifier of the text that is such a name and is not qualified.
+     *
+     * @param sql query after qualification
+     * @param schema schema as stored
+     * @return the name, or null when there is none
+     */
+    private String missedPlainName(String sql, String schema) {
+        List<ParquetQueryParser.JoinTable> tables;
+        try {
+            tables = QueryTables.of(TimeTravelClause.withoutClauses(sql));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return TableReferences.unqualifiedName(sql,
+                    name -> catalogViews.sessionOwner(name, schema) != null);
+        }
+        for (ParquetQueryParser.JoinTable table : tables) {
+            if (table.schema() == null && catalogViews.sessionOwner(table.table(), schema) != null) {
+                return table.table();
+            }
+        }
+        return null;
+    }
+
+    /**
      * Describes the columns of one table as the complete-answer DuckDB reads it, with the type
      * its catalog declares when it comes from one.
      *

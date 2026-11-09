@@ -10,7 +10,8 @@ import org.apache.arrow.flight.RequestContext;
  * Carries the result mode a client asks for with the {@code x-flight-result-mode} header:
  * {@code complete} (one endpoint with the whole answer) or {@code partial} (one endpoint per node
  * with that node's part, merged by the client). Also carries whether the client tries the
- * locations of an endpoint in order ({@code x-flight-location-failover: 1}).
+ * locations of an endpoint in order ({@code x-flight-location-failover: 1}), and the schema of
+ * plain table names it names with the {@code schema} header.
  */
 public final class ResultModeMiddleware implements FlightServerMiddleware {
 
@@ -18,12 +19,18 @@ public final class ResultModeMiddleware implements FlightServerMiddleware {
     public static final String HEADER = "x-flight-result-mode";
     /** Request header by which a client says it tries an endpoint's locations in order. */
     public static final String LOCATION_FAILOVER_HEADER = "x-flight-location-failover";
+    /**
+     * Request header naming the schema of table names written without one (item 39 (a)); the
+     * Arrow Flight JDBC driver sends a URL property such as {@code schema=tpch} as this header.
+     */
+    public static final String SCHEMA_HEADER = "schema";
     /** Key under which the middleware is registered. */
     public static final FlightServerMiddleware.Key<ResultModeMiddleware> KEY =
             FlightServerMiddleware.Key.of("flight-result-mode");
 
     private final String requested;
     private final boolean locationFailover;
+    private final String schema;
 
     /**
      * Remembers the requested mode of one call.
@@ -31,9 +38,30 @@ public final class ResultModeMiddleware implements FlightServerMiddleware {
      * @param requested header value, or null
      * @param locationFailover whether the client tries an endpoint's locations in order
      */
-    private ResultModeMiddleware(String requested, boolean locationFailover) {
+    ResultModeMiddleware(String requested, boolean locationFailover) {
+        this(requested, locationFailover, null);
+    }
+
+    /**
+     * Remembers the requested mode and schema of one call.
+     *
+     * @param requested header value, or null
+     * @param locationFailover whether the client tries an endpoint's locations in order
+     * @param schema value of the schema header, or null
+     */
+    ResultModeMiddleware(String requested, boolean locationFailover, String schema) {
         this.requested = requested;
         this.locationFailover = locationFailover;
+        this.schema = schema == null || schema.isBlank() ? null : schema.strip();
+    }
+
+    /**
+     * Returns the schema the call names for table names written without one.
+     *
+     * @return schema name, or null when the call sends no {@code schema} header
+     */
+    public String schema() {
+        return schema;
     }
 
     /**
@@ -91,7 +119,8 @@ public final class ResultModeMiddleware implements FlightServerMiddleware {
         public ResultModeMiddleware onCallStarted(CallInfo info, CallHeaders incomingHeaders,
                 RequestContext context) {
             return new ResultModeMiddleware(incomingHeaders.get(HEADER),
-                    isEnabled(incomingHeaders.get(LOCATION_FAILOVER_HEADER)));
+                    isEnabled(incomingHeaders.get(LOCATION_FAILOVER_HEADER)),
+                    incomingHeaders.get(SCHEMA_HEADER));
         }
     }
 }

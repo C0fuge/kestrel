@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,6 +78,17 @@ class TableReferencesTest {
         assertFalse(TableReferences.singleSelect("WITH c AS (SELECT 1) SELECT a FROM c"));
         assertFalse(TableReferences.singleSelect("FROM hive.orders"));
         assertTrue(TableReferences.singleSelect("SELECT 'select from' FROM hive.orders"));
+    }
+
+    /** Item 39 (a): the fallback check finds plain identifiers, not qualified ones or functions. */
+    @Test
+    void unqualifiedNamesAreFoundOutsideQualifiedNames() {
+        java.util.function.Predicate<String> orders = name -> name.equalsIgnoreCase("orders");
+        assertEquals("orders", TableReferences.unqualifiedName(
+                "SELECT * FROM read_parquet('x'), orders", orders));
+        assertEquals("ORDERS", TableReferences.unqualifiedName("SELECT 1 FROM \"ORDERS\"", orders));
+        assertNull(TableReferences.unqualifiedName(
+                "SELECT orders.o_id, orders(1) FROM \"tpch\".orders WHERE 'orders' = x", orders));
     }
 
     private static String qualify(String sql) {

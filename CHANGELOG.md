@@ -113,6 +113,19 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   queue: their endpoint streams hold one small batch, and queueing them behind full scans made dc small-query p99
   tails (8.2 s at 32 clients against 1.0 s for speed). The `merged` log line shows `permits=` (0 for them).
 
+### Added - per-session schema of plain table names (STATUS item 39 (a) part 2)
+
+- A client can name the schema of table names written without one: the Flight SQL session option `schema`
+  (SetSessionOptions; ADBC's current schema, JDBC with session cookies) or the call header `schema` (the Arrow Flight
+  JDBC driver sends a URL property such as `...?schema=tpch` as this header). The header goes before the session
+  option, both go before the server's `defaultSchema`. A plain name that schema has reads that schema's table; other
+  plain names read what they read before. The names are qualified in the SQL text before access checks and
+  planning, so tickets, prepared statement handles and calls to other nodes carry `schema.table` (no ticket format
+  change). DuckDB's parse of the rewritten text checks that no name of that schema stayed plain; such a query is
+  refused `INVALID_ARGUMENT ... qualify it (schema.table)` instead of reading another schema. An unknown schema is
+  INVALID_VALUE on SetSessionOptions and `INVALID_ARGUMENT: Unknown schema ...` with the header. Without the option
+  or header nothing changes.
+
 ### Fixed - memory of a server in a systemd scope / non-root cgroup (STATUS item 39 (b))
 
 - The memory DuckDB is sized from (per-connection `memory_limit`, speed's node-wide limit) took the cgroup limit only

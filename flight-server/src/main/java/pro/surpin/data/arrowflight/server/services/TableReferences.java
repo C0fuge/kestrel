@@ -210,6 +210,37 @@ final class TableReferences {
     }
 
     /**
+     * Finds an identifier of a query that a predicate accepts and that is neither qualified nor
+     * a qualifier ({@code x} in {@code x.y}) nor a function name: a conservative check for names
+     * a reference finder may have missed.
+     *
+     * @param sql SQL text
+     * @param accepts takes an unquoted identifier and tells whether it counts
+     * @return the first such identifier unquoted, or null
+     */
+    static String unqualifiedName(String sql, java.util.function.Predicate<String> accepts) {
+        List<Token> tokens = TimeTravelClause.tokens(sql);
+        for (int i = 0; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (!TimeTravelClause.identifier(token)) {
+                continue;
+            }
+            Token before = i > 0 ? tokens.get(i - 1) : null;
+            Token after = i + 1 < tokens.size() ? tokens.get(i + 1) : null;
+            if (before != null && before.kind() == Kind.DOT
+                    || after != null && (after.kind() == Kind.DOT
+                    || after.kind() == Kind.OTHER && after.text().equals("("))) {
+                continue;
+            }
+            String name = TimeTravelClause.unquote(token);
+            if (accepts.test(name)) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Names the query defines itself: CTEs ({@code name AS (}, {@code name AS [NOT]
      * MATERIALIZED (}, {@code name(columns) AS (}) and named windows, in lower case. Any
      * identifier written that way counts, which may leave a real table unqualified but never

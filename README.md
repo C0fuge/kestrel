@@ -462,7 +462,9 @@ used. Before, the three session actions were UNIMPLEMENTED.
   be named without its schema when no other schema has a table of that name, or when
   `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`, default unset) names one of the schemas that have it;
   otherwise such a name is refused `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
-  qualify it ...` (never "does not exist"). This is what stock
+  qualify it ...` (never "does not exist"). A client can also name the schema of such names per
+  session or per call: Flight SQL session option `schema`, or call header `schema` (JDBC URL
+  property `schema=tpch`); it goes before `defaultSchema`. This is what stock
   JDBC/ODBC/ADBC drivers and BI tools need on a cluster. It needs storage every node can read
   (HDFS, S3); a cluster on local disks refuses it. A local data directory that every node mounts
   (NFS and the like, the same files at the same path) can be declared shared with `dataDirShared=true`

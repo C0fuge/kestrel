@@ -161,6 +161,10 @@ public final class CatalogViews {
     private volatile Map<String, String> plainOwners = Map.of();
     /** Table name in lower case -> the schemas that have it, for names without an alias view. */
     private volatile Map<String, List<String>> ambiguousOwners = Map.of();
+    /** Table name in lower case -> every schema that has it (as stored), for session schemas. */
+    private volatile Map<String, List<String>> allOwners = Map.of();
+    /** Schema name in lower case -> the name as stored, for the schemas with described tables. */
+    private volatile Map<String, String> schemaNames = Map.of();
     /** Schema a plain name in several schemas resolves to (setting defaultSchema), or null. */
     private final String defaultSchema;
     /** Last refresh's verdict on the default schema, logged when it changes. */
@@ -245,6 +249,36 @@ public final class CatalogViews {
     public String plainOwner(String table) throws IOException, SQLException {
         current();
         return table == null ? null : plainOwners.get(table.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Names a schema a session or call asks plain table names to be read from (item 39 (a)),
+     * spelled as stored.
+     *
+     * @param schema schema name in any case
+     * @return the stored name, or null when no described table belongs to such a schema
+     * @throws IOException when the table files cannot be listed
+     * @throws SQLException when DuckDB cannot read a table's column types
+     */
+    public String knownSchema(String schema) throws IOException, SQLException {
+        current();
+        return schema == null ? null : schemaNames.get(schema.strip().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Tells whether a schema has a table of a name (in any case), so that a plain name in a
+     * query with that session schema reads that schema's table.
+     *
+     * @param table table name as written, unquoted
+     * @param schema schema name as stored ({@link #knownSchema})
+     * @return the schema, or null when it has no such table
+     */
+    public String sessionOwner(String table, String schema) {
+        if (table == null || schema == null) {
+            return null;
+        }
+        List<String> schemas = allOwners.get(table.toLowerCase(Locale.ROOT));
+        return schemas != null && schemas.contains(schema) ? schema : null;
     }
 
     /**
@@ -420,6 +454,16 @@ public final class CatalogViews {
         failedTables = Map.copyOf(undescribed);
         plainOwners = Map.copyOf(unique);
         ambiguousOwners = Map.copyOf(ambiguous);
+        Map<String, List<String>> every = new HashMap<>();
+        Map<String, String> names = new HashMap<>();
+        for (Map.Entry<String, List<String>> owner : owners.entrySet()) {
+            every.put(owner.getKey(), List.copyOf(owner.getValue()));
+            for (String schema : owner.getValue()) {
+                names.putIfAbsent(schema.toLowerCase(Locale.ROOT), schema);
+            }
+        }
+        allOwners = Map.copyOf(every);
+        schemaNames = Map.copyOf(names);
         if (defaultSchema != null && !Boolean.valueOf(defaultFound).equals(defaultSchemaFound)) {
             defaultSchemaFound = defaultFound;
             if (defaultFound) {
