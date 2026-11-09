@@ -23,6 +23,28 @@
 
 ## Next steps (one per session)
 
+> **Item 39 (a) (2026-11-09, core lane): part 1 done in code and CI (`ffe0b1d2`), Dev CI 42620776092 green.** A plain
+> name that several schemas have is refused `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch: qualify it
+> (schema.orders) or set a default schema (setting defaultSchema)` on prepare and execute (was `NOT_FOUND ... does not
+> exist`); new server setting `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`) points the `main` alias view of such names at
+> that schema (start log `views=defaultSchema`, WARN `found=false`). Tests: `PlainNameSchemaIntegrationTest` (tpch.orders
+> + orders.orders + tpch.lineitem through Flight SQL), `CatalogViewsTest`, `ConfigAdapterTest`. **Next core session
+> (item 39 (a) part 2):** a per-session schema - Flight SQL session option `schema` (SetSessionOptions; the server
+> already keeps sessions for `arrow-compression`) and a call header for JDBC URL properties (`...?schema=tpch` is sent
+> as a header by the Arrow Flight JDBC driver). Do it safely with DuckDB `SET search_path='<schema>,main'` on the
+> pooled connection for the query (reset after), plus the same schema for the HDFS short-circuit `qualifyPlainNames`
+> step and for distributed-complete peer calls; a name the finder misses must never read another schema silently.
+> Then "ITEM 39(a) DONE". **For the stand now:** `-DdefaultSchema=tpch` should give TPC-H plain names 22/22.
+>
+> **Item 39 (b) note (core lane, pushed before the split was seen, `39f84617`):** `HostLimits` reads the process's own
+> cgroup and its parents (was the mount point only); start log `memoryBudget source=cgroup|host memoryMiB= hostMiB=
+> cgroupMiB= cgroup=`. Dev CI step (speed server in a `MemoryMax=3G` scope): `source=cgroup memoryMiB=3072`, 100 M-group
+> aggregate exact in 4.0 s, scope peak 2.86 GB, oom_kill 0. **Caveat:** on the runner the JDK (21.0.13) already
+> reported 3072 MiB for the host as well (`hostMiB=3072`), so that step passes without the fix too; the regression
+> test is the unit test (`DuckDbSizingTest`). On the stand, the `memoryBudget` line (or the old `duckdb=sizing
+> memoryMiB=`) decides: if memory already read ~48 GB there, the RSS overshoot has another cause (memory outside
+> DuckDB's `memory_limit`). Handed to the plugins lane in `PLUGINS-STATUS.md`.
+
 > **Maintainer, 2026-11-09 16:30 - ITEM 39 IS SPLIT ACROSS FOUR LANES, worked in parallel (maintainer exception to the
 > lane scope limits for this item only).** Each part on its own branch, each branch merged into `main` by its lane when
 > its CI is green (rebase on `origin/main` first, small commits, keep both sides of CHANGELOG conflicts, never rewrite
@@ -3893,3 +3915,8 @@ S3 slowdown item below stays open for then).
   Dev CI 42403022881 (push), package run on `pkg/b69660b9`: Dev CI 42403052289, Service cluster 42403042241, hdfs
   42403044908, security 42403047248, stores 42403049750. Pre-release `server-1.0.0-b69660b9260a`. Item 38 waits for
   the stand. Lock released.
+- 2026-11-09 12:43-13:20Z (cloud session, core lane): item 39 (a) part 1 (`ffe0b1d2`: ambiguous plain names are
+  INVALID_ARGUMENT naming the schemas, setting `defaultSchema`) and, before the maintainer's lane split reached this
+  session, item 39 (b) (`39f84617`: cgroup limit of the process's own cgroup and its parents, `memoryBudget` start
+  line, Dev CI scope step; caveat: the runner's JDK already saw the scope limit). Dev CI 42620776092 green. Note for
+  the plugins lane in PLUGINS-STATUS.md. Next: (a) part 2, per-session schema. Lock released.
