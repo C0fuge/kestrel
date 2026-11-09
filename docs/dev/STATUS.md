@@ -3995,3 +3995,6 @@ S3 slowdown item below stays open for then).
   `service-cluster.yml` `hdfs-ha loss` cell counts the reads each NameNode answered per failover window (queries
   after each failover reach the new active NameNode); Service cluster 42689843545 + 42691698496 green. Details in
   `LANE3-STATUS.md`.
+- 2026-11-09 20:40-20:45Z (cloud session, core lane): nothing taken. Item 39: (a), (b), (d) DONE; (c) still in
+  progress on the catalogs lane (`LOCK-CATALOGS` 20:21:07Z, active; parts 1-3 on `main`), so `package=true` and
+  "ITEM 39 DONE" still wait. Item 38 waits for the stand. Newest main Dev CI 42690037660 (32ebda26, part 3) green.
