@@ -3981,3 +3981,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-09 19:03-19:50Z (lane 3 session): D13 (c) merged into `main` (74971b9a + 60c36431), CI/test only: the
   `service-cluster.yml` loss cells stream a slow merged scan across the node kill; runs 42680042903 + 42681427105 green,
   `peer lost ... retry` UNAVAILABLE seen 3 times, every retry exact. Details in `LANE3-STATUS.md`.
+- 2026-11-09 19:40-19:50Z (cloud session, core lane): nothing taken. Item 39: (a), (b), (d) DONE; (c) still in
+  progress on the catalogs lane (`LOCK-CATALOGS` 19:22:09Z, active), so `package=true` and "ITEM 39 DONE" still wait.
+  Item 38 waits for the stand. Newest main Dev CI 42641096583 (2b61650d) green; later main commits are lane 3
+  workflow/test changes (D13 (c), Service cluster 42680042903 + 42681427105 green). Lock released.
