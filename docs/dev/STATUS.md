@@ -3970,4 +3970,4 @@ S3 slowdown item below stays open for then).
   Service cluster 42638482163 (dispatch on `main`) 13/13 green incl. hdfs-ha loss (ok 200, 0 errors) - but the cell
   was intermittent before and the job log has no server log, so one green run does not prove the retry fired; lane 3
   (D16) should watch the next runs. Not done: checkstyle/spotbugs only in CI (local plugin download failed offline;
-  CI build job green). Item 39 still waits for (b)/(c) DONE before the core lane's `package=true`.
+  CI build job green). Item 39: (a), (b), (d) DONE; the core lane's `package=true` waits for (c) (catalogs lane, in progress).
