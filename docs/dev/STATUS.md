@@ -23,17 +23,17 @@
 
 ## Next steps (one per session)
 
-> **BUG FIRST (2026-11-09, lane 3, service matrix): HDFS NameNode failover fails queries `INTERNAL`.** Service cluster
-> cell `hdfs-ha loss` (3 nodes, HA nameservice `ns1`, `haadmin -failover nn2 nn1` under a load of 3 clients) failed twice
-> in a row (run 42632461815 on `lane/distributed`, attempt 1 and the rerun of the failed job): 2 of 276 / 2 of 205
-> answers `INTERNAL: ... IO Error: Unable to get file info: hdfs://ns1/data/tpch/lineitem/part-002.parquet: Operation
-> category READ is not supported in state standby` (also `Failed to open file: ... in state standby`), on q07 / q08 /
-> q21 (joins, computed by one node: not the merge path), within ~25 s after the failover; 0 wrong answers. The cell was
-> green up to `b69660b9` (42403042241); no HDFS code changed since, so it is probably timing (the failover landing on a
-> DuckDB `getFileInfo`/open), not a regression. hadoopfs/libhdfs3 should fail over to the other NameNode on
-> `StandbyException` for these calls (the Java client does). If it cannot, a query failed by a `StandbyException` (or
-> `RetriableException`) could be answered `UNAVAILABLE` so clients retry - that is a status-code change, so an Open
-> question first. Intermittent: the push run on `main` 42635146358 (ace241be) had the cell green (2 of 3 runs red).
+> **HDFS NameNode failover bug (2026-11-09, found by lane 3, fixed by the core lane in `2429782f`: Dev CI 42638389703 green, Service cluster 42638482163 13/13 incl. hdfs-ha loss).** Cause
+> (libhdfs3 source, `NamenodeProxy.cpp` `NAMENODE_HA_RETRY_*`): on a standby NameNode libhdfs3 switches to the other
+> one and tries again at most `dfs.client.failover.max.attempts` (15) times **without pausing**, so while `haadmin
+> -failover` has left both NameNodes standby it gives up within milliseconds (the Java client sleeps 0.5..15 s between
+> tries). Fix (server, no status-code change): `DuckDbAdapter.retryOnStandby` runs a query again after 0.5 / 1 / 2 / 4
+> / 8 s when the standby refusal came before anything was sent (prepare, catalog view, execution before the first
+> batch); log `duckdb=standbyRetry`. **Lane 3 (D16):** rerun `service-cluster.yml` (hdfs-ha loss) on `main`; if it
+> is still red, look for the failing answer's `duckdb=standbyRetry` lines (none = the refusal came from a path not
+> covered, e.g. after the first batch or in GetFlightInfo). Long term: a pause in libhdfs3's HA retry (patched
+> hadoopfs build, outside this repo). Before the fix the cell was intermittent (red in 2 of 3 runs; push
+> run 42635146358 on `ace241be` green).
 
 > **ITEM 39(a) DONE (2026-11-09, core lane): part 1 `ffe0b1d2` (Dev CI 42620776092), part 2 `53647b1a` + test fix
 > `655bec3a` (Dev CI 42628870401 red on the test, 42630578494 green).** Part 1: an ambiguous plain name is `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
@@ -3956,3 +3956,18 @@ S3 slowdown item below stays open for then).
   `qualifyPlainNames` calls it). `DistributedComplete.stream` plans merges from it: with plain table names (TPC-H with
   `defaultSchema=tpch`) every dc query fell back to one node (`Name the table with its schema`). Service cluster
   speed-dc cells now also run TPC-H with plain names. Found there: the hdfs-ha failover bug above. Details: LANE3-STATUS Log.
+- 2026-11-09 14:40-15:35Z (cloud session, core lane): HDFS NameNode failover bug (bug-first from lane 3, D16) fixed in
+  `2429782f`. Cause from libhdfs3's source (ClickHouse fork, `NamenodeProxy.cpp`): its HA retry switches NameNode and
+  tries again up to `dfs.client.failover.max.attempts` (15) times with no pause, so a `haadmin -failover` window with
+  both NameNodes standby exhausts it in milliseconds. Fix in `DuckDbAdapter`: `retryOnStandby` runs a query again
+  after 0.5/1/2/4/8 s when a standby refusal (`standbyNameNode`: "is not supported in state standby" /
+  `StandbyException`) came before anything was sent - prepare, catalog view (`beforeSend` also reads failed-view
+  reasons), or the stream before its first batch (found while testing: DuckDB's errors during `loadNextBatch` arrive
+  as an Arrow `IOException`, not a `SQLException`). Never after a batch was sent; the once-only paths (registered
+  Arrow streams) unchanged; no status code / setting / wire change. Log INFO `duckdb=standbyRetry run= delayMs=`,
+  WARN `... result=failed`. Test `DuckDbStandbyRetryTest` (5: text, refused twice then answers, refused every run,
+  refused in the stream before the first batch, refused after a batch = not run again). Dev CI 42638389703 green;
+  Service cluster 42638482163 (dispatch on `main`) 13/13 green incl. hdfs-ha loss (ok 200, 0 errors) - but the cell
+  was intermittent before and the job log has no server log, so one green run does not prove the retry fired; lane 3
+  (D16) should watch the next runs. Not done: checkstyle/spotbugs only in CI (local plugin download failed offline;
+  CI build job green). Item 39 still waits for (b)/(c) DONE before the core lane's `package=true`.
