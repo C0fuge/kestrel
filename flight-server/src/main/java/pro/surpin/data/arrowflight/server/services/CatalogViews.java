@@ -169,10 +169,19 @@ public final class CatalogViews {
     private final String defaultSchema;
     /** Last refresh's verdict on the default schema, logged when it changes. */
     private Boolean defaultSchemaFound;
-    private Snapshot snapshot;
-    private long refreshedAtNanos;
+    private volatile Snapshot snapshot;
+    private volatile long refreshedAtNanos;
     /** Data version of the store the snapshot was built from (null when unknown). */
-    private String dataVersion;
+    private volatile String dataVersion;
+    /**
+     * Whether a query is refreshing views that are only old (same data version): the other
+     * queries keep the current views meanwhile instead of waiting for the listing (item 39 (c)).
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean refreshing =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    /** Queries answered with the views of before while another one refreshed them. */
+    private final java.util.concurrent.atomic.AtomicLong servedDuringRefresh =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * Creates the catalog of views.
@@ -286,13 +295,61 @@ public final class CatalogViews {
      * seconds while a table could not be described) or at once when
      * the store reports a new data version (for example a new commit on a lakeFS branch). All
      * tables of one refresh are listed in one read scope of the store, so the views never mix
-     * versions.
+     * versions. When the views are only old (the store's data version unchanged), one query
+     * refreshes them and the queries arriving meanwhile get the views of before instead of
+     * waiting for the listing of every table (item 39 (c): on HDFS with many files that listing
+     * stalled every query of the node once a minute). The first views and a new data version
+     * are waited for, as before.
      *
      * @return view definitions
      * @throws IOException when the table files cannot be listed
      * @throws SQLException when DuckDB cannot read a table's column types
      */
-    public synchronized Snapshot current() throws IOException, SQLException {
+    public Snapshot current() throws IOException, SQLException {
+        Snapshot current = snapshot;
+        if (current != null) {
+            DataStore store = parquetAdapter.dataStore();
+            if (Objects.equals(dataVersion, store == null ? null : store.dataVersion())) {
+                long interval = failedTables.isEmpty() ? REFRESH_NANOS : FAILED_REFRESH_NANOS;
+                if (System.nanoTime() - refreshedAtNanos < interval) {
+                    return current;
+                }
+                if (!refreshing.compareAndSet(false, true)) {
+                    servedDuringRefresh.incrementAndGet();
+                    return current;
+                }
+                try {
+                    return refreshIfDue();
+                } finally {
+                    refreshing.set(false);
+                }
+            }
+        }
+        return refreshIfDue();
+    }
+
+    /**
+     * Returns how many queries got the views of before while another query refreshed them.
+     *
+     * @return query count since start
+     */
+    public long servedDuringRefresh() {
+        return servedDuringRefresh.get();
+    }
+
+    /** Makes the views due for a refresh by age (tests). */
+    void expire() {
+        refreshedAtNanos = System.nanoTime() - REFRESH_NANOS - 1;
+    }
+
+    /**
+     * Refreshes the views unless another thread did it meanwhile.
+     *
+     * @return view definitions
+     * @throws IOException when the table files cannot be listed
+     * @throws SQLException when DuckDB cannot read a table's column types
+     */
+    private synchronized Snapshot refreshIfDue() throws IOException, SQLException {
         long now = System.nanoTime();
         DataStore store = parquetAdapter.dataStore();
         long interval = failedTables.isEmpty() ? REFRESH_NANOS : FAILED_REFRESH_NANOS;

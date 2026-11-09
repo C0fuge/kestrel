@@ -183,6 +183,67 @@ class CatalogViewsTest {
     }
 
     /**
+     * Item 39 (c): while one query refreshes views that are only old (same data version), the
+     * queries arriving meanwhile get the views of before at once instead of waiting for the
+     * listing; the refreshing query gets the new views.
+     */
+    @Test
+    void oldViewsServeOtherQueriesWhileOneRefreshes(@TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path file = dir.resolve("f.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT 1 AS x) TO '" + file + "' (FORMAT parquet)");
+        }
+        DataStore store = mock(DataStore.class);
+        when(store.readScope()).thenReturn(DataStore.ReadScope.NONE);
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> java.nio.file.Path.of(
+                java.net.URI.create(inv.<DataFile>getArgument(0).location())).toString());
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("a", "/a"));
+        AtomicReference<Map<String, String>> tables = new AtomicReference<>(Map.of("t", "/a/t"));
+        when(parquet.getTables(eq("a"), any())).thenAnswer(inv -> tables.get());
+        java.util.concurrent.CountDownLatch listing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean block = new java.util.concurrent.atomic.AtomicBoolean();
+        when(parquet.tableFiles(any(), any())).thenAnswer(inv -> {
+            if (block.get()) {
+                listing.countDown();
+                assertTrue(release.await(30, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            return List.of(new DataFile("a/" + inv.getArgument(1) + "/f.parquet",
+                    file.toUri().toString(), java.nio.file.Files.size(file), 0, null));
+        });
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        ExecutorService refresher = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            CatalogViews views = new CatalogViews(parquet, duck, true);
+            CatalogViews.Snapshot first = views.current();
+            assertEquals(0, views.servedDuringRefresh());
+
+            tables.set(Map.of("t", "/a/t", "u", "/a/u"));
+            block.set(true);
+            views.expire();
+            java.util.concurrent.Future<CatalogViews.Snapshot> refreshed = refresher.submit(views::current);
+            assertTrue(listing.await(30, java.util.concurrent.TimeUnit.SECONDS));
+            // The refresh waits on the listing: another query gets the views of before at once.
+            assertSame(first, views.current());
+            assertEquals(1, views.servedDuringRefresh());
+
+            release.countDown();
+            CatalogViews.Snapshot second = refreshed.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            assertNotEquals(first.version(), second.version());
+            assertTrue(second.dataStatements().toString().contains("\"u\""),
+                    second.dataStatements().toString());
+            assertSame(second, views.current());
+        } finally {
+            release.countDown();
+            refresher.shutdownNow();
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies that on HDFS the views are described from footers read through the store's Java
      * client (DuckDB itself could not read the hdfs:// file here), and that a table whose first
      * file cannot be read is left out with its reason while every other table keeps its view.
