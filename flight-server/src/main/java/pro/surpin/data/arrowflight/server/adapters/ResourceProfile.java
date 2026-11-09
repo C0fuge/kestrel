@@ -12,7 +12,8 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 
 /**
  * Resource profile of {@code resourceProfile} ({@code FLIGHT_RESOURCE_PROFILE}): {@code balanced}
- * (default) changes nothing; {@code speed} trades memory and CPU for speed by supplying defaults
+ * (default) changes nothing except {@code duckDbExternalFileCache=true} on an {@code hdfs://} data
+ * dir; {@code speed} trades memory and CPU for speed by supplying defaults
  * for the settings measured as faster. A setting given as a system property or in the
  * environment always wins over the profile; the profile wins over {@code arrowflight.properties}.
  *
@@ -22,7 +23,7 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
  */
 public record ResourceProfile(String name, Map<String, String> defaults, Map<String, String> explicit) {
 
-    /** Default profile: today's behaviour. */
+    /** Default profile: today's behaviour (external file cache on for an HDFS data dir). */
     public static final String BALANCED = "balanced";
 
     /** Profile that trades memory and CPU for speed. */
@@ -58,7 +59,12 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         String name = raw.lookup(List.of("resourceProfile", "arrowflight.resourceProfile"),
                 List.of("FLIGHT_RESOURCE_PROFILE")).orElse(BALANCED).toLowerCase(Locale.ROOT);
         if (BALANCED.equals(name)) {
-            return new ResourceProfile(BALANCED, Map.of(), Map.of());
+            if (!hdfsDataDir(raw)) {
+                return new ResourceProfile(BALANCED, Map.of(), Map.of());
+            }
+            Builder b = new Builder(raw);
+            offerHdfsFileCache(b);
+            return new ResourceProfile(BALANCED, b.defaults, b.explicit);
         }
         if (!SPEED.equals(name)) {
             throw new IllegalArgumentException("resourceProfile must be balanced or speed: " + name);
@@ -90,13 +96,12 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
             long mib = speedMemoryBytes(host, balanced) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
-        if (shared) {
-            // One buffer pool: the cache stays within the node-wide memory limit. Not with a DuckDB
-            // per connection, where every idle connection keeps its own (servers OOM-killed on HDFS).
-            // S3 TPC-H SF10 262.5 -> 42.7 s, c32 p95 18.0 -> 0.58 s, peak RSS x1.6-2.1 (egret
-            // fc-s3-f06b5834e76e, run 41437523179).
-            b.offer("true", "duckDbExternalFileCache", "arrowflight.duckdb.externalFileCache",
-                    "DUCKDB_EXTERNAL_FILE_CACHE");
+        if (shared || hdfsDataDir(raw)) {
+            // One buffer pool: the cache stays within the node-wide memory limit. With a DuckDB per
+            // connection only on HDFS (offerHdfsFileCache): there every connection keeps its own,
+            // each within its connection's memory limit. S3 TPC-H SF10 262.5 -> 42.7 s, c32 p95
+            // 18.0 -> 0.58 s, peak RSS x1.6-2.1 (egret fc-s3-f06b5834e76e, run 41437523179).
+            offerHdfsFileCache(b);
         }
         // Parallel scan threads hand their batches on as they finish instead of in file order (rows of a
         // query without ORDER BY come in any order, as upstream's default): one full lineitem read on S3
@@ -111,6 +116,32 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         // No S3 read caches: one pass reads each file once, so a cache only adds the loopback hop and heap
         // (TPC-H SF10 on S3 1.33x slower with them, as fast as balanced without; runs 40939989610, 40945132304).
         return new ResourceProfile(SPEED, b.defaults, b.explicit);
+    }
+
+    /**
+     * Tells whether the data dir is on HDFS ({@code hdfs://}), where every profile keeps DuckDB's
+     * external file cache by default.
+     *
+     * @param raw configuration source without profile defaults
+     * @return true for an {@code hdfs://} data dir
+     */
+    static boolean hdfsDataDir(ConfigSource raw) {
+        return ConfigAdapter.isHdfs(raw.lookup(List.of("dataDir"), List.of()).orElse(null));
+    }
+
+    /**
+     * Supplies {@code duckDbExternalFileCache=true} for an HDFS data dir (Q11, item 39): without it
+     * every per-thread DuckDB's libhdfs3 asked the DataNode for the short-circuit fds again,
+     * ~5-6 times per point query; with it 0-0.2 and +10..15 % q/s (HDFS point cell, run
+     * 42689843600). The hadoopfs build 51b7220-afc4 reports real modification times, so a
+     * rewritten file is read again instead of served from the cache. With a DuckDB per connection
+     * each connection's cache stays within that connection's memory limit.
+     *
+     * @param b profile builder
+     */
+    private static void offerHdfsFileCache(Builder b) {
+        b.offer("true", "duckDbExternalFileCache", "arrowflight.duckdb.externalFileCache",
+                "DUCKDB_EXTERNAL_FILE_CACHE");
     }
 
     /**

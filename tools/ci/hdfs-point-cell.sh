@@ -127,6 +127,12 @@ for c in "${counts[@]}"; do
     echo
   } | tee -a "$res"
 done
+# Q11 (item 39): a file rewritten in place is read fresh once the hadoopfs metadata cache TTL (30 s by
+# default) has passed, with the external file cache and the footer cache warm. Last: it changes orders.
+rewrite=$("$py" -I tools/ci/hdfs-rewrite-check.py 172.31.0.12:32010 "$in/data/tpch/orders/part-000.parquet" \
+  "$work" "${REWRITE_WAIT_SECONDS:-35}" 2>&1 | tail -n 1)
+echo "${LABEL:-$profile}|$rewrite" | tee -a "$res"
+[[ $rewrite == *"fresh=true"* ]] || status=1
 python3 -I tools/ci/thread-dump-summary.py "$work"/dump-*.txt > "$work/threads.txt" 2>&1 || true
 head -n 60 "$work/threads.txt"
 for c in nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done

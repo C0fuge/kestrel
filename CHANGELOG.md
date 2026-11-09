@@ -24,6 +24,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `duckDbMemoryLimit` (`arrowflight.duckdb.memoryLimit`) | unset = per connection (memory - `-Xmx` - direct memory - 15 %) / `duckDbMemoryConnections`, at least 1 GiB, at most 80 % of memory; `none` = DuckDB's own; a size (e.g. `4GB`) wins | DuckDB's 80 % of RAM per instance |
 | `shutdownDrainSeconds` (`arrowflight.server.shutdownDrainSeconds`, `FLIGHT_SHUTDOWN_DRAIN_SECONDS`) | 20: a stopping node leaves the pool, refuses new calls `UNAVAILABLE`, lets running answers finish (`docker stop -t 25`) | did not exist; stop cut running answers (`INTERNAL`); `0` restores that |
 | `duckDbHdfsShortcircuit` / `duckDbHdfsDomainSocketPath` (`HDFS_SHORTCIRCUIT` / `HDFS_DOMAIN_SOCKET_PATH`) | unset = `dfs.client.read.shortcircuit` / `dfs.domain.socket.path` from the `LIBHDFS3_CONF` file, else from the server's Hadoop configuration (a socket path alone turns short-circuit on); startup line `hdfs=shortCircuit` | unset = hadoopfs's own defaults (off, no socket), so DuckDB read every HDFS block over TCP whatever `LIBHDFS3_CONF` said |
+| `duckDbExternalFileCache` with an `hdfs://` data dir (every profile) | `true` (Q11, item 39; each connection's cache within its `memory_limit`) | `false` in `balanced` |
 | `duckDbPreserveInsertionOrder` under `resourceProfile=speed` only | `false` (rows without ORDER BY in any order) | `true` (balanced unchanged) |
 | `hdfsLocalCopyMinFreeBytes` (`arrowflight.hdfs.localCopyMinFreeBytes`, `HDFS_LOCAL_COPY_MIN_FREE_BYTES`) | unset = min(1 GiB, 10 % of the copies' disk); a size wins, 0 = the copies only have to fit (line `hdfs=localCopyCache ... minFreeBytes=... reserve=default\|set diskBytes=...`, WARN when a set reserve is not below the disk size) | 1 GiB on any disk (item 30) |
 
@@ -31,6 +32,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `hdfsMetadataCacheTtlMs` (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`) | `30000` with an `hdfs://` data dir, else `0` (off) | hadoopfs (51b7220-afc4+) keeps file statuses and located blocks this long (`hdfs_metadata_cache_ttl_ms`); a rewritten file may show its old status that long |
 | `fileStatsPruningMaxFiles` (`arrowflight.fileStatsPruningMaxFiles`, `FLIGHT_FILE_STATS_PRUNING_MAX_FILES`) | `1024` (0 = off) | complete answers of a plain single-table query over a directory table read only the files whose footer min/max of integer / date columns the WHERE clause can match; answers unchanged (item 39 (c) part 3) |
 | `duckDbParquetMetadataCache` (`arrowflight.duckdb.parquetMetadataCache`, `DUCKDB_PARQUET_METADATA_CACHE`) | `false` | every DuckDB keeps the Parquet footers it read (DuckDB `parquet_metadata_cache`); re-read only when the file system reports a newer modification time (item 39 (c)) |
 | `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table (item 39 (a)) |
@@ -103,6 +105,26 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Changed - hadoopfs 51b7220-afc4, HDFS metadata cache TTL, external file cache on HDFS (STATUS item 39, last step)
+
+- CI / release default hadoopfs build is `51b7220-afc4` (DuckDB v1.5.6, `ci-assets`
+  `hadoopfs-v1.5.6-afc4.duckdb_extension`, was afc3): file-status + located-blocks cache, lazy open from cached blocks,
+  real modification times. `tools/ci/hadoopfs-pinned.sh` puts it (checksum-checked) into the extracted extension set
+  in Dev CI, HDFS point perf, Service HDFS, Service cluster and the catalogs CI jobs that use hadoopfs.
+- New setting `hdfsMetadataCacheTtlMs` (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`): set as
+  DuckDB `hdfs_metadata_cache_ttl_ms` on every connection; default 30000 with an `hdfs://` data dir, else 0 (off).
+  Start line `hdfs=metadataCache ttlMs=...`; an older build without the setting logs one WARN
+  `hdfs=metadataCacheUnsupported` and runs without the cache.
+- Default change (Q11, maintainer's yes): `duckDbExternalFileCache=true` with an `hdfs://` data dir in every profile
+  (`resourceProfile profile=balanced duckDbExternalFileCache=true`); `-D` / environment `false` wins. Per point query
+  the DataNode short-circuit fd requests fell from ~5-6 to 0-0.2, +10..15 % q/s (HDFS point cell, run 42689843600).
+  Each connection's cache stays within its `memory_limit`; the node may hold that limit times its live connections.
+- CI: the HDFS point cell ends each variant with `tools/ci/hdfs-rewrite-check.py`: with the caches warm, one orders
+  file is rewritten in place (`hdfs dfs -put -f`, half its rows) and after the TTL the answers must be the new ones.
+- Tests: `ConfigAdapterTest` (TTL defaults and refusal), `ResourceProfileTest` (file cache on HDFS, explicit wins,
+  other data dirs unchanged), `DuckDbAdapterTest` (TTL set, older build skipped; the real-extension test reads the
+  setting).
 
 ### Changed - file pruning also for queries with a table alias (STATUS item 39 (c), part 4)
 

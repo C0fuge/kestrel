@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
+| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -312,8 +312,8 @@ point queries do not read and parse every file's footer again. DuckDB reads a fo
 reports a newer modification time for the file; whether the hadoopfs extension reports one is not checked yet, so
 keep it off where files are rewritten in place.
 
-`duckDbExternalFileCache=true` (default false) lets DuckDB keep file data read through an extension
-(S3, HDFS) in memory. DuckDB 1.5.6 keeps that cache inside each connection's `memory_limit` and
+`duckDbExternalFileCache=true` (default false; true with an `hdfs://` data dir, Q11) lets DuckDB keep file data
+read through an extension (S3, HDFS) in memory. DuckDB 1.5.6 keeps that cache inside each connection's `memory_limit` and
 evicts it like any other buffer, but an idle connection keeps what it cached until it is closed,
 so a node may hold up to `memory_limit` times its live DuckDB connections (one per Flight worker
 thread that ran a query, plus the `duckDbThreadsUnderLoad` / `duckDbThreadsWhenIdle` ones). With
@@ -324,7 +324,12 @@ node-wide bound on S3 / lakeFS use the plugins' read cache (`arrowflight.s3.cach
 `duckDbSharedDatabase=true` (and so under `resourceProfile=speed`, which turns the cache on there) all sessions share
 one buffer pool: the cache stays within the one node-wide `memory_limit` (startup line `duckdb=externalFileCache
 nodeWide=<limit> ... bound=sharedMemoryLimit`), and the private DuckDB a query moves to after running out of memory
-keeps no cache.
+keeps no cache. On an `hdfs://` data dir the cache is on by default in every profile: each per-thread DuckDB
+otherwise asked the DataNode for the short-circuit file descriptors again (~5-6 times per point query; with the cache
+0-0.2 and +10..15 % q/s); the hadoopfs build 51b7220-afc4 reports real modification times, so a file rewritten in
+place is read again. `hdfsMetadataCacheTtlMs` (`HDFS_METADATA_CACHE_TTL_MS`, default 30000 on `hdfs://`, else 0 =
+off) sets how long that build keeps file statuses and located blocks (`hdfs_metadata_cache_ttl_ms`) before asking
+the NameNode again; a rewritten file may be seen with its old status for up to that long.
 
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per

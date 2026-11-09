@@ -186,6 +186,26 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbParquetMetadataCache"), e.getMessage());
     }
 
+    /** Item 39: the hadoopfs metadata cache TTL is 30 s for an hdfs:// data dir, off elsewhere. */
+    @Test
+    void hdfsMetadataCacheTtlDefaultsTo30sOnHdfsOnly() throws IOException {
+        String hdfs = "hdfs://nn:8020/data";
+        assertEquals(30_000, ConfigAdapter.hdfsMetadataCacheTtlMs(source(Map.of(), Map.of()), hdfs));
+        assertEquals(30_000, ConfigAdapter.hdfsMetadataCacheTtlMs(source(Map.of(), Map.of()), "HDFS://ns/d"));
+        assertEquals(0, ConfigAdapter.hdfsMetadataCacheTtlMs(source(Map.of(), Map.of()), "/data/parquet"));
+        assertEquals(0, ConfigAdapter.hdfsMetadataCacheTtlMs(source(Map.of(), Map.of()), null));
+        assertEquals(5000, ConfigAdapter.hdfsMetadataCacheTtlMs(
+                source(Map.of("arrowflight.hdfs.metadataCacheTtlMs", "5000"), Map.of()), hdfs));
+        assertEquals(0, ConfigAdapter.hdfsMetadataCacheTtlMs(
+                source(Map.of(), Map.of("HDFS_METADATA_CACHE_TTL_MS", "0")), hdfs));
+        assertEquals(1000, ConfigAdapter.hdfsMetadataCacheTtlMs(
+                source(Map.of("hdfsMetadataCacheTtlMs", "1000"), Map.of()), "/data/parquet"));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.hdfsMetadataCacheTtlMs(
+                        source(Map.of("hdfsMetadataCacheTtlMs", "-1"), Map.of()), hdfs));
+        assertTrue(e.getMessage().contains("hdfsMetadataCacheTtlMs"), e.getMessage());
+    }
+
     /** Item 39 (c): file pruning by footer statistics is on for tables of up to 1024 files. */
     @Test
     void fileStatsPruningMaxFilesDefaultsTo1024() throws IOException {

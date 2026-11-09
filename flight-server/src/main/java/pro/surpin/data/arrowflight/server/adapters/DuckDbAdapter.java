@@ -53,6 +53,7 @@ import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.duckdb.LockdownCheck;
 import pro.surpin.data.arrowflight.server.duckdb.PluginRefusedFunctions;
 import pro.surpin.data.arrowflight.server.duckdb.TableSecrets;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 
 /**
@@ -247,6 +248,8 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private final boolean zeroCopyWrites;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
+    /** hadoopfs file-status / located-blocks cache TTL in ms (hdfsMetadataCacheTtlMs), 0 = off. */
+    private final int hdfsMetadataCacheTtlMs;
     /** hadoopfs settings the loaded extension does not know, warned about once. */
     private final Set<String> unknownHdfsSettings = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService sessionReaper;
@@ -585,6 +588,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.declaredSecrets = setup.secrets();
         PluginRefusedFunctions.addAll(setup.extraRefusedFunctions());
         this.appConfig = appConfig;
+        this.hdfsMetadataCacheTtlMs = ConfigAdapter.hdfsMetadataCacheTtlMs(
+                ConfigSource.system(), appConfig.dataDir());
         this.ioPool = ioPool;
         this.batchSize = appConfig.batchSize();
         this.duckDbGroups = appConfig.duckDbGroups();
@@ -1086,6 +1091,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                         appConfig.duckDbHdfsConnectTimeoutMs(), logExtensions);
                 setHdfsTimeout(s, "hdfs_read_timeout_ms",
                         appConfig.duckDbHdfsReadTimeoutMs(), logExtensions);
+                setHdfsMetadataCache(s, hdfsMetadataCacheTtlMs, logExtensions);
             }
             runStorageSetup(s);
             if (logExtensions) {
@@ -1160,6 +1166,41 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (log) {
             LOGGER.info("node={} duckdb=hdfsTimeout setting={} valueMs={}", LogUtil.node(), name,
                     valueMs);
+        }
+    }
+
+    /**
+     * Sets how long the hadoopfs extension keeps file statuses and located blocks
+     * ({@code hdfs_metadata_cache_ttl_ms}, build 51b7220-afc4 and later), so repeated point
+     * queries do not ask the NameNode for them again; 0 turns the cache off. An older build
+     * without the setting keeps working without the cache: a positive TTL is warned about once,
+     * 0 is logged only on the logging connection.
+     *
+     * @param s     statement of the connection to set up
+     * @param ttlMs TTL in ms, 0 for off
+     * @param log   whether to log the value (once per node)
+     * @throws java.sql.SQLException when DuckDB refuses the setting for another reason
+     */
+    void setHdfsMetadataCache(Statement s, int ttlMs, boolean log) throws java.sql.SQLException {
+        String name = "hdfs_metadata_cache_ttl_ms";
+        try {
+            s.execute("SET " + name + " = " + ttlMs);
+        } catch (java.sql.SQLException e) {
+            String message = e.getMessage();
+            if (message == null || !message.contains("unrecognized configuration parameter")) {
+                throw e;
+            }
+            if (ttlMs > 0 && unknownHdfsSettings.add(name)) {
+                LOGGER.warn("node={} hdfs=metadataCacheUnsupported ttlMs={} reason=\"the hadoopfs"
+                        + " extension has no {} setting (build before 51b7220-afc4); file statuses"
+                        + " are asked of the NameNode on every open\"", LogUtil.node(), ttlMs, name);
+            } else if (log) {
+                LOGGER.info("node={} hdfs=metadataCache ttlMs=0 supported=false", LogUtil.node());
+            }
+            return;
+        }
+        if (log) {
+            LOGGER.info("node={} hdfs=metadataCache ttlMs={}", LogUtil.node(), ttlMs);
         }
     }
 
