@@ -3985,3 +3985,9 @@ S3 slowdown item below stays open for then).
   progress on the catalogs lane (`LOCK-CATALOGS` 19:22:09Z, active), so `package=true` and "ITEM 39 DONE" still wait.
   Item 38 waits for the stand. Newest main Dev CI 42641096583 (2b61650d) green; later main commits are lane 3
   workflow/test changes (D13 (c), Service cluster 42680042903 + 42681427105 green). Lock released.
+- 2026-11-09 (lane 4, item 39 (c) part 3, b0f82a47): core change for the core lane to know - `ExecutionService
+  .readComplete` now passes the SQL through `CatalogViews.prunedFiles`: a plain single-table query over a directory
+  table reads only the files its WHERE clause can match by footer min/max (`FileStatsPruner`); new setting
+  `fileStatsPruningMaxFiles` (default 1024, 0 = off; Open question Q10 in CATALOGS-STATUS.md).
+  `tools/ci/service-cluster-data.py` takes an optional 4th argument `mod|range` (default `mod`, unchanged for
+  service-cluster / service-hdfs).
