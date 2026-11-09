@@ -30,13 +30,12 @@ docker network create --subnet 172.31.0.0/24 hd > /dev/null 2>&1 || true
 hd=/srv/hd
 sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/sock"
 conf="$work/conf"; mkdir -p "$conf"
+# DuckDB (hadoopfs, libhdfs3) reads short-circuit; the server's own Java client runs without the
+# native Hadoop library (with it, this cell's JVM crashed in ShortCircuitCache: "NativeIO is not
+# available", SIGSEGV), so its few footer reads go over TCP.
 sc=off native=()
 if docker run --rm "$image" hadoop checknative 2>&1 | grep -qE '^hadoop: +true'; then
   sc=on
-  docker create --name hlib "$image" > /dev/null && docker cp hlib:/opt/hadoop/lib/native "$work/hnative" > /dev/null
-  docker rm hlib > /dev/null
-  native=(-v "$work/hnative:/hnative:ro" -e LD_LIBRARY_PATH=/hnative)
-  opts="$opts -Djava.library.path=/hnative"
 fi
 props=(fs.defaultFS hdfs://172.31.0.10:8020 dfs.replication 1 dfs.permissions.enabled false
   dfs.namenode.rpc-bind-host 0.0.0.0 dfs.namenode.http-bind-host 0.0.0.0 dfs.namenode.name.dir /hd/name
