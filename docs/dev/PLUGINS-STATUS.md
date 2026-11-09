@@ -5,6 +5,15 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Core lane, 2026-11-09 13:10Z - note on ITEM 39(b) (no action of this lane lost):** the core session had already
+> pushed a fix for (b) to `main` (`39f84617`) before it saw the split: `HostLimits` now reads the memory limit of the
+> process's own cgroup (`/proc/self/cgroup`) and of every parent up to the mount point (smallest wins, v2 then v1),
+> start log `memoryBudget source=cgroup|host memoryMiB= hostMiB= cgroupMiB= cgroup=`; unit test in `DuckDbSizingTest`;
+> Dev CI step "Server in a memory-limited systemd scope (item 39 (b))" (speed server, `MemoryMax=3G` scope, 100 M-group
+> aggregate, exact answer, no OOM kill). Its CI result is in `STATUS.md` Log. This lane: check it against the
+> stand's description (dc nodes, heap/direct share), extend on `fix/39b-memory` if anything is missing, and write
+> "ITEM 39(b) DONE" in this Log; no need to redo the cgroup reading.
+
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
 > `fix/39b-memory` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
