@@ -207,6 +207,62 @@ jobs:
           [ "$merged" -ge 48 ] || { echo "only $merged of 48 answers merged from endpoint answers"; exit 1; }
           exit "$rc"
 
+      # Item 39 (b): on the maintainer's cluster a speed server in a 48 GB systemd scope on a 754 GB host sized
+      # DuckDB from the host's memory (only /sys/fs/cgroup/memory.max at the mount point was read) and was
+      # OOM-killed on a large aggregate. Here: a speed server in a systemd scope with MemoryMax=3G (the runner has
+      # 16 GB), an aggregate whose hash table (100 M groups) is larger than the scope: the start log must name the
+      # scope's limit, the answer must be exact and the scope must see no OOM kill (DuckDB spills instead).
+      - name: Server in a memory-limited systemd scope (item 39 (b))
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/m39"; mkdir -p "$work/data/big/events" "$work/tmp"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet --only-binary=duckdb duckdb==1.5.6
+          "$RUNNER_TEMP/py/bin/python" -I -c "
+          import duckdb, sys
+          duckdb.connect().execute(f\"COPY (SELECT i AS id, i % 7 AS g FROM range(100000000) t(i)) TO '{sys.argv[1]}/part-0.parquet' (FORMAT PARQUET)\")
+          " "$work/data/big/events"
+          ls -l "$work/data/big/events"
+          cp "$RUNNER_TEMP/dc35/cp.txt" "$work/cp.txt" 2>/dev/null || true
+          [ -s "$work/cp.txt" ] || ./mvnw -B -q -pl flight-server dependency:build-classpath -Dmdep.outputFile="$work/cp.txt" -Dmdep.includeScope=runtime
+          sudo systemd-run --quiet --scope --unit=flight39 -p MemoryMax=3G -p MemorySwapMax=0 \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            env HOME="$HOME" LANG=C.UTF-8 FLIGHT_ALLOW_INSECURE=true "$JAVA_HOME/bin/java" -Xmx512m -XX:MaxDirectMemorySize=512m \
+            --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED \
+            --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+            -Dio.netty.tryReflectionSetAccessible=true -Dhazelcast.phone.home.enabled=false \
+            -DresourceProfile=speed -DresultMode=complete -DduckDbTempDirectory="$work/tmp" \
+            -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:$(cat "$work/cp.txt")" \
+            pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$work/data" \
+            --localhost 127.0.0.1 --port 32011 --hazelcast-port 5711 --hosts 127.0.0.1:5711 \
+            --metrics-enabled false > "$work/server.log" 2>&1 &
+          for _ in $(seq 120); do grep -q 'Server Arrow Flight SQL started' "$work/server.log" && break; sleep 1; done
+          grep -q 'Server Arrow Flight SQL started' "$work/server.log" || { tail -n 40 "$work/server.log"; exit 1; }
+          scope=/sys/fs/cgroup/system.slice/flight39.scope
+          budget=$(grep -m 1 -o 'memoryBudget .*' "$work/server.log" || true)
+          sizing=$(grep -m 1 -o 'duckdb=sizing.*' "$work/server.log" | cut -c1-300 || true)
+          echo "item 39 (b): $budget | $sizing" | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=0
+          "$RUNNER_TEMP/py/bin/python" -I -c "
+          import sys, time
+          import adbc_driver_flightsql.dbapi as flightsql
+          t = time.time()
+          with flightsql.connect('grpc://127.0.0.1:32011', db_kwargs={'adbc.flight.sql.rpc.call_header.x-flight-result-mode': 'complete'}) as c, c.cursor() as cur:
+              cur.execute('SELECT count(*) AS n, sum(c) AS s, max(c) AS m FROM (SELECT id, count(*) AS c FROM big.events GROUP BY id)')
+              row = cur.fetchall()[0]
+          print('answer', row, 'seconds', round(time.time() - t, 1))
+          sys.exit(0 if tuple(int(v) for v in row) == (100000000, 100000000, 1) else 1)
+          " > "$work/client.log" 2>&1 || rc=$?
+          cat "$work/client.log" | grep -v 'warnings.warn' | tail -n 5
+          peak=$(cat "$scope/memory.peak" 2>/dev/null || echo unknown)
+          kills=$(awk '$1 == "oom_kill" {print $2}' "$scope/memory.events" 2>/dev/null || echo unknown)
+          spilled=$(du -sm "$work/tmp" 2>/dev/null | cut -f1 || true)
+          echo "item 39 (b): $(grep -m 1 '^answer' "$work/client.log" || echo 'no answer'); scope peak $peak bytes, oom_kill $kills" | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo systemctl stop flight39.scope || true
+          echo "$budget" | grep -q 'source=cgroup memoryMiB=3072' || { echo "memory budget not from the scope: $budget"; exit 1; }
+          [ "$kills" = "0" ] || { echo "the scope saw OOM kills: $kills"; tail -n 30 "$work/server.log"; exit 1; }
+          [ "$rc" -eq 0 ] || { tail -n 30 "$work/server.log" | cut -c1-400; exit 1; }
+
       - name: Test summary
         if: always()
         run: |

@@ -5,6 +5,8 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +24,9 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HostLimits.class);
 
+    /** Whether the memory source was logged (once per process). */
+    private static final AtomicBoolean LOGGED = new AtomicBoolean();
+
     /** Values at or above this in a cgroup limit file mean "no limit" (cgroup v1 writes ~2^63). */
     private static final long NO_CGROUP_LIMIT = 1L << 60;
 
@@ -31,10 +36,18 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
      * @return host limits
      */
     public static HostLimits detect() {
-        long memory = physicalMemory();
-        long cgroup = cgroupMemoryLimit(Path.of("/sys/fs/cgroup"));
-        if (cgroup > 0 && (memory <= 0 || cgroup < memory)) {
+        long host = physicalMemory();
+        List<String> ownCgroup = procSelfCgroup();
+        long cgroup = cgroupMemoryLimit(Path.of("/sys/fs/cgroup"), ownCgroup);
+        long memory = host;
+        boolean fromCgroup = cgroup > 0 && (host <= 0 || cgroup <= host);
+        if (fromCgroup) {
             memory = cgroup;
+        }
+        if (LOGGED.compareAndSet(false, true)) {
+            LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={}",
+                    fromCgroup ? "cgroup" : "host", memory >> 20, host >> 20, cgroup >> 20,
+                    String.join(";", ownCgroup));
         }
         return new HostLimits(Runtime.getRuntime().availableProcessors(), memory,
                 Runtime.getRuntime().maxMemory(), OutboundBudget.maxDirectMemory());
@@ -65,8 +78,75 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
      * @return limit in bytes, 0 when there is none or it is not readable
      */
     static long cgroupMemoryLimit(Path cgroupRoot) {
-        long v2 = readLimit(cgroupRoot.resolve("memory.max"));
-        return v2 > 0 ? v2 : readLimit(cgroupRoot.resolve("memory").resolve("memory.limit_in_bytes"));
+        return cgroupMemoryLimit(cgroupRoot, List.of());
+    }
+
+    /**
+     * Reads the memory limit of the process's own cgroup and of every cgroup above it up to the
+     * mount point, the smallest one set (item 39 (b)): a server started in a systemd scope or
+     * service with {@code MemoryMax} has its limit in {@code /sys/fs/cgroup/<its path>/memory.max},
+     * not at the root, and a limit of a parent slice binds it as well. cgroup v2 first, else v1.
+     *
+     * @param cgroupRoot mount point of the cgroup file system
+     * @param procSelfCgroup lines of {@code /proc/self/cgroup} (none: the mount point only)
+     * @return limit in bytes, 0 when there is none or it is not readable
+     */
+    static long cgroupMemoryLimit(Path cgroupRoot, List<String> procSelfCgroup) {
+        String v2Path = "";
+        String v1Path = "";
+        for (String line : procSelfCgroup) {
+            String[] parts = line.split(":", 3);
+            if (parts.length != 3) {
+                continue;
+            }
+            if ("0".equals(parts[0]) && parts[1].isEmpty()) {
+                v2Path = parts[2].strip();
+            } else if (List.of(parts[1].split(",")).contains("memory")) {
+                v1Path = parts[2].strip();
+            }
+        }
+        long v2 = smallestLimit(cgroupRoot, v2Path, "memory.max");
+        return v2 > 0 ? v2 : smallestLimit(cgroupRoot.resolve("memory"), v1Path, "memory.limit_in_bytes");
+    }
+
+    /**
+     * Returns the smallest limit set in a cgroup directory and the ones above it.
+     *
+     * @param base mount point of the hierarchy
+     * @param cgroup path of the process's cgroup in it ("/a/b"), empty for the mount point
+     * @param file name of the limit file
+     * @return limit in bytes, 0 when none is set
+     */
+    private static long smallestLimit(Path base, String cgroup, String file) {
+        Path root = base.normalize();
+        Path dir = root.resolve(cgroup.replaceFirst("^/+", "")).normalize();
+        if (!dir.startsWith(root)) {
+            dir = root;
+        }
+        long smallest = 0;
+        for (Path d = dir; d != null && d.startsWith(root); d = d.getParent()) {
+            long limit = readLimit(d.resolve(file));
+            if (limit > 0 && (smallest == 0 || limit < smallest)) {
+                smallest = limit;
+            }
+        }
+        return smallest;
+    }
+
+    /**
+     * Reads the cgroup membership of this process.
+     *
+     * @return lines of {@code /proc/self/cgroup}, empty when not readable
+     */
+    private static List<String> procSelfCgroup() {
+        try {
+            Path file = Path.of("/proc/self/cgroup");
+            return Files.isReadable(file) ? Files.readAllLines(file, StandardCharsets.US_ASCII)
+                    : List.of();
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("/proc/self/cgroup not readable", e);
+            return List.of();
+        }
     }
 
     /**

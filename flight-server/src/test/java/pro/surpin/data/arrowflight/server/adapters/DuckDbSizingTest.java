@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -190,6 +191,32 @@ class DuckDbSizingTest {
         assertEquals(4L << 30, HostLimits.cgroupMemoryLimit(dir));
         Files.writeString(dir.resolve("memory.max"), "6442450944\n");
         assertEquals(6L << 30, HostLimits.cgroupMemoryLimit(dir));
+    }
+
+    /**
+     * Verifies the limit of the process's own cgroup and of its parents counts, not only the
+     * mount point's (item 39 (b): a server in a systemd scope with MemoryMax=48G on a 754 GB host
+     * sized DuckDB from the host's memory).
+     */
+    @Test
+    void readsTheLimitOfTheProcessCgroupAndItsParents(@TempDir Path dir) throws IOException {
+        Path scope = Files.createDirectories(dir.resolve("system.slice/flight.scope"));
+        List<String> v2 = List.of("0::/system.slice/flight.scope");
+        assertEquals(0, HostLimits.cgroupMemoryLimit(dir, v2));
+        Files.writeString(scope.resolve("memory.max"), "51539607552\n");
+        assertEquals(48L << 30, HostLimits.cgroupMemoryLimit(dir, v2));
+        assertEquals(0, HostLimits.cgroupMemoryLimit(dir), "the mount point alone has no limit");
+        Files.writeString(dir.resolve("system.slice/memory.max"), "34359738368\n");
+        assertEquals(32L << 30, HostLimits.cgroupMemoryLimit(dir, v2), "a smaller parent binds");
+        // A path leaving the mount point reads the mount point only.
+        assertEquals(0, HostLimits.cgroupMemoryLimit(dir, List.of("0::/../../etc")));
+        // cgroup v1: the memory controller's own path.
+        Path v1 = Files.createDirectories(dir.resolve("memory/user/job"));
+        Files.writeString(v1.resolve("memory.limit_in_bytes"), "4294967296\n");
+        assertEquals(4L << 30, HostLimits.cgroupMemoryLimit(dir,
+                List.of("4:memory:/user/job", "1:cpu,cpuacct:/")));
+        assertEquals(4L << 30, HostLimits.cgroupMemoryLimit(dir,
+                List.of("9:name=systemd:/", "4:cpu,memory:/user/job", "0::/")));
     }
 
     @Test

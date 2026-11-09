@@ -102,6 +102,15 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - memory of a server in a systemd scope / non-root cgroup (STATUS item 39 (b))
+
+- The memory DuckDB is sized from (per-connection `memory_limit`, speed's node-wide limit) took the cgroup limit only
+  from `/sys/fs/cgroup/memory.max` (the mount point): a server in a systemd scope or service with `MemoryMax` (48 GB on
+  a 754 GB host) was sized from the host's memory and OOM-killed on large aggregates. Now the process's own cgroup
+  (`/proc/self/cgroup`) and every cgroup above it count, the smallest limit wins (v2 `memory.max`, else v1
+  `memory.limit_in_bytes`). Start log `memoryBudget source=cgroup|host memoryMiB=... hostMiB=... cgroupMiB=...
+  cgroup=...`. Dev CI: a speed server in a `MemoryMax=3G` scope answers a 100 M-group aggregate exactly, no OOM kill.
+
 ### Fixed - plain table names that several schemas have (STATUS item 39 (a))
 
 - A table name written without a schema that two or more schemas have (`orders` with `tpch.orders` and
