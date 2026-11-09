@@ -10,7 +10,8 @@ i on node i mod n, and compares every answer with <dir>/expected/qNN.parquet (co
 count, values; rows as a multiset, floating-point values within a relative 1e-9 - the summation
 order of a merged answer may change the last bits), then Flight SQL metadata (GetObjects lists the
 8 tables of schema ``tpch``, GetTableSchema of ``tpch.lineitem`` has the data files' columns) and
-one prepared query with a bound parameter. Prints ``ok``/``FAIL`` lines and a last line
+one prepared query with a bound parameter. With ``SC_PLAIN=1`` it also runs the 22 queries with plain
+table names (``tpch.`` removed) against the same answers (D15). Prints ``ok``/``FAIL`` lines and a last line
 ``result pass`` or ``result fail <first error>``; exits non-zero on a failure.
 
 With the environment variable ``SC_DATANODES`` (comma-separated ``host:port`` of the HDFS DataNodes'
@@ -190,6 +191,22 @@ def check(servers, base):
             print(f"ok {name} on {servers[node]} rows {got.num_rows} {ms:.0f} ms", flush=True)
     if len(queries) != 22:
         fail(f"{len(queries)} queries, expected 22")
+    if os.environ.get("SC_PLAIN") == "1":
+        # D15: the same 22 queries with plain table names (no ``tpch.``), against the same answers;
+        # under distributedComplete their mergeable shapes must merge, not fall back.
+        for i, (name, sql, want) in enumerate(queries):
+            node = (i + 1) % len(conns)
+            plain = re.sub(r"\btpch\.", "", sql)
+            try:
+                got = run(conns[node], plain)
+            except Exception as e:  # noqa: BLE001 - every failure is reported
+                fail(f"plain {name} on {servers[node]}: {first_line(e)}")
+                continue
+            diff = difference(got, want)
+            if diff:
+                fail(f"plain {name} on {servers[node]}: wrong answer: {diff}")
+            else:
+                print(f"ok plain {name} on {servers[node]} rows {got.num_rows}", flush=True)
     if dns:
         text, local, remote = reads_delta(before, block_reads(dns))
         print(f"reads total of the 22 queries: local {local}, remote {remote} ({text})", flush=True)

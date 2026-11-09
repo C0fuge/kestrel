@@ -373,6 +373,8 @@ jobs:
           else
             # D13 (a2): on HDFS the check prints each query's DataNode block reads (local / remote client).
             [[ $STORE == hdfs* ]] && export SC_DATANODES=172.30.0.11:9864,172.30.0.12:9864,172.30.0.13:9864
+            # D15: speed-dc also runs the queries with plain table names; they must merge like the qualified ones.
+            [ "$CELL" = speed-dc ] && export SC_PLAIN=1
             "$py" -I tools/ci/service-cluster-check.py check "$nodes" "$in" > "$RUNNER_TEMP/client.log" 2>&1; rc=$?
             cat "$RUNNER_TEMP/client.log"
             if [[ $STORE == hdfs* ]]; then
@@ -412,6 +414,11 @@ jobs:
               echo "::warning title=short-circuit unused::$STORE $CELL: the servers read every block over TCP although the Java client reads short-circuit in the same layout"
             fi
           fi
+          # D15: a merge must never fall back because a table was named without its schema.
+          for i in 1 2 3; do
+            unqualified=$(docker logs "srv$i" 2>&1 | grep 'distributedComplete=fallback' | grep -m 1 'Name the table with its schema' || true)
+            [ -z "$unqualified" ] || finish fail "srv$i: plain table name not merged: $(echo "$unqualified" | cut -c1-200)"
+          done
           result=$(grep -m 1 '^result ' "$RUNNER_TEMP/client.log")
           if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then finish pass ""; fi
           detail=${result#result fail }
