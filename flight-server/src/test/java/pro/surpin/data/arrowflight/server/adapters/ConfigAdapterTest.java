@@ -186,6 +186,20 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbParquetMetadataCache"), e.getMessage());
     }
 
+    /** Item 39 (c): file pruning by footer statistics is on for tables of up to 1024 files. */
+    @Test
+    void fileStatsPruningMaxFilesDefaultsTo1024() throws IOException {
+        assertEquals(1024, ConfigAdapter.fileStatsPruningMaxFiles(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.fileStatsPruningMaxFiles(
+                source(Map.of("fileStatsPruningMaxFiles", "0"), Map.of())));
+        assertEquals(50, ConfigAdapter.fileStatsPruningMaxFiles(
+                source(Map.of(), Map.of("FLIGHT_FILE_STATS_PRUNING_MAX_FILES", "50"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.fileStatsPruningMaxFiles(
+                        source(Map.of("fileStatsPruningMaxFiles", "-1"), Map.of())));
+        assertTrue(e.getMessage().contains("fileStatsPruningMaxFiles"), e.getMessage());
+    }
+
     @Test
     void flightLoadReservationSecondsDefaultsToTenMinutesAndRefusesZero() throws IOException {
         assertEquals(600L, ConfigAdapter.flightLoadReservationSeconds(source(Map.of(), Map.of())));

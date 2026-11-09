@@ -131,6 +131,8 @@ public final class ExecutionService {
         this.widenUnsigned = appConfig == null || appConfig.widenUnsignedTypes();
         this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter, widenUnsigned,
                 pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.defaultSchema());
+        this.catalogViews.filePruning(
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.fileStatsPruningMaxFiles());
     }
 
     /**
@@ -256,7 +258,8 @@ public final class ExecutionService {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            String sql = catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false);
+            String sql = catalogViews.prunedFiles(
+                    catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false));
             CatalogViews.Snapshot views = catalogViews.current();
             try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(),
                     allocator)) {

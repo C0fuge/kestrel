@@ -31,6 +31,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `fileStatsPruningMaxFiles` (`arrowflight.fileStatsPruningMaxFiles`, `FLIGHT_FILE_STATS_PRUNING_MAX_FILES`) | `1024` (0 = off) | complete answers of a plain single-table query over a directory table read only the files whose footer min/max of integer / date columns the WHERE clause can match; answers unchanged (item 39 (c) part 3) |
 | `duckDbParquetMetadataCache` (`arrowflight.duckdb.parquetMetadataCache`, `DUCKDB_PARQUET_METADATA_CACHE`) | `false` | every DuckDB keeps the Parquet footers it read (DuckDB `parquet_metadata_cache`); re-read only when the file system reports a newer modification time (item 39 (c)) |
 | `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table (item 39 (a)) |
 | `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |
@@ -102,6 +103,21 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Changed - point queries read only the files their filter can match (STATUS item 39 (c), part 3)
+
+- A complete answer of a plain single-table query over a directory table (`SELECT ... FROM schema.table WHERE ...`,
+  no join, subquery, WITH or set operation, no alias yet) now reads only the Parquet files whose footer statistics its
+  WHERE clause can match, instead of the view over every file: comparisons (`= < <= > >= BETWEEN IN`, under AND / OR)
+  of signed integer and date columns with integral number or date literals. NOT, other operators and types, casts of
+  columns, parameters and NULL never leave a file out; neither do files without statistics for the column, with only
+  nulls in it, or with other columns / types than the view's first file. No file left -> the empty view (e.g.
+  `count(*)` = 0). Footers are read once per file version (path, length, modification time) through the store.
+  On HDFS a point query opened every file of its table (~5 NameNode opens per file); now only the matching ones.
+- New setting `fileStatsPruningMaxFiles` (default 1024; 0 turns pruning off): tables with more files are not pruned.
+- Tests: `FileStatsPrunerTest` (40 queries answer the same with and without pruning: nulls, negative numbers, cast
+  and text literals, OR / IN / NOT, dates, joins, three-part column names; footers read once; rewritten files read
+  again).
 
 ### Fixed - queries failed `INTERNAL` during an HDFS NameNode failover (service matrix `hdfs-ha loss`)
 
