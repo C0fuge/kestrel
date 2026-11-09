@@ -235,6 +235,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final int cores;
     /** Caps the streams inside DuckDB at once (duckDbProducingStreams); off by default. */
     private final ProducingStreamGate producingGate;
+    /** Whether every DuckDB keeps the Parquet footers it read (duckDbParquetMetadataCache). */
+    private final boolean parquetMetadataCache = ConfigAdapter.duckDbParquetMetadataCache();
     /**
      * Lets gRPC send DuckDB's batch buffers without a copy (flightZeroCopyWrites); safe because
      * each batch DuckDB exports lives in new buffers that gRPC keeps until it has written them.
@@ -627,12 +629,14 @@ public final class DuckDbAdapter implements AutoCloseable {
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
         LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} whenIdle={}"
-                + " producingStreams={} zeroCopyWrites={} availableProcessors={} sharedDatabase={}",
+                + " producingStreams={} zeroCopyWrites={} availableProcessors={} sharedDatabase={}"
+                + " parquetMetadataCache={}",
                 LogUtil.node(),
                 shared == null ? appConfig.duckDbThreads() : "shared", this.threadsUnderLoad,
                 this.threadsWhenIdle,
                 producingGate.permits(),
-                zeroCopyWrites, this.cores, shared == null ? "off" : shared.describe());
+                zeroCopyWrites, this.cores, shared == null ? "off" : shared.describe(),
+                parquetMetadataCache);
         int warmCount = appConfig.duckDbWarmConnections();
         if (warmCount > 0) {
             LOGGER.info("node={} duckdb=warmup connections={}", LogUtil.node(), warmCount);
@@ -1025,6 +1029,11 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (streamingBuffer != null && shared == null) {
                 // How far a streamed result may run ahead of the Flight consumer.
                 s.execute("SET streaming_buffer_size = " + sqlStringLiteral(streamingBuffer));
+            }
+            if (parquetMetadataCache) {
+                // Footers kept per DuckDB, checked against the file's modification time on each
+                // read: point queries no longer read and parse every file's footer (item 39 (c)).
+                s.execute("SET parquet_metadata_cache = true");
             }
             if (!fileCache) {
                 // The cache keeps file data read through an extension until memory_limit is

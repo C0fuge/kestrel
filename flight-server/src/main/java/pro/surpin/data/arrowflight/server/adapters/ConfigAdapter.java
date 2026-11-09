@@ -719,6 +719,35 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns duckDbParquetMetadataCache from the system configuration.
+     *
+     * @return whether every DuckDB keeps the Parquet footers it read
+     */
+    public static boolean duckDbParquetMetadataCache() {
+        return duckDbParquetMetadataCache(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code duckDbParquetMetadataCache} ({@code DUCKDB_PARQUET_METADATA_CACHE}): whether
+     * every DuckDB of the node keeps the Parquet footers it read (DuckDB's
+     * {@code parquet_metadata_cache}) instead of reading and parsing them again on each query
+     * (item 39 (c): point queries); default false. DuckDB checks a cached footer against the
+     * file's modification time on every read, so a rewritten file is read again.
+     *
+     * @param props configuration source
+     * @return true when on
+     * @throws IllegalArgumentException for a value other than true or false
+     */
+    public static boolean duckDbParquetMetadataCache(ConfigSource props) {
+        String value = getStringWithEnv("duckDbParquetMetadataCache", "arrowflight.duckdb.parquetMetadataCache",
+                "DUCKDB_PARQUET_METADATA_CACHE", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("duckDbParquetMetadataCache must be true or false: " + value);
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    /**
      * Returns flightZeroCopyWrites from the system configuration.
      *
      * @return whether DuckDB result streams hand their batches to gRPC without a copy

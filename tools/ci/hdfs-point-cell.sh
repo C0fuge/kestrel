@@ -104,7 +104,7 @@ for c in "${counts[@]}"; do
   line=$(taskset -c 2,3 "$py" -I tools/ci/point-query-load.py 172.31.0.12:32010 "$c" "$seconds" "$keys" 2> "$work/client-c$c.log") || status=1
   wait "$sampler"; [ -n "$dumper" ] && wait "$dumper"
   cpu=$(sed 's/%//' "$work/cpu-c$c.txt" | awk '{ s += $1; n++ } END { if (n) printf "%.0f", s / n; else print "?" }')
-  echo "$profile|$line cpu=${cpu}%" | tee -a "$res"
+  echo "${LABEL:-$profile}|$line cpu=${cpu}%" | tee -a "$res"
 done
 python3 -I tools/ci/thread-dump-summary.py "$work"/dump-*.txt > "$work/threads.txt" 2>&1 || true
 head -n 60 "$work/threads.txt"

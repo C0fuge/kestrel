@@ -172,6 +172,20 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbProducingStreams"), e.getMessage());
     }
 
+    /** Item 39 (c): the Parquet footer cache of every DuckDB is off unless set. */
+    @Test
+    void duckDbParquetMetadataCacheDefaultsToOff() throws IOException {
+        assertFalse(ConfigAdapter.duckDbParquetMetadataCache(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.duckDbParquetMetadataCache(
+                source(Map.of("duckDbParquetMetadataCache", "true"), Map.of())));
+        assertTrue(ConfigAdapter.duckDbParquetMetadataCache(
+                source(Map.of(), Map.of("DUCKDB_PARQUET_METADATA_CACHE", "TRUE"))));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbParquetMetadataCache(
+                        source(Map.of("duckDbParquetMetadataCache", "yes"), Map.of())));
+        assertTrue(e.getMessage().contains("duckDbParquetMetadataCache"), e.getMessage());
+    }
+
     @Test
     void flightLoadReservationSecondsDefaultsToTenMinutesAndRefusesZero() throws IOException {
         assertEquals(600L, ConfigAdapter.flightLoadReservationSeconds(source(Map.of(), Map.of())));
