@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server.services;
 
 import org.apache.arrow.flight.CallStatus;
+import org.apache.arrow.memory.BufferAllocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +46,7 @@ public final class PeerStreamAdmission {
     private final AtomicLong waited = new AtomicLong();
     private final AtomicLong waitNanos = new AtomicLong();
     private final AtomicLong refused = new AtomicLong();
+    private final AtomicLong unmetered = new AtomicLong();
 
     /**
      * Creates the admission of a node.
@@ -74,6 +76,34 @@ public final class PeerStreamAdmission {
      */
     public static int defaultPermits(long directMemoryBytes) {
         return (int) Math.max(MIN_PERMITS, Math.min(Integer.MAX_VALUE, directMemoryBytes / STREAM_BYTES));
+    }
+
+    /**
+     * Derives the permits from the memory the endpoint streams can really use: the smaller of the
+     * JVM's direct memory limit and the limit of the Arrow allocator they are read into (item 39
+     * (d): with 8 GiB of direct memory and the default 2 GiB allocator limit, 64 permits let eight
+     * concurrent full scans fill the allocator and fail at 2 GiB).
+     *
+     * @param directMemoryBytes the JVM's direct memory limit
+     * @param allocatorLimitBytes effective limit of the allocator of the peer streams
+     * @return permits
+     */
+    public static int defaultPermits(long directMemoryBytes, long allocatorLimitBytes) {
+        return defaultPermits(Math.min(directMemoryBytes, allocatorLimitBytes));
+    }
+
+    /**
+     * Returns the effective limit of an allocator: the smallest limit of it and its parents.
+     *
+     * @param allocator an allocator
+     * @return bytes it can hand out at most
+     */
+    public static long effectiveLimit(BufferAllocator allocator) {
+        long limit = Long.MAX_VALUE;
+        for (BufferAllocator a = allocator; a != null; a = a.getParentAllocator()) {
+            limit = Math.min(limit, a.getLimit());
+        }
+        return limit;
     }
 
     /**
@@ -121,6 +151,28 @@ public final class PeerStreamAdmission {
      */
     public long refused() {
         return refused.get();
+    }
+
+    /**
+     * Counts the merges admitted without permits since start (one-row answers, item 39 (d)).
+     *
+     * @return merges admitted without permits
+     */
+    public long unmetered() {
+        return unmetered.get();
+    }
+
+    /**
+     * Admits a merge whose endpoint answers are one row each (an aggregate without GROUP BY and
+     * DISTINCT) without permits and without waiting (item 39 (d)): their streams hold one small
+     * batch, so charging them like full scans only queued small queries behind the scans (dc
+     * small-query p99 8.2 s at 32 clients against 1.0 s for speed alone).
+     *
+     * @return an admission holding no permits
+     */
+    public Admitted admitUnmetered() {
+        unmetered.incrementAndGet();
+        return new Admitted(0);
     }
 
     /**
@@ -223,7 +275,7 @@ public final class PeerStreamAdmission {
 
         @Override
         public void close() {
-            if (released.compareAndSet(false, true)) {
+            if (released.compareAndSet(false, true) && held > 0) {
                 release(held);
             }
         }

@@ -399,8 +399,9 @@ setting on, the ticket secret allows impersonating any user from a member's addr
 `FLIGHT_TLS_CERT` (nodes sharing one certificate, or a chain that includes the issuing CA). Each merge
 holds its parts' streams open, and every open stream holds batches in direct memory. So the merges of a node
 share `distributedCompletePeerStreams` streams (`FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`, default one per
-128 MiB of direct memory, at least 2). A merge takes room for all its parts before it opens them, and waits in
-arrival order while other merges hold the room. After `distributedCompleteAdmissionWaitMillis` (default 300000)
+128 MiB of the smaller of direct memory and the Arrow allocator limit `arrowAllocatorLimitBytes`, at least 2). A
+merge takes room for all its parts before it opens them, and waits in arrival order while other merges hold the
+room; one-row merges (aggregates without GROUP BY and DISTINCT) take none and never wait. After `distributedCompleteAdmissionWaitMillis` (default 300000)
 it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
 `RESOURCE_EXHAUSTED`.
 

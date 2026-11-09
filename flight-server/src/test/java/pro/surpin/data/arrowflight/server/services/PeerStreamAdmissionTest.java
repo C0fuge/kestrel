@@ -2,6 +2,8 @@ package pro.surpin.data.arrowflight.server.services;
 
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.FlightStatusCode;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletableFuture;
@@ -27,6 +29,40 @@ class PeerStreamAdmissionTest {
         assertEquals(PeerStreamAdmission.MIN_PERMITS, PeerStreamAdmission.defaultPermits(64L << 20));
         assertThrows(IllegalArgumentException.class, () -> new PeerStreamAdmission(0, 1));
         assertThrows(IllegalArgumentException.class, () -> new PeerStreamAdmission(1, -1));
+    }
+
+    /**
+     * Item 39 (d): on the cluster 8 GiB of direct memory gave 64 permits while the peer streams
+     * are read into the default 2 GiB Arrow allocator, so eight concurrent full scans failed at
+     * 2 GiB; the permits follow the smaller limit, including a parent allocator's.
+     */
+    @Test
+    void permitsFollowTheArrowAllocatorLimitWhenItIsSmaller() {
+        assertEquals(16, PeerStreamAdmission.defaultPermits(8L << 30, 2L << 30));
+        assertEquals(16, PeerStreamAdmission.defaultPermits(2L << 30, 8L << 30));
+        assertEquals(64, PeerStreamAdmission.defaultPermits(8L << 30, Long.MAX_VALUE));
+        try (BufferAllocator root = new RootAllocator(2L << 30);
+                BufferAllocator child = root.newChildAllocator("peers", 0, Long.MAX_VALUE)) {
+            assertEquals(2L << 30, PeerStreamAdmission.effectiveLimit(child));
+            assertEquals(16, PeerStreamAdmission.defaultPermits(8L << 30,
+                    PeerStreamAdmission.effectiveLimit(child)));
+        }
+    }
+
+    /** Item 39 (d): one-row merges neither wait nor take room, even when none is free. */
+    @Test
+    void unmeteredMergesNeitherWaitNorTakeRoom() throws Exception {
+        PeerStreamAdmission admission = new PeerStreamAdmission(4, 100);
+        try (PeerStreamAdmission.Admitted running = admission.admit(4, () -> false, "scan")) {
+            PeerStreamAdmission.Admitted small = admission.admitUnmetered();
+            assertEquals(0, small.held());
+            small.close();
+            small.close();
+            assertEquals(0, admission.available());
+        }
+        assertEquals(4, admission.available());
+        assertEquals(1, admission.unmetered());
+        assertEquals(0, admission.waited());
     }
 
     @Test

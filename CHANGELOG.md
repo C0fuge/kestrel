@@ -51,7 +51,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `flightLoadReservationSeconds` (`arrowflight.cluster.loadReservationSeconds`, `FLIGHT_LOAD_RESERVATION_SECONDS`) | 600 | how long an unread planned endpoint counts as node load |
 | `distributedComplete` (`arrowflight.cluster.distributedComplete`, `FLIGHT_DISTRIBUTED_COMPLETE`) | false | the planning node merges complete answers from the nodes' partial endpoints |
 | `distributedCompleteTrustedCertificates` (`arrowflight.cluster.distributedCompleteTrustedCertificates`, `FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS`) | empty = the node's own certificate | peer TLS trust of distributed complete mode |
-| `distributedCompletePeerStreams` (`arrowflight.cluster.distributedCompletePeerStreams`, `FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`) | 0 = one per 128 MiB of direct memory, at least 2 | endpoint streams the distributed complete merges of a node hold open at once; a merge waits for room (item 35) |
+| `distributedCompletePeerStreams` (`arrowflight.cluster.distributedCompletePeerStreams`, `FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`) | 0 = one per 128 MiB of the smaller of direct memory and the Arrow allocator limit (`arrowAllocatorLimitBytes`, default 2 GiB), at least 2; one-row merges are not counted | endpoint streams the distributed complete merges of a node hold open at once; a merge waits for room (items 35, 39 (d)) |
 | `distributedCompleteAdmissionWaitMillis` (`arrowflight.cluster.distributedCompleteAdmissionWaitMillis`, `FLIGHT_DISTRIBUTED_COMPLETE_ADMISSION_WAIT_MILLIS`) | 300000 | longest wait of a merge for room, then `RESOURCE_EXHAUSTED` |
 | `dataDirShared` (`arrowflight.storage.dataDirShared`, `FLIGHT_DATA_DIR_SHARED`) | false | a local data directory is a mount every node reads (NFS) |
 | `hdfsLocalCopyMaxBytes` (`arrowflight.hdfs.localCopyMaxBytes`, `HDFS_LOCAL_COPY_MAX_BYTES`) | `32GiB` (0 = off) | only on HDFS with SASL DataNodes (`hdfs=shortCircuitOnly`, where such queries failed before): bound of the node-local copies of files the node does not hold every block of; least recently used unused copies are evicted |
@@ -101,6 +101,17 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
+
+### Fixed - distributed complete under concurrency on nodes with more direct memory than 2 GiB (STATUS item 39 (d))
+
+- The merge admission of item 35 derived its budget from direct memory only, but the peer streams are read into the
+  Arrow allocator, whose limit (`arrowAllocatorLimitBytes`) defaults to 2 GiB: with 8 GiB of direct memory a node
+  admitted 64 streams and eight concurrent full scans failed with `Unable to allocate buffer ... Current allocation:
+  2147231193`. The default budget is now one stream per 128 MiB of the smaller of the two (16 at a 2 GiB allocator);
+  the start line names both limits. A set `distributedCompletePeerStreams` is unchanged.
+- One-row merges (aggregates without GROUP BY and DISTINCT, AVG included) no longer take room or wait in the merge
+  queue: their endpoint streams hold one small batch, and queueing them behind full scans made dc small-query p99
+  tails (8.2 s at 32 clients against 1.0 s for speed). The `merged` log line shows `permits=` (0 for them).
 
 ### Fixed - memory of a server in a systemd scope / non-root cgroup (STATUS item 39 (b))
 

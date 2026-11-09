@@ -99,7 +99,8 @@ public final class DistributedComplete implements AutoCloseable {
             BufferAllocator allocator, Function<Location, FlightClient> clientFactory) {
         this(planner, cluster, execution, allocator, clientFactory, new PeerStreamAdmission(
                 PeerStreamAdmission.defaultPermits(
-                        pro.surpin.data.arrowflight.server.adapters.OutboundBudget.maxDirectMemory()),
+                        pro.surpin.data.arrowflight.server.adapters.OutboundBudget.maxDirectMemory(),
+                        PeerStreamAdmission.effectiveLimit(allocator)),
                 PeerStreamAdmission.DEFAULT_WAIT_MILLIS));
     }
 
@@ -194,8 +195,10 @@ public final class DistributedComplete implements AutoCloseable {
         }
         PeerStreamAdmission.Admitted admitted;
         try {
-            // Waits while the merges running here hold their endpoint streams' memory (item 35).
-            admitted = admission.admit(endpoints.size(), listener::isCancelled, query);
+            // Waits while the merges running here hold their endpoint streams' memory (item 35);
+            // one-row answers hold almost none and do not queue behind scans (item 39 (d)).
+            admitted = oneRow(parsed) ? admission.admitUnmetered()
+                    : admission.admit(endpoints.size(), listener::isCancelled, query);
         } catch (InterruptedException | RuntimeException e) {
             releaseLoads(endpoints);
             throw e;
@@ -253,9 +256,9 @@ public final class DistributedComplete implements AutoCloseable {
             // The endpoint nodes log how they read the files; this node read none of them.
             execution.logNoFileReads("endpoints=" + endpoints.size());
             LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
-                    + " peerWaitMs={} query='{}'", LogUtil.node(), endpoints.size(),
+                    + " peerWaitMs={} permits={} query='{}'", LogUtil.node(), endpoints.size(),
                     (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
-                    answers.waitNanos() / 1_000_000, query);
+                    answers.waitNanos() / 1_000_000, admitted.held(), query);
             return true;
         } catch (Exception e) {
             cancel(streams);
@@ -301,9 +304,17 @@ public final class DistributedComplete implements AutoCloseable {
      * @return true when the endpoints of one node run in turn
      */
     private boolean oneStreamPerNode(ParquetQueryParser parsed) {
-        boolean oneRow = parsed.hasAggregation && parsed.groupByColumnNames.isEmpty()
-                && !parsed.distinct;
-        return !oneRow && execution.localCopies();
+        return !oneRow(parsed) && execution.localCopies();
+    }
+
+    /**
+     * Tells whether every endpoint answers one row: an aggregate without GROUP BY and DISTINCT.
+     *
+     * @param parsed the part query
+     * @return true for one-row endpoint answers
+     */
+    static boolean oneRow(ParquetQueryParser parsed) {
+        return parsed.hasAggregation && parsed.groupByColumnNames.isEmpty() && !parsed.distinct;
     }
 
     /**

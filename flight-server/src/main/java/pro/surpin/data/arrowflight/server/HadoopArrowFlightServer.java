@@ -509,11 +509,17 @@ public class HadoopArrowFlightServer {
         String trusted = ConfigAdapter.distributedCompleteTrustedCertificates(ConfigSource.system());
         File certificates = trusted != null ? new File(trusted) : flightSecurity.certificate();
         int configured = ConfigAdapter.distributedCompletePeerStreams(ConfigSource.system());
+        long direct = OutboundBudget.maxDirectMemory();
+        long allocatorLimit = PeerStreamAdmission.effectiveLimit(component.allocator());
         PeerStreamAdmission admission = new PeerStreamAdmission(configured > 0 ? configured
-                : PeerStreamAdmission.defaultPermits(OutboundBudget.maxDirectMemory()),
+                : PeerStreamAdmission.defaultPermits(direct, allocatorLimit),
                 ConfigAdapter.distributedCompleteAdmissionWaitMillis(ConfigSource.system()));
-        LOGGER.info("distributedComplete peer streams: {} ({}), a merge waits at most {} ms for room",
-                admission.permits(), configured > 0 ? "set" : "one per 128 MiB of direct memory",
+        // The peer streams are read into the Arrow allocator: its limit (arrowAllocatorLimitBytes,
+        // default 2 GiB) bounds them even when direct memory is larger (item 39 (d)).
+        LOGGER.info("distributedComplete peer streams: {} ({}), a merge waits at most {} ms for room;"
+                + " one-row merges are not counted", admission.permits(), configured > 0 ? "set"
+                : "one per 128 MiB of min(direct memory " + (direct >> 20) + " MiB, Arrow allocator limit "
+                        + (allocatorLimit >> 20) + " MiB)",
                 ConfigAdapter.distributedCompleteAdmissionWaitMillis(ConfigSource.system()));
         distributedComplete = new DistributedComplete(component.queryPlanner(),
                 component.clusterService(), component.executionService(), component.allocator(),

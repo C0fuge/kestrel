@@ -224,6 +224,38 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies one-row merges (aggregates without GROUP BY, AVG included) do not queue behind
+     * merges that hold all the room (item 39 (d): dc small-query tails behind full scans), and
+     * answer exactly while the room stays held.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void oneRowMergesDoNotWaitForRoom() throws Exception {
+        List<String> queries = List.of("SELECT count(*) FROM s.t",
+                "SELECT count(*) AS n, sum(v) AS total, min(d) AS lo FROM s.t WHERE k = 9",
+                "SELECT avg(v) AS a FROM s.t");
+        List<String> alone = new ArrayList<>();
+        for (String query : queries) {
+            alone.add(answer(query));
+        }
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        try (PeerStreamAdmission.Admitted held = admission.admit(FILES, () -> false, "scan")) {
+            for (int i = 0; i < queries.size(); i++) {
+                assertEquals(alone.get(i), answer(queries.get(i)), queries.get(i));
+            }
+            assertEquals(0, admission.available());
+        }
+        assertEquals(queries.size(), distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        assertEquals(0, admission.waited());
+        assertEquals(0, admission.refused());
+        assertEquals(queries.size(), admission.unmetered());
+        assertEquals(FILES, admission.available());
+    }
+
+    /**
      * Verifies a merge that finds no room within the wait is refused with RESOURCE_EXHAUSTED,
      * which a client may retry, and the node then answers again once room is back.
      *
