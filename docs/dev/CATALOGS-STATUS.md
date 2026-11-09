@@ -642,4 +642,5 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   42624683955 (every variant on two runners, c32 a/b: balanced 42.2/49.4, +file cache 50.1/60.4, +metadata cache
   45.8/53.5, speed 72.5/84.9, +metadata cache 76.9/88.3), 42627272084 (rebased head 3b5512be, per-query HDFS
   counters: ~20 NameNode opens per query, balanced 7-8 short-circuit fd requests per query, speed 0). Dev CI
-  42627268633 green on the rebased head. Not DONE: see the ITEM 39(c) note in Next steps. Lock released.
+  42627268633 green on the rebased head; 42630358181 red only on the core lane's
+  `PlainNameSchemaIntegrationTest` (red on `main` too, fixed there by 655bec3a); 42632180687 green after rebasing on it. Not DONE: see the ITEM 39(c) note in Next steps. Lock released.
