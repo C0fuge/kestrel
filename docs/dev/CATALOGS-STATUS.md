@@ -679,5 +679,5 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   kept). `hdfs-point-cell.sh` prints NameNode audit commands per query and opens per file. Branch runs: Dev CI
   42637718051 green (b08fdb19), HDFS point perf 42637704787 (all opens are DuckDB's: ~5 per file per query + one
   getfileinfo each; balanced c32 a/b 45.0/52.9 q/s, speed 74.8/87.9; complete mode, so part 2 not visible there).
-  Merged into `main` by cherry-pick (34b7911a, 2b61650d; no force push to the branch). Dev CI on main: 42641096583.
+  Merged into `main` by cherry-pick (34b7911a, 2b61650d; no force push to the branch). Dev CI on main: 42641096583 green.
   Not DONE: next is file pruning by footer statistics (Next steps). Lock released.
