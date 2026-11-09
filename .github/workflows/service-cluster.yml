@@ -6,7 +6,7 @@
 # mounted for short-circuit reads when the image's native Hadoop library loads), HDFS HA (hdfs-ha: the
 # same with an HA nameservice ns1 of two NameNodes, nn1 standby / nn2 active, shared edits, manual
 # failover; data dir hdfs://ns1/data, so the servers' Java client and hadoopfs must fail over to nn2;
-# in the loss cell the NameNodes also fail over nn2 -> nn1 under load) and S3 (a MinIO
+# in the loss cell the NameNodes also fail over nn2 -> nn1 and back under load) and S3 (a MinIO
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
 # SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
@@ -365,11 +365,24 @@ jobs:
               sleep 15
               docker exec nn2 hdfs haadmin -failover nn2 nn1 2>&1 | tail -n 1
               note "NameNode failover nn2 -> nn1 at $(date -u +%T): $(haState)"
+              # D16: a second failover window (nn1 -> nn2) in the same load, so each run exercises the
+              # standby retry (DuckDbAdapter.retryOnStandby) twice.
+              sleep 12
+              docker exec nn1 hdfs haadmin -failover nn1 nn2 2>&1 | tail -n 1
+              note "NameNode failover nn1 -> nn2 at $(date -u +%T): $(haState)"
             fi
             wait "$client"; rc=$?
             grep -E '^(summary|result)' "$RUNNER_TEMP/client.log"
             grep -E '^event .* (unavailable|wrong|error|retry)' "$RUNNER_TEMP/client.log" | head -n 20
             note "$(grep '^summary' "$RUNNER_TEMP/client.log")"
+            if [ "$STORE" = hdfs-ha ]; then
+              # D16: did the server retry a standby refusal (retried = INFO run=, failed = WARN result=failed),
+              # and how many standby refusals reached a log at all? Diagnostic; the client summary decides.
+              for i in 1 2 3; do
+                l=$(docker logs "srv$i" 2>&1)
+                note "srv$i standby: retried $(grep -c 'duckdb=standbyRetry run=' <<< "$l"), retry failed $(grep -c 'duckdb=standbyRetry result=failed' <<< "$l"), standby lines $(grep -c 'in state standby' <<< "$l")"
+              done
+            fi
           else
             # D13 (a2): on HDFS the check prints each query's DataNode block reads (local / remote client).
             [[ $STORE == hdfs* ]] && export SC_DATANODES=172.30.0.11:9864,172.30.0.12:9864,172.30.0.13:9864
