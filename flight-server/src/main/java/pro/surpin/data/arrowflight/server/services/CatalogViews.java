@@ -1139,7 +1139,7 @@ public final class CatalogViews {
         if (threePartName(sql, reference)) {
             return sql;
         }
-        String filter = singleTableFilter(sql, reference);
+        String filter = singleTableFilter(sql, reference, true);
         if (filter == null) {
             return sql;
         }
@@ -1396,19 +1396,62 @@ public final class CatalogViews {
      * @return the WHERE clause as the query parser renders it, or null
      */
     static String singleTableFilter(String sql, TableReferences.Reference reference) {
+        return singleTableFilter(sql, reference, false);
+    }
+
+    /**
+     * Returns the WHERE clause of a query that reads one table and nothing else.
+     *
+     * @param sql client SQL
+     * @param reference the query's only reference to the table
+     * @param aliases whether a reference with an alias ({@code FROM s.t x}) is read too; its
+     *        filter then names columns as {@code "x"."c"}, so only callers that accept any
+     *        qualifier of the one table (file pruning) pass true
+     * @return the WHERE clause as the query parser renders it, or null
+     */
+    static String singleTableFilter(String sql, TableReferences.Reference reference,
+            boolean aliases) {
         if (!TableReferences.singleSelect(sql)) {
             return null;
         }
+        String name = reference.table();
+        if (reference.aliased()) {
+            name = aliases ? aliasOf(sql, reference) : null;
+            if (name == null) {
+                return null;
+            }
+        }
         try {
             ParquetQueryParser pq = ParquetQueryParser.parse(sql);
+            // With an alias the parser names the table by its alias.
             if (pq.isJoin || !reference.schema().equalsIgnoreCase(pq.schema)
-                    || !reference.table().equalsIgnoreCase(pq.table)) {
+                    || !name.equalsIgnoreCase(pq.table)) {
                 return null;
             }
             return pq.filter;
         } catch (RuntimeException e) {
             return null;   // no hints: DuckDB applies every filter anyway
         }
+    }
+
+    /**
+     * Reads the alias written after a table reference ({@code s.t x} or {@code s.t AS x}).
+     *
+     * @param sql SQL
+     * @param reference an aliased reference found in it
+     * @return the alias, unquoted, or null when none follows
+     */
+    static String aliasOf(String sql, TableReferences.Reference reference) {
+        List<TimeTravelClause.Token> tokens = TimeTravelClause.tokens(sql);
+        for (int i = 0; i < tokens.size(); i++) {
+            if (tokens.get(i).start() < reference.end()) {
+                continue;
+            }
+            int at = TimeTravelClause.word(tokens.get(i), "AS") ? i + 1 : i;
+            return at < tokens.size() && TimeTravelClause.identifier(tokens.get(at))
+                    ? TimeTravelClause.unquote(tokens.get(at)) : null;
+        }
+        return null;
     }
 
     /**

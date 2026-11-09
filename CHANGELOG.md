@@ -104,6 +104,13 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Changed - file pruning also for queries with a table alias (STATUS item 39 (c), part 4)
+
+- `FROM schema.table x WHERE x.k = 5` (and `AS x`, quoted aliases) is now pruned by footer statistics like the same
+  query without an alias; the kept files' subquery keeps the alias. Stream hints still ignore aliased queries.
+- Tests: `FileStatsPrunerTest` (8 more queries: aliased filters, GROUP BY / ORDER BY by alias, whole-row alias,
+  quoted alias, aliased joins and subqueries stay unpruned).
+
 ### Changed - point queries read only the files their filter can match (STATUS item 39 (c), part 3)
 
 - A complete answer of a plain single-table query over a directory table (`SELECT ... FROM schema.table WHERE ...`,
