@@ -16,6 +16,10 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 *Item 39(b) done 2026-11-09 (plugins lane check of the core lane's `39f84617`, nothing to extend; see Log).*
 
+> **Maintainer, 2026-11-10 00:25 - NEXT in this lane: ITEM 40(a)** (S3 TPC-H SF10 1.5x behind GizmoSQL on the same
+> DuckDB): see `STATUS.md` "ITEM 40". Branch `fix/40a-s3`, maintainer exception to the lane scope for this item,
+> merge into `main` when green, "ITEM 40(a) DONE <sha>" in this Log.
+
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
 > `fix/39b-memory` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,

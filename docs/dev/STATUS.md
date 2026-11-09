@@ -36,6 +36,19 @@
 > check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
 > Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
 
+> **Maintainer, 2026-11-10 00:25 - ITEM 40 (after item 39 is packaged): close the gap to GizmoSQL.** The compare
+> harness now runs GizmoSQL v1.42.2 (Flight SQL server on the same DuckDB v1.5.6, C++), results in the performance
+> repo `results/FRESH-gizmo-deafc861cce3.md`: 22/22 everywhere; **S3 TPC-H SF10: gizmo 33.5 s vs our speed 50.4 s
+> (1.48-1.51x, every round)**; local: gizmo level/ahead of speed (TPC-H 1.01-1.07, small-query mix steps take speed
+> 1.19-1.41x gizmo's time, load 0.85-1.00) at 0.2-0.8 of speed's memory; local small c1 p50 speed 1.16-1.18x balanced
+> (confirmed regression). Split, in parallel:
+> - **(a) plugins lane, branch `fix/40a-s3`:** S3 SF10 - compare DuckDB settings/pragmas and the S3 read path
+>   (gizmo uses plain DuckDB httpfs; diff `SELECT * FROM duckdb_settings()` of both servers in the harness, threads,
+>   external file cache, prefetch, `s3_*` settings, statement cache / per-query view setup) and fix ours.
+> - **(b) core lane:** per-query overhead of small queries (Java/Flight path vs DuckDB time: profile the small set,
+>   speed c1 regression vs balanced) and memory of speed vs gizmo.
+> Each part: measure with the harness against gizmo (the performance repo can run a wave on request), "ITEM 40(x) DONE".
+
 > **HDFS NameNode failover bug (2026-11-09, found by lane 3, fixed by the core lane in `2429782f`: Dev CI 42638389703 green, Service cluster 42638482163 13/13 incl. hdfs-ha loss).** Cause
 > (libhdfs3 source, `NamenodeProxy.cpp` `NAMENODE_HA_RETRY_*`): on a standby NameNode libhdfs3 switches to the other
 > one and tries again at most `dfs.client.failover.max.attempts` (15) times **without pausing**, so while `haadmin
