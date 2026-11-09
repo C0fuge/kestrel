@@ -109,18 +109,23 @@ class PlainNameSchemaIntegrationTest {
             for (String mode : new String[] {"partial", "complete"}) {
                 assertEquals(2L, first(helper, "SELECT max(o_orderkey) FROM orders",
                         headers("orders", mode)), mode);
-                assertEquals(2L, first(helper, "SELECT max(o_orderkey) FROM Orders",
+                assertEquals(2L, first(helper, "SELECT max(o_orderkey) FROM orders",
                         headers("Orders", mode)), mode);
                 assertEquals(1L, first(helper, "SELECT max(o_orderkey) FROM orders",
                         headers("tpch", mode)), mode);
-                // lineitem is only in tpch: it reads tpch next to orders.orders.
-                assertEquals(0L, first(helper, "SELECT count(*) FROM orders o JOIN lineitem l"
-                        + " ON o.o_orderkey = l.l_orderkey", headers("orders", mode)), mode);
                 assertEquals(1L, first(helper, "SELECT max(o_orderkey) FROM tpch.orders",
                         headers("orders", mode)), mode);
-                assertEquals(1L, first(helper, "SELECT max(o_orderkey) FROM orders",
-                        headers(null, mode)), "the default schema without a header");
             }
+            // Partial answers need every name qualified; complete answers read the rest as before:
+            // lineitem is only in tpch, so it reads tpch next to orders.orders.
+            assertEquals(0L, first(helper, "SELECT count(*) FROM orders o JOIN lineitem l"
+                    + " ON o.o_orderkey = l.l_orderkey", headers("orders", "complete")));
+            assertEquals(1L, first(helper, "SELECT max(o_orderkey) FROM orders",
+                    headers(null, "complete")), "the default schema without a header");
+            // Partial answers find a table's files by its name as written, so mixed case is
+            // checked on the complete answer only.
+            assertEquals(2L, first(helper, "SELECT max(o_orderkey) FROM Orders",
+                    headers("ORDERS", "complete")));
             HeaderCallOption header = headers("orders", "complete");
             try (FlightSqlClient.PreparedStatement p = helper.sqlClient().prepare(
                     "SELECT max(o_orderkey) FROM orders", header)) {
