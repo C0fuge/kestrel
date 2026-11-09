@@ -11,55 +11,23 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > in this file's Log. Maintainer exception to this lane's scope limits for this item only. No `package=true` here: the
 > core lane packages when all four parts are merged.
 
-ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2026-11-09:
-- Part 1 merged into `main`: `CatalogViews.current()` no longer makes every query wait for the minute-ly listing of
-  all tables (one query refreshes, the others use the views of before; first views and a new data version are still
-  waited for) - one likely cause of the real cluster's p95 tail (14.8 s at 128 clients; a 1.27 TB table and several
-  schemas listed under one lock once a minute). Opt-in `duckDbParquetMetadataCache` (default off).
-- Measuring: `.github/workflows/hdfs-point-perf.yml` (+ `tools/ci/hdfs-point-cell.sh`, `point-query-load.py`,
-  `thread-dump-summary.py`). On 2-CPU single-node HDFS cells both profiles are CPU-bound inside
-  `duckdb_jdbc_execute` (thread dumps): the real cluster's not-CPU-bound collapse is NOT reproduced there yet.
-- Per-query HDFS work (run 42627272084, SF1, point_orders / point_lineitem / count_filter mix): every query costs
-  ~20 NameNode `open` RPCs (two per file of the table) in both profiles (speed ~10 at c8/c32), and balanced also
-  7-8 DataNode short-circuit fd requests per query (each per-thread DuckDB's libhdfs3 asks for the fds again; speed:
-  0, one DuckDB keeps them; balanced + file cache ~0.5, + metadata cache ~4). On the Kerberos / SASL-privacy cluster
-  each such RPC and fd request costs a round trip the DataNode / NameNode serialise: the likeliest not-CPU-bound
-  balanced collapse.
-- Part 2 merged into `main` (34b7911a): partial-mode describes of remote tables read a footer stub kept per sample
-  file version (`FooterStubCache`) instead of DuckDB opening the sample file per query. The cell runs complete mode
-  (describes come from the catalog views), so it does not show there.
-- Who opens the files (run 42637704787, new audit breakdown per command and file): ALL opens come from DuckDB's
-  execution, not from the Java side (`listStatus` ~0.01/query; the Java planner's listing is cached). Each point
-  query opens every file of its table ~5 times (SF1, 4 files of ~3-4 row groups each: about one open per row group
-  scanned plus the footer; the table's first file +1, DuckDB's bind), and every open comes with a `getfileinfo`
-  (hadoopfs stat before open): ~20 opens + ~20 getfileinfo RPCs per query in both profiles at c1; speed drops to ~10
-  at c8/c32 (shared DuckDB), balanced stays at ~20. On the real cluster (SF10, more row groups per file, Kerberos +
-  SASL privacy) that is tens of NameNode round trips per point query: the likeliest cause of the not-CPU-bound
-  collapse.
-- Part 3 merged into `main` (b0f82a47, 32ebda26): **file pruning by footer statistics** (`FileStatsPruner`,
-  `CatalogViews.prunedFiles`, called by `ExecutionService.readComplete`). A complete answer of a plain single-table
-  query over a directory table (`TableReferences.singleSelect`, one reference, `singleTableFilter` parses it) reads
-  `(SELECT <view columns> FROM read_parquet([kept files])) AS "<table>"` (or the empty view when nothing is kept)
-  instead of the view. Used: `= < <= > >= BETWEEN IN` under AND / OR, signed INT32/INT64 and DATE columns, integral
-  number / date literals; NOT, casts of columns, parameters, NULL, text vs integer never prune; files without stats,
-  only nulls, or other columns/types than the view's first file are kept. Footers cached per (location, size,
-  mtime), at most 100 000; setting `fileStatsPruningMaxFiles` (default 1024, 0 = off). Not pruned yet: aliased
-  tables (`FROM tpch.orders o`: `ParquetQueryParser` gives no filter), plain names on non-HDFS stores (only
-  `schema.table` references are found), three-part column names, partial mode (QueryPlanner spreads every file).
-  **The HDFS cell did not show it** (run 42684276829: ~20 opens per query as before): `service-cluster-data.py`
-  split orders / lineitem by `key % 4`, so every file spans every key. It now takes `range` (hdfs-point-perf uses it,
-  default of the other workflows stays `mod`) and the cell runs `*-nopruning` variants; first run 42689843600.
-- Next, in this order: (1) read run 42689843600 (or its successor): expected point_orders / point_lineitem opens per
-  query ~20 -> ~5-6 (count_filter still reads all files: `o_custkey` spans every file) and higher q/s than the
-  `-nopruning` variants; if not, find out why from the server log (`views=prunedFiles` is DEBUG; `pruning.files`
-  timing). Then decide "ITEM 39(c) DONE" (the maintainer's item is the point-query collapse; pruning + parts 1-2 are
-  the server-side levers; the rest is hadoopfs P1 / Q9). (2) Prune aliased single-table queries too (the filter of
-  `FROM s.t x WHERE x.k = 5`: make `singleTableFilter` accept the alias). (3) Q9 answer: when the hadoopfs build
-  `51b7220-afc4` appears in `ci-assets` (not there on 2026-11-09 20:00Z: only afc3), take it, set
-  `hdfs_metadata_cache_ttl_ms` from a new server setting and measure opens per query again. (4) Balanced fd
-  requests: file cache variant (~0.5/query) / `duckDbParquetMetadataCache` as balanced default = Open question
-  first, after hadoopfs modification times are checked. (5) Cell like the cluster (several schemas), speed vs
-  upstream.
+ITEM 39(c) state after session 2026-11-09 (4) - see the Log for "ITEM 39(c) DONE":
+- Part 1 (catalog views refresh without making queries wait), part 2 (`FooterStubCache`), part 3 (file pruning by
+  footer statistics, `fileStatsPruningMaxFiles`, Q10) and part 4 (pruning also with a table alias,
+  `FROM s.t x WHERE x.k = 5`) are in `main`.
+- Measured (HDFS point perf 42689843600, SF1, key-range files, point_orders / point_lineitem / count_filter mix, two
+  runners): NameNode opens per query ~20 -> ~11 in every profile (lineitem files ~2.0 -> ~0.5 opens each; orders
+  files ~3.2 -> ~2.1: `count_filter` on `o_custkey` still reads every orders file), speed c32 ~10 -> ~5.7.
+  q/s +3..15% against the `-nopruning` variants (balanced c32 58.6 -> 65.6 and 45.7 -> 52.8; speed c32
+  97.9 -> 106.3 and 77.9 -> 82.5); the 2-CPU cell stays CPU-bound in `duckdb_jdbc_execute`, so the real cluster's
+  round-trip-bound collapse is expected to gain more (fewer Kerberos/SASL RPCs per query). Verify on the stand once
+  the core lane has packaged.
+- Follow-ups of 39 (c), not blocking DONE: (a) Q9 answer: when the hadoopfs build `51b7220-afc4` appears in
+  `ci-assets` (only afc3 on 2026-11-09 20:30Z), take it, set `hdfs_metadata_cache_ttl_ms` from a new optional
+  server setting and measure opens per query again (`hdfs-point-perf.yml`). (b) Q11: balanced fd requests per query
+  (~5-6; file cache variant 0-0.2 and +10..15% q/s). (c) A cell like the cluster (several schemas, SF10), speed vs
+  upstream. (d) Pruning for plain names on non-HDFS stores and partial mode (QueryPlanner) - only if the stand
+  shows it matters.
 
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
@@ -426,6 +394,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- Q11 (2026-11-09, item 39 (c)): in the HDFS point cell the balanced profile asks the DataNode for short-circuit fds
+  ~5-6 times per point query (each per-thread DuckDB's libhdfs3 asks again); `duckDbExternalFileCache=true` brings
+  that to 0-0.2 and q/s +10..15% (run 42689843600: balanced c32 65.6 -> 75.9 and 52.8 -> 60.6). Make the external
+  file cache the balanced default on HDFS (it is a default change, so not done without you), after checking that
+  hadoopfs reports real modification times (stale cached bytes otherwise; afc4 promises correct mtimes)?
 - Q10 (2026-11-09, item 39 (c) part 3): file pruning by footer statistics is **on by default**
   (`fileStatsPruningMaxFiles=1024`). Answers are unchanged by design (40-query equality test), but it changes which
   files a complete answer reads. Keep it on, or make it opt-in (`0` default) until the stand has run with it?
