@@ -138,6 +138,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   INVALID_VALUE on SetSessionOptions and `INVALID_ARGUMENT: Unknown schema ...` with the header. Without the option
   or header nothing changes.
 
+### Changed - result-schema describes reuse the sample file's footer on remote stores (STATUS item 39 (c), part 2)
+
+- A query whose text the result-schema cache had not seen (every point query with a new literal) was described by
+  DuckDB against the table's sample file, one more open of that file on HDFS / S3 per query. Describes of remote
+  tables now read a local footer stub (the file's footer without row groups, as item 29's SASL path) kept per file
+  version: location, length and modification time; a rewritten file gets a new stub, files without a modification
+  time and local files are described directly as before. Result schemas are unchanged.
+
 ### Fixed - queries no longer wait for the minute-ly refresh of the catalog views (STATUS item 39 (c), part 1)
 
 - Every query asked the catalog views for their current definitions under one lock; once a minute (every 5 s while a
