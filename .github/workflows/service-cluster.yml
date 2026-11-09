@@ -380,7 +380,7 @@ jobs:
               # and how many standby refusals reached a log at all? Diagnostic; the client summary decides.
               for i in 1 2 3; do
                 l=$(docker logs "srv$i" 2>&1)
-                note "srv$i standby: retried $(grep -c 'duckdb=standbyRetry run=' <<< "$l"), retry failed $(grep -c 'duckdb=standbyRetry result=failed' <<< "$l"), standby lines $(grep -c 'in state standby' <<< "$l")"
+                note "srv$i standby: retried $(grep -c 'duckdb=standbyRetry run=' <<< "$l"), retry failed $(grep -c 'duckdb=standbyRetry result=failed' <<< "$l"), standby lines $(grep -c 'in state standby' <<< "$l"); first: $(grep -m 1 'in state standby' <<< "$l" | cut -c1-220)"
               done
             fi
           else
