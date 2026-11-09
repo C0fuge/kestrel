@@ -21,7 +21,11 @@ on:
         type: string
         default: "1"
       extra:
-        description: "extra -D options of the server in every cell"
+        description: "extra -D options of the server in every variant"
+        type: string
+        default: ""
+      variants:
+        description: "variants name=profile:options separated by ';' (empty = balanced, speed, each with and without the caches)"
         type: string
         default: ""
   push:
@@ -92,17 +96,14 @@ jobs:
   cell:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {name: balanced, profile: balanced, options: ""}
-          - {name: balanced-filecache, profile: balanced, options: "-DduckDbExternalFileCache=true"}
-          - {name: balanced-metacache, profile: balanced, options: "-DduckDbParquetMetadataCache=true"}
-          - {name: speed, profile: speed, options: ""}
-          - {name: speed-metacache, profile: speed, options: "-DduckDbParquetMetadataCache=true"}
-    name: ${{ matrix.name }}
+        # Every runner measures every variant (runners differ by up to 2x between jobs, so only
+        # variants measured on one runner compare); the two runners take them in opposite orders.
+        runner: [a, b]
+    name: runner ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -122,26 +123,40 @@ jobs:
           docker build -q -t sc-server "$RUNNER_TEMP/img"
       - name: Measure
         env:
-          LABEL: ${{ matrix.name }}
+          VARIANTS: ${{ inputs.variants || 'balanced=balanced:;balanced-filecache=balanced:-DduckDbExternalFileCache=true;balanced-metacache=balanced:-DduckDbParquetMetadataCache=true;speed=speed:;speed-metacache=speed:-DduckDbParquetMetadataCache=true' }}
         run: |
+          set -u
           keys=$(( 1500000 * ${{ inputs.sf || '1' }} ))
-          tools/ci/hdfs-point-cell.sh "${{ matrix.profile }}" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work" \
-            "${{ inputs.clients || '1,8,32' }}" "${{ inputs.seconds || '30' }}" "$keys" "${{ matrix.options }} ${{ inputs.extra }}"
+          IFS=';' read -ra vs <<< "$VARIANTS"
+          if [ "${{ matrix.runner }}" = b ]; then rev=(); for (( i=${#vs[@]}-1; i>=0; i-- )); do rev+=("${vs[i]}"); done; vs=("${rev[@]}"); fi
+          status=0
+          for v in "${vs[@]}"; do
+            name=${v%%=*} rest=${v#*=}; profile=${rest%%:*} options=${rest#*:}
+            echo "::group::$name"
+            LABEL=$name tools/ci/hdfs-point-cell.sh "$profile" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work/$name" \
+              "${{ inputs.clients || '1,8,32' }}" "${{ inputs.seconds || '30' }}" "$keys" "$options ${{ inputs.extra }}" || status=1
+            echo "::endgroup::"
+          done
+          cat "$RUNNER_TEMP"/work/*/result.txt
+          exit "$status"
       - name: Report
         if: always()
         run: |
           w="$RUNNER_TEMP/work"; mkdir -p "$w"
           {
-            echo "### ${{ matrix.name }}"; echo '```'
-            cat "$w/notes.txt" "$w/result.txt" 2>/dev/null
-            echo; head -n 80 "$w/threads.txt" 2>/dev/null || true
+            echo "### runner ${{ matrix.runner }}"; echo '```'
+            cat "$w"/*/result.txt 2>/dev/null || true
             echo '```'
+            for d in "$w"/*/; do
+              echo "<details><summary>$(basename "$d") threads</summary>"; echo; echo '```'
+              head -n 60 "$d/threads.txt" 2>/dev/null || true
+              echo '```'; echo '</details>'
+            done
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: hdfs-point-${{ matrix.name }}
+          name: hdfs-point-${{ matrix.runner }}
           path: |
             ${{ runner.temp }}/work
-            !${{ runner.temp }}/work/hnative
           retention-days: 7
