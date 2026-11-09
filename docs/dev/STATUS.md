@@ -3938,4 +3938,4 @@ S3 slowdown item below stays open for then).
   `CatalogViews.current()` is no longer one lock for every query: when the views are only old (same data version)
   one query refreshes them and the others use the views of before (`refreshIfDue()` keeps the old synchronized body;
   counter `servedDuringRefresh()`). New opt-in setting `duckDbParquetMetadataCache` (DuckDbAdapter.configureConnection).
-  Workflow `hdfs-point-perf.yml` (lane 4 only). Dev CI 42623741690 green on the branch. Details: CATALOGS-STATUS Log.
+  Workflow `hdfs-point-perf.yml` (lane 4 only). Dev CI 42623741690, 42627268633 (rebased) green on the branch. Details: CATALOGS-STATUS Log.

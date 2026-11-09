@@ -14,21 +14,27 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2026-11-09:
 - Part 1 merged into `main`: `CatalogViews.current()` no longer makes every query wait for the minute-ly listing of
   all tables (one query refreshes, the others use the views of before; first views and a new data version are still
-  waited for) - the likeliest cause of the real cluster's p95 14.8 s with 2-6 busy cores (a 1.27 TB table and several
+  waited for) - one likely cause of the real cluster's p95 tail (14.8 s at 128 clients; a 1.27 TB table and several
   schemas listed under one lock once a minute). Opt-in `duckDbParquetMetadataCache` (default off).
 - Measuring: `.github/workflows/hdfs-point-perf.yml` (+ `tools/ci/hdfs-point-cell.sh`, `point-query-load.py`,
   `thread-dump-summary.py`). On 2-CPU single-node HDFS cells both profiles are CPU-bound inside
   `duckdb_jdbc_execute` (thread dumps): the real cluster's not-CPU-bound collapse is NOT reproduced there yet.
-- Next, in this order: (1) read run 42626810469's `opensPerQuery` / `fdRequestsPerQuery` per variant (balanced opens
-  every file of the table per query in each per-thread DuckDB; speed shares one DuckDB) - if balanced needs a NameNode
-  open + fd request per file per query, that is the HDFS metadata work to reuse. (2) Make the cell look like the
-  cluster: several schemas with many files (e.g. 2000 small files in a second schema, `orders.orders` next to
-  `tpch.orders`), so the view refresh and per-query listing (`QueryPlanner.tableFiles` lists every file with block
-  locations up to four times per query; `ExecutionService` 1875 / 2139) cost what they cost there; compare a build
-  of the commit before part 1 with the branch on the same runner. (3) Cache the per-query
-  `tableFiles` listing per table for the views' refresh interval (same staleness as the views) if (1)/(2) show it;
-  check whether hadoopfs reports file modification times (DuckDB's footer cache relies on them) before proposing
-  `duckDbParquetMetadataCache` as a default. (4) speed's rate: compare with upstream on the same cell.
+- Per-query HDFS work (run 42627272084, SF1, point_orders / point_lineitem / count_filter mix): every query costs
+  ~20 NameNode `open` RPCs (two per file of the table) in both profiles (speed ~10 at c8/c32), and balanced also
+  7-8 DataNode short-circuit fd requests per query (each per-thread DuckDB's libhdfs3 asks for the fds again; speed:
+  0, one DuckDB keeps them; balanced + file cache ~0.5, + metadata cache ~4). On the Kerberos / SASL-privacy cluster
+  each such RPC and fd request costs a round trip the DataNode / NameNode serialise: the likeliest not-CPU-bound
+  balanced collapse.
+- Next, in this order: (1) find who opens each file twice per query (DuckDB footer + data open, or the Java planner:
+  `QueryPlanner.tableFiles` lists every file with block locations up to four times per query, `ExecutionService`
+  1875 / 2139) - add `cmd=listStatus` / `getBlockLocations` counts to the cell; cache the per-query `tableFiles` listing per table for
+  the views' refresh interval (same staleness as the views) if it is the Java side. (2) Balanced fd requests: try a
+  variant with the file cache on (fd requests ~0.5/query, +19-22 % q/s on 2 CPUs) and its memory cost on the
+  service-hdfs cells; check whether hadoopfs reports file modification times (DuckDB's footer and file caches rely
+  on them) before proposing `duckDbParquetMetadataCache` or the file cache as a balanced default (a default change =
+  Open question first). (3) Make the cell look like the cluster (several schemas, ~2000 small files in a second
+  schema, `orders.orders` next to `tpch.orders`) and compare a build of the commit before part 1 with the branch on
+  the same runner. (4) speed's rate: compare with upstream on the same cell.
 
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
@@ -634,5 +640,6 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   server JVM crashed with the native Hadoop library, cell runs without it), 42622519461 (baseline: balanced 42/57/53,
   speed 71/111/119 q/s at c1/c8/c32, both CPU-bound on 2 CPUs), 42623710991 (one runner per variant: too noisy),
   42624683955 (every variant on two runners, c32 a/b: balanced 42.2/49.4, +file cache 50.1/60.4, +metadata cache
-  45.8/53.5, speed 72.5/84.9, +metadata cache 76.9/88.3), 42626810469 (with per-query HDFS counters; read next
-  session). Not DONE: see the ITEM 39(c) note in Next steps. Lock released.
+  45.8/53.5, speed 72.5/84.9, +metadata cache 76.9/88.3), 42627272084 (rebased head 3b5512be, per-query HDFS
+  counters: ~20 NameNode opens per query, balanced 7-8 short-circuit fd requests per query, speed 0). Dev CI
+  42627268633 green on the rebased head. Not DONE: see the ITEM 39(c) note in Next steps. Lock released.
