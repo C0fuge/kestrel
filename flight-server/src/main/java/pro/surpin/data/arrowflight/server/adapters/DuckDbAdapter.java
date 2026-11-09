@@ -220,6 +220,10 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final ThreadLocal<Session> privateSession;
     /** Queries run again on a private DuckDB after running out of memory in the shared one. */
     private final AtomicLong outOfMemoryRetries = new AtomicLong();
+    /** Runs again of queries a standby HDFS NameNode refused before anything was sent. */
+    private final AtomicLong standbyRetries = new AtomicLong();
+    /** Pauses before each run again after a standby NameNode's refusal, in milliseconds. */
+    private volatile long[] standbyRetryDelaysMillis = STANDBY_RETRY_DELAYS_MILLIS.clone();
     /** When the shared DuckDB's memory was last logged after it ran out of it, in nanoseconds. */
     private final AtomicLong memoryLoggedNanos = new AtomicLong(System.nanoTime() - MEMORY_LOG_INTERVAL_NANOS);
     /** Sessions a query slot chose for this thread's current query; unset = threadSession. */
@@ -766,6 +770,25 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     public long outOfMemoryRetries() {
         return outOfMemoryRetries.get();
+    }
+
+    /**
+     * Returns how many times a query ran again after a standby HDFS NameNode refused it before
+     * anything was sent.
+     *
+     * @return runs again since start
+     */
+    public long standbyRetries() {
+        return standbyRetries.get();
+    }
+
+    /**
+     * Sets the pauses before each run again after a standby NameNode's refusal (tests).
+     *
+     * @param delaysMillis pauses in milliseconds, one per run again
+     */
+    void standbyRetryDelaysMillis(long... delaysMillis) {
+        standbyRetryDelaysMillis = delaysMillis.clone();
     }
 
     /**
@@ -1716,12 +1739,14 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = session();
         try {
-            try {
-                streamSql(session, allocator, duckSql, listener, startListener);
-            } catch (ChangedFileBeforeStart e) {
-                logChangedFileRetry(e);
-                streamSql(session, allocator, duckSql, listener, startListener);
-            }
+            retryOnStandby(listener, () -> {
+                try {
+                    streamSql(session, allocator, duckSql, listener, startListener);
+                } catch (ChangedFileBeforeStart e) {
+                    logChangedFileRetry(e);
+                    streamSql(session, allocator, duckSql, listener, startListener);
+                }
+            });
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
         } catch (OutOfMemoryBeforeSend e) {
@@ -1757,6 +1782,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         } catch (OutOfMemoryBeforeSend e) {
             // Its Arrow streams are registered on this connection only: no run elsewhere.
             throw e.error;
+        } catch (StandbyBeforeSend e) {
+            // Its Arrow streams are read once: no run again.
+            throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
             throw e;
@@ -1779,12 +1807,13 @@ public final class DuckDbAdapter implements AutoCloseable {
         // Filters of the other mode reach DuckDB as the client wrote them.
         checkSingleQuery(session, duckSql);
         if (readsLocalCopies(duckSql)) {
-            try (PreparedStatement ps = session.conn.prepareStatement(duckSql)) {
+            try (PreparedStatement ps = beforeSend(session, () -> session.conn.prepareStatement(duckSql))) {
                 streamPrepared(allocator, duckSql, ps, listener, startListener);
             }
             return;
         }
-        streamPrepared(allocator, duckSql, session.statement(duckSql), listener, startListener);
+        PreparedStatement ps = beforeSend(session, () -> session.statement(duckSql));
+        streamPrepared(allocator, duckSql, ps, listener, startListener);
     }
 
     /**
@@ -1901,8 +1930,15 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (!started && remoteFileChanged(e)) {
                 throw new ChangedFileBeforeStart(e);
             }
+            if (!sent && standbyNameNode(e)) {
+                throw new StandbyBeforeSend(e);
+            }
             throw retryableOutOfMemory(e, sent, listener);
         } catch (Exception e) {
+            // DuckDB's errors while batches are read come wrapped by the Arrow reader (IOException).
+            if (!sent && !listener.isCancelled() && standbyNameNode(e)) {
+                throw new StandbyBeforeSend(e);
+            }
             throw retryableOutOfMemory(e, sent, listener);
         } finally {
             listenerReadiness.disarm();
@@ -2023,6 +2059,8 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw again.error;
         } catch (OutOfMemoryBeforeSend again) {
             throw again.error;
+        } catch (StandbyBeforeSend again) {
+            throw again.error;
         } catch (Exception again) {
             if (invalidatesDatabase(again)) {
                 privateSession.remove();
@@ -2031,6 +2069,129 @@ public final class DuckDbAdapter implements AutoCloseable {
                 }
             }
             throw again;
+        }
+    }
+
+    /** Pauses before each run again of a query a standby HDFS NameNode refused, in milliseconds. */
+    static final long[] STANDBY_RETRY_DELAYS_MILLIS = {500, 1000, 2000, 4000, 8000};
+
+    /**
+     * Tells whether an error, or one of its causes, is an HDFS NameNode refusing a call because it
+     * is in standby: libhdfs3 tries the NameNodes of an HA nameservice in turn without pausing, so
+     * while a failover has left both standby it gives up within milliseconds (Hadoop's Java client
+     * pauses and tries again for seconds).
+     *
+     * @param error error of a statement
+     * @return true for Hadoop's StandbyException text
+     */
+    static boolean standbyNameNode(Throwable error) {
+        for (Throwable e = error; e != null; e = e.getCause() == e ? null : e.getCause()) {
+            String message = e.getMessage();
+            if (message != null && (message.contains("is not supported in state standby")
+                    || message.contains("StandbyException"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Runs a query, and runs it again after a pause while a standby HDFS NameNode refused it
+     * before anything was sent (a NameNode failover), at most once per pause of
+     * {@link #STANDBY_RETRY_DELAYS_MILLIS}; then fails with the NameNode's refusal.
+     *
+     * @param listener Flight stream listener, for cancellation
+     * @param attempt  the query
+     * @throws Exception on query or stream failure
+     */
+    private void retryOnStandby(org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            Attempt attempt) throws Exception {
+        long[] delays = standbyRetryDelaysMillis;
+        for (int run = 0;; run++) {
+            try {
+                attempt.run();
+                return;
+            } catch (StandbyBeforeSend e) {
+                if (run >= delays.length || listener.isCancelled()) {
+                    LOGGER.warn("qid={} node={} duckdb=standbyRetry result=failed runs={} error={}",
+                            LogUtil.qid(), LogUtil.node(), run + 1, firstLine(String.valueOf(e.error.getMessage())));
+                    throw e.error;
+                }
+                standbyRetries.incrementAndGet();
+                LOGGER.info("qid={} node={} duckdb=standbyRetry run={} delayMs={} error={}", LogUtil.qid(),
+                        LogUtil.node(), run + 2, delays[run], firstLine(String.valueOf(e.error.getMessage())));
+                Thread.sleep(delays[run]);
+            }
+        }
+    }
+
+    /**
+     * Runs a step of a query that comes before anything is sent; a standby NameNode's refusal
+     * (also one that left a catalog view uncreated) lets the query run again.
+     *
+     * @param <T>     the step's result
+     * @param session this thread's session, for the reasons of failed views
+     * @param step    the step
+     * @return the step's result
+     * @throws java.sql.SQLException on failure
+     */
+    private static <T> T beforeSend(Session session, SqlStep<T> step) throws java.sql.SQLException {
+        try {
+            return step.call();
+        } catch (java.sql.SQLException e) {
+            if (standbyNameNode(e) || standbyNameNode(explainMissingView(session.failedViews, e))) {
+                throw new StandbyBeforeSend(e);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * One run of a query.
+     */
+    @FunctionalInterface
+    private interface Attempt {
+        /**
+         * Runs the query.
+         *
+         * @throws Exception on query or stream failure
+         */
+        void run() throws Exception;
+    }
+
+    /**
+     * A step of a query before anything is sent.
+     *
+     * @param <T> the step's result
+     */
+    @FunctionalInterface
+    private interface SqlStep<T> {
+        /**
+         * Runs the step.
+         *
+         * @return the step's result
+         * @throws java.sql.SQLException on failure
+         */
+        T call() throws java.sql.SQLException;
+    }
+
+    /**
+     * A query failed with a standby HDFS NameNode's refusal before anything was sent; it may run
+     * again once the failover has made the other NameNode active.
+     */
+    private static final class StandbyBeforeSend extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        /** DuckDB's error, thrown when the query does not run again or fails every time. */
+        private final transient Exception error;
+
+        /**
+         * Wraps DuckDB's error.
+         *
+         * @param error DuckDB's error
+         */
+        StandbyBeforeSend(Exception error) {
+            super(error.getMessage(), error, false, false);
+            this.error = error;
         }
     }
 
@@ -2540,12 +2701,14 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = session();
         try {
-            try {
-                streamComplete(session, allocator, sql, parameters, views, listener, startListener);
-            } catch (ChangedFileBeforeStart e) {
-                logChangedFileRetry(e);
-                streamComplete(session, allocator, sql, parameters, views, listener, startListener);
-            }
+            retryOnStandby(listener, () -> {
+                try {
+                    streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+                } catch (ChangedFileBeforeStart e) {
+                    logChangedFileRetry(e);
+                    streamComplete(session, allocator, sql, parameters, views, listener, startListener);
+                }
+            });
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
         } catch (OutOfMemoryBeforeSend e) {
@@ -2575,19 +2738,22 @@ public final class DuckDbAdapter implements AutoCloseable {
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
-        syncViews(session, views, sql);
+        beforeSend(session, () -> {
+            syncViews(session, views, sql);
+            return null;
+        });
         // Parse first: preparing a text with several statements runs all but the last one.
         checkSingleQuery(session, sql);
         if (readsLocalCopies(sql)) {
             // Not cached: the statement would keep the copies open (readsLocalCopies).
-            try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
+            try (PreparedStatement ps = beforeSend(session, () -> session.conn.prepareStatement(sql))) {
                 requireQuery(sql, ps);
                 bindParameters(ps, parameters);
                 streamPrepared(allocator, sql, ps, listener, startListener);
             }
             return;
         }
-        PreparedStatement ps = session.statement(sql);
+        PreparedStatement ps = beforeSend(session, () -> session.statement(sql));
         requireQuery(sql, ps);
         bindParameters(ps, parameters);
         // Not streamSql: its parse check would take a statement from the cache, and a cache of
@@ -2626,6 +2792,9 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw e.error;
         } catch (OutOfMemoryBeforeSend e) {
             // Its Arrow streams are registered on this connection only: no run elsewhere.
+            throw e.error;
+        } catch (StandbyBeforeSend e) {
+            // Its Arrow streams are read once: no run again.
             throw e.error;
         } catch (Exception e) {
             dropSessionIfInvalidated(session, e);
