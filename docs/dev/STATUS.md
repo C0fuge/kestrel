@@ -3974,3 +3974,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-09 15:05-15:30Z (lane 3 session): D16 DONE 97a2b7bb - the standby retry of `2429782f` confirmed in the
   `service-cluster.yml` hdfs-ha loss cell (now two NameNode failovers + per-server `standbyRetry` counts): run
   42642657223 one refusal retried after 500 ms and answered, 0 errors; 42641106647 also green. Workflow only.
+- 2026-11-09 18:40-18:50Z (cloud session, core lane): nothing taken. Item 39: (a), (b), (d) DONE; (c) still open on
+  the catalogs lane (next there: file pruning by footer statistics; `LOCK-CATALOGS` 15:23:58Z, older than 150 min), so
+  the core lane's `package=true` and "ITEM 39 DONE" still wait. Item 38 waits for the stand. Newest main Dev CI
+  42641096583 (2b61650d) green. Lock released.
