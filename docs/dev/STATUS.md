@@ -3920,3 +3920,9 @@ S3 slowdown item below stays open for then).
   session, item 39 (b) (`39f84617`: cgroup limit of the process's own cgroup and its parents, `memoryBudget` start
   line, Dev CI scope step; caveat: the runner's JDK already saw the scope limit). Dev CI 42620776092 green. Note for
   the plugins lane in PLUGINS-STATUS.md. Next: (a) part 2, per-session schema. Lock released.
+- 2026-11-09 13:40Z (lane 3): ITEM 39(d) DONE `a952f415` on `main` (core files touched: `PeerStreamAdmission`,
+  `DistributedComplete`, `HadoopArrowFlightServer` start line, Dev CI item 35 step). The dc merge budget now follows
+  min(direct memory, Arrow allocator limit `arrowAllocatorLimitBytes`, 2 GiB default) - the cluster's 8g direct had
+  admitted 64 streams into a 2 GiB allocator; one-row merges take no permits. Dev CI 42621419498 green on
+  `lane/distributed` (2g and 8g direct, 48/48 exact each). No package run (core lane packages item 39). Details in
+  LANE3-STATUS.md.
