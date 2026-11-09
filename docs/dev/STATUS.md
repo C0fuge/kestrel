@@ -3978,3 +3978,6 @@ S3 slowdown item below stays open for then).
   the catalogs lane (next there: file pruning by footer statistics; `LOCK-CATALOGS` 15:23:58Z, older than 150 min), so
   the core lane's `package=true` and "ITEM 39 DONE" still wait. Item 38 waits for the stand. Newest main Dev CI
   42641096583 (2b61650d) green. Lock released.
+- 2026-11-09 19:03-19:50Z (lane 3 session): D13 (c) merged into `main` (74971b9a + 60c36431), CI/test only: the
+  `service-cluster.yml` loss cells stream a slow merged scan across the node kill; runs 42680042903 + 42681427105 green,
+  `peer lost ... retry` UNAVAILABLE seen 3 times, every retry exact. Details in `LANE3-STATUS.md`.
