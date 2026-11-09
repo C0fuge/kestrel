@@ -22,7 +22,8 @@ ITEM 39(c) state after session 2026-11-09 (4) - see the Log for "ITEM 39(c) DONE
   97.9 -> 106.3 and 77.9 -> 82.5); the 2-CPU cell stays CPU-bound in `duckdb_jdbc_execute`, so the real cluster's
   round-trip-bound collapse is expected to gain more (fewer Kerberos/SASL RPCs per query). Verify on the stand once
   the core lane has packaged.
-- Follow-ups of 39 (c), not blocking DONE: (a) Q9 answer: when the hadoopfs build `51b7220-afc4` appears in
+- Follow-ups of 39 (c), not blocking DONE ((a) and (b) done by the core lane in 877cf100: hadoopfs afc4 in CI,
+  `hdfsMetadataCacheTtlMs`, external file cache default on HDFS): (a) Q9 answer: when the hadoopfs build `51b7220-afc4` appears in
   `ci-assets` (only afc3 on 2026-11-09 20:30Z), take it, set `hdfs_metadata_cache_ttl_ms` from a new optional
   server setting and measure opens per query again (`hdfs-point-perf.yml`). (b) Q11: balanced fd requests per query
   (~5-6; file cache variant 0-0.2 and +10..15% q/s). (c) A cell like the cluster (several schemas, SF10), speed vs
@@ -685,3 +686,6 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Dev CI 42693013191 green; merged into `main` as bf72114c. New Open question Q11 (balanced external file cache).
 ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and part 1 before; follow-ups (a)-(d) in
   Next steps, none blocking). The core lane can package (`package=true`) and measure on the stand. Lock released.
+- 2026-11-09 21:25Z: no open item for this lane. ITEM 39(c) follow-ups (a) Q9/afc4 and (b) Q11 were done by the core
+  lane (877cf100); (c)/(d) wait for the stand. Item 40 is split between the plugins and core lanes. Lane stays in
+  finish mode (CATALOGS LANE DONE); no code change, lock not taken.
