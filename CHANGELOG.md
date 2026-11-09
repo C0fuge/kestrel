@@ -103,6 +103,17 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - queries failed `INTERNAL` during an HDFS NameNode failover (service matrix `hdfs-ha loss`)
+
+- libhdfs3 (in the hadoopfs extension) tries the NameNodes of an HA nameservice in turn without pausing; while a
+  failover has left both standby it gives up within milliseconds, and the query failed `INTERNAL: ... Operation
+  category READ is not supported in state standby` (Hadoop's Java client pauses and tries again for seconds). A
+  query refused that way before anything reached the client (prepare, catalog view, or execution before the first
+  batch) now runs again on the node after 0.5, 1, 2, 4 and 8 s (log INFO `duckdb=standbyRetry run= delayMs=`);
+  after the last pause, or once a batch was sent, it fails as before (WARN `duckdb=standbyRetry result=failed`).
+  No status code, setting or wire change. Queries over Arrow streams registered on the connection run once, as
+  before. Test: `DuckDbStandbyRetryTest`.
+
 ### Fixed - distributed complete never merged queries with plain table names (lane 3, D15, after item 39 (a))
 
 - A merge plans the query in parts, and partial plans need `schema.table`: every query naming a table without its
