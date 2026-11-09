@@ -23,6 +23,18 @@
 
 ## Next steps (one per session)
 
+> **BUG FIRST (2026-11-09, lane 3, service matrix): HDFS NameNode failover fails queries `INTERNAL`.** Service cluster
+> cell `hdfs-ha loss` (3 nodes, HA nameservice `ns1`, `haadmin -failover nn2 nn1` under a load of 3 clients) failed twice
+> in a row (run 42632461815 on `lane/distributed`, attempt 1 and the rerun of the failed job): 2 of 276 / 2 of 205
+> answers `INTERNAL: ... IO Error: Unable to get file info: hdfs://ns1/data/tpch/lineitem/part-002.parquet: Operation
+> category READ is not supported in state standby` (also `Failed to open file: ... in state standby`), on q07 / q08 /
+> q21 (joins, computed by one node: not the merge path), within ~25 s after the failover; 0 wrong answers. The cell was
+> green up to `b69660b9` (42403042241); no HDFS code changed since, so it is probably timing (the failover landing on a
+> DuckDB `getFileInfo`/open), not a regression. hadoopfs/libhdfs3 should fail over to the other NameNode on
+> `StandbyException` for these calls (the Java client does). If it cannot, a query failed by a `StandbyException` (or
+> `RetriableException`) could be answered `UNAVAILABLE` so clients retry - that is a status-code change, so an Open
+> question first. Until fixed, the cell stays red after a failover hits a file open.
+
 > **ITEM 39(a) DONE (2026-11-09, core lane): part 1 `ffe0b1d2` (Dev CI 42620776092), part 2 `53647b1a` + test fix
 > `655bec3a` (Dev CI 42628870401 red on the test, 42630578494 green).** Part 1: an ambiguous plain name is `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
 > qualify it ...`; server setting `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`). Part 2: per-session schema - Flight SQL
@@ -3939,3 +3951,8 @@ S3 slowdown item below stays open for then).
   one query refreshes them and the others use the views of before (`refreshIfDue()` keeps the old synchronized body;
   counter `servedDuringRefresh()`). New opt-in setting `duckDbParquetMetadataCache` (DuckDbAdapter.configureConnection).
   Workflow `hdfs-point-perf.yml` (lane 4 only). Dev CI 42623741690, 42632180687 (rebased on 655bec3a) green on the branch. Details: CATALOGS-STATUS Log.
+- 2026-11-09 (lane 3, D15, merged 7c54dfde + ace241be): small core change for the core lane to know -
+  `ExecutionService.qualifyAsResolved(query)` (the body of `qualifyPlainNames` without its HDFS short-circuit gate;
+  `qualifyPlainNames` calls it). `DistributedComplete.stream` plans merges from it: with plain table names (TPC-H with
+  `defaultSchema=tpch`) every dc query fell back to one node (`Name the table with its schema`). Service cluster
+  speed-dc cells now also run TPC-H with plain names. Found there: the hdfs-ha failover bug above. Details: LANE3-STATUS Log.

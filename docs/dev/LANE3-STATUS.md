@@ -30,6 +30,14 @@ concurrent full scans on the core lane's item 39 pre-release; expect `peer strea
 
 SERVICE MATRIX lane 3 DONE (2026-11-02, see Log): `.github/workflows/service-cluster.yml`, 8 cells green (run 41469353046).
 
+D15 DONE 7c54dfde + ace241be (2026-11-09, see Log): distributed complete merges queries with plain table names
+    (they all fell back to one node). For the stand: TPC-H with plain names + `-DdefaultSchema=tpch` under dc should
+    log `distributedComplete=merged` for q01 / q06 and no `fallback reason='Name the table with its schema'`.
+
+D16. hdfs-ha loss cell red: NameNode failover fails 2 of ~250 answers `INTERNAL ... in state standby` (bug-first
+    in `STATUS.md` for the core lane, hadoopfs/libhdfs3). Lane 3 part: rerun `service-cluster.yml` once the core
+    lane has a fix; if the fix is a retryable status instead, the loss check already accepts `UNAVAILABLE` + retry.
+
 D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
     behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
     Optional (Open question material, changes a default): derive `arrowAllocatorLimitBytes` from direct memory.
@@ -496,3 +504,21 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   Dev CI concurrency step now also runs with `-XX:MaxDirectMemorySize=8g` and asserts budget 16: Dev CI
   42621419498 green on the branch (2g and 8g each 48/48 exact, 0 failed executions); push Dev CI 42624035293 on
   a952f415 was running at session end. Next: D14 (stand results), D12, D13 (c).
+- 2026-11-09 (lane 3 session, 23rd): lock 14:05Z. **D15 DONE 7c54dfde + ace241be** (rebase-merged into `main`; no
+  `package=true`: the core lane packages item 39). Found while adding a dc test for item 39 (a) part 2's session
+  schema: partial plans need `schema.table` (`ParquetAdapter.requireSchema`), so under `distributedComplete` every
+  query with a plain table name was planned, refused and computed by one node (`distributedComplete=fallback
+  reason='Name the table with its schema ...'`), which is how the stand runs TPC-H since item 39 (a). Answers were
+  right, nothing merged. Fix: `DistributedComplete.stream` plans from `ExecutionService.qualifyAsResolved(query)`, the
+  plain names qualified with the schema DuckDB reads them from here (the one schema with the name, or
+  `defaultSchema`); the expected schema still comes from the client's text. The header / session option `schema`
+  was already written into the text by item 39 (a) part 2. Test `DistributedCompleteSchemaIntegrationTest`
+  (`tpch.orders` next to `orders.orders`, 4 endpoints: header, session option + prepared, default schema; 4 merged
+  shapes, each equal to the single-node answer of that schema's table). `service-cluster.yml`: speed-dc cells also
+  run the 22 queries with plain names (`SC_PLAIN=1`) and fail on that fallback line. Dev CI 42632283286 green on the
+  branch; Service cluster 42632461815 on the branch: 11/12 cells green incl. the three speed-dc with plain names
+  (merged 13 + 12 on hdfs-ha), **hdfs-ha loss red twice** (attempt 1 and the rerun of the failed job): NameNode
+  failover -> `INTERNAL ... Operation category READ is not supported in state standby` on 2 single-node join answers,
+  0 wrong; written as bug-first in `STATUS.md` (D16). Push runs on `main`: Dev CI of ace241be cancelled by the
+  catalogs lane's dispatch 42635429611 on 63a3ec52 (includes D15), Service cluster 42635146358 running at session end.
+  Next: D16 (after the core lane), D14 (stand results), D12, D13 (c).
