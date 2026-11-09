@@ -23,18 +23,20 @@
 
 ## Next steps (one per session)
 
-> **Item 39 (a) (2026-11-09, core lane): part 1 done in code and CI (`ffe0b1d2`), Dev CI 42620776092 green.** A plain
-> name that several schemas have is refused `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch: qualify it
-> (schema.orders) or set a default schema (setting defaultSchema)` on prepare and execute (was `NOT_FOUND ... does not
-> exist`); new server setting `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`) points the `main` alias view of such names at
-> that schema (start log `views=defaultSchema`, WARN `found=false`). Tests: `PlainNameSchemaIntegrationTest` (tpch.orders
-> + orders.orders + tpch.lineitem through Flight SQL), `CatalogViewsTest`, `ConfigAdapterTest`. **Next core session
-> (item 39 (a) part 2):** a per-session schema - Flight SQL session option `schema` (SetSessionOptions; the server
-> already keeps sessions for `arrow-compression`) and a call header for JDBC URL properties (`...?schema=tpch` is sent
-> as a header by the Arrow Flight JDBC driver). Do it safely with DuckDB `SET search_path='<schema>,main'` on the
-> pooled connection for the query (reset after), plus the same schema for the HDFS short-circuit `qualifyPlainNames`
-> step and for distributed-complete peer calls; a name the finder misses must never read another schema silently.
-> Then "ITEM 39(a) DONE". **For the stand now:** `-DdefaultSchema=tpch` should give TPC-H plain names 22/22.
+> **ITEM 39(a) DONE (2026-11-09, core lane): part 1 `ffe0b1d2` (Dev CI 42620776092), part 2 `53647b1a` + test fix
+> `655bec3a` (Dev CI 42628870401 red on the test, 42630578494 green).** Part 1: an ambiguous plain name is `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
+> qualify it ...`; server setting `defaultSchema` (`FLIGHT_DEFAULT_SCHEMA`). Part 2: per-session schema - Flight SQL
+> session option `schema` (SetSessionOptions; unknown schema -> INVALID_VALUE, empty unsets) or call header `schema`
+> (JDBC URL `...?schema=tpch`; header before session option, both before `defaultSchema`). Implemented as a text
+> rewrite (`ExecutionService.qualifyForSchema`) at every SQL entry (statement, prepare, schema calls, plain
+> descriptors), before access checks, instead of the suggested `SET search_path` on the pooled connection: tickets,
+> prepared handles, the HDFS `qualifyPlainNames` step and dc peer calls then carry `schema.table` with no ticket
+> format change and no connection state to reset. Safety: DuckDB's parse (`QueryTables`) of the rewritten text must
+> show no plain name of that schema (token check when it cannot parse); else `INVALID_ARGUMENT ... qualify it
+> (schema.table)` (test: a named window hiding the FROM name). Tests: `PlainNameSchemaIntegrationTest` (+3: header in
+> both modes + prepared, session option, missed name), `TableReferencesTest`. Remaining for "ITEM 39 DONE": (c) on
+> `main`, then the core lane's `package=true`. **For the stand:** JDBC `...?schema=tpch` or `-DdefaultSchema=tpch`
+> should give TPC-H plain names 22/22.
 >
 > **Item 39 (b) note (core lane, pushed before the split was seen, `39f84617`):** `HostLimits` reads the process's own
 > cgroup and its parents (was the mount point only); start log `memoryBudget source=cgroup|host memoryMiB= hostMiB=
@@ -3926,3 +3928,9 @@ S3 slowdown item below stays open for then).
   admitted 64 streams into a 2 GiB allocator; one-row merges take no permits. Dev CI 42621419498 green on
   `lane/distributed` (2g and 8g direct, 48/48 exact each). No package run (core lane packages item 39). Details in
   LANE3-STATUS.md.
+- 2026-11-09 13:45-14:35Z (cloud session, core lane): ITEM 39(a) DONE. Part 2 in `53647b1a` + `655bec3a`: per-session
+  schema of plain names (session option / call header `schema`, a text rewrite checked by DuckDB's parse; additive,
+  no change without the option or header). Dev CI 42628870401 failed on the new test only (it expected partial
+  answers for a mixed-case name and a join with an unqualified name); test fixed, Dev CI 42630578494 green. Existing
+  behaviour, not changed: partial answers find a table's files by its name as written (`FROM Orders` -> NOT_FOUND
+  `Could not find Arrow schema`, case-sensitive paths) and need every name qualified. No package run yet: waits for 39 (c). Lock released.
