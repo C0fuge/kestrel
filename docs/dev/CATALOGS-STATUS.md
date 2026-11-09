@@ -25,16 +25,30 @@ ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2
   0, one DuckDB keeps them; balanced + file cache ~0.5, + metadata cache ~4). On the Kerberos / SASL-privacy cluster
   each such RPC and fd request costs a round trip the DataNode / NameNode serialise: the likeliest not-CPU-bound
   balanced collapse.
-- Next, in this order: (1) find who opens each file twice per query (DuckDB footer + data open, or the Java planner:
-  `QueryPlanner.tableFiles` lists every file with block locations up to four times per query, `ExecutionService`
-  1875 / 2139) - add `cmd=listStatus` / `getBlockLocations` counts to the cell; cache the per-query `tableFiles` listing per table for
-  the views' refresh interval (same staleness as the views) if it is the Java side. (2) Balanced fd requests: try a
-  variant with the file cache on (fd requests ~0.5/query, +19-22 % q/s on 2 CPUs) and its memory cost on the
-  service-hdfs cells; check whether hadoopfs reports file modification times (DuckDB's footer and file caches rely
-  on them) before proposing `duckDbParquetMetadataCache` or the file cache as a balanced default (a default change =
-  Open question first). (3) Make the cell look like the cluster (several schemas, ~2000 small files in a second
-  schema, `orders.orders` next to `tpch.orders`) and compare a build of the commit before part 1 with the branch on
-  the same runner. (4) speed's rate: compare with upstream on the same cell.
+- Part 2 merged into `main` (34b7911a): partial-mode describes of remote tables read a footer stub kept per sample
+  file version (`FooterStubCache`) instead of DuckDB opening the sample file per query. The cell runs complete mode
+  (describes come from the catalog views), so it does not show there.
+- Who opens the files (run 42637704787, new audit breakdown per command and file): ALL opens come from DuckDB's
+  execution, not from the Java side (`listStatus` ~0.01/query; the Java planner's listing is cached). Each point
+  query opens every file of its table ~5 times (SF1, 4 files of ~3-4 row groups each: about one open per row group
+  scanned plus the footer; the table's first file +1, DuckDB's bind), and every open comes with a `getfileinfo`
+  (hadoopfs stat before open): ~20 opens + ~20 getfileinfo RPCs per query in both profiles at c1; speed drops to ~10
+  at c8/c32 (shared DuckDB), balanced stays at ~20. On the real cluster (SF10, more row groups per file, Kerberos +
+  SASL privacy) that is tens of NameNode round trips per point query: the likeliest cause of the not-CPU-bound
+  collapse.
+- Next, in this order: (1) **file pruning by footer statistics before DuckDB** for directory tables: keep each
+  file's min/max per column (Java footers, cached per table fingerprint as `TableStatisticsService` does) and pass
+  DuckDB only the files whose ranges can match conjunctive `col = literal` / range predicates on integer / date
+  columns (never prune on missing or non-integer stats; regression tests with nulls, negative numbers, cast
+  literals, OR). Complete mode reads through the catalog views (`CatalogViews`, one view per table over all
+  files), so the pruned file list must reach the complete path too (a per-query `read_parquet` of the matching
+  files instead of the view when the predicate prunes). Expected on the cell: point_orders / point_lineitem 4 files
+  -> 1, opens ~20 -> ~5. (2) hadoopfs side (not this repo's code; note for the maintainer): one `getfileinfo` + one
+  `open` (getBlockLocations) per row-group scan state; caching located blocks per file in the extension would cut
+  most of the RPCs - Open question Q9. (3) Balanced fd requests: the file cache variant (fd requests ~0.5/query);
+  check hadoopfs modification times before proposing it or `duckDbParquetMetadataCache` as a balanced default
+  (default change = Open question first). (4) Make the cell look like the cluster (several schemas, `orders.orders`
+  next to `tpch.orders`), compare with the commit before part 1. (5) speed's rate vs upstream on the same cell.
 
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
@@ -397,7 +411,15 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
       (above). Possible test-only extras: `hudi_info` / `hudi_files` with options (their signatures take none),
       or whether credentials in `hudi_option` show up in DuckDB error text (they did not in run 40823753558's
       refusals - masked check only). Otherwise stop early.
+
+
 ## Open questions
+
+- Q9 (2026-11-09, item 39 (c)): DuckDB's hadoopfs extension does one NameNode `getfileinfo` and one `open`
+  (getBlockLocations) per Parquet file per row-group scan (~5 per file per point query in the HDFS cell, run
+  42637704787). Should the extension (our build in `ci-assets`) cache file status and located blocks per file for a
+  short time? It is outside this repository's sources; the server-side lever (file pruning by footer statistics) is
+  next in this lane either way.
 
 - **Maintainer answers 2026-10-29 (Q1, Q4-Q7):**
   - Q1: yes, lane 4 adds the per-table temporary S3 secrets for vended credentials (opt-in, off by default, own
@@ -645,3 +667,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   42627268633 green on the rebased head; 42630358181 red only on the core lane's
   `PlainNameSchemaIntegrationTest` (red on `main` too, fixed there by 655bec3a); 42632180687 green after rebasing on it. Merged into `main` (fast-forward, head 63a3ec52); Dev CI
   42635429611 (dispatch on `main`) green. Not DONE: see the ITEM 39(c) note in Next steps. Lock released.
+- 2026-11-09 (2): **ITEM 39(c) part 2** - `FooterStubCache`: partial-mode describes of remote tables reuse a local
+  footer stub per sample file version (SASL describes use it too). Tests `FooterStubCacheTest`,
+  `ExecutionServiceTest.describesOfRemoteTablesReuseOneFooterStub` (+ the SASL describe test now expects the stub
+  kept). `hdfs-point-cell.sh` prints NameNode audit commands per query and opens per file. Branch runs: Dev CI
+  42637718051 green (b08fdb19), HDFS point perf 42637704787 (all opens are DuckDB's: ~5 per file per query + one
+  getfileinfo each; balanced c32 a/b 45.0/52.9 q/s, speed 74.8/87.9; complete mode, so part 2 not visible there).
+  Merged into `main` by cherry-pick (34b7911a, 2b61650d; no force push to the branch). Dev CI on main: 42641096583.
+  Not DONE: next is file pruning by footer statistics (Next steps). Lock released.
