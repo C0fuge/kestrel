@@ -36,19 +36,30 @@ ITEM 39(c) in progress (branch `fix/39c-point`; not DONE). State after session 2
   at c8/c32 (shared DuckDB), balanced stays at ~20. On the real cluster (SF10, more row groups per file, Kerberos +
   SASL privacy) that is tens of NameNode round trips per point query: the likeliest cause of the not-CPU-bound
   collapse.
-- Next, in this order: (1) **file pruning by footer statistics before DuckDB** for directory tables: keep each
-  file's min/max per column (Java footers, cached per table fingerprint as `TableStatisticsService` does) and pass
-  DuckDB only the files whose ranges can match conjunctive `col = literal` / range predicates on integer / date
-  columns (never prune on missing or non-integer stats; regression tests with nulls, negative numbers, cast
-  literals, OR). Complete mode reads through the catalog views (`CatalogViews`, one view per table over all
-  files), so the pruned file list must reach the complete path too (a per-query `read_parquet` of the matching
-  files instead of the view when the predicate prunes). Expected on the cell: point_orders / point_lineitem 4 files
-  -> 1, opens ~20 -> ~5. (2) hadoopfs side (not this repo's code; note for the maintainer): one `getfileinfo` + one
-  `open` (getBlockLocations) per row-group scan state; caching located blocks per file in the extension would cut
-  most of the RPCs - Open question Q9. (3) Balanced fd requests: the file cache variant (fd requests ~0.5/query);
-  check hadoopfs modification times before proposing it or `duckDbParquetMetadataCache` as a balanced default
-  (default change = Open question first). (4) Make the cell look like the cluster (several schemas, `orders.orders`
-  next to `tpch.orders`), compare with the commit before part 1. (5) speed's rate vs upstream on the same cell.
+- Part 3 merged into `main` (b0f82a47, 32ebda26): **file pruning by footer statistics** (`FileStatsPruner`,
+  `CatalogViews.prunedFiles`, called by `ExecutionService.readComplete`). A complete answer of a plain single-table
+  query over a directory table (`TableReferences.singleSelect`, one reference, `singleTableFilter` parses it) reads
+  `(SELECT <view columns> FROM read_parquet([kept files])) AS "<table>"` (or the empty view when nothing is kept)
+  instead of the view. Used: `= < <= > >= BETWEEN IN` under AND / OR, signed INT32/INT64 and DATE columns, integral
+  number / date literals; NOT, casts of columns, parameters, NULL, text vs integer never prune; files without stats,
+  only nulls, or other columns/types than the view's first file are kept. Footers cached per (location, size,
+  mtime), at most 100 000; setting `fileStatsPruningMaxFiles` (default 1024, 0 = off). Not pruned yet: aliased
+  tables (`FROM tpch.orders o`: `ParquetQueryParser` gives no filter), plain names on non-HDFS stores (only
+  `schema.table` references are found), three-part column names, partial mode (QueryPlanner spreads every file).
+  **The HDFS cell did not show it** (run 42684276829: ~20 opens per query as before): `service-cluster-data.py`
+  split orders / lineitem by `key % 4`, so every file spans every key. It now takes `range` (hdfs-point-perf uses it,
+  default of the other workflows stays `mod`) and the cell runs `*-nopruning` variants; first run 42689843600.
+- Next, in this order: (1) read run 42689843600 (or its successor): expected point_orders / point_lineitem opens per
+  query ~20 -> ~5-6 (count_filter still reads all files: `o_custkey` spans every file) and higher q/s than the
+  `-nopruning` variants; if not, find out why from the server log (`views=prunedFiles` is DEBUG; `pruning.files`
+  timing). Then decide "ITEM 39(c) DONE" (the maintainer's item is the point-query collapse; pruning + parts 1-2 are
+  the server-side levers; the rest is hadoopfs P1 / Q9). (2) Prune aliased single-table queries too (the filter of
+  `FROM s.t x WHERE x.k = 5`: make `singleTableFilter` accept the alias). (3) Q9 answer: when the hadoopfs build
+  `51b7220-afc4` appears in `ci-assets` (not there on 2026-11-09 20:00Z: only afc3), take it, set
+  `hdfs_metadata_cache_ttl_ms` from a new server setting and measure opens per query again. (4) Balanced fd
+  requests: file cache variant (~0.5/query) / `duckDbParquetMetadataCache` as balanced default = Open question
+  first, after hadoopfs modification times are checked. (5) Cell like the cluster (several schemas), speed vs
+  upstream.
 
 > **Maintainer, 2026-11-02 18:30 - SERVICE MATRIX, catalogs and stores part (take it first).** A real Hadoop
 > cluster refused every HDFS query with `f06b5834e76e` (core lane fixes it); no CI run talks to real services end to
@@ -415,6 +426,9 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- Q10 (2026-11-09, item 39 (c) part 3): file pruning by footer statistics is **on by default**
+  (`fileStatsPruningMaxFiles=1024`). Answers are unchanged by design (40-query equality test), but it changes which
+  files a complete answer reads. Keep it on, or make it opt-in (`0` default) until the stand has run with it?
 - **Answer Q9 (maintainer, 2026-11-09 18:20): yes.** The hadoopfs side is now its own item in the extension's repo
   (P1: process-wide file-status + located-blocks cache with a TTL setting `hdfs_metadata_cache_ttl_ms`, reuse of the
   open stream across row-group reads, correct modification times; build for DuckDB v1.5.6 as `51b7220-afc4`,
@@ -683,3 +697,11 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Not DONE: next is file pruning by footer statistics (Next steps). Lock released.
 
 - 2026-11-09 18:58Z (orchestrator): released stale `LOCK-CATALOGS` (15:23:58Z, no catalogs commit since then). ITEM 39(c) still open (next: file pruning by footer statistics; Q9 answered).
+- 2026-11-09 (3): **ITEM 39(c) part 3** - file pruning by footer statistics for complete answers of plain
+  single-table queries over directory tables (`FileStatsPruner`, `CatalogViews.prunedFiles`; setting
+  `fileStatsPruningMaxFiles`, default 1024, Q10). Core files touched (39 (c) exception): `CatalogViews`,
+  `ExecutionService.readComplete`, `ConfigAdapter`. Tests `FileStatsPrunerTest` (5), `ConfigAdapterTest` (+1).
+  Branch `fix/39c-point` (merged origin/main, no force push): Dev CI 42684272737 green, HDFS point perf 42684276829
+  green but no change in opens (mod-split data, see Next steps); data script `range` split + `-nopruning` variants,
+  HDFS point perf 42689843600 running at session end. Cherry-picked into `main` (b0f82a47, 32ebda26); Dev CI on
+  main 42690037660 running at session end. Not DONE. Lock released.

@@ -3978,3 +3978,16 @@ S3 slowdown item below stays open for then).
   the catalogs lane (next there: file pruning by footer statistics; `LOCK-CATALOGS` 15:23:58Z, older than 150 min), so
   the core lane's `package=true` and "ITEM 39 DONE" still wait. Item 38 waits for the stand. Newest main Dev CI
   42641096583 (2b61650d) green. Lock released.
+- 2026-11-09 19:03-19:50Z (lane 3 session): D13 (c) merged into `main` (74971b9a + 60c36431), CI/test only: the
+  `service-cluster.yml` loss cells stream a slow merged scan across the node kill; runs 42680042903 + 42681427105 green,
+  `peer lost ... retry` UNAVAILABLE seen 3 times, every retry exact. Details in `LANE3-STATUS.md`.
+- 2026-11-09 19:40-19:50Z (cloud session, core lane): nothing taken. Item 39: (a), (b), (d) DONE; (c) still in
+  progress on the catalogs lane (`LOCK-CATALOGS` 19:22:09Z, active), so `package=true` and "ITEM 39 DONE" still wait.
+  Item 38 waits for the stand. Newest main Dev CI 42641096583 (2b61650d) green; later main commits are lane 3
+  workflow/test changes (D13 (c), Service cluster 42680042903 + 42681427105 green). Lock released.
+- 2026-11-09 (lane 4, item 39 (c) part 3, b0f82a47): core change for the core lane to know - `ExecutionService
+  .readComplete` now passes the SQL through `CatalogViews.prunedFiles`: a plain single-table query over a directory
+  table reads only the files its WHERE clause can match by footer min/max (`FileStatsPruner`); new setting
+  `fileStatsPruningMaxFiles` (default 1024, 0 = off; Open question Q10 in CATALOGS-STATUS.md).
+  `tools/ci/service-cluster-data.py` takes an optional 4th argument `mod|range` (default `mod`, unchanged for
+  service-cluster / service-hdfs).

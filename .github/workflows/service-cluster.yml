@@ -14,7 +14,8 @@
 # balanced, speed (-DresourceProfile=speed), speed-dc
 # (speed + -DdistributedComplete=true), and loss (speed-dc under a load of 3 clients while the third
 # server is killed: every answer exact or a retryable UNAVAILABLE whose retry is exact, never a
-# partial answer). Each non-loss cell runs the 22 queries (answers compared with in-process DuckDB
+# partial answer; one more client streams a merged scan of lineitem slowly, so the kill lands inside
+# a merged answer and exercises the "peer lost ... retry" UNAVAILABLE, D13 c). Each non-loss cell runs the 22 queries (answers compared with in-process DuckDB
 # over the same files, tools/ci/service-cluster-data.py), Flight SQL metadata and a prepared query
 # (tools/ci/service-cluster-check.py). The job summary has the table cell -> pass/fail + first error.
 #
@@ -408,7 +409,7 @@ jobs:
             fi
           fi
           for i in 1 2 3; do
-            note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback')"
+            note "srv$i: refused $(docker logs "srv$i" 2>&1 | grep -c 'query=refused'), merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), peerLost $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=peerLost')"
           done
           if [[ $STORE == hdfs* ]]; then
             # Short-circuit reads: a client reading a local block over the domain socket opens the block file

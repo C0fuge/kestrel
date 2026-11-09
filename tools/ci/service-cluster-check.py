@@ -33,6 +33,14 @@ workflow stops) for <seconds>, and checks that each answer is either exactly the
 error a client may retry (gRPC UNAVAILABLE); a retryable error is retried once on the next node and
 that answer must be exact. A wrong (e.g. partial) answer or a non-retryable error fails. Prints
 ``load start`` when the load runs, one ``event`` line per answer and the same ``result`` line.
+When <dir>/expected/scan.txt exists, one more client streams ``SCAN`` (a merged answer of all
+lineitem rows under ``distributedComplete``) on the first node, read at ``SC_SCAN_ROWS_PER_S`` rows
+per second (default 150000, ~40 s at SF1; at the kill, 15 s in, ~2/3 of the rows are unread), so that the kill lands inside a merged answer whose
+first batch the client already holds (D13 c). Each scan must end with exactly the reference's rows
+and sums, or with UNAVAILABLE whose retry on the other node is exact; ``scan`` events say after how
+many rows an error came and whether it was the server's "peer lost" status. The summary counts
+``scan_ok``, ``scan_peer_lost`` (UNAVAILABLE "peer lost" after the first batch), ``scan_retryable``
+(any UNAVAILABLE) and ``scan_retried_ok``; a wrong scan or a non-retryable error fails as above.
 """
 import decimal
 import math
@@ -44,6 +52,7 @@ import time
 import urllib.request
 
 import adbc_driver_flightsql.dbapi as flightsql
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 PREPARED = "SELECT count(*) FROM tpch.lineitem WHERE l_quantity < ?"
@@ -53,6 +62,7 @@ LOCALITY_QUERIES = {
     "orders count": "SELECT count(*) FROM tpch.orders WHERE o_totalprice > 1000",
 }
 STATEMENT_QUERY = "type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery"
+SCAN = "SELECT l_orderkey, l_linenumber FROM tpch.lineitem"
 TABLES = {"customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"}
 
 
@@ -320,12 +330,31 @@ def retryable(error):
     return "unavailable" in str(error).lower()
 
 
+def scan(server, rate):
+    """Streams ``SCAN`` at <rate> rows/s: ((rows, sum key, sum line), error, rows read before it)."""
+    rows = keys = lines = 0
+    try:
+        with connect(server) as conn, conn.cursor() as cursor:
+            cursor.execute(SCAN)
+            start = time.time()
+            for batch in cursor.fetch_record_batch():
+                rows += batch.num_rows
+                keys += pc.sum(batch.column(0)).as_py() or 0
+                lines += pc.sum(batch.column(1)).as_py() or 0
+                if rate:
+                    time.sleep(max(0.0, rows / rate - (time.time() - start)))
+        return (rows, keys, lines), None, rows
+    except Exception as e:  # noqa: BLE001
+        return None, e, rows
+
+
 def loss(servers, base, seconds, clients):
     """The ``loss`` mode; returns the process exit code."""
     queries = load(base)
     alive = servers[:-1]
     lock = threading.Lock()
-    counts = {"ok": 0, "retryable": 0, "retried_ok": 0, "wrong": 0, "error": 0}
+    counts = {"ok": 0, "retryable": 0, "retried_ok": 0, "wrong": 0, "error": 0,
+              "scan_ok": 0, "scan_peer_lost": 0, "scan_retryable": 0, "scan_retried_ok": 0}
     failures = []
     deadline = time.time() + seconds
 
@@ -372,8 +401,44 @@ def loss(servers, base, seconds, clients):
             else:
                 record("retried_ok", f"c{c} {name} {other} retry ok")
 
+    def scanner(want, rate):
+        n = 0
+        while time.time() < deadline:
+            server = alive[n % len(alive)]
+            n += 1
+            got, error, read = scan(server, rate)
+            if error is None:
+                if tuple(got) == want:
+                    record("scan_ok", f"scan {server} ok rows {got[0]}")
+                else:
+                    record("wrong", f"scan {server} wrong {got} != {want}", f"scan on {server}: wrong {got} != {want}")
+                continue
+            if not retryable(error):
+                record("error", f"scan {server} error after {read} rows {first_line(error)}",
+                       f"scan on {server}: non-retryable after {read} rows: {first_line(error)}")
+                continue
+            lost = read > 0 and "peer lost" in str(error).lower()
+            if lost:
+                with lock:
+                    counts["scan_peer_lost"] += 1
+            record("scan_retryable", f"scan {server} unavailable after {read} rows peerLost={lost} {first_line(error)}")
+            other = alive[n % len(alive)]
+            got, error, read = scan(other, 0)
+            if error is None and tuple(got) == want:
+                record("scan_retried_ok", f"scan {other} retry ok rows {got[0]}")
+            else:
+                diff = f"{got} != {want}" if error is None else first_line(error)
+                record("wrong" if error is None else "error", f"scan {other} retry failed {diff}",
+                       f"scan retried on {other}: {diff}")
+
     print("load start", flush=True)
     threads = [threading.Thread(target=client, args=(c,)) for c in range(clients)]
+    scan_ref = os.path.join(base, "expected", "scan.txt")
+    if os.path.exists(scan_ref):
+        with open(scan_ref, encoding="utf-8") as fh:
+            want = tuple(int(v) for v in fh.read().split())
+        threads.append(threading.Thread(target=scanner,
+                                        args=(want, float(os.environ.get("SC_SCAN_ROWS_PER_S", "150000")))))
     for t in threads:
         t.start()
     for t in threads:
