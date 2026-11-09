@@ -15,7 +15,13 @@
 # (memory check of the shared DuckDB's node-wide memory_limit, STATUS item 22); the -DduckDbThreads=4
 # configuration and its 10 % check are then skipped, every client's answers must equal the
 # default's, and a pass's total is its wall-clock time. Every configuration also reports the
-# container's peak memory (cgroup v2 memory.peak). Not part of Dev CI.
+# container's peak memory (cgroup v2 memory.peak). Input plain=true (item 40(a), the GizmoSQL gap) also
+# measures plain in-process DuckDB (pip duckdb 1.5.6, default settings, the same httpfs and S3 endpoint,
+# views over read_parquet globs; tools/ci/tpch-duckdb.py) in a container with the same limits, as the
+# reference GizmoSQL stands for, writes the DuckDB settings of every server configuration
+# (tools/ci/flight-settings.py) and of plain DuckDB, and puts the settings that differ and a per-query
+# table (best time of each configuration, ratio to plain) in the summary; its answers' checksums must
+# equal those of the ADBC client (client=adbc). Not part of Dev CI.
 name: TPC-H perf
 
 on:
@@ -63,6 +69,10 @@ on:
         description: "server options of a further configuration measured on this ref, its answers checked against the default's (e.g. -DduckDbSharedDatabase=true; empty = none)"
         type: string
         default: ""
+      plain:
+        description: "also measure plain in-process DuckDB (GizmoSQL-like reference) and diff the DuckDB settings (item 40(a))"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -145,7 +155,7 @@ jobs:
           grep -c 'tpch\.' "$RUNNER_TEMP"/queries/*.sql | head -n 3
 
       - name: ADBC client
-        if: inputs.client == 'adbc'
+        if: inputs.client == 'adbc' || inputs.plain
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/adbc"
@@ -235,6 +245,10 @@ jobs:
               return
             fi
             docker logs srv 2>&1 | grep -o 'duckdb=\(sizing\|threads\) .*' | head -n 2 | sed "s/^/$label: /" >> "$out"
+            docker logs srv 2>&1 | grep -o 'profile=.*' | head -n 1 | sed "s/^/$label: /" >> "$out"
+            if [ "${{ inputs.plain }}" = true ]; then
+              "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/flight-settings.py 127.0.0.1:32010 "$RUNNER_TEMP/settings-$label.txt" || true
+            fi
             local ok=0
             if [ "${{ inputs.client }}" = adbc ]; then
               "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/tpch-adbc.py 127.0.0.1:32010 "$RUNNER_TEMP/queries" \
@@ -266,6 +280,23 @@ jobs:
           fi
           if [ -n "${{ inputs.extra }}" ]; then
             measure "extra" head "${{ inputs.extra }}"
+          fi
+          if [ "${{ inputs.plain }}" = true ]; then
+            if [ "${{ inputs.store }}" = s3 ]; then
+              plainArgs=(/ext/httpfs.duckdb_extension 127.0.0.1:9000 s3://lake/data/tpch)
+              plainMount=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro" -e S3_KEY="$S3_KEY" -e S3_SECRET="$S3_SECRET")
+            else
+              plainArgs=(- - /data/tpch)
+              plainMount=()
+            fi
+            # pip runs before the measured passes; the container has the server's CPU and memory limits.
+            docker run --rm --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+              -v "$RUNNER_TEMP/data:/data:ro" -v "$RUNNER_TEMP/queries:/queries:ro" -v "$PWD/tools/ci:/tools:ro" \
+              -v "$RUNNER_TEMP:/out" "${plainMount[@]}" python:3.12-slim sh -c \
+              "pip install -q --root-user-action=ignore duckdb==1.5.6 pyarrow==22.0.0 >/dev/null && python -I /tools/tpch-duckdb.py $(printf '%q ' "${plainArgs[@]}") /queries ${{ inputs.rounds }} /out/settings-plain.txt" \
+              > "$RUNNER_TEMP/plain.log" 2>&1 || echo "plain: client failed" >> "$out"
+            grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | sed "s/^/plain: /" >> "$out"
+            grep -vE '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | head -n 20
           fi
           cat "$out"
 
@@ -311,6 +342,16 @@ jobs:
             exit 1
           fi
           echo "ok: default within 10 % of -DduckDbThreads=4, same answers" | tee -a "$RUNNER_TEMP/check.txt"
+          if [ "${{ inputs.plain }}" = true ]; then
+            p=$(best plain)
+            echo "plain DuckDB best total ${p:-none} s" | tee -a "$RUNNER_TEMP/check.txt"
+            [ -n "$p" ] || { echo "plain DuckDB produced no result" | tee -a "$RUNNER_TEMP/check.txt"; exit 1; }
+            if [ "${{ inputs.client }}" = adbc ] && [ "$(sums default)" != "$(sums plain)" ]; then
+              echo "answers differ between the server and plain DuckDB:" | tee -a "$RUNNER_TEMP/check.txt"
+              diff <(sums default) <(sums plain) | tee -a "$RUNNER_TEMP/check.txt" || true
+              exit 1
+            fi
+          fi
 
       - name: Summary
         if: always()
@@ -333,4 +374,34 @@ jobs:
             grep -E ': q[0-9]+ ' "$RUNNER_TEMP/results.txt" 2>/dev/null || true
             echo '```'
             echo '</details>'
+            if [ "${{ inputs.plain }}" = true ]; then
+              r="$RUNNER_TEMP/results.txt"
+              labels=$(grep -oE '^[a-z0-9]+: q[0-9]+ r[1-9]' "$r" | cut -d: -f1 | awk '!seen[$0]++' | tr '\n' ' ')
+              echo
+              echo "Per query, best measured time in ms (ratio to plain DuckDB):"
+              echo
+              echo '```'
+              # label: qNN rK <ms> ms rows ...: best time per label and query.
+              awk -v labels="$labels" '
+                $2 ~ /^q[0-9]+$/ && $3 ~ /^r[1-9]/ { l = substr($1, 1, length($1) - 1); k = l SUBSEP $2
+                  if (!(k in b) || $4 + 0 < b[k]) b[k] = $4 + 0; qs[$2] = 1 }
+                END { n = split(labels, ls, " "); printf "%-5s", "query"; for (i = 1; i <= n; i++) printf " %18s", ls[i]; print ""
+                  for (j = 1; j <= 99; j++) { q = sprintf("q%02d", j); if (!(q in qs)) continue; printf "%-5s", q
+                    for (i = 1; i <= n; i++) { k = ls[i] SUBSEP q; p = b["plain" SUBSEP q]
+                      if (k in b) printf " %10.1f (%4.2fx)", b[k], (p > 0 ? b[k] / p : 0); else printf " %18s", "-" }
+                    print "" } }' "$r"
+              echo '```'
+              for f in "$RUNNER_TEMP"/settings-*.txt; do
+                l=$(basename "$f" .txt); l=${l#settings-}
+                [ "$l" = plain ] && continue
+                echo
+                echo "<details><summary>DuckDB settings of $l that differ from plain DuckDB (- plain, + $l)</summary>"
+                echo
+                echo '```'
+                diff <(grep -vE '^(secret_directory|home_directory|temp_directory|extension_directory)=' "$RUNNER_TEMP/settings-plain.txt" 2>/dev/null) \
+                  <(grep -vE '^(secret_directory|home_directory|temp_directory|extension_directory)=' "$f") | grep -E '^[<>]' | sed 's/^</-/; s/^>/+/' || true
+                echo '```'
+                echo '</details>'
+              done
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
