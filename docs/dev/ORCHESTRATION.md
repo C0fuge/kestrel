@@ -1,22 +1,22 @@
 # Orchestration status
 
-Status as of **2026-11-09 11:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-09 12:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 38** (minor logs/hints) is done in code/CI and packaged as pre-release `server-1.0.0-b69660b9260a`
-(19:05Z); it waits for the maintainer's stand check and "ITEM 38 DONE". The routine's original criterion (items 26/27,
-marten/heron IMPROVEMENTS DONE) is long met; no egret FRESH on the newest pre-release (egret runs ACCEPT, not FRESH, on
-log-only builds; **ACCEPT b69660b9260a SHIP**).
+Not ALL DONE: **ITEM 39** (bug first, real-cluster benchmark of build `35c15ab226b9`) is split by the maintainer
+across all four lanes: (a) core on `main`, (b) plugins `fix/39b-memory`, (c) catalogs `fix/39c-point`, (d) lane 3
+`lane/distributed`. ITEM 38 still waits for the stand check on `server-1.0.0-b69660b9260a`. The routine's original
+criterion (items 26/27, marten/heron IMPROVEMENTS DONE) is long met.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 38 done in CI, waits for the stand | a39854de, 2026-11-09 10:41Z lock/unlock only (no work) | free (released 10:41Z) | main Dev CI 42403022881 (b69660b9) green; package Dev CI 42403052289 (pkg/b69660b9) green |
-| plugins (`PLUGINS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | paused; no new bug-first note | 2026-11-06 | free | - |
-| lane 3 (`LANE3-STATUS.md`) | paused; no new bug-first note | branch 2026-10-29 | free | - |
+| core (`STATUS.md`) | ITEM 39(a) plain names / defaultSchema (ffe0b1d2); also pushed 39(b) cgroup fix (39f84617) before the split | 2026-11-09 12:54Z | held 12:44:20Z (fresh) | main Dev CI 42620776092 (39f84617) running; last completed main Dev CI 42403022881 (b69660b9) green |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 39(b) memory from cgroup; core lane note: fix already on main, lane to check dc/heap share and write 39(b) DONE | 2026-11-09 12:54Z (core note) | held 12:53:38Z (fresh) | no run on `fix/39b-memory` yet (branch not pushed) |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 39(c) balanced HDFS point/small-query collapse | 2026-11-09 12:53Z lock | held 12:53:44Z (fresh) | hdfs-point-perf 42621322306 on fix/39c-point (25ee0816) running |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 39(d) dc small-query tails + 2 GiB allocator cap | 2026-11-09 12:54Z lock | held 12:54:06Z (fresh) | Dev CI 42621419498 on lane/distributed (670fc876) queued |
 
-No stale locks (marten and heron locks free). Newest Dev CI on main green, nothing to rerun.
+No stale locks (marten and heron locks free). No red Dev CI on main; nothing to rerun.
 
 ## Service matrix (newest run per workflow)
 
@@ -29,32 +29,33 @@ No stale locks (marten and heron locks free). Newest Dev CI on main green, nothi
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-b69660b9260a` (2026-11-07 ~18:50-19:05Z): item 38 (1)-(4); waits for the stand; egret ACCEPT SHIP (42406253240).
-- `server-1.0.0-06c5adc7d7c9` (2026-11-07 07:02Z): item 37 (a)-(d); **ITEM 37 DONE on the stand**; egret ACCEPT SHIP.
-- `server-1.0.0-deafc861cce3` (2026-11-06 11:30Z): third in the release list (the API lists it before 6384bc55b173 now); egret FRESH DONE; marten/heron CHECKED.
+- `server-1.0.0-b69660b9260a` (2026-11-07 18:47Z): item 38; waits for the stand; egret ACCEPT SHIP (42406253240).
+- `server-1.0.0-06c5adc7d7c9` (2026-11-07 05:57Z): item 37; ITEM 37 DONE on the stand.
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): egret FRESH DONE; marten/heron CHECKED.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 2026-11-09 11:41Z "finish mode, nothing new".
-  Open question (no decision needed to continue): TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 183 (2026-11-09 11:51Z): nothing open.
-- Neither has checked a server build newer than `deafc861cce3`.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 12:42Z "finish mode, nothing new".
+  Open question: TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 184 (12:53Z): nothing open.
 
 ## egret
 
 - Newest FRESH: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8 1.30-1.58, load +42-45 %
   at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **ACCEPT b69660b9260a DONE: SHIP** (42406253240, all 6 checks in all 4 profile x servers cells, room wait 30 s).
+- ACCEPT b69660b9260a DONE: SHIP. README 'In progress': idle (11:26Z, newest tracked b69660b9260a).
 
 ## For the maintainer
 
-- Stand check of `server-1.0.0-b69660b9260a` for ITEM 38 (stop under load: no `runningCalls=1` on a `done` line;
-  keytab-less KEYRING start WARN; one-line INFO fallback), then "ITEM 38 DONE".
-- **Open question (item 35):** default budget `distributedCompletePeerStreams` (one per 128 MiB direct memory).
-- **marten open question:** TPC-H q16 SF1 slowdown from join-key pushdown - fix or leave.
+- ITEM 39 in progress in all four lanes; 39(b) was fixed by the core lane on `main` before the split (39f84617),
+  plugins lane asked to verify the dc/heap-direct share and close it.
+- Stand check of `server-1.0.0-b69660b9260a` for ITEM 38, then "ITEM 38 DONE".
+- **Open questions:** item 35 default `distributedCompletePeerStreams`; item 33 default `hdfsLocalCopyRoomWaitMillis`
+  (0 vs 30000); marten q16 SF1 pushdown slowdown.
 
 ## History
 
+- 2026-11-09 12:58Z: ITEM 39 (real-cluster bugs, maintainer 2026-11-09) split across all four lanes; all four locks held (12:44-12:54Z); 39(a) ffe0b1d2 and 39(b) 39f84617 pushed to main by the core lane, main Dev CI 42620776092 running; lane3 Dev CI 42621419498 queued; catalogs hdfs-point-perf 42621322306 running on fix/39c-point; no red CI, no stale locks.
 - 2026-11-09 11:56Z: no change: no core session since 10:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (11:41Z)/heron (session 183)/egret (11:26Z README, idle) idle; no stale locks.
 - 2026-11-09 10:56Z: no change: core session 10:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (10:40Z)/heron (session 182)/egret (09:26Z README, idle) idle; no stale locks.
 - 2026-11-09 09:56Z: no change: no core session since 08:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (09:40Z)/heron (session 181)/egret (09:26Z README, idle) idle; no stale locks.
@@ -94,4 +95,3 @@ No stale locks (marten and heron locks free). Newest Dev CI on main green, nothi
 - 2026-11-07 13:56Z: no change: core session 13:40Z only re-confirmed item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9; no new CI runs or pre-releases; marten (13:41Z)/heron (session 147)/egret (13:27Z) idle; no stale locks.
 - 2026-11-07 12:57Z: no change: no core commits since 07:42Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (12:40Z)/heron (session 146)/egret (11:27Z) idle; no stale locks.
 - 2026-11-07 11:56Z: no change: no core commits since 07:42Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (11:42Z)/heron (session 145)/egret (11:27Z) idle; no stale locks.
-- 2026-11-07 10:56Z: no change since 09:56Z: no core commits since 07:42Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (10:41Z)/heron (session 144)/egret idle; no stale locks.
