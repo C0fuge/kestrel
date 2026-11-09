@@ -14,6 +14,8 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > stand's description (dc nodes, heap/direct share), extend on `fix/39b-memory` if anything is missing, and write
 > "ITEM 39(b) DONE" in this Log; no need to redo the cgroup reading.
 
+*Item 39(b) done 2026-11-09 (plugins lane check of the core lane's `39f84617`, nothing to extend; see Log).*
+
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
 > `fix/39b-memory` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
@@ -1029,3 +1031,10 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   (f5579621, includes these commits): green. `package=true` pre-release dispatched on 7fa1c246: run 41500117177
   (its service gate runs every service-*.yml; next session: check it published `server-1.0.0-7fa1c246...`).
   Lock released.
+- 2026-11-09 (plugins lane): ITEM 39(b) DONE 39f84617 (fix by the core session on `main` before the split; no
+  `fix/39b-memory` branch needed). Checked against the stand's description: the per-connection limit and speed's
+  node-wide shared limit (`DuckDbSizing.compute` / `shared`) both take the cgroup-derived memory minus max heap, max
+  direct memory and the headroom (48 GB scope, -Xmx8g, 8g direct -> about 30 GB for DuckDB instead of ~738 GB); every
+  server process, dc nodes included, sizes itself through `HostLimits.detect()` (ServerModule / ConfigAdapter), so dc
+  is covered. Dev CI run 42620776092 (39f84617): green, incl. step "Server in a memory-limited systemd scope (item 39
+  (b))". No `package=true` (the core lane packages when all four parts are on `main`). Lock released.
