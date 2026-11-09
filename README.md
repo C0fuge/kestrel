@@ -386,7 +386,8 @@ Only query shapes whose merge is exact are distributed (one table; plain columns
 plain `avg` - the parts answer `sum` and `count`, the merge divides as DuckDB's `avg` does, so DECIMAL and integer
 averages are bit-identical while the unscaled sum stays below 2^53 and may differ in the last bit beyond it, as
 floating-point averages and sums may -, `GROUP BY` of selected columns, `DISTINCT`, `ORDER BY` over output columns, `LIMIT` except on aggregates;
-no parameters, no time travel) and only when the plan has at least two parts; the answer has the same
+no parameters, no time travel; a table named without its schema is planned as the table DuckDB reads for it on the
+answering node) and only when the plan has at least two parts; the answer has the same
 columns as on one node. Every other query, and any refusal or peer failure before the first batch reaches
 the client, keeps the single-node path; a failure after the first batch fails the query: with `UNAVAILABLE`
 ("peer lost during distributed complete answer; retry") when a part's stream ended with `UNAVAILABLE` or a

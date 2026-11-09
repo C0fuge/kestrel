@@ -312,6 +312,25 @@ public final class ExecutionService {
         if (query == null || !parquetAdapter.wholeFileReadsOnly()) {
             return query;
         }
+        return qualifyAsResolved(query);
+    }
+
+    /**
+     * Writes in front of every table name a query gives without one the schema DuckDB reads it
+     * from through the alias views of {@code main} (the one schema with that table, or the
+     * setting defaultSchema among several), on every store. Distributed complete merges plan
+     * partial endpoints from the result, which need {@code schema.table} (item 39 (a) / (d)).
+     * Names in several schemas without a default, unknown names and names the query defines
+     * itself stay as written.
+     *
+     * @param query client SQL
+     * @return the query with its plain table names qualified, or the query itself
+     * @throws java.io.UncheckedIOException when the schemas cannot be listed
+     */
+    public String qualifyAsResolved(String query) {
+        if (query == null) {
+            return null;
+        }
         String qualified = TableReferences.qualifyPlainNames(query, name -> {
             try {
                 return catalogViews.plainOwner(name);

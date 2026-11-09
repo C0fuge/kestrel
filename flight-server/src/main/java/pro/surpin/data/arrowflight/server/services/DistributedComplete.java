@@ -163,11 +163,22 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public boolean stream(String query, String user, FlightProducer.ServerStreamListener listener)
             throws Exception {
-        ParquetQueryParser parsed = mergeable(query);
+        // Partial endpoints need schema.table: a plain name is planned as the table DuckDB reads
+        // for it here (the one schema with it, or defaultSchema), so peers read that table too.
+        String readQuery;
+        try {
+            readQuery = execution.qualifyAsResolved(query);
+        } catch (java.io.UncheckedIOException e) {
+            LOGGER.info("node={} distributedComplete=fallback reason='schemas: {}' query='{}'",
+                    LogUtil.node(), e.getCause().getMessage(), query);
+            fallbacks.incrementAndGet();
+            return false;
+        }
+        ParquetQueryParser parsed = mergeable(readQuery);
         AverageMerge averages = null;
-        String partQuery = query;
+        String partQuery = readQuery;
         if (parsed == null) {
-            averages = AverageMerge.of(query);
+            averages = AverageMerge.of(readQuery);
             if (averages == null) {
                 return false;
             }

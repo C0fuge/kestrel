@@ -102,6 +102,17 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 Client side (no server setting): the DoGet call header / session option `arrow-compression: zstd|lz4` asks for a
 compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast LZ4 decoding.
 
+### Fixed - distributed complete never merged queries with plain table names (lane 3, D15, after item 39 (a))
+
+- A merge plans the query in parts, and partial plans need `schema.table`: every query naming a table without its
+  schema (TPC-H with plain names and `defaultSchema=tpch`, as on the stand) was planned, refused (`Name the table
+  with its schema ...`, log `distributedComplete=fallback`) and computed by one node. The merge now plans such a
+  name as the table DuckDB reads for it on that node (the one schema with it, or `defaultSchema` among several),
+  so the endpoints of every node read that table; a session or header `schema` was already written into the text.
+  Answers are unchanged (the single-node answer of the same table); names in several schemas without a default
+  and names the query defines itself keep the single-node path. Test: `DistributedCompleteSchemaIntegrationTest`
+  (`tpch.orders` next to `orders.orders`: header, session option and default schema, merged and exact).
+
 ### Fixed - distributed complete under concurrency on nodes with more direct memory than 2 GiB (STATUS item 39 (d))
 
 - The merge admission of item 35 derived its budget from direct memory only, but the peer streams are read into the
