@@ -369,14 +369,14 @@ jobs:
               # shell(/bin/true)); the servers' clients must fail over back to nn1.
               sleep 15
               docker exec nn2 hdfs haadmin -failover nn2 nn1 2>&1 | tail -n 1
-              note "NameNode failover nn2 -> nn1 at $(date -u +%T): $(haState)"
               snap1=$(nnSnap)
+              note "NameNode failover nn2 -> nn1 at $(date -u +%T): $(haState)"
               # D16: a second failover window (nn1 -> nn2) in the same load, so each run exercises the
               # standby retry (DuckDbAdapter.retryOnStandby) twice.
               sleep 12
               docker exec nn1 hdfs haadmin -failover nn1 nn2 2>&1 | tail -n 1
-              note "NameNode failover nn1 -> nn2 at $(date -u +%T): $(haState)"
               snap2=$(nnSnap)
+              note "NameNode failover nn1 -> nn2 at $(date -u +%T): $(haState)"
             fi
             wait "$client"; rc=$?
             if [ "$STORE" = hdfs-ha ]; then
