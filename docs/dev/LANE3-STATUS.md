@@ -42,6 +42,10 @@ D13 (c) DONE 74971b9a + 60c36431 (2026-11-09, see Log): the loss cells stream a 
     kill; `peerLost` UNAVAILABLE after the first batch is now seen in CI (2 of 3 loss cells per run), every retry
     exact. Watch: a red loss cell, or `scan_peer_lost=0` in all three loss cells of several runs.
 
+D13 (b) DONE 3a595503 + dd9090a8 (2026-11-09, see Log): the hdfs-ha loss cell notes the reads each NameNode
+    answered per failover window; queries planned after each failover reach the new active NameNode (~2 700-3 000
+    reads per window, standby ~0). Watch: a `NameNode not reached` warning in later runs.
+
 D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
     behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
     Optional (Open question material, changes a default): derive `arrowAllocatorLimitBytes` from direct memory.
@@ -64,10 +68,10 @@ D13. Follow-ups of the service matrix (cluster), optional:
       Only merged answers (`distributedComplete`, 2 of 22 TPC-H queries) read locally. A wider merge (joins) is
       the only way to cut it - not planned.
     - ~~(b) an HA nameservice URI (`hdfs://<ns>/...`) for the cluster cells~~ *done 2026-11-02 (1646ed4f, see Log):*
-      store `hdfs-ha`, 12/12 cells green. Follow-up (optional): the hdfs-ha loss cell's NameNode failover (nn2 -> nn1,
+      store `hdfs-ha`, 12/12 cells green. ~~Follow-up (optional): the hdfs-ha loss cell's NameNode failover (nn2 -> nn1,
       ~30 s into the load) saw 0 errors, but the cell does not show that a query planned after it reached the
       NameNode (speed caches file listings) - count NameNode RPCs per NameNode (JMX) after the failover, or fail
-      over under `balanced`.
+      over under `balanced`.~~ *done 2026-11-09 (D13 (b) DONE above).*
     - ~~(c) the loss cells saw no retryable error (kills land between or before peer reads: fallbacks 1-2, 0 wrong) -
       a longer load or a kill timed inside a merged answer would exercise `peerLost`.~~ *done 2026-11-09 (D13 (c)
       DONE above).*
@@ -552,3 +556,16 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   exact; first time CI saw the D6 path outside unit tests), hdfs loss had read node 3's endpoints before the kill.
   0 wrong, 0 non-retryable over both runs. Test/workflow only (no Dev CI needed, no `package=true`). D12 decided
   acceptable (see D12). Lock released. Next: D14 (stand results).
+- 2026-11-09 20:03-20:40Z (lane 3 session): lock 20:03Z. D14 still waits for the stand (no stand results after the
+  maintainer's 16:30 note), so took the D13 (b) follow-up. **D13 (b) DONE** (3a595503 + dd9090a8, rebase-merged into
+  `main`): the `hdfs-ha loss` cell snapshots each NameNode's JMX `NameNodeActivity` (FileInfoOps / GetBlockLocations /
+  GetListingOps, new `service-cluster-check.py nnsnap|nnreads`) at load start and right after each failover; notes
+  per window, warning `NameNode not reached` when a window's active NameNode answered none (not a cell failure). The
+  logic lives in the Python script because the cell's `run` block hit GitHub's 21000-character expression limit
+  (dispatch refused 422) - keep new cell logic out of the workflow. Service cluster on the branch: 42689843545 12/12
+  green (snapshot after the HA probe blurred the windows: nn1 829 reads "while standby"), 42691698496 12/12 green
+  with the snapshot before the probe: nn2 active 5965/5955/5, nn1 40/41/0; after failover 1 nn1 active
+  2951/2924/20, nn2 60/49/0; after failover 2 nn2 active 2680/2678/2, nn1 1/0/0 (residue = the ~1 s between
+  failover and snapshot); 244 answers, 0 wrong, 0 errors. Under `speed` listings stay cached (GetListingOps ~0)
+  but every file open reaches the active NameNode. Test/workflow only (no Dev CI, no `package=true`). Lock
+  released. Next: D14 (stand results).

@@ -119,6 +119,14 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   and text literals, OR / IN / NOT, dates, joins, three-part column names; footers read once; rewritten files read
   again).
 
+### Added - CI: NameNode reads per failover window (lane 3, D13 (b))
+
+- `service-cluster.yml` `hdfs-ha loss` cell: the notes give, for each window between the NameNode failovers
+  (nn2 active, nn1 active, nn2 active again), the client reads each NameNode answered (JMX `NameNodeActivity`
+  `FileInfoOps` / `GetBlockLocations` / `GetListingOps`), and a warning `NameNode not reached` when the active
+  NameNode of a window after a failover answered none. Shows that queries planned after a failover reach the new
+  active NameNode although `speed` caches file listings. Test only; no server change.
+
 ### Added - CI: a node kill inside a streaming merged answer (lane 3, D13 (c))
 
 - `service-cluster.yml` loss cells: one more load client streams a merged scan of all `lineitem` rows

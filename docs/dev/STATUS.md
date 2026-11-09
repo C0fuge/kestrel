@@ -3991,3 +3991,7 @@ S3 slowdown item below stays open for then).
   `fileStatsPruningMaxFiles` (default 1024, 0 = off; Open question Q10 in CATALOGS-STATUS.md).
   `tools/ci/service-cluster-data.py` takes an optional 4th argument `mod|range` (default `mod`, unchanged for
   service-cluster / service-hdfs).
+- 2026-11-09 20:03-20:40Z (lane 3 session): D13 (b) merged into `main` (3a595503 + dd9090a8), CI/test only: the
+  `service-cluster.yml` `hdfs-ha loss` cell counts the reads each NameNode answered per failover window (queries
+  after each failover reach the new active NameNode); Service cluster 42689843545 + 42691698496 green. Details in
+  `LANE3-STATUS.md`.
