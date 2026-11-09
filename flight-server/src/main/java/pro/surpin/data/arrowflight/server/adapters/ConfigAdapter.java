@@ -719,6 +719,35 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns fileStatsPruningMaxFiles from the system configuration.
+     *
+     * @return tables with more files are not pruned; 0 = pruning off
+     */
+    public static int fileStatsPruningMaxFiles() {
+        return fileStatsPruningMaxFiles(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code fileStatsPruningMaxFiles} ({@code arrowflight.fileStatsPruningMaxFiles},
+     * {@code FLIGHT_FILE_STATS_PRUNING_MAX_FILES}): complete answers of a plain single-table
+     * query over a directory table read only the files whose footer min/max of integer and date
+     * columns its WHERE clause can match (item 39 (c)), for tables with at most this many files;
+     * default 1024, 0 turns it off.
+     *
+     * @param props configuration source
+     * @return the bound, 0 for off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int fileStatsPruningMaxFiles(ConfigSource props) {
+        int value = getIntWithEnv("fileStatsPruningMaxFiles", "arrowflight.fileStatsPruningMaxFiles",
+                "FLIGHT_FILE_STATS_PRUNING_MAX_FILES", 1024, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("fileStatsPruningMaxFiles must be 0 or more: " + value);
+        }
+        return value;
+    }
+
+    /**
      * Returns duckDbParquetMetadataCache from the system configuration.
      *
      * @return whether every DuckDB keeps the Parquet footers it read

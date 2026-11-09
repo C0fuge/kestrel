@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
+| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -300,6 +300,11 @@ least 2, where threads here count as cores / 4 between 2 and 16) as `memory_limi
 one per GiB of that limit (fewer than 4 made TPC-H SF10 1.35-1.7x slower on 4-16 core hosts). `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
+
+`fileStatsPruningMaxFiles` (default 1024, 0 = off): a complete answer of a plain single-table query over a directory
+table reads only the Parquet files whose footer min/max of signed integer and date columns its WHERE clause can match
+(`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` with literals, under AND / OR); other filters read every file as before.
+Footers are read once per file version through the store; tables with more files than the bound are not pruned.
 
 `duckDbParquetMetadataCache=true` (default false) lets every DuckDB keep the Parquet footers it read, so repeated
 point queries do not read and parse every file's footer again. DuckDB reads a footer again only when the file system

@@ -80,8 +80,16 @@ public final class CatalogViews {
      * @param fingerprint file paths and lengths the definitions were made for
      * @param data view over the files
      * @param empty view with the same columns and no rows
+     * @param files the files of a directory table, the view's first file first; null when a
+     *        query must read the view itself (catalog tables, tables this node cannot read)
+     * @param columns select list of the data view (over {@code files})
+     * @param emptyBody query of the empty view, for a query whose filter rules out every file
      */
-    private record TableViews(String fingerprint, String data, String empty) {
+    private record TableViews(String fingerprint, String data, String empty, List<DataFile> files,
+            String columns, String emptyBody) {
+        TableViews(String fingerprint, String data, String empty) {
+            this(fingerprint, data, empty, null, null, null);
+        }
     }
 
     /** Marks a catalog table read as Arrow streams: no view, each reference reads a stream. */
@@ -148,6 +156,10 @@ public final class CatalogViews {
     private final DuckDbAdapter duckDbAdapter;
     private final boolean widenUnsigned;
     private final Map<String, TableViews> tables = new HashMap<>();
+    /** Directory tables whose files a query may prune: lower-case "schema\0table" to views. */
+    private volatile Map<String, TableViews> prunable = Map.of();
+    /** Leaves out files by footer statistics (setting fileStatsPruning), or null when off. */
+    private volatile FileStatsPruner pruner;
     /** Catalog schemas without views because their catalog failed: schema to error. */
     private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
     /** Data tables without views because their first file could not be described: key to error. */
@@ -508,6 +520,13 @@ public final class CatalogViews {
         }
         tables.clear();
         tables.putAll(seen);
+        Map<String, TableViews> withFiles = new HashMap<>();
+        for (Map.Entry<String, TableViews> entry : seen.entrySet()) {
+            if (entry.getValue().files() != null) {
+                withFiles.put(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+            }
+        }
+        prunable = Map.copyOf(withFiles);
         failedTables = Map.copyOf(undescribed);
         plainOwners = Map.copyOf(unique);
         ambiguousOwners = Map.copyOf(ambiguous);
@@ -621,10 +640,10 @@ public final class CatalogViews {
             }
         }
         String view = DuckDbAdapter.quoteIdentifier(schema) + "." + DuckDbAdapter.quoteIdentifier(table);
-        String data = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
-                + (widened ? String.join(", ", select) : "*") + " FROM " + source;
-        String empty = "CREATE OR REPLACE VIEW " + view + " AS SELECT "
-                + String.join(", ", typed) + " WHERE false";
+        String columns = widened ? String.join(", ", select) : "*";
+        String emptyBody = "SELECT " + String.join(", ", typed) + " WHERE false";
+        String data = "CREATE OR REPLACE VIEW " + view + " AS SELECT " + columns + " FROM " + source;
+        String empty = "CREATE OR REPLACE VIEW " + view + " AS " + emptyBody;
         if (noneReadable) {
             List<String> unreadableFiles = new ArrayList<>(files.size());
             for (DataFile file : files) {
@@ -642,8 +661,9 @@ public final class CatalogViews {
                 LOGGER.warn("node={} views=unreadableTable table={}.{} files={}: {}",
                         LogUtil.node(), schema, table, files.size(), unreadableTableNote(false));
             }
+            return new TableViews(fingerprint, data, empty);
         }
-        return new TableViews(fingerprint, data, empty);
+        return new TableViews(fingerprint, data, empty, List.copyOf(bound), columns, emptyBody);
     }
 
     /**
@@ -1081,6 +1101,114 @@ public final class CatalogViews {
         LOGGER.debug("node={} views=arrowStreams references={} describe={}", LogUtil.node(),
                 references.size(), scans == null);
         return TableReferences.rewrite(sql, references, sources);
+    }
+
+    /**
+     * Turns file pruning by footer statistics on or off (setting {@code fileStatsPruning}).
+     *
+     * @param maxFiles tables with more files are not pruned; 0 turns pruning off
+     */
+    public void filePruning(int maxFiles) {
+        pruner = maxFiles <= 0 ? null : new FileStatsPruner(maxFiles, 100_000);
+    }
+
+    /**
+     * Replaces the one reference of a plain single-table query to a directory table by a read of
+     * only the files whose footer statistics the query's WHERE clause can match (item 39 (c)):
+     * {@code (SELECT <view columns> FROM read_parquet([kept files])) AS "<table>"}, or the empty
+     * view's query when no file is kept. Any other query, a table without a file to leave out,
+     * a qualified column reference {@code schema.table.column} and a table this node cannot read
+     * whole return the SQL unchanged (DuckDB then reads the view, as before).
+     *
+     * @param sql SQL after the catalog rewrites
+     * @return SQL DuckDB can run
+     */
+    public String prunedFiles(String sql) {
+        FileStatsPruner p = pruner;
+        Map<String, TableViews> data = prunable;
+        if (p == null || sql == null || data.isEmpty() || !TableReferences.singleSelect(sql)) {
+            return sql;
+        }
+        List<TableReferences.Reference> references = TableReferences.find(sql,
+                (schema, table) -> data.containsKey((schema + "\u0000" + table)
+                        .toLowerCase(Locale.ROOT)));
+        if (references.size() != 1) {
+            return sql;
+        }
+        TableReferences.Reference reference = references.get(0);
+        if (threePartName(sql, reference)) {
+            return sql;
+        }
+        String filter = singleTableFilter(sql, reference);
+        if (filter == null) {
+            return sql;
+        }
+        TableViews views = data.get((reference.schema() + "\u0000" + reference.table())
+                .toLowerCase(Locale.ROOT));
+        DataStore store = parquetAdapter.dataStore();
+        List<DataFile> kept;
+        try {
+            kept = p.keep(store, reference.schema() + "." + reference.table(), views.files(),
+                    filter);
+        } catch (IOException | RuntimeException e) {
+            // No pruning: DuckDB reads the view and reports what it cannot read itself.
+            LOGGER.warn("node={} pruning=footerError table={}.{} error='{}'", LogUtil.node(),
+                    reference.schema(), reference.table(), e.getMessage());
+            return sql;
+        }
+        if (kept == null) {
+            return sql;
+        }
+        String body;
+        if (kept.isEmpty()) {
+            body = views.emptyBody();
+        } else {
+            List<DataFile> ordered = readableFirst(store, kept);
+            if (store.wholeFileReadsOnly() && !store.readableHere(ordered.get(0))) {
+                return sql;   // the view binds on a file this node reads; keep it
+            }
+            List<String> paths = new ArrayList<>(ordered.size());
+            for (DataFile file : ordered) {
+                paths.add(store.duckDbUri(file));
+            }
+            body = "SELECT " + views.columns() + " FROM "
+                    + DuckDbAdapter.readParquetFromClause(paths);
+        }
+        LOGGER.debug("node={} views=prunedFiles table={}.{} kept={} files={}", LogUtil.node(),
+                reference.schema(), reference.table(), kept.size(), views.files().size());
+        return TableReferences.rewrite(sql, references, List.of("(" + body + ")"
+                + (reference.aliased() ? "" : " AS "
+                        + DuckDbAdapter.quoteIdentifier(reference.table()))));
+    }
+
+    /**
+     * Tells whether a query names a column as {@code schema.table.column} for a reference: such
+     * a name binds to the view only, not to a subquery that replaces it.
+     *
+     * @param sql SQL
+     * @param reference the table reference
+     * @return true when a three-part name of the table is written
+     */
+    static boolean threePartName(String sql, TableReferences.Reference reference) {
+        List<TimeTravelClause.Token> tokens = TimeTravelClause.tokens(sql);
+        for (int i = 0; i + 3 < tokens.size(); i++) {
+            if (tokens.get(i).start() == reference.start()) {
+                continue;
+            }
+            if (nameIs(tokens.get(i), reference.schema())
+                    && tokens.get(i + 1).kind() == TimeTravelClause.Kind.DOT
+                    && nameIs(tokens.get(i + 2), reference.table())
+                    && tokens.get(i + 3).kind() == TimeTravelClause.Kind.DOT) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean nameIs(TimeTravelClause.Token token, String name) {
+        return (token.kind() == TimeTravelClause.Kind.WORD
+                || token.kind() == TimeTravelClause.Kind.QUOTED)
+                && TimeTravelClause.unquote(token).equalsIgnoreCase(name);
     }
 
     /**
