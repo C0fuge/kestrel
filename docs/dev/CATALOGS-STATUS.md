@@ -681,3 +681,5 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   getfileinfo each; balanced c32 a/b 45.0/52.9 q/s, speed 74.8/87.9; complete mode, so part 2 not visible there).
   Merged into `main` by cherry-pick (34b7911a, 2b61650d; no force push to the branch). Dev CI on main: 42641096583 green.
   Not DONE: next is file pruning by footer statistics (Next steps). Lock released.
+
+- 2026-11-09 18:58Z (orchestrator): released stale `LOCK-CATALOGS` (15:23:58Z, no catalogs commit since then). ITEM 39(c) still open (next: file pruning by footer statistics; Q9 answered).
