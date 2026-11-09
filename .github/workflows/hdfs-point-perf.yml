@@ -20,6 +20,10 @@ on:
         description: "TPC-H scale factor"
         type: string
         default: "1"
+      split:
+        description: "how orders / lineitem are split into 4 files: range (key ranges, footer min/max differ) or mod (key % 4)"
+        type: string
+        default: "range"
       extra:
         description: "extra -D options of the server in every variant"
         type: string
@@ -85,7 +89,7 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0
-          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" 4
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" 4 "${{ inputs.split || 'range' }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hdfs-point-input
@@ -123,7 +127,7 @@ jobs:
           docker build -q -t sc-server "$RUNNER_TEMP/img"
       - name: Measure
         env:
-          VARIANTS: ${{ inputs.variants || 'balanced=balanced:;balanced-filecache=balanced:-DduckDbExternalFileCache=true;balanced-metacache=balanced:-DduckDbParquetMetadataCache=true;speed=speed:;speed-metacache=speed:-DduckDbParquetMetadataCache=true' }}
+          VARIANTS: ${{ inputs.variants || 'balanced=balanced:;balanced-nopruning=balanced:-DfileStatsPruningMaxFiles=0;balanced-filecache=balanced:-DduckDbExternalFileCache=true;balanced-metacache=balanced:-DduckDbParquetMetadataCache=true;speed=speed:;speed-nopruning=speed:-DfileStatsPruningMaxFiles=0;speed-metacache=speed:-DduckDbParquetMetadataCache=true' }}
         run: |
           set -u
           keys=$(( 1500000 * ${{ inputs.sf || '1' }} ))
