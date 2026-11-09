@@ -113,6 +113,9 @@ compressed stream; Java clients need the `arrow-flight-codec-lz4` asset for fast
   after the last pause, or once a batch was sent, it fails as before (WARN `duckdb=standbyRetry result=failed`).
   No status code, setting or wire change. Queries over Arrow streams registered on the connection run once, as
   before. Test: `DuckDbStandbyRetryTest`.
+- CI (lane 3, D16): the `service-cluster.yml` `hdfs-ha loss` cell fails over twice under load (nn2 -> nn1 -> nn2)
+  and notes per server how many standby refusals were retried / failed (first standby line shown). Run
+  42642657223: one refusal retried after 500 ms, 189 answers, 0 errors.
 
 ### Fixed - distributed complete never merged queries with plain table names (lane 3, D15, after item 39 (a))
 
