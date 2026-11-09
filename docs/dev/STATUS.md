@@ -3998,3 +3998,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-09 20:40-20:45Z (cloud session, core lane): nothing taken. Item 39: (a), (b), (d) DONE; (c) still in
   progress on the catalogs lane (`LOCK-CATALOGS` 20:21:07Z, active; parts 1-3 on `main`), so `package=true` and
   "ITEM 39 DONE" still wait. Item 38 waits for the stand. Newest main Dev CI 42690037660 (32ebda26, part 3) green.
+- 2026-11-09 (catalogs lane): **ITEM 39(c) DONE bf72114c** - part 4 (file pruning also for aliased single-table
+  queries; core files `CatalogViews`, test `FileStatsPrunerTest`). HDFS point perf 42689843600: NameNode opens per
+  point-mix query ~20 -> ~11, q/s +3..15% on the CPU-bound cell. Item 39 can be packaged. Follow-ups and Q10/Q11 in
+  `CATALOGS-STATUS.md`.
