@@ -520,5 +520,6 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   (merged 13 + 12 on hdfs-ha), **hdfs-ha loss red twice** (attempt 1 and the rerun of the failed job): NameNode
   failover -> `INTERNAL ... Operation category READ is not supported in state standby` on 2 single-node join answers,
   0 wrong; written as bug-first in `STATUS.md` (D16). Push runs on `main`: Dev CI of ace241be cancelled by the
-  catalogs lane's dispatch 42635429611 on 63a3ec52 (includes D15), Service cluster 42635146358 running at session end.
+  catalogs lane's dispatch 42635429611 on 63a3ec52 (includes D15) **green**; Service cluster 42635146358 on ace241be
+  **12/12 green** (hdfs-ha loss passed there: the failover bug is intermittent, 2 of 3 runs).
   Next: D16 (after the core lane), D14 (stand results), D12, D13 (c).

@@ -33,7 +33,7 @@
 > DuckDB `getFileInfo`/open), not a regression. hadoopfs/libhdfs3 should fail over to the other NameNode on
 > `StandbyException` for these calls (the Java client does). If it cannot, a query failed by a `StandbyException` (or
 > `RetriableException`) could be answered `UNAVAILABLE` so clients retry - that is a status-code change, so an Open
-> question first. Until fixed, the cell stays red after a failover hits a file open.
+> question first. Intermittent: the push run on `main` 42635146358 (ace241be) had the cell green (2 of 3 runs red).
 
 > **ITEM 39(a) DONE (2026-11-09, core lane): part 1 `ffe0b1d2` (Dev CI 42620776092), part 2 `53647b1a` + test fix
 > `655bec3a` (Dev CI 42628870401 red on the test, 42630578494 green).** Part 1: an ambiguous plain name is `INVALID_ARGUMENT: Table orders exists in schemas orders, tpch:
