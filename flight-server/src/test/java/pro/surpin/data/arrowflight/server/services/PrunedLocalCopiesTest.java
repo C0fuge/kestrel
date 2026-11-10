@@ -134,6 +134,79 @@ class PrunedLocalCopiesTest {
         }
     }
 
+    /**
+     * Verifies that with local copies off a point query whose kept file is held here is answered
+     * from that file (marked pruned, so the node-wide readability refusal does not apply), while
+     * one whose kept file is not held here stays unpruned and is refused as before (Q-42 (b)).
+     */
+    @Test
+    void withoutCopiesAPointQueryOnHeldFilesIsPrunedNotRefused(@TempDir Path dir) throws Exception {
+        List<DataFile> files = new ArrayList<>();
+        Map<String, String> uris = new HashMap<>();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < FILES; i++) {
+                Path file = dir.resolve("f" + i + ".parquet");
+                s.execute("COPY (SELECT range::BIGINT AS k, 'v' || range AS v FROM range(" + (i * 10 + 1)
+                        + ", " + (i * 10 + 11) + ")) TO '" + file + "' (FORMAT parquet)");
+                DataFile data = new DataFile("s/t/f" + i + ".parquet", file.toString(), Files.size(file), i,
+                        null);
+                files.add(data);
+                uris.put(data.relativePath(), file.toString());
+            }
+        }
+        DataFile notHere = files.get(0);
+        DataStore store = mock(DataStore.class);
+        when(store.wholeFileReadsOnly()).thenReturn(true);
+        when(store.readableHere(any(DataFile.class))).thenAnswer(inv -> !notHere.equals(inv.getArgument(0)));
+        when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> ((DataFile) inv.getArgument(0)).location());
+        when(store.duckDbUri(anyString())).thenAnswer(inv -> uris.get((String) inv.getArgument(0)));
+        when(store.inputFile(any(DataFile.class))).thenAnswer(
+                inv -> new LocalInputFile(Path.of(((DataFile) inv.getArgument(0)).location())));
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(false);
+        when(parquet.getSchemas(null)).thenReturn(Map.of("s", "/s"));
+        when(parquet.getTables(eq("s"), any())).thenReturn(Map.of("t", "/s/t"));
+        when(parquet.tableFiles(any(), any())).thenReturn(files);
+        when(parquet.getTableSchema("s", "t")).thenReturn(new Schema(List.of()));
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool);
+                Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("CREATE SCHEMA s");
+            s.execute("CREATE VIEW s.t AS SELECT * FROM "
+                    + DuckDbAdapter.readParquetFromClause(new ArrayList<>(uris.values())));
+            ExecutionService service = new ExecutionService(parquet, duck, mock(MetadataService.class), null,
+                    null);
+
+            String held = "SELECT k, v FROM s.t WHERE k = 25";
+            try (ExecutionService.CopiedQuery pruned = service.completeFromCopies(held)) {
+                assertFalse(pruned.copied(), pruned.sql());
+                assertTrue(pruned.pruned(), pruned.sql());
+                assertTrue(pruned.sql().contains(uris.get(files.get(2).relativePath())), pruned.sql());
+                assertFalse(pruned.sql().contains(notHere.location()), pruned.sql());
+                assertEquals(answer(s, held), answer(s, pruned.sql()));
+            }
+
+            String none = "SELECT count(*) FROM s.t WHERE k = 1000";
+            try (ExecutionService.CopiedQuery empty = service.completeFromCopies(none)) {
+                assertTrue(empty.pruned(), empty.sql());
+                assertEquals(answer(s, none), answer(s, empty.sql()));
+            }
+
+            // The kept file is not held here: unchanged and unpruned, so the refusal still applies.
+            String missing = "SELECT * FROM s.t WHERE k = 5";
+            try (ExecutionService.CopiedQuery refused = service.completeFromCopies(missing)) {
+                assertFalse(refused.copied(), refused.sql());
+                assertFalse(refused.pruned(), refused.sql());
+                assertEquals(missing, refused.sql());
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
     /** Rows of an answer as sorted text (a multiset). */
     private static List<String> answer(Statement s, String sql) throws Exception {
         List<String> rows = new ArrayList<>();

@@ -30,14 +30,17 @@ class DuckDbSizingTest {
         return DuckDbSizing.parseBytes(sizing.memoryLimit());
     }
 
-    /** The screening container: 2 CPUs, 6 GB, -Xmx3g, direct 2g - 4 threads as before 19, 1 GiB floor. */
+    /**
+     * The screening container: 2 CPUs, 6 GB, -Xmx3g, direct 2g - 4 threads as before 19; its budget
+     * of ~100 MiB caps the 1 GiB floor at the budget's floor of 128 MiB (Q-42 (a), was 1024 MiB).
+     */
     @Test
-    void smallContainerKeepsFourThreadsAndTheOneGibFloor() {
+    void smallContainerKeepsFourThreadsAndTheBudgetFloor() {
         DuckDbSizing s = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertEquals(4, s.threads());
         assertEquals(2, s.connections());
-        assertEquals("1024MiB", s.memoryLimit());
+        assertEquals("128MiB", s.memoryLimit());
         DuckDbSizing s3 = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 true, 0, null, 0);
         assertEquals(4, s3.threads());
@@ -72,7 +75,7 @@ class DuckDbSizingTest {
         DuckDbSizing sized = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertFalse(sized.externalFileCacheUnbounded());
-        assertEquals("perConnection=1024MiB expectedConnections=2 expectedMiB=2048 memoryMiB=6144"
+        assertEquals("perConnection=128MiB expectedConnections=2 expectedMiB=256 memoryMiB=6144"
                 + " bound=memoryLimitTimesLiveConnections", sized.describeExternalFileCache());
         DuckDbSizing none = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, DuckDbSizing.MEMORY_LIMIT_NONE, 0);
@@ -136,7 +139,37 @@ class DuckDbSizingTest {
         DuckDbSizing tiny = DuckDbSizing.compute(new HostLimits(64, 8 * GIB, 4 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertEquals(4, tiny.threads());
-        assertEquals("1024MiB", tiny.memoryLimit());
+        // 8 - 4 - 2 - 1.2 = 0.8 GiB: the budget, not the 1 GiB floor (Q-42 (a))
+        assertEquals("819MiB", tiny.memoryLimit());
+    }
+
+    /**
+     * Verifies that neither a connection's default limit nor the shared DuckDB's exceeds the
+     * budget on small hosts (1-3 GiB, Q-42 (a)), never below 128 MiB, and that only a default
+     * limit below the old 1 GiB floor is warned about, never an operator's.
+     */
+    @Test
+    void smallBudgetsCapTheOneGibFloors() {
+        for (long mib = 1024; mib <= 3072; mib += 256) {
+            HostLimits host = new HostLimits(4, mib << 20, 512L << 20, 256L << 20);
+            DuckDbSizing s = DuckDbSizing.compute(host, false, 0, null, 0);
+            long cap = Math.max(DuckDbSizing.MIN_BUDGET_BYTES, s.budgetBytes());
+            assertTrue(limitBytes(s) <= cap, s.describe());
+            assertTrue(limitBytes(s) >= DuckDbSizing.MIN_BUDGET_BYTES, s.describe());
+            long shared = DuckDbSizing.parseBytes(DuckDbSizing.shared(host, 0, null).memoryLimit());
+            assertTrue(shared <= cap && shared >= DuckDbSizing.MIN_BUDGET_BYTES, mib + " MiB: " + shared);
+        }
+        // 2 GiB: budget 2048 - 768 - 307 = 972 MiB, so both get it instead of 1024 MiB
+        HostLimits two = new HostLimits(4, 2 * GIB, 512L << 20, 256L << 20);
+        assertEquals("972MiB", DuckDbSizing.compute(two, false, 0, null, 0).memoryLimit());
+        assertEquals("972MiB", DuckDbSizing.shared(two, 0, null).memoryLimit());
+        String warning = DuckDbSizing.belowFloorWarning("972MiB", false);
+        assertTrue(warning.startsWith("memoryLimit=972MiB floorMiB=1024 "), warning);
+        assertTrue(warning.contains("duckDbMemoryLimit"), warning);
+        assertNull(DuckDbSizing.belowFloorWarning("972MiB", true));
+        assertNull(DuckDbSizing.belowFloorWarning("1024MiB", false));
+        assertNull(DuckDbSizing.belowFloorWarning(null, false));
+        assertNull(DuckDbSizing.belowFloorWarning("50%", false));
     }
 
     @Test
@@ -233,8 +266,10 @@ class DuckDbSizingTest {
      */
     @Test
     void sharedDatabaseGetsTheCoresAndTheWholeBudget() {
-        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"),
+        assertEquals(new DuckDbSizing.Shared(2, "128MiB"),
                 DuckDbSizing.shared(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB), 0, null));
+        assertEquals(new DuckDbSizing.Shared(4, "1843MiB"),
+                DuckDbSizing.shared(new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB), 0, null));
         assertEquals(new DuckDbSizing.Shared(8, "8806MiB"),
                 DuckDbSizing.shared(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB), 0, " "));
         assertEquals(new DuckDbSizing.Shared(4, "6553MiB"),

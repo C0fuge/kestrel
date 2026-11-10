@@ -198,7 +198,8 @@ class ResourceProfileTest {
     /**
      * The egret profile of item 23b (2 cores, 6 GB, -Xmx3g, direct 2g, data on S3): the shared DuckDB gets
      * at least what DuckDB-per-connection gives its two expected connections (2 x 1 GiB) instead of 1 GiB
-     * for the whole node (now 2 x 1331 MiB with the Q-40a reservation), and a query that still runs out
+     * for the whole node (now 2 x 1331 MiB with the Q-40a reservation; balanced itself has 128 MiB per
+     * connection since Q-42 (a)), and a query that still runs out
      * of memory runs again on a private DuckDB sized as balanced.
      */
     @Test
@@ -207,14 +208,15 @@ class ResourceProfileTest {
         Map<String, String> s3 = Map.of("dataDir", "s3://bucket/tpch");
         ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of(), s3);
         DuckDbSizing balanced = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), s3), egret);
-        assertEquals("1024MiB", balanced.memoryLimit());
+        // ~100 MiB budget with the full -Xmx / direct: the budget's floor, not 1 GiB (Q-42 (a))
+        assertEquals("128MiB", balanced.memoryLimit());
         assertEquals(2, balanced.connections());
         DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared(effective(raw, egret), egret)
                 .withFallback(ConfigAdapter.duckDbSizing(raw, egret));
         assertEquals("2662MiB", shared.memoryLimit());
         assertEquals(4, shared.threads());
         assertEquals(balanced.threads(), shared.fallbackThreads());
-        assertEquals("1024MiB", shared.fallbackMemoryLimit());
+        assertEquals("128MiB", shared.fallbackMemoryLimit());
         for (HostLimits host : List.of(egret, SMALL, MEDIUM, LARGE)) {
             DuckDbSizing perConnection = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), Map.of()), host);
             long node = DuckDbSizing.parseBytes(ConfigAdapter.duckDbShared(
