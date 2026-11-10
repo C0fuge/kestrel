@@ -278,6 +278,59 @@ jobs:
           [ "$kills" = "0" ] || { echo "the scope saw OOM kills: $kills"; tail -n 30 "$work/server.log"; exit 1; }
           [ "$rc" -eq 0 ] || { tail -n 30 "$work/server.log" | cut -c1-400; exit 1; }
 
+      - name: speed's JVM reservation under memory pressure (item 40(a), Q-40a)
+        # speed sizes DuckDB with the heap the JVM uses (min(-Xmx, max(1 GiB, in use x 2))) and
+        # min(direct, 1 GiB + 25 %), not the limits. Check: 6G scope, -Xmx3g / direct 1g, heap filled
+        # to 90 % after start, a 100 M-group aggregate holds DuckDB at its limit (spills), exact
+        # answer, no OOM kill.
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/m40"; mkdir -p "$work/tmp"
+          data="$RUNNER_TEMP/m39/data"
+          [ -s "$data/big/events/part-0.parquet" ] || { echo "no data of the item 39 (b) step"; exit 1; }
+          sudo systemd-run --quiet --scope --unit=flight40 -p MemoryMax=6G -p MemorySwapMax=0 \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            env HOME="$HOME" LANG=C.UTF-8 FLIGHT_ALLOW_INSECURE=true "$JAVA_HOME/bin/java" -Xmx3g -XX:MaxDirectMemorySize=1g \
+            --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED \
+            --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
+            -Dio.netty.tryReflectionSetAccessible=true -Dhazelcast.phone.home.enabled=false \
+            -DresourceProfile=speed -DresultMode=complete -DduckDbTempDirectory="$work/tmp" \
+            -Dfill.port=32012 -Dfill.percent=90 \
+            -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:$(cat "$RUNNER_TEMP/m39/cp.txt")" \
+            tools/ci/HeapFillLauncher.java --data-dir "$data" \
+            --localhost 127.0.0.1 --port 32012 --hazelcast-port 5712 --hosts 127.0.0.1:5712 \
+            --metrics-enabled false > "$work/server.log" 2>&1 &
+          for _ in $(seq 180); do grep -q '^heapFill' "$work/server.log" && break; sleep 1; done
+          grep -q '^heapFill' "$work/server.log" || { tail -n 40 "$work/server.log"; exit 1; }
+          scope=/sys/fs/cgroup/system.slice/flight40.scope
+          budget=$(grep -m 1 -o 'memoryBudget .*' "$work/server.log" || true)
+          profile=$(grep -m 1 -o 'profile=speed.*' "$work/server.log" | cut -c1-300 || true)
+          filled=$(grep -m 1 '^heapFill' "$work/server.log")
+          echo "item 40(a): $budget | $profile | $filled" | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=0
+          "$RUNNER_TEMP/py/bin/python" -I -c "
+          import sys, time
+          import adbc_driver_flightsql.dbapi as flightsql
+          t = time.time()
+          with flightsql.connect('grpc://127.0.0.1:32012', db_kwargs={'adbc.flight.sql.rpc.call_header.x-flight-result-mode': 'complete'}) as c, c.cursor() as cur:
+              cur.execute('SELECT count(*) AS n, sum(c) AS s, max(c) AS m FROM (SELECT id, count(*) AS c FROM big.events GROUP BY id)')
+              row = cur.fetchall()[0]
+          print('answer', row, 'seconds', round(time.time() - t, 1))
+          sys.exit(0 if tuple(int(v) for v in row) == (100000000, 100000000, 1) else 1)
+          " > "$work/client.log" 2>&1 || rc=$?
+          grep -v 'warnings.warn' "$work/client.log" | tail -n 5
+          peak=$(cat "$scope/memory.peak" 2>/dev/null || echo unknown)
+          kills=$(awk '$1 == "oom_kill" {print $2}' "$scope/memory.events" 2>/dev/null || echo unknown)
+          spilled=$(du -sm "$work/tmp" 2>/dev/null | cut -f1 || true)
+          echo "item 40(a): $(grep -m 1 '^answer' "$work/client.log" || echo 'no answer'); scope peak $peak bytes, oom_kill $kills, temp ${spilled:-0} MiB" | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo systemctl stop flight40.scope || true
+          echo "$budget" | grep -q 'source=cgroup memoryMiB=6144' || { echo "memory budget not from the scope: $budget"; exit 1; }
+          limit=$(echo "$profile" | grep -o 'duckDbMemoryLimit=[0-9]*MiB' | grep -o '[0-9]*' || echo 0)
+          [ "$limit" -gt 2048 ] || { echo "speed did not raise the limit above the -Xmx + direct sizing (2048 MiB): $limit"; exit 1; }
+          [ "$kills" = "0" ] || { echo "the scope saw OOM kills: $kills"; tail -n 30 "$work/server.log"; exit 1; }
+          [ "$rc" -eq 0 ] || { tail -n 30 "$work/server.log" | cut -c1-400; exit 1; }
+
       - name: Test summary
         if: always()
         run: |

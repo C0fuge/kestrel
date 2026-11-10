@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- `resourceProfile=speed` sizes the shared DuckDB's default memory limit with the JVM memory it can really use
+  (item 40(a), Q-40a): reserved heap = min(`-Xmx`, max(1 GiB, heap in use at startup x 2)), reserved direct =
+  min(`MaxDirectMemorySize`, 1 GiB + 25 %), instead of the full `-Xmx` + direct; the memory stays the container's
+  (cgroup) or machine's, 15 % headroom and the 80 % cap unchanged. 8 GB container with `-Xmx3g` / direct 2g: 2048 ->
+  4402 MiB, so DuckDB's external file cache holds the S3 files (warm TPC-H SF10 on S3 75.8 s with 2048 MiB, 15.9-19.4 s
+  with 4.9-5.1 GiB). `balanced` and an explicit `duckDbMemoryLimit` are unchanged. Start log `memoryBudget` gains
+  `usedHeapMiB=`. Dev CI step "speed's JVM reservation under memory pressure" (6G scope, heap filled to 90 %).
+
 - hadoopfs `51b7220-afc6` and SASL data transfer (STATUS item 41, steps 1-2): the CI / release default hadoopfs build is
   `51b7220-afc6` (`ci-assets` `hadoopfs-v1.5.6-afc6.duckdb_extension`, sha256
   `836299dc639b2fd0f829723e3c7bfe28a403a04be7244482bde88191d8b40948`, was afc4; afc5: listing cache, afc6: SASL

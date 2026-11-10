@@ -117,12 +117,16 @@ class ResourceProfileTest {
         assertEquals(ResourceProfile.SPEED, ResourceProfile.resolve(upper, () -> MEDIUM).name());
     }
 
-    /** speed on 4 / 16 / 64 cores: shared DuckDB with all cores and the memory balanced gives its connections. */
+    /**
+     * speed on 4 / 16 / 64 cores: shared DuckDB with all cores and the memory balanced gives its
+     * connections when only the JVM's reservation (Q-40a) is taken off: SMALL 1 GiB heap + 1 GiB direct,
+     * MEDIUM 1 GiB + 2 GiB, LARGE capped at 80 % of the memory.
+     */
     @Test
     void speedSizesTheSharedDuckDbByHost() {
-        assertShared(SMALL, 4, "2662MiB");
-        assertShared(MEDIUM, 16, "15564MiB");
-        assertShared(LARGE, 64, "173668MiB");
+        assertShared(SMALL, 4, "3174MiB");
+        assertShared(MEDIUM, 16, "24780MiB");
+        assertShared(LARGE, 64, "209715MiB");
     }
 
     /**
@@ -192,9 +196,10 @@ class ResourceProfileTest {
     }
 
     /**
-     * The egret profile of item 23b (2 cores, 6 GB, -Xmx3g, direct 2g, data on S3): the shared DuckDB gets what DuckDB-per-connection gives its two expected
-     * connections (2 x 1 GiB) instead of 1 GiB for the whole node, and a query that still runs
-     * out of memory runs again on a private DuckDB sized as balanced.
+     * The egret profile of item 23b (2 cores, 6 GB, -Xmx3g, direct 2g, data on S3): the shared DuckDB gets
+     * at least what DuckDB-per-connection gives its two expected connections (2 x 1 GiB) instead of 1 GiB
+     * for the whole node (now 2 x 1331 MiB with the Q-40a reservation), and a query that still runs out
+     * of memory runs again on a private DuckDB sized as balanced.
      */
     @Test
     void speedNeverGivesTheSharedDuckDbLessThanBalancedGivesItsConnections() {
@@ -206,7 +211,7 @@ class ResourceProfileTest {
         assertEquals(2, balanced.connections());
         DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared(effective(raw, egret), egret)
                 .withFallback(ConfigAdapter.duckDbSizing(raw, egret));
-        assertEquals("2048MiB", shared.memoryLimit());
+        assertEquals("2662MiB", shared.memoryLimit());
         assertEquals(4, shared.threads());
         assertEquals(balanced.threads(), shared.fallbackThreads());
         assertEquals("1024MiB", shared.fallbackMemoryLimit());
@@ -214,9 +219,50 @@ class ResourceProfileTest {
             DuckDbSizing perConnection = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), Map.of()), host);
             long node = DuckDbSizing.parseBytes(ConfigAdapter.duckDbShared(
                     effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), host), host).memoryLimit());
-            assertEquals(Math.min(DuckDbSizing.parseBytes(perConnection.memoryLimit()) * perConnection.connections(),
-                    host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT) >> 20, node >> 20, host.toString());
+            long cap = host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT;
+            assertTrue(node >= Math.min(DuckDbSizing.parseBytes(perConnection.memoryLimit())
+                    * perConnection.connections(), cap), host.toString());
+            assertTrue(node <= cap, host.toString());
         }
+    }
+
+    /**
+     * Q-40a: speed reserves for the JVM what it can use, not its limits - heap min(-Xmx, max(1 GiB, heap in
+     * use x 2)), direct min(limit, 1 GiB + 25 %) - so DuckDB's limit holds the S3 file cache. tpch-perf's
+     * container (4 cores, 8 GB, -Xmx3g, direct 2g): 2048 MiB before, 4402 MiB now (5120 MiB measured warm
+     * TPC-H SF10 on S3 19.4 s instead of 75.8 s).
+     */
+    @Test
+    void speedReservesWhatTheJvmUsesNotItsLimits() {
+        HostLimits harness = new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB);
+        HostLimits reserved = ResourceProfile.speedReservation(harness);
+        assertEquals(GIB, reserved.maxHeapBytes());
+        assertEquals(GIB + 2 * GIB / 100 * 25, reserved.maxDirectBytes());
+        assertEquals(harness.memoryBytes(), reserved.memoryBytes());
+        assertEquals(harness.cores(), reserved.cores());
+        ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of("dataDir", "s3://bucket/t"));
+        assertEquals("4402MiB", ConfigAdapter.duckDbShared(effective(raw, harness), harness).memoryLimit());
+
+        // A heap in use counts twice, up to -Xmx; with it all in use speed reserves the whole heap.
+        HostLimits busy = new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB, 3 * GIB / 4);
+        assertEquals(3 * GIB / 2, ResourceProfile.speedReservation(busy).maxHeapBytes());
+        assertEquals("3890MiB", ConfigAdapter.duckDbShared(effective(raw, busy), busy).memoryLimit());
+        HostLimits full = new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB, 2 * GIB);
+        assertEquals(3 * GIB, ResourceProfile.speedReservation(full).maxHeapBytes());
+
+        // Small limits are reserved whole: never more than the JVM may take.
+        HostLimits small = new HostLimits(2, 2 * GIB, 256L << 20, 256L << 20, 200L << 20);
+        assertEquals(256L << 20, ResourceProfile.speedReservation(small).maxHeapBytes());
+        assertEquals(256L << 20, ResourceProfile.speedReservation(small).maxDirectBytes());
+
+        // balanced and an explicit limit are unchanged.
+        DuckDbSizing balanced = ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), Map.of()), harness);
+        assertEquals(ConfigAdapter.duckDbSizing(raw(Map.of(), Map.of(), Map.of()), reserved).connections(),
+                balanced.connections());
+        assertEquals("1024MiB", balanced.memoryLimit());
+        ConfigSource explicit = raw(Map.of("resourceProfile", "speed", "duckDbMemoryLimit", "3GiB"), Map.of(),
+                Map.of());
+        assertEquals("3GiB", ConfigAdapter.duckDbShared(effective(explicit, harness), harness).memoryLimit());
     }
 
     /**
