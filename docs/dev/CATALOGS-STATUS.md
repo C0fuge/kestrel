@@ -44,7 +44,7 @@ ITEM 40(b) state after session 2026-11-10 (7) - the pruned-vs-view gap on local 
   4.10, speed head 4.11 / 4.21 / 4.05; pinned head 5.68 / 5.00 / 4.96 vs off 5.78 / 5.20 / 5.01 (base 4.41-5.04 and
   5.23-5.57, noisy runner). **Pruning on is now level with pruning off on local files.** Dev CI branch 42826441121
   green; Dev CI on main 42828677361 dispatched (merge push was `[skip ci]`).
-- Next (in order): (a) check Dev CI on main 42828677361 for 4228c733; (b) a pruning shape for decimal / date
+- Next (in order): (a) done: Dev CI on main 42828677361 green for 4228c733; (b) a pruning shape for decimal / date
   literals too (a separate key: `DescribeKey` must keep decimals in its describe key, DuckDB types them by digits;
   for pruning only the value matters) - the `count_filter` mix uses decimals; (c) gizmo vs speed per call and c32 JFR
   on the HDFS point cell (old step 4). Next branch from `origin/main` as `fix/40b-small-7`. `fix/40b-small-6` on the
@@ -942,4 +942,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   (~300 of 3446 DoGet samples). Now one parse per `DescribeKey` shape with stand-in literals, values bound when
   footer bounds are compared. `small-query-perf.yml` 42826465868: c1 p50 pruning on = pruning off within noise (was
   ~0.25 ms slower). Tests: `FileStatsPrunerTest` +1, `DescribeKeyTest` +1; CHANGELOG line; Q-40b-1 updated (proposal:
-  close without default change). Dev CI on main for 4228c733: 42828677361 dispatched. Not DONE yet. Lock released.
+  close without default change). Dev CI on main for 4228c733: 42828677361 green. Not DONE yet. Lock released.
