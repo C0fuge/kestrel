@@ -299,18 +299,21 @@ class DistributedCompleteIntegrationTest {
     void localPointLookupsAreComputedHere() throws Exception {
         String query = "SELECT v, k, d, name, amount FROM s.t WHERE v = 41";
         String alone = answer(query);
-        String count = "SELECT count(*) FROM s.t WHERE k = 9";
+        String count = "SELECT k, count(*) AS n FROM s.t WHERE k = 9 GROUP BY k";
         String countAlone = answer(count);
+        String filteredCount = "SELECT count(*) AS n FROM s.t WHERE k = 9";
+        String filteredCountAlone = answer(filteredCount);
         PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
         useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
         distributed.pointLookupsLocal(true);
         assertEquals(alone, answer(query));
         assertEquals(alone, answer(query));
-        assertEquals(2, distributed.localPointLookups());
+        assertEquals(filteredCountAlone, answer(filteredCount));
+        assertEquals(3, distributed.localPointLookups());
         assertEquals(0, distributed.mergedAnswers());
         assertEquals(0, distributed.fallbacks());
         assertEquals(0, admission.probation());
-        // Aggregates are still merged.
+        // Grouped aggregates are still merged.
         assertEquals(countAlone, answer(count));
         assertEquals(1, distributed.mergedAnswers());
     }

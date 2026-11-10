@@ -200,7 +200,7 @@ public final class DistributedComplete implements AutoCloseable {
         }
         // A point lookup reads little but fans out to every endpoint: one node computes it faster
         // (item 43: dc point lookups 0.27-0.57 of speed's q/s on 3 nodes even without queueing).
-        if (pointLookupsLocal && !oneRow(parsed) && smallAnswer(parsed)
+        if (pointLookupsLocal && pointLookup(parsed)
                 && planner.filesNotReadableHere(partQuery).isEmpty()) {
             localPointLookups.incrementAndGet();
             LOGGER.debug("node={} distributedComplete=local reason='point lookup' query='{}'", LogUtil.node(),
@@ -370,6 +370,30 @@ public final class DistributedComplete implements AutoCloseable {
         if (!parsed.hasAggregation && parsed.limit != null && parsed.limit <= SMALL_LIMIT) {
             return true;
         }
+        return equalityFilter(parsed);
+    }
+
+    /**
+     * Tells whether a part query is a point lookup computed on the planning node with
+     * {@code distributedCompletePointLookups=local} (item 43): a filter with an equality of a
+     * column and a literal and no OR, and no aggregate or a one-row one (a filtered count). Grouped
+     * aggregates are merged; so is a small LIMIT alone: a top-N query still scans the whole
+     * table, which the merge spreads over the nodes.
+     *
+     * @param parsed the part query
+     * @return true for a point lookup
+     */
+    static boolean pointLookup(ParquetQueryParser parsed) {
+        return (!parsed.hasAggregation || oneRow(parsed)) && equalityFilter(parsed);
+    }
+
+    /**
+     * Tells whether a query's filter has an equality of a column and a literal and no OR.
+     *
+     * @param parsed the query
+     * @return true for such a filter
+     */
+    private static boolean equalityFilter(ParquetQueryParser parsed) {
         String filter = parsed.filter;
         return filter != null && !OR_WORD.matcher(filter).find() && POINT_EQUALITY.matcher(filter).find();
     }

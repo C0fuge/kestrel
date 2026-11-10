@@ -63,6 +63,16 @@ class DistributedCompleteMergeableTest {
                 "SELECT o_custkey, count(*) AS n FROM tpch.orders GROUP BY o_custkey LIMIT 5")) {
             assertFalse(DistributedComplete.smallAnswer(ParquetQueryParser.parse(query)), query);
         }
+        // Computed locally: equality filters, without aggregates or with one-row ones; not top-N or GROUP BY.
+        for (String query : List.of("SELECT * FROM tpch.orders WHERE o_orderkey = 5",
+                "SELECT count(*) FROM tpch.orders WHERE o_custkey = 7 AND o_totalprice > 1000")) {
+            assertTrue(DistributedComplete.pointLookup(ParquetQueryParser.parse(query)), query);
+        }
+        for (String query : List.of("SELECT o_orderkey FROM tpch.orders ORDER BY o_orderkey LIMIT 10",
+                "SELECT count(*) FROM tpch.orders WHERE o_custkey > 7",
+                "SELECT o_custkey, count(*) AS n FROM tpch.orders WHERE o_orderstatus = 'F' GROUP BY o_custkey")) {
+            assertFalse(DistributedComplete.pointLookup(ParquetQueryParser.parse(query)), query);
+        }
     }
 
     /** A subquery of the same table would see only an endpoint's files: never merged. */

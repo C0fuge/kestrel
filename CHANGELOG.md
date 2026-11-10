@@ -10,10 +10,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 - Distributed complete mode: point lookups no longer fan out and queue for peer-stream room (item 43). A query with
-  an equality of a column and a literal (no OR), or a LIMIT of at most 10 000 rows, without aggregation, is computed
+  an equality of a column and a literal (no OR) and no aggregate, or a one-row aggregate (a filtered count), is computed
   by the planning node alone when it can read the files (new setting `distributedCompletePointLookups`, default
-  `local`; `merge` keeps merging them). A merged point lookup (`merge`, or files this node cannot read) starts on
-  probation without permits and takes them only once it has read more than 16 MiB of endpoint answers (then it waits
+  `local`; `merge` keeps merging them). A merged point lookup (`merge`, or files this node cannot read), and a query with a LIMIT
+  of at most 10 000 rows and no aggregate, starts on probation without permits and takes them only once it has read more than 16 MiB of endpoint answers (then it waits
   like any merge); at most max(32, 8 x permits) merges are on probation at once. Before, each point lookup took all
   the permits of its endpoints (4 of 4 with 512 MiB direct), so 61-63 % of dc point lookups waited (217 q/s against
   1348 without dc at 32 clients; with probation alone the CI cluster still did 0.27-0.57 of speed's q/s, run
