@@ -4,6 +4,9 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
+> is green (do not hold them for one big merge); the core lane packages right after "ITEM 40(b) DONE".**
+>
 > **Maintainer, 2026-11-10 10:40 - FIRST in this lane: ITEM 40(b)** (moved here from the core lane, which works on item
 > 41). Per-query overhead of small / point queries: on the real cluster point queries are the main gap to upstream
 > (there 460 q/s on 16 cores), and GizmoSQL (same DuckDB) takes 0.70-0.85 of speed's time on the small-query mix
@@ -13,6 +16,32 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > time, and cut it (statement/plan caching per SQL text, avoid re-describing, fewer copies, smaller first batch,
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
+
+ITEM 40(b) state after session 2026-11-10 (1) - profiling only, no code change yet (branch `fix/40b-small` = main +
+the tool `tools/ci/small-query-rpc.py`):
+- Local cell (4 vCPU VM, local disk, synthetic TPC-H-shaped orders 1.5 M / lineitem 6 M rows, 4 key-range files per
+  table, 4 row groups per file; DuckDB's tpch extension cannot be downloaded in the session), c1, complete mode, p50 ms:
+  ADBC point_orders ~13-14, point_lineitem ~12-13, count_filter ~17, `SELECT k` ~5. Per call (small-query-rpc.py):
+  point_orders statement flow GetFlightInfo 1.6-1.8 + DoGet 8.2-9.3; prepared flow (what ADBC sends) create 1.7-1.8,
+  GetFlightInfo 0.6-0.7, DoGet 8.8-9.3, close 0.5-0.7 (= one round trip, no server work). `SELECT k`: create 1.1-1.3,
+  DoGet 1.0-1.2.
+- DuckDB's own time is most of it: the pruned DoGet SQL (one file kept by `FileStatsPruner`) run alone over JDBC
+  (same jar, same settings incl. lockdown) takes 6.1-7.4 ms (the matching row group is decoded); DoGet adds ~1-1.5 ms
+  on top. Server time per query beyond DuckDB and round trips: ~0.6-1.2 ms in the describe (create /
+  GetFlightInfo; table queries +0.5 ms over `SELECT k`) and ~1 ms in DoGet. JFR (1 ms sampling, `SELECT k`): server
+  CPU ~0.3 ms per query; in DoGet the parts are DuckDB fetch, `putNext`/`start` (Flight write), the
+  `ExecutionPathRecorder` JSON line (one INFO line per query) and ticket sign/verify; nothing dominant.
+- External file cache (speed default): +0.8 ms (+13 %) per point query on local files in plain JDBC, but no
+  difference end to end on the server (noise +-1 ms), and speed vs balanced is equal here at c1 (the 1.16-1.18x of
+  the harness does not reproduce on this VM) - not changed.
+- Next (in order): (1) get the harness numbers for gizmo vs speed per call on the same box (the gap is likely
+  per-call fixed cost x 4 calls of ADBC's flow): run `small-query-rpc.py` against gizmo too (ask the performance
+  repo or run gizmo in CI); (2) cut the second DuckDB prepare per query: the describe at CreatePreparedStatement
+  runs in the describe DuckDB and DoGet prepares the same text again - cache the describe result per SQL text for
+  the GetFlightInfo(prepared) that follows, and measure skipping the describe DuckDB for queries whose schema the
+  execution DuckDB gives at prepare time; (3) make the per-query `ExecutionPathRecorder` line and the debug
+  formatting free when off; (4) measure c32 CPU per query (that is where the cluster's 460 q/s gap is) with JFR on
+  the HDFS point cell (`hdfs-point-perf.yml` with a JFR variant).
 
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(c).** balanced point/small-query collapse on HDFS and the speed point-query rate (item 39 (c)); the small-query path, ExecutionService, DuckDbAdapter and catalog views are allowed for this item. Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
@@ -699,3 +728,6 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-09 21:25Z: no open item for this lane. ITEM 39(c) follow-ups (a) Q9/afc4 and (b) Q11 were done by the core
   lane (877cf100); (c)/(d) wait for the stand. Item 40 is split between the plugins and core lanes. Lane stays in
   finish mode (CATALOGS LANE DONE); no code change, lock not taken.
+- 2026-11-10 (1): **ITEM 40(b)** started (profiling): local c1 per-call numbers, DuckDB vs server time,
+  JFR breakdown, external file cache check (see the 40(b) state note in Next steps). New tool
+  `tools/ci/small-query-rpc.py` on branch `fix/40b-small` (68dc9ea9). No server change, so no CI run. Lock released.
