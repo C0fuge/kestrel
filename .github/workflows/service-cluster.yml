@@ -437,18 +437,21 @@ jobs:
               echo "::warning title=short-circuit unused::$STORE $CELL: the servers read every block over TCP although the Java client reads short-circuit in the same layout"
             fi
           fi
-          # Item 43: 32 clients of point queries (tools/ci/point-query-load.py: point_orders, point_lineitem,
-          # count_filter) on node 1 in speed and speed-dc; the summary compares q/s (dc within 20 % of speed).
+          # Item 43: 32 clients of point queries (tools/ci/point-query-load.py) on node 1; the summary compares q/s.
           if [ "$CELL" = speed ] || [ "$CELL" = speed-dc ]; then
             keys=$(awk -v s="${{ inputs.sf || '1' }}" 'BEGIN { printf "%d", 1500000 * s }')
-            waits0=$(docker logs srv1 2>&1 | grep -c 'distributedComplete=admissionWait')
+            l0=$(docker logs srv1 2>&1)
+            waits0=$(grep -c 'distributedComplete=admissionWait' <<< "$l0"); merged0=$(grep -c 'distributedComplete=merged ' <<< "$l0")
             "$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 4 5 "$keys" > /dev/null 2>&1 || true # warm-up
             point=$("$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 32 "${POINT_SECONDS:-30}" "$keys" 2> "$RUNNER_TEMP/point.log"); prc=$?
             echo "$point" > "$RUNNER_TEMP/point.txt"
             l=$(docker logs srv1 2>&1)
             note "point load c32 on srv1: ${point:-(no result: $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-200))}"
-            note "srv1 point load: admission waits $(( $(grep -c 'distributedComplete=admissionWait' <<< "$l") - waits0 )), merged on probation $(grep -c 'distributedComplete=merged .*probation=true' <<< "$l"), probation over $(grep -c 'distributedComplete=probationOver' <<< "$l")"
+            pwaits=$(( $(grep -c 'distributedComplete=admissionWait' <<< "$l") - waits0 )); pmerged=$(( $(grep -c 'distributedComplete=merged ' <<< "$l") - merged0 ))
+            note "srv1 point load: admission waits $pwaits, merged $pmerged, merged on probation $(grep -c 'distributedComplete=merged .*probation=true' <<< "$l"), probation over $(grep -c 'distributedComplete=probationOver' <<< "$l")"
             [ "$prc" -eq 0 ] && [ -n "$point" ] || finish fail "point load c32: ${point:-no result} $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-150)"
+            # dc point lookups run on srv1 alone (item 43): no merge, no admission wait
+            [ "$CELL" != speed-dc ] || [ "$pwaits$pmerged" = 00 ] || finish fail "point load under dc: $pmerged merged, $pwaits admission waits on srv1"
           fi
           # D15: a merge must never fall back because a table was named without its schema.
           for i in 1 2 3; do
@@ -528,8 +531,14 @@ jobs:
               p1=$(grep -oE 'p99=[0-9]+' <<< "$sp" | cut -d= -f2); p2=$(grep -oE 'p99=[0-9]+' <<< "$dc" | cut -d= -f2)
               ratio=$(awk -v a="${q1:-0}" -v b="${q2:-0}" 'BEGIN { if (a > 0) printf "%.2f", b / a; else print "?" }')
               echo "| $store | ${q1:-?} | ${q2:-?} | $ratio | ${p1:-?} / ${p2:-?} |"
-              if [ "$ratio" = "?" ] || awk -v r="$ratio" 'BEGIN { exit !(r < 0.8) }'; then
-                echo "$store: speed-dc point q/s ${q2:-?} not within 20 % of speed ${q1:-?} (ratio $ratio)" >> "$RUNNER_TEMP/point-verdict.txt"
+              # The two cells run on different runners: with the same server work (the speed-dc cell fails
+              # itself on any merge or admission wait of a point lookup), their q/s differ by up to ~40 %
+              # (main run 42789267919: hdfs 0.62 on code that gave 0.84 on the branch). Below 0.8 warns;
+              # below 0.5 (the fan-out cost before item 43: 0.27-0.57) fails.
+              if [ "$ratio" = "?" ] || awk -v r="$ratio" 'BEGIN { exit !(r < 0.5) }'; then
+                echo "$store: speed-dc point q/s ${q2:-?} below half of speed ${q1:-?} (ratio $ratio)" >> "$RUNNER_TEMP/point-verdict.txt"
+              elif awk -v r="$ratio" 'BEGIN { exit !(r < 0.8) }'; then
+                echo "$store: speed-dc point q/s ${q2:-?} not within 20 % of speed ${q1:-?} (ratio $ratio; cells on different runners)" >> "$RUNNER_TEMP/point-warn.txt"
               fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
@@ -537,6 +546,7 @@ jobs:
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
           [ "$n" -eq 12 ] || { echo "only $n of 12 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt || exit 1
+          [ ! -s "$RUNNER_TEMP/point-warn.txt" ] || while read -r l; do echo "::warning title=item 43 point q/s::$l"; done < "$RUNNER_TEMP/point-warn.txt"
           if [ -s "$RUNNER_TEMP/point-verdict.txt" ]; then
             while read -r l; do echo "::error title=item 43 point q/s::$l"; done < "$RUNNER_TEMP/point-verdict.txt"
             exit 1
