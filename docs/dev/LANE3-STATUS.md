@@ -588,3 +588,5 @@ Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowf
   (core lane's package Dev CI 42751144566 running at 04:03Z), so no stand rerun exists. Wrote D14's optional part as
   Q3 (default of `arrowAllocatorLimitBytes` from direct memory); no code, no CI. Lock released. Next: D14 (stand
   results of the item 39 pre-release), Q3 answer.
+- 2026-11-10 07:04Z (lane 3 session): no change. ITEM 39 is packaged (`server-1.0.0-894afb9b48c4`, core lane 06:34Z),
+  but no stand results on it yet; D14 waits for them, Q3 still unanswered. No code, no CI, lock not taken.
