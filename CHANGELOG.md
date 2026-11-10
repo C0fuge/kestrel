@@ -19,6 +19,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   no short-circuit requirement at start); older builds keep the short-circuit-only path with copies. The extension needs
   `dfs.data.transfer.protection` and `hadoop.security.authentication=kerberos` in the `LIBHDFS3_CONF` file: without them
   `auto` stays short-circuit only and `on` stops the start naming the missing setting. `off` = the earlier behaviour.
+  Partial-mode answers on SASL clusters stay as before with direct reads too: a query with a nested query asked for
+  in parts gets its complete answer (item 33 (E)) and plain table names are qualified (item 31).
   Start line `hdfs=saslDataTransfer mode=auto direct=true|false extensionVersion=... [reason=...] transferProtection=...`.
   CI: new Service hdfs topology `sasl-direct` (3 DataNodes, `privacy`, copies off: TPC-H 22/22 + the SASL check
   answers exact); `ha-krb-sasl` / `sasl-cluster` pin `hdfsSaslDataTransfer=off` (copy path).

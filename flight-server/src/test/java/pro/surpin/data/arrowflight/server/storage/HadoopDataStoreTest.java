@@ -65,6 +65,22 @@ class HadoopDataStoreTest {
     }
 
     /**
+     * Item 41: with direct SASL reads the store reads any file, but the partial-mode rules of
+     * SASL clusters stay; without SASL neither applies.
+     */
+    @Test
+    void saslClusterKeepsThePartialRulesWithDirectReads() {
+        HadoopDataStore store = store("localhost");
+        assertFalse(store.saslPartialRules());
+        store.setSaslCluster(true);
+        assertFalse(store.wholeFileReadsOnly());
+        assertTrue(store.saslPartialRules());
+        HadoopDataStore shortCircuitOnly = store("localhost");
+        shortCircuitOnly.setWholeFileReadsOnly(true);
+        assertTrue(shortCircuitOnly.saslPartialRules());
+    }
+
+    /**
      * Creates a store over the temporary directory.
      *
      * @param storageHost storage host loopback block hosts stand for

@@ -776,6 +776,15 @@ public class ParquetAdapter {
     }
 
     /**
+     * Tells whether the partial-mode rules of SASL clusters apply (items 31, 33 (E), 41).
+     *
+     * @return true on HDFS with SASL DataNodes, whatever the read path
+     */
+    public boolean saslPartialRules() {
+        return store.saslPartialRules();
+    }
+
+    /**
      * Tells whether a node copies the files it cannot read where they are (only whole-file
      * holders read them) to a node-local cache, so that any node can read any file (item 30).
      *

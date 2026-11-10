@@ -49,6 +49,8 @@ public final class HadoopDataStore implements DataStore {
     private final boolean sharedMount;
     /** Whether only nodes holding every block of a file can read it (SASL, short-circuit only). */
     private volatile boolean wholeFileReadsOnly;
+    /** Whether the DataNodes require SASL data-transfer protection (item 41: any read path). */
+    private volatile boolean saslCluster;
     /** The data directory as the file system names it; looked up once, it never changes. */
     private volatile URI rootUri;
 
@@ -99,6 +101,21 @@ public final class HadoopDataStore implements DataStore {
     @Override
     public boolean wholeFileReadsOnly() {
         return wholeFileReadsOnly;
+    }
+
+    @Override
+    public boolean saslPartialRules() {
+        return wholeFileReadsOnly || saslCluster;
+    }
+
+    /**
+     * Marks the DataNodes as requiring SASL data-transfer protection, also when DuckDB reads
+     * them directly, so the partial-mode rules of SASL clusters stay (item 41).
+     *
+     * @param saslCluster whether the DataNodes require SASL data-transfer protection
+     */
+    public void setSaslCluster(boolean saslCluster) {
+        this.saslCluster = saslCluster;
     }
 
     @Override

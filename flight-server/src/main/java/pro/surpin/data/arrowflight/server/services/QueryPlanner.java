@@ -323,7 +323,7 @@ public final class QueryPlanner {
      * @return reason, or null when the store reads any block or the query has no subquery
      */
     public String nestedQueryCompleteReason(String query) {
-        if (!parquetAdapter.wholeFileReadsOnly()) {
+        if (!parquetAdapter.saslPartialRules()) {
             return null;
         }
         boolean nested;

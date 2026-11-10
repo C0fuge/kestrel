@@ -47,6 +47,18 @@ public interface DataStore extends pro.surpin.data.arrowflight.spi.storage.DataS
     }
 
     /**
+     * Tells whether the partial-mode rules of SASL clusters apply: a query with a nested query
+     * asked for in parts gets its complete answer, and plain table names are qualified (items
+     * 31, 33 (E)). True on HDFS with SASL DataNodes, also when DuckDB reads them directly (item
+     * 41), so partial-mode clients get the same answers on either read path.
+     *
+     * @return true on a SASL cluster
+     */
+    default boolean saslPartialRules() {
+        return wholeFileReadsOnly();
+    }
+
+    /**
      * Tells whether DuckDB on this node can read a listed file: always, unless only whole-file
      * holders can read files, in which case this node's storage host must hold every block.
      *

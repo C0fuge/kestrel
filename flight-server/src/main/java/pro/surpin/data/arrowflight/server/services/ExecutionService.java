@@ -314,7 +314,7 @@ public final class ExecutionService {
      * @throws java.io.UncheckedIOException when the schemas cannot be listed
      */
     public String qualifyPlainNames(String query) {
-        if (query == null || !parquetAdapter.wholeFileReadsOnly()) {
+        if (query == null || !parquetAdapter.saslPartialRules()) {
             return query;
         }
         return qualifyAsResolved(query);

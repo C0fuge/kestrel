@@ -529,7 +529,8 @@ class QueryPlannerTest {
         String inList = "SELECT count(*) FROM s.t WHERE k IN (SELECT k FROM s.u)";
         QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
 
-        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        // Item 41: the rule follows the SASL cluster, also when DuckDB reads it directly.
+        when(parquetAdapter.saslPartialRules()).thenReturn(true);
         assertNotNull(planner.nestedQueryCompleteReason(q04));
         assertTrue(planner.nestedQueryCompleteReason(inList).contains("subquery"));
         assertNotNull(planner.nestedQueryCompleteReason("WITH r AS (SELECT a FROM s.t)"
@@ -541,7 +542,7 @@ class QueryPlannerTest {
         assertNull(planner.nestedQueryCompleteReason("SELECT * FROM (SELECT a FROM s.t) x"),
                 "the plain FROM wrapper is read in parts");
 
-        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(false);
+        when(parquetAdapter.saslPartialRules()).thenReturn(false);
         assertNull(planner.nestedQueryCompleteReason(q04));
     }
 

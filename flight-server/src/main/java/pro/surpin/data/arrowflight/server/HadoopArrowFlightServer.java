@@ -215,6 +215,10 @@ public class HadoopArrowFlightServer {
                         HdfsSaslDataTransfer.extensionVersion(hdfsExtensionFile()),
                         libhdfs3Properties(System.getenv("LIBHDFS3_CONF")));
                 saslDirect = sasl.direct();
+                if (store instanceof HadoopDataStore hadoopStore) {
+                    // Partial-mode answers stay as on the short-circuit-only path (item 41).
+                    hadoopStore.setSaslCluster(true);
+                }
                 LOGGER.info("hdfs=saslDataTransfer {} transferProtection={}{}", sasl.describe(),
                         shortCircuit.transferProtection(), saslDirect
                                 ? ": DuckDB reads blocks of any DataNode over SASL data transfer;"
