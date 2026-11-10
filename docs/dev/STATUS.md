@@ -60,6 +60,13 @@
 > check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
 > Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
 
+> **Maintainer, 2026-11-10 11:00 - small, with item 41: a too-old hadoopfs must fail clearly.** `894afb9b48c4` started
+> with the afc3 extension (the `ci-assets` extension set) fails `IllegalStateException: DuckDB cannot be set up for
+> the data store: Statement was closed`. At start, check the loaded hadoopfs version / that `hdfs_metadata_cache_ttl_ms`
+> exists; if not, WARN `hdfs=extensionTooOld version=... need >= 51b7220-afc4` and run without the metadata cache (or
+> fail with that message) instead of the closed-statement error. Also refresh the `duckdb-extensions-v1.5.6.tar.zst`
+> set in `ci-assets` with the pinned hadoopfs so other users of the set get it.
+
 > **Maintainer, 2026-11-10 08:20 - ITEM 41 (after item 39 is packaged; core lane, may be split): DuckDB reads SASL
 > DataNodes directly.** The extension repo released hadoopfs `51b7220-afc5` (listing cache: a repeated point query with
 > a glob makes no NameNode call) and **`51b7220-afc6`: SASL data-transfer protection on the read path** (DIGEST-MD5 on
