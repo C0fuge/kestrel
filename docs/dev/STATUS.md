@@ -4190,3 +4190,4 @@ S3 slowdown item below stays open for then).
   not DONE yet, so no cluster package. Lock released.
 - 2026-11-10 10:41Z (core lane): nothing open but the cluster package, which waits for "ITEM 40(b) DONE" (catalogs
   lane, its lock held since 10:21Z); no code change, stopped early. Lock released.
+- 2026-11-10 13:42Z (core lane): still waiting for "ITEM 40(b) DONE" (catalogs lane, lock held since 13:24Z, working on 40(b) after 3a01265e); no code change, stopped early. Lock released.
