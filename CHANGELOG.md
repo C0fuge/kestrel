@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- File pruning parses a point query's shape once instead of every text (item 40(b)): DoGet's pruning parsed each
+  point query with jOOQ (the key differs every query, so the parse cache never hit), the main part of what pruning
+  cost on local files. Texts that differ only in the integer literals the describe cache key leaves out now share one
+  parse with stand-in literals, and the footer bounds are compared with each text's own values. Same files kept (test
+  over 25 shapes against a per-text parse, answers against the view); filters with other literals (decimals, dates,
+  strings) are parsed per text as before.
+
 - Pruned point queries on a node without local copies are pruned once per DoGet (item 40(b), the speed / balanced c1
   regression of item 39 (c) on local data): DoGet ran the file pruning twice (before the local-copy decision and again
   on the already pruned text) and the pruned text went through DuckDB's single-query parse check in full, because the
