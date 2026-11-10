@@ -25,6 +25,33 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (4) - third improvement (repeated parses of one text) merged (388b81f5):
+- Measured where jOOQ parses run (debug print on every parse-cache miss, `PointQueryOverheadPerfTest`, 4 vCPU): each
+  query text is parsed by jOOQ **once** already (complete mode: first in DoGet's `CatalogViews.pruning`; partial:
+  in create's `completeAnswerReason`); the later `ParquetQueryParser.parse` calls of the same request hit the parse
+  cache. So step (2) "one jOOQ parse per request" was already true; what the calls repeated was the preparation in
+  front of the cache lookup (`castTypedLiterals`, which built a new regex Matcher at every character, and
+  `flattenSubqueryWrapper`, which compiled its pattern each call): JFR 15 of 39 parser samples.
+- Cut: cache by the raw text in `parse()` (same capacity/size limit, refused texts never cached) + one matcher tried
+  only at `t`/`T` in `castTypedLiterals` + `FROM_PAREN` compiled once. JFR samples under `parse()` 39 -> 25 (of ~700),
+  preparation 15 -> 0; end to end within noise (c1 point p50 complete 9.6-9.8 ms before, 10.2 after; partial 7.4-7.7
+  vs 7.9; DuckDB-bound VM).
+- Other per-query costs seen in the same JFR (for the next cuts): `ExecutionPathRecorder` (`queryDigest` SHA-256 +
+  JSON line + write, ~18 samples, as many as the jOOQ parse), `FileStatsPruner.keep` parses its filter with jOOQ
+  again per query (`parseCondition`, 2 samples), and in partial mode `ClusterService.allServerLoads` takes the
+  `entrySet` query path (~45 samples) because the test helper (one of its constructors) starts Hazelcast without the
+  `arrowflight.uri` member attribute; `ServerModule` always sets it, so production takes the key-lookup path
+  (test-only, not a server cost). `ExecutionPathRecorder` is already async with a per-thread digest; making the
+  per-query INFO line cheaper than that means turning it off by default = a behaviour change (ask first).
+- Next (in order): (a) check Dev CI on main for 388b81f5 (run 42802352922, started at session end); (b) one jOOQ
+  `parseCondition` per filter text in `FileStatsPruner.keep` (it re-parses the filter the query parser just
+  rendered; small, ~2 samples); (c) literal-insensitive describe cache key (old step 3) - the bigger remaining
+  server-side cut for point queries; (d) gizmo vs speed per call and c32 JFR on the HDFS point cell (old step 4).
+  Start the next branch from `origin/main` as `fix/40b-small-4`. JFR recipe that works here: append
+  `-XX:FlightRecorderOptions=stackdepth=256 -XX:StartFlightRecording=filename=<dir>/x-%p.jfr,settings=profile` to
+  `JAVA_TOOL_OPTIONS` and run `mvn -pl flight-server test-compile surefire:test -Dgroups=perf -DexcludedGroups=
+  -Dtest=PointQueryOverheadPerfTest -Djacoco.skip=true` (`-DargLine` is not passed to the fork).
+
 ITEM 40(b) state after session 2026-11-10 (3) - second improvement (one parse check per pruned query) merged:
 - Done: next step (1) of session (2). DoGet's pruned text is accepted without a second `json_serialize_sql` when the
   parse check of the unpruned text (the describe's) found a DuckDB base table reference (`query_location`, UTF-8
