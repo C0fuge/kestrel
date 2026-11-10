@@ -163,7 +163,7 @@ class FlightSqlProducerTest {
                 clusterService, authorization);
         producer.getStreamStatement(FlightSql.TicketStatementQuery.newBuilder()
                 .setStatementHandle(handle).build(), context, listener);
-        verify(executionService).readComplete(any(), eq(expanded), any(), any(), eq(true));
+        verify(executionService).readComplete(any(), eq(expanded), any(), any(), eq(true), eq(false));
         verify(listener, never()).error(any());
     }
 

@@ -255,11 +255,33 @@ public final class ExecutionService {
     public void readComplete(BufferAllocator allocator, String query, byte[] parameters,
             FlightProducer.ServerStreamListener listener, boolean startListener)
             throws Exception {
+        readComplete(allocator, query, parameters, listener, startListener, false);
+    }
+
+    /**
+     * Streams the complete answer to a client's query with parameter values, skipping the file
+     * pruning when {@link #completeFromCopies(String, String)} already decided it for this very
+     * text ({@link CopiedQuery#pruningDone()}): DoGet would otherwise run the pruning a second
+     * time per point query, on the pruned text or on a text it already declined (item 40 (b)).
+     *
+     * @param allocator     Arrow buffer allocator
+     * @param query         client SQL
+     * @param parameters    one-row Arrow IPC stream with the values, or null
+     * @param listener      Flight stream listener
+     * @param startListener whether to call listener.start()
+     * @param pruningDone   whether the file pruning of {@code query} was decided already
+     * @throws Exception on refusal, query or stream failure
+     */
+    public void readComplete(BufferAllocator allocator, String query, byte[] parameters,
+            FlightProducer.ServerStreamListener listener, boolean startListener,
+            boolean pruningDone) throws Exception {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            String sql = prunedFiles(
-                    catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false));
+            String expanded = catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false);
+            // The decision was made on the text as passed: a text the expansion changes is pruned
+            // here as before.
+            String sql = pruningDone && expanded.equals(query) ? expanded : prunedFiles(expanded);
             CatalogViews.Snapshot views = catalogViews.current();
             try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(),
                     allocator)) {
@@ -294,7 +316,19 @@ public final class ExecutionService {
      * @return the text to run
      */
     String prunedFiles(String sql) {
-        CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        return prunedFiles(sql, catalogViews.pruning(sql));
+    }
+
+    /**
+     * Replaces the pruned table reference of a text by a read of its kept files, as
+     * {@link #prunedFiles(String)} does, with the files already picked, and lets the DuckDB
+     * adapter accept the result without a second parse check when the unpruned text passed it.
+     *
+     * @param sql     text after the catalog rewrites
+     * @param pruning the reference and its kept files from {@link CatalogViews#pruning}, or null
+     * @return the text to run, unchanged when pruning is null or the view must stay
+     */
+    String prunedFiles(String sql, CatalogViews.Pruning pruning) {
         String replacement = catalogViews.prunedReplacement(pruning);
         if (replacement == null) {
             return sql;
@@ -2414,17 +2448,31 @@ public final class ExecutionService {
      * @param lease copies the SQL reads, or null; closed when the answer has been streamed
      * @param pruned whether the SQL reads only files of its one table this node reads where they
      *        are, picked by footer statistics (item 42)
+     * @param pruningDone whether the file pruning of {@code sql} is decided, so that
+     *        {@link #readComplete} need not run it again (item 40 (b))
      */
-    public record CopiedQuery(String sql, LocalCopyCache.Lease lease, boolean pruned) implements AutoCloseable {
+    public record CopiedQuery(String sql, LocalCopyCache.Lease lease, boolean pruned, boolean pruningDone)
+            implements AutoCloseable {
 
         /**
-         * Creates a query that is not pruned.
+         * Creates a query that is not pruned and whose pruning is still to be decided.
          *
          * @param sql SQL to run
          * @param lease copies the SQL reads, or null
          */
         public CopiedQuery(String sql, LocalCopyCache.Lease lease) {
-            this(sql, lease, false);
+            this(sql, lease, false, false);
+        }
+
+        /**
+         * Creates a query; a pruned one needs no further pruning.
+         *
+         * @param sql SQL to run
+         * @param lease copies the SQL reads, or null
+         * @param pruned whether the SQL reads only the files its filter can match
+         */
+        public CopiedQuery(String sql, LocalCopyCache.Lease lease, boolean pruned) {
+            this(sql, lease, pruned, pruned);
         }
 
         /**
@@ -2480,7 +2528,7 @@ public final class ExecutionService {
                 return null;
             }
         }
-        String pruned = catalogViews.prunedFiles(sql, pruning);
+        String pruned = prunedFiles(sql, pruning);
         return pruned.equals(sql) ? null : new CopiedQuery(pruned, null, true);
     }
 
@@ -2510,7 +2558,9 @@ public final class ExecutionService {
                 // Item 41: one hdfs=reads line per complete answer on the direct SASL path.
                 logDirectComplete(clientSql, pruning);
             }
-            return pruned != null ? pruned : new CopiedQuery(clientSql, null);
+            // A text the pruning declined is not pruned again in DoGet (item 40 (b)); one pruned
+            // but with a kept file this node lacks is left to DoGet's pruning, as before.
+            return pruned != null ? pruned : new CopiedQuery(clientSql, null, false, pruning == null);
         }
         String sql;
         try {

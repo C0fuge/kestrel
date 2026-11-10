@@ -2201,7 +2201,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 requireReadableHere(query);
             }
             executionService.readComplete(allocator, copied.sql(), state.parameters(),
-                    listener, true);
+                    listener, true, copied.pruningDone());
         }
     }
 

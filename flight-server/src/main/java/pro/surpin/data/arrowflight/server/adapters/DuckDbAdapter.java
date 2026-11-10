@@ -3384,7 +3384,7 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param sql client SQL
      * @return true when the text passed the check and is remembered
      */
-    boolean parseCheckRemembered(String sql) {
+    public boolean parseCheckRemembered(String sql) {
         return parseCheckCache.containsKey(sql);
     }
 

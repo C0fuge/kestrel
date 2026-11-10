@@ -188,6 +188,58 @@ class FileStatsPrunerTest {
     }
 
     /**
+     * Verifies that DoGet's pruning on a node without local copies is decided once (item 40 (b),
+     * the speed c1 regression of item 39 (c)): the pruned text of a described point query is
+     * accepted without a second DuckDB parse check, a text the pruning declines is marked as
+     * decided too, and DoGet streams the decided text without pruning it again.
+     */
+    @Test
+    void doGetUsesThePruningDecidedBeforeIt(@TempDir Path dir) throws Exception {
+        List<DataFile> files = writeFiles(dir);
+        ParquetAdapter parquet = adapter(files, new AtomicInteger());
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool);
+                Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement();
+                org.apache.arrow.memory.RootAllocator allocator = new org.apache.arrow.memory.RootAllocator()) {
+            ExecutionService service = new ExecutionService(parquet, duck, mock(MetadataService.class), null,
+                    null);
+            // The service prunes with the default setting (fileStatsPruningMaxFiles=1024).
+            for (String statement : new CatalogViews(parquet, duck, true).current().dataStatements()) {
+                s.execute(statement);
+            }
+            String point = "SELECT * FROM s.t WHERE k = 5";
+            service.completeSchema(allocator, point);
+            try (ExecutionService.CopiedQuery pruned = service.completeFromCopies(point, null)) {
+                assertTrue(pruned.pruned(), pruned.sql());
+                assertTrue(pruned.pruningDone(), pruned.sql());
+                assertFalse(pruned.sql().equals(point));
+                assertTrue(duck.parseCheckRemembered(pruned.sql()), "accepted without a second parse check");
+                assertEquals(1, filesRead(pruned.sql(), dir));
+                assertEquals(answer(s, point), answer(s, pruned.sql()));
+                org.apache.arrow.flight.FlightProducer.ServerStreamListener listener =
+                        mock(org.apache.arrow.flight.FlightProducer.ServerStreamListener.class);
+                when(listener.isReady()).thenReturn(true);
+                service.readComplete(allocator, pruned.sql(), null, listener, true, pruned.pruningDone());
+                org.mockito.Mockito.verify(listener).putNext();   // the one batch of the kept file
+            }
+            for (String declined : List.of("SELECT * FROM s.t WHERE k IS NULL",
+                    "SELECT * FROM s.t a JOIN s.t b ON a.k = b.k WHERE a.k = 5")) {
+                try (ExecutionService.CopiedQuery whole = service.completeFromCopies(declined, null)) {
+                    assertFalse(whole.pruned(), declined);
+                    assertTrue(whole.pruningDone(), declined);
+                    assertEquals(declined, whole.sql());
+                }
+            }
+            try (ExecutionService.CopiedQuery undecided = new ExecutionService.CopiedQuery(point, null)) {
+                assertFalse(undecided.pruningDone(), "other paths leave the pruning to DoGet");
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies that point queries differing only in their key are described once (item 40 (b),
      * {@link DescribeKey}), and that a text whose literal is not left out is described itself.
      */
@@ -336,6 +388,7 @@ class FileStatsPrunerTest {
 
     private static DataStore store(AtomicInteger footerReads) {
         DataStore store = mock(DataStore.class);
+        when(store.readableHere(any(DataFile.class))).thenReturn(true);   // a local store
         when(store.duckDbUri(any(DataFile.class))).thenAnswer(inv -> ((DataFile) inv.getArgument(0)).location());
         when(store.inputFile(any(DataFile.class))).thenAnswer(inv -> {
             footerReads.incrementAndGet();
