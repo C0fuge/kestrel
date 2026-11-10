@@ -39,6 +39,9 @@
 #   ha-krb, ha-krb-sasl (balanced): a last stage stops the server under load and starts one with
 #           tpch.nation's files unreadable for the server's principal (item 37 (a), (b);
 #           tools/ci/service-hdfs-deny-stop-check.py).
+#   ha-krb-sasl, sasl-cluster, sasl-direct: a stage runs complete-mode point queries on point.orders_r
+#           (tpch.orders in 8 key ranges) on one server and requires views=prunedFiles lines (item 42 (2);
+#           tools/ci/service-hdfs-point-check.py).
 # With short-circuit configured every cell requires that DuckDB (hadoopfs) read short-circuit: the
 # DataNode log shows REQUEST_SHORT_CIRCUIT_FDS, and JMX BlocksRead (TCP) grows by at most the server's
 # own Java footer reads, three blocks per file and node (planning footers, plus the view setup's footer
@@ -70,6 +73,8 @@ n=1; [[ $topo == sasl-* ]] && n=3
 # other SASL topologies keep the short-circuit-only path.
 direct=false; [ "$topo" = sasl-direct ] && direct=true
 if $sasl && ! $direct; then opts="$opts -DhdfsSaslDataTransfer=off"; fi
+# Item 42 (2): the point-query stage counts CatalogViews' views=prunedFiles debug lines.
+if $sasl; then opts="$opts -Dorg.slf4j.simpleLogger.log.pro.surpin.data.arrowflight.server.services.CatalogViews=debug"; fi
 dnIp() { echo "172.31.0.$(( 11 + $1 ))"; }   # DataNode i (and server i): 172.31.0.12, .13, .14
 ha=false; [ "$topo" != plain ] && ha=true
 
@@ -267,6 +272,16 @@ else
     [ "$(grep -cE "^[0-9]+\. BP-.*$(dnIp "$i"):" "$work/fsck-split.log")" -lt "$blocks" ] \
       || finish fail "dn$i holds every block of split/t/$splitFile (placement); rerun"
   done
+fi
+if $sasl; then
+  # Item 42 (2): point.orders_r = tpch.orders in 8 files of one key range each (footer min/max tell
+  # them apart), replication 2 of 3 in the clusters: some files whole on dn1, some only as copies.
+  "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-hdfs-point-check.py gen "$in/data/tpch/orders" "$work/point/orders_r" \
+    || finish fail "item 42: point.orders_r files not written"
+  docker cp "$work/point" "$admin:/tmp/upload-point" > /dev/null
+  docker exec "${kenv[@]}" "$admin" bash -c "hdfs dfs -mkdir -p /data/point \
+    && hdfs dfs -D dfs.replication=$([ "$n" -gt 1 ] && echo 2 || echo 1) -put /tmp/upload-point/orders_r /data/point/" \
+    || finish fail "item 42: point.orders_r upload failed"
 fi
 files=$(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data 2>/dev/null | awk '{print $2}')
 note "data: $(docker exec "${kenv[@]}" "$admin" hdfs dfs -count /data 2>/dev/null | awk '{print $2 " files, " $3 " bytes"}')"
@@ -706,6 +721,36 @@ dcSmallDisk() {
   checkReadsPerQid $(for i in $(seq "$n"); do echo "srvc$i"; done)
   return 0
 }
+# Item 42 (2): complete-mode point queries on point.orders_r read only the file their key can be in, also
+# on SASL DataNodes read short-circuit only with node-local copies (the maintainer's stand: no
+# views=prunedFiles line there, kept=1 files=8 with privileged DataNodes). One server without
+# distributedComplete, as on the stand: srv itself in ha-krb-sasl; in the clusters the servers stop
+# and srvq starts in dn1's network namespace (copy cache at its default) and stops again after.
+pointPruning() {
+  local name=$srv rcq lines kept1 kept0 saved
+  if [ "$n" -gt 1 ]; then
+    for i in $(seq "$n"); do docker stop -t 20 "srv$i" > /dev/null; done
+    mkdir -p "$work/copiesq" && chmod 777 "$work/copiesq"
+    saved=$opts
+    opts=$(echo "$opts" | sed -E 's/ -DhdfsLocalCopyMaxBytes=[1-9][0-9]*//; s/ -DendpointsPerServer=1//')
+    startSmallDiskServer srvq "$work/copiesq" ""
+    opts=$saved
+    name=srvq
+    sleep 3
+  fi
+  "$py" -I tools/ci/service-hdfs-point-check.py check "$(dnIp 1):32010" "$work/point/orders_r" > "$work/point-check.log" 2>&1; rcq=$?
+  cat "$work/point-check.log"
+  docker logs "$name" > "$work/$name-point.log" 2>&1 || true
+  [ "$n" -gt 1 ] && docker stop -t 20 srvq > /dev/null
+  lines=$(grep -c 'views=prunedFiles table=point.orders_r' "$work/$name-point.log" || true)
+  kept1=$(grep -c 'views=prunedFiles table=point.orders_r kept=1 files=8' "$work/$name-point.log" || true)
+  kept0=$(grep -c 'views=prunedFiles table=point.orders_r kept=0 files=8' "$work/$name-point.log" || true)
+  note "item 42 (2) point queries on $name: $(grep -m 1 '^result ' "$work/point-check.log" || echo 'no result line'); views=prunedFiles $lines (kept=1: $kept1, kept=0: $kept0), complete from copies $(grep -c 'hdfs=completeFromCopies' "$work/$name-point.log"), footer errors $(grep -c 'pruning=footerError' "$work/$name-point.log"); $(grep -m 1 -oE 'views=prunedFiles table=point.*' "$work/$name-point.log" || echo 'no views=prunedFiles line')"
+  [ "$rcq" -eq 0 ] || finish fail "item 42 (2): $(grep -m 1 '^result fail' "$work/point-check.log" | cut -c13- || echo 'point client failed')"
+  [ "$kept1" -ge 2 ] && [ "$kept0" -ge 1 ] \
+    || finish fail "item 42 (2): point queries not pruned on SASL DataNodes (views=prunedFiles kept=1: $kept1 of 2, kept=0: $kept0 of 1)"
+  return 0
+}
 # Item 37 (a), (b): a node stop under load, then a server started while tpch.nation's files are
 # readable by their owner only (the server's principal flight is not the owner). Kerberos cells
 # with one server, balanced only. Fails on: a load failure other than UNAVAILABLE, 'Filesystem
@@ -754,6 +799,7 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   # shellcheck disable=SC2046
   # hdfs=reads lines (item 32) belong to the short-circuit-only / copy path; sasl-direct has none.
   if [ "$n" -gt 1 ] && ! $direct; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
+  if $sasl; then pointPruning; fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
   if $krb && [ "$n" -eq 1 ] && [ "$profile" = balanced ]; then denyAndStop; fi

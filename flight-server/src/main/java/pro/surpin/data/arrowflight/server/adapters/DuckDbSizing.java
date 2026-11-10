@@ -55,6 +55,13 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     /** Most of the host memory one connection gets by default (DuckDB's own default share). */
     static final int MAX_CONNECTION_PERCENT = 80;
 
+    /**
+     * Smallest default memory limit when the DuckDB budget is smaller than
+     * {@link #MIN_CONNECTION_BYTES}: a limit above the budget got speed servers OOM-killed in a
+     * 3 GiB container (item 42), so under {@code speed} the budget wins over the 1 GiB floor down to this size.
+     */
+    static final long MIN_BUDGET_BYTES = 128L << 20;
+
     private static final Pattern SIZE = Pattern.compile(
             "\\s*(\\d+(?:\\.\\d+)?)\\s*(B|KB|MB|GB|TB|KIB|MIB|GIB|TIB)?\\s*");
 
@@ -243,6 +250,20 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
             memoryLimit = Math.max(1, bytes >> 20) + "MiB";
         }
         return new Shared(threads, memoryLimit);
+    }
+
+    /**
+     * Caps a default DuckDB memory limit at the DuckDB budget (memory minus heap, direct memory
+     * and headroom), never below {@link #MIN_BUDGET_BYTES}: the 1 GiB floor and DuckDB's 80 %
+     * share must not let DuckDB, the heap and direct memory together exceed the container
+     * (item 42: 2457 MiB + 768 MiB heap + 512 MiB direct in 3 GiB, OOM kill).
+     *
+     * @param bytes  limit before the cap
+     * @param budget DuckDB budget in bytes, may be negative
+     * @return the limit, at most the budget
+     */
+    static long withinBudget(long bytes, long budget) {
+        return Math.min(bytes, Math.max(MIN_BUDGET_BYTES, budget));
     }
 
     /**

@@ -187,8 +187,9 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
 
     /**
      * Sizes the node-wide memory limit of the shared DuckDB under {@code speed}: what the
-     * DuckDB-per-connection mode gives the connections it expects at once, at least 1 GiB and at
-     * most DuckDB's own default share of 80 % of the memory. The earlier rule (75 % of the memory
+     * DuckDB-per-connection mode gives the connections it expects at once, at least 1 GiB, at
+     * most DuckDB's own default share of 80 % of the memory and never above the DuckDB budget
+     * (down to {@link DuckDbSizing#MIN_BUDGET_BYTES}). The earlier rule (75 % of the memory
      * minus heap and direct) was always smaller and left 1 GiB for the whole node with a large
      * heap, where 32 concurrent S3 queries ran out of it (item 23b).
      *
@@ -200,7 +201,9 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         Long perConnection = balanced.memoryLimit() == null ? null : DuckDbSizing.parseBytes(balanced.memoryLimit());
         long bytes = perConnection == null ? balanced.budgetBytes() : perConnection * balanced.connections();
         bytes = Math.min(bytes, host.memoryBytes() / 100 * DuckDbSizing.MAX_CONNECTION_PERCENT);
-        return Math.max(DuckDbSizing.MIN_CONNECTION_BYTES, bytes);
+        // Never above the budget (item 42): each connection's 1 GiB floor times the expected
+        // connections gave 2457 MiB with a 1331 MiB budget in 3 GiB, and the server was OOM-killed.
+        return DuckDbSizing.withinBudget(Math.max(DuckDbSizing.MIN_CONNECTION_BYTES, bytes), balanced.budgetBytes());
     }
 
     /**

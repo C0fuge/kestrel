@@ -18,6 +18,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `hdfs=metadataCacheUnsupported`) and runs without the cache; missing timeout settings keep their
   `duckdb=hdfsTimeoutUnsupported` WARN, now with `version=`.
 
+- Item 42 (stand bugs): (1) `resourceProfile=speed` never sizes the shared DuckDB's default memory limit above the
+  DuckDB budget (memory - reserved heap - reserved direct - 15 %; floor 128 MiB): with 4 expected connections the 1 GiB
+  per-connection floor gave 2457 MiB in a 3 GiB container with `-Xmx768m` / direct 512m (budget 1331 MiB) and the
+  server was OOM-killed; now 1331 MiB. 2 GiB / 256m / 256m: 1638 -> 1228 MiB. `balanced` and explicit limits unchanged.
+  (2) File pruning by footer statistics (item 39 (c)) now also applies on SASL DataNodes read short-circuit only:
+  complete answers there went through the node-local-copy rewrite, which replaced the table by all its files before
+  pruning, so no `views=prunedFiles` line and every missing file was copied. A point query now copies and reads only
+  the kept files (a kept file held here is read in place without the node-wide readability refusal; no kept file
+  reads nothing); also for the batches-of-copies path. HDFS service cells ha-krb-sasl / sasl-cluster / sasl-direct gain
+  a point-query stage on `point.orders_r` (8 key ranges) requiring `views=prunedFiles` lines.
+
 - `resourceProfile=speed` sizes the shared DuckDB's default memory limit with the JVM memory it can really use
   (item 40(a), Q-40a): reserved heap = min(`-Xmx`, max(1 GiB, heap in use at startup x 2)), reserved direct =
   min(`MaxDirectMemorySize`, 1 GiB + 25 %), instead of the full `-Xmx` + direct; the memory stays the container's

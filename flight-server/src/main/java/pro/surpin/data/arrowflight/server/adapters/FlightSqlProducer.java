@@ -2197,7 +2197,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
         try (ExecutionService.CopiedQuery copied =
                 executionService.completeFromCopies(expanded, notBatched)) {
-            if (!copied.copied()) {
+            if (!copied.copied() && !copied.pruned()) {
                 requireReadableHere(query);
             }
             executionService.readComplete(allocator, copied.sql(), state.parameters(),

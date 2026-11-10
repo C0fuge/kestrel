@@ -1124,46 +1124,27 @@ public final class CatalogViews {
      * @return SQL DuckDB can run
      */
     public String prunedFiles(String sql) {
-        FileStatsPruner p = pruner;
-        Map<String, TableViews> data = prunable;
-        if (p == null || sql == null || data.isEmpty() || !TableReferences.singleSelect(sql)) {
+        return prunedFiles(sql, pruning(sql));
+    }
+
+    /**
+     * Replaces the pruned reference of a query by a read of its kept files, as
+     * {@link #prunedFiles(String)} does, with the files already picked.
+     *
+     * @param sql     SQL after the catalog rewrites
+     * @param pruning the reference and its kept files from {@link #pruning(String)}, or null
+     * @return SQL DuckDB can run, unchanged when pruning is null or the view must stay
+     */
+    String prunedFiles(String sql, Pruning pruning) {
+        if (pruning == null) {
             return sql;
         }
-        List<TableReferences.Reference> references = TableReferences.find(sql,
-                (schema, table) -> data.containsKey((schema + "\u0000" + table)
-                        .toLowerCase(Locale.ROOT)));
-        if (references.size() != 1) {
-            return sql;
-        }
-        TableReferences.Reference reference = references.get(0);
-        if (threePartName(sql, reference)) {
-            return sql;
-        }
-        String filter = singleTableFilter(sql, reference, true);
-        if (filter == null) {
-            return sql;
-        }
-        TableViews views = data.get((reference.schema() + "\u0000" + reference.table())
-                .toLowerCase(Locale.ROOT));
         DataStore store = parquetAdapter.dataStore();
-        List<DataFile> kept;
-        try {
-            kept = p.keep(store, reference.schema() + "." + reference.table(), views.files(),
-                    filter);
-        } catch (IOException | RuntimeException e) {
-            // No pruning: DuckDB reads the view and reports what it cannot read itself.
-            LOGGER.warn("node={} pruning=footerError table={}.{} error='{}'", LogUtil.node(),
-                    reference.schema(), reference.table(), e.getMessage());
-            return sql;
-        }
-        if (kept == null) {
-            return sql;
-        }
         String body;
-        if (kept.isEmpty()) {
-            body = views.emptyBody();
+        if (pruning.kept().isEmpty()) {
+            body = pruning.emptyBody();
         } else {
-            List<DataFile> ordered = readableFirst(store, kept);
+            List<DataFile> ordered = readableFirst(store, pruning.kept());
             if (store.wholeFileReadsOnly() && !store.readableHere(ordered.get(0))) {
                 return sql;   // the view binds on a file this node reads; keep it
             }
@@ -1171,14 +1152,91 @@ public final class CatalogViews {
             for (DataFile file : ordered) {
                 paths.add(store.duckDbUri(file));
             }
-            body = "SELECT " + views.columns() + " FROM "
+            body = "SELECT " + pruning.columns() + " FROM "
                     + DuckDbAdapter.readParquetFromClause(paths);
         }
-        LOGGER.debug("node={} views=prunedFiles table={}.{} kept={} files={}", LogUtil.node(),
-                reference.schema(), reference.table(), kept.size(), views.files().size());
-        return TableReferences.rewrite(sql, references, List.of("(" + body + ")"
+        logPruned(pruning);
+        TableReferences.Reference reference = pruning.reference();
+        return TableReferences.rewrite(sql, List.of(reference), List.of("(" + body + ")"
                 + (reference.aliased() ? "" : " AS "
                         + DuckDbAdapter.quoteIdentifier(reference.table()))));
+    }
+
+    /**
+     * Picks the files of the one directory table of a plain single-table query that its WHERE
+     * clause can match by their footer statistics, as {@link #prunedFiles(String)} reads them;
+     * the local-copy path of SASL DataNodes (item 42) copies and reads only these.
+     *
+     * @param sql SQL after the catalog rewrites, table names qualified
+     * @return the reference and the kept files, or null when the query is not pruned (any
+     *         other query, a footer that cannot be read, or no file to leave out)
+     */
+    Pruning pruning(String sql) {
+        FileStatsPruner p = pruner;
+        if (p == null || sql == null || !TableReferences.singleSelect(sql)) {
+            return null;
+        }
+        try {
+            current();   // the tables and their files as the query will read them
+        } catch (IOException | SQLException e) {
+            return null;   // the query reports what cannot be listed or described
+        }
+        Map<String, TableViews> data = prunable;
+        if (data.isEmpty()) {
+            return null;
+        }
+        List<TableReferences.Reference> references = TableReferences.find(sql,
+                (schema, table) -> data.containsKey((schema + "\u0000" + table)
+                        .toLowerCase(Locale.ROOT)));
+        if (references.size() != 1) {
+            return null;
+        }
+        TableReferences.Reference reference = references.get(0);
+        if (threePartName(sql, reference)) {
+            return null;
+        }
+        String filter = singleTableFilter(sql, reference, true);
+        if (filter == null) {
+            return null;
+        }
+        TableViews views = data.get((reference.schema() + "\u0000" + reference.table())
+                .toLowerCase(Locale.ROOT));
+        List<DataFile> kept;
+        try {
+            kept = p.keep(parquetAdapter.dataStore(), reference.schema() + "." + reference.table(),
+                    views.files(), filter);
+        } catch (IOException | RuntimeException e) {
+            // No pruning: DuckDB reads the view and reports what it cannot read itself.
+            LOGGER.warn("node={} pruning=footerError table={}.{} error='{}'", LogUtil.node(),
+                    reference.schema(), reference.table(), e.getMessage());
+            return null;
+        }
+        return kept == null ? null : new Pruning(reference, List.copyOf(kept), views.files().size(),
+                views.columns(), views.emptyBody());
+    }
+
+    /**
+     * Logs the {@code views=prunedFiles} line of a pruned query.
+     *
+     * @param pruning the pruned reference and its kept files
+     */
+    void logPruned(Pruning pruning) {
+        LOGGER.debug("node={} views=prunedFiles table={}.{} kept={} files={}", LogUtil.node(),
+                pruning.reference().schema(), pruning.reference().table(), pruning.kept().size(),
+                pruning.files());
+    }
+
+    /**
+     * Files of one table reference a query's WHERE clause can match by footer statistics.
+     *
+     * @param reference the table reference
+     * @param kept      files kept, possibly none
+     * @param files     number of files the table has
+     * @param columns   select list of the table's data view
+     * @param emptyBody query of the table's empty view, for a query that keeps no file
+     */
+    record Pruning(TableReferences.Reference reference, List<DataFile> kept, int files, String columns,
+            String emptyBody) {
     }
 
     /**

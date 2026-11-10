@@ -2043,6 +2043,20 @@ public final class ExecutionService {
             return CopyBatches.declined(parsed.schema + "." + parsed.table
                     + " is not a table of the data store (" + e.getMessage() + ")");
         }
+        CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        if (pruning != null && copyKey(pruning.reference().schema(), pruning.reference().table())
+                .equals(copyKey(parsed.schema, parsed.table))) {
+            if (pruning.kept().size() == listed.size()) {
+                pruning = null;
+            } else if (pruning.kept().isEmpty()) {
+                return CopyBatches.declined("footer statistics rule out every file of " + parsed.schema + "."
+                        + parsed.table);
+            } else {
+                listed = pruning.kept();   // item 42: copy only the files the filter can match
+            }
+        } else {
+            pruning = null;
+        }
         DataStore store = parquetAdapter.dataStore();
         List<DataFile> unreadable = new ArrayList<>();
         String[] fileUris = new String[listed.size()];
@@ -2075,6 +2089,9 @@ public final class ExecutionService {
         if (renamed && !RenamingStreamListener.sameTypes(complete, partial)) {
             return CopyBatches.declined("the column types of the answer in parts "
                     + partial.getFields() + " differ from the complete answer's " + complete.getFields());
+        }
+        if (pruning != null) {
+            catalogViews.logPruned(pruning);
         }
         LOGGER.info("qid={} node={} hdfs=completeInCopyBatches table={}.{} files={} localCopy={}"
                 + " renamed={}", LogUtil.qid(), LogUtil.node(), parsed.schema, parsed.table,
@@ -2217,8 +2234,21 @@ public final class ExecutionService {
      *
      * @param sql SQL to run, unchanged when nothing is copied
      * @param lease copies the SQL reads, or null; closed when the answer has been streamed
+     * @param pruned whether the SQL reads only files of its one table this node reads where they
+     *        are, picked by footer statistics (item 42)
      */
-    public record CopiedQuery(String sql, LocalCopyCache.Lease lease) implements AutoCloseable {
+    public record CopiedQuery(String sql, LocalCopyCache.Lease lease, boolean pruned) implements AutoCloseable {
+
+        /**
+         * Creates a query that is not pruned.
+         *
+         * @param sql SQL to run
+         * @param lease copies the SQL reads, or null
+         */
+        public CopiedQuery(String sql, LocalCopyCache.Lease lease) {
+            this(sql, lease, false);
+        }
+
         /**
          * Tells whether the SQL reads local copies.
          *
@@ -2288,6 +2318,24 @@ public final class ExecutionService {
             return new CopiedQuery(sql, null);
         }
         DataStore store = parquetAdapter.dataStore();
+        // A point query reads and copies only the files its filter can match (item 42): the rewrite
+        // below would otherwise replace the table by all its files before the files are pruned.
+        CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        String prunedKey = null;
+        if (pruning != null) {
+            boolean allHere = true;
+            for (DataFile file : pruning.kept()) {
+                allHere &= store.readableHere(file);
+            }
+            if (allHere) {
+                String pruned = catalogViews.prunedFiles(sql, pruning);
+                if (!pruned.equals(sql)) {
+                    copies(List.of(), pruning.kept().size());
+                    return new CopiedQuery(pruned, null, true);
+                }
+            }
+            prunedKey = copyKey(pruning.reference().schema(), pruning.reference().table());
+        }
         Map<String, List<DataFile>> copied = new LinkedHashMap<>();
         List<DataFile> unreadable = new ArrayList<>();
         Set<String> listedTables = new HashSet<>();
@@ -2301,10 +2349,14 @@ public final class ExecutionService {
                 continue;
             }
             List<DataFile> listed;
-            try {
-                listed = parquetAdapter.tableFiles(schema, table.table());
-            } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
-                continue;   // not a table of the data store: DuckDB reports it
+            if (key.equals(prunedKey)) {
+                listed = pruning.kept();
+            } else {
+                try {
+                    listed = parquetAdapter.tableFiles(schema, table.table());
+                } catch (IllegalArgumentException | java.io.FileNotFoundException e) {
+                    continue;   // not a table of the data store: DuckDB reports it
+                }
             }
             listedTables.add(key);
             files += listed.size();
@@ -2376,6 +2428,9 @@ public final class ExecutionService {
                 }
                 sources.add(source + (reference.aliased() ? ""
                         : " AS " + DuckDbAdapter.quoteIdentifier(reference.table())));
+            }
+            if (prunedKey != null && copied.containsKey(prunedKey)) {
+                catalogViews.logPruned(pruning);
             }
             LOGGER.info("qid={} node={} hdfs=completeFromCopies tables={} references={}",
                     LogUtil.qid(), LogUtil.node(), copied.size(), references.size());

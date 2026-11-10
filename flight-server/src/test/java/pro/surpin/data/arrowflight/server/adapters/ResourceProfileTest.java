@@ -292,8 +292,9 @@ class ResourceProfileTest {
         HostLimits tiny = new HostLimits(2, 2 * GIB, 256L << 20, 256L << 20);
         ConfigSource source = effective(raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of()), tiny);
         assertEquals(0, new PropertiesPluginConfig("s3", source, List.of()).getInt("cacheMegabytes", 0));
-        // Balanced gives its two connections 1 GiB each; capped at 80 % of the 2 GiB.
-        assertEquals("1638MiB", ConfigAdapter.duckDbShared(source, tiny).memoryLimit());
+        // Balanced gives its two connections 1 GiB each, 80 % of the 2 GiB would be 1638 MiB: with heap and
+        // direct memory above the 2 GiB, so the budget (2 GiB - 512 MiB - 15 %) caps it (item 42).
+        assertEquals("1228MiB", ConfigAdapter.duckDbShared(source, tiny).memoryLimit());
     }
 
     /**
@@ -343,5 +344,45 @@ class ResourceProfileTest {
 
         ConfigSource balanced = raw(Map.of(), Map.of(), Map.of());
         assertTrue(ConfigAdapter.getConfig(effective(balanced, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+    }
+
+    /**
+     * Item 42: in a 3 GiB container with -Xmx768m and direct 512m on 16 cores speed gave DuckDB 2457 MiB
+     * (4 connections x the 1 GiB floor, capped only at 80 % of the memory) with a budget of 1331 MiB, and
+     * the server was OOM-killed; the limit now never exceeds the budget, for small budgets too.
+     */
+    @Test
+    void speedNeverSizesDuckDbAboveTheBudgetInSmallContainers() {
+        long mib = 1L << 20;
+        HostLimits stand = new HostLimits(16, 3 * GIB, 768 * mib, 512 * mib, 100 * mib);
+        ConfigSource raw = raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of());
+        DuckDbSizing reserved = ConfigAdapter.duckDbSizing(raw, ResourceProfile.speedReservation(stand));
+        assertEquals(1331, reserved.budgetBytes() >> 20);
+        assertEquals("1331MiB", ConfigAdapter.duckDbShared(effective(raw, stand), stand).memoryLimit());
+
+        for (long memory : List.of(1 * GIB, 3 * GIB / 2, 2 * GIB, 5 * GIB / 2, 3 * GIB)) {
+            for (long heap : List.of(256 * mib, 512 * mib, 768 * mib, GIB)) {
+                for (long direct : List.of(256 * mib, 512 * mib, GIB)) {
+                    for (int cores : List.of(2, 4, 16, 64)) {
+                        HostLimits host = new HostLimits(cores, memory, heap, direct, heap / 4);
+                        long budget = ConfigAdapter.duckDbSizing(raw, ResourceProfile.speedReservation(host))
+                                .budgetBytes();
+                        long limit = DuckDbSizing.parseBytes(
+                                ConfigAdapter.duckDbShared(effective(raw, host), host).memoryLimit());
+                        String at = host.toString();
+                        assertTrue(limit <= Math.max(DuckDbSizing.MIN_BUDGET_BYTES, budget), at);
+                        assertTrue(limit >= DuckDbSizing.MIN_BUDGET_BYTES, at);
+                        if (budget >= DuckDbSizing.MIN_BUDGET_BYTES) {
+                            assertTrue(limit + heap + direct <= memory, at);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Large hosts keep their limits: the budget is far above them there.
+        HostLimits harness = new HostLimits(4, 8 * GIB, 3 * GIB, 2 * GIB);
+        ConfigSource s3 = raw(Map.of("resourceProfile", "speed"), Map.of(), Map.of("dataDir", "s3://bucket/t"));
+        assertEquals("4402MiB", ConfigAdapter.duckDbShared(effective(s3, harness), harness).memoryLimit());
     }
 }
