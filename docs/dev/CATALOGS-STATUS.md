@@ -17,6 +17,23 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (3) - second improvement (one parse check per pruned query) merged:
+- Done: next step (1) of session (2). DoGet's pruned text is accepted without a second `json_serialize_sql` when the
+  parse check of the unpruned text (the describe's) found a DuckDB base table reference (`query_location`, UTF-8
+  byte offset) exactly at the replaced span and the span is a plain table name (`DuckDbAdapter.acceptRewrite`,
+  `ExecutionService.prunedFiles`, `CatalogViews.prunedReplacement`). Derived names = original's + `read_parquet` +
+  `list_value` (the `[...]` file list parses as `list_value`; the test over the 40 pruning queries found it).
+  Only on the node that described the text (cache per node); the local-copy path (item 42) still checks in full.
+- HDFS point perf (balanced / speed, c1/c8/c32 q/s, 2 runners each): branch 42791070774 b 56.4/79.7/80.1 and
+  55.5/77.0/77.4, s 54.6/88.3/97.3 and 55.3/89.6/96.0; main baseline 42791075306 b 53.0/78.5/79.5 and 45.2/63.1/64.8
+  (slower runner), s 56.0/90.0/95.5 and 46.5/71.3/78.0. Within noise on the comparable runner (the 2-CPU cell is
+  DuckDB-CPU-bound); 0 errors. Expected saving ~0.15 ms CPU per point query.
+- Next (in order): (2) one jOOQ parse per request (or a parse cache per SQL text for create -> GetFlightInfo -> DoGet);
+  (3) literal-insensitive describe cache key; (4) gizmo vs speed per call and c32 JFR on the HDFS point cell, as in
+  the session (2) note. Branch for the next cut: `fix/40b-small-2` was this cut's (`fix/40b-small` cannot be rebased:
+  force-push refused, and merging main into it conflicts with the cherry-picked 48adb2ac) - start the next one from
+  `origin/main` as `fix/40b-small-3`.
+
 ITEM 40(b) state after session 2026-11-10 (2) - first improvement (parse check name scan, see Log) merged:
 - Local cell rebuilt (same shape; this time data sorted by key, 93 750-row groups for orders, 375 000 for lineitem,
   so DuckDB's own point time is smaller): c1 p50 ms, prepared flow point_orders create 1.45-1.55, GetFlightInfo
@@ -763,3 +780,9 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   (c1 per call and c8 ADBC load, see the 40(b) state note). New profile numbers and the next three cuts are in that
   note. Not DONE yet. Branch `fix/40b-small` now = main + `tools/ci/small-query-rpc.py` (merge commit f8f39197; a
   force-push to rebase it was refused, so main was merged in instead). Lock released.
+- 2026-11-10 (3): **ITEM 40(b)** second improvement: DoGet accepts the pruned text of a point query without a second
+  DuckDB parse check when DuckDB's parse of the described text put a table reference at the replaced span
+  (`query_location`); tests `DuckDbAdapterTest` (+2), `FileStatsPrunerTest` (every pruned query: accepted, one
+  statement, names within original + `read_parquet` + `list_value`). Branch `fix/40b-small-2` Dev CI 42791067194 green;
+  HDFS point perf branch 42791070774 vs main 42791075306 within noise (state note). Merged into `main` as 345627f1
+  (Dev CI on main 42794210815 started at session end). Not DONE yet. Lock released.
