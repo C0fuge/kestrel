@@ -23,6 +23,8 @@
 
 ## Next steps (one per session)
 
+> **Waiting on Q-43m (balanced 128 MiB OOM on small hosts, 2026-11-10 20:45Z): answer A/B/C becomes the next core item.**
+
 > **BUILD FOR THE REAL CLUSTER DONE (2026-11-10 17:18Z, core lane; maintainer 11:30).** `package=true` on `pkg/2ff22144`
 > (= `main` 2ff22144: 40(a), 40(b) DONE 135e6dac, 41 + follow-ups, merged parts of 42 / 43) green: Dev CI 42857169249
 > (build, service gate, package); Service cluster 42860270956, hdfs 42860277541, security 42860284292, stores
@@ -1954,6 +1956,20 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **(Q-43m, 2026-11-10 20:45Z, core lane) balanced fails heavy TPC-H on small hosts since Q-42(a) - change the budget
+  rule?** egret FRESH 42865250390 on `server-1.0.0-2ff221447b5d` (orchestrator 19:58Z): `balanced` runs with DuckDB
+  `memory_limit=128MiB` per connection and fails with `Out of Memory Error ... (127.8 MiB/128.0 MiB used)` - local
+  SF10 q09/q10/q13 every round (19/22), S3 SF1 3-5 and SF10 5-8 queries per round; `speed` 22/22. Errors, not wrong
+  rows. Cause (no bug in the code; it does what the Q-42 answer asked): `DuckDbSizing.compute` caps the per-connection
+  limit at the budget `memory - maxHeap - maxDirect - 15 %`, which on egret's 6 GiB / -Xmx3g / direct 2g is ~103 MiB,
+  so the 128 MiB floor applies (before 15220a77: 1 GiB x 2 connections, 22/22, RSS ~1.6 GB - the JVM limits are far
+  above what the JVM really uses). Options: **(A, proposed)** size balanced's cap with `speed`'s reservation
+  (`ResourceProfile.speedReservation`: heap = min(-Xmx, max(1 GiB, 2 x heap in use)), direct = min(limit, 1 GiB +
+  25 %)) - egret: budget ~2663 MiB, 1331 MiB per connection (>= the old 1 GiB), item 42's 3 GiB OOM-kill shape stays
+  capped as now; (B) undo the cap for balanced only (keep it for speed / shared); (C) keep it and have the harness set
+  `duckDbMemoryLimit`. Not changed without your word (a default). Until then the stand on this pre-release should use
+  `speed` or set `duckDbMemoryLimit` on small hosts; the start WARN `duckdb=memoryLimitBelowFloor` names this case.
 
 - **Answer (maintainer, 2026-11-10 11:25): yes, log it** - on the direct path one `hdfs=reads` line per query with
   files read node-local (all blocks on this node's DataNode) vs remote (by block hosts) and remote bytes if cheap; the
@@ -4204,3 +4220,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-10 16:41-17:20Z (core lane): the build for the real cluster - Dev CI `package=true` 42857169249 on
   `pkg/2ff22144` (= main after ITEM 40(b) DONE) green with Service cluster 42860270956, hdfs 42860277541, security
   42860284292, stores 42860290386; pre-release `server-1.0.0-2ff221447b5d`. No code change. Lock released.
+- 2026-11-10 20:42-20:55Z (core lane): no open item; looked at the orchestrator's balanced-OOM finding on
+  `server-1.0.0-2ff221447b5d` (egret FRESH 42865250390): cause is Q-42(a)'s budget cap (128 MiB per connection on
+  6 GiB / -Xmx3g / direct 2g), not a code bug. New Open question Q-43m with options (A proposed: speed's reservation
+  for balanced's cap). No code change, no CI run. Lock released.
