@@ -19,6 +19,16 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > **Maintainer, 2026-11-10 00:25 - NEXT in this lane: ITEM 40(a)** (S3 TPC-H SF10 1.5x behind GizmoSQL on the same
 > DuckDB): see `STATUS.md` "ITEM 40". Branch `fix/40a-s3`, maintainer exception to the lane scope for this item,
 > merge into `main` when green, "ITEM 40(a) DONE <sha>" in this Log.
+>
+> *Item 40(a) step 1 done 2026-11-10 (plugins lane): cause found, fix needs Q-40a below.* The S3 gap is DuckDB's
+> memory limit under speed, not the S3 read path: speed sizes DuckDB as memory - `-Xmx` - `MaxDirectMemorySize` - 15 %;
+> the external file cache lives in that limit, so with a large reserved heap the warm passes re-read S3 (q09/q10/q12/
+> q14/q20 7-20x plain). `tpch-perf.yml` (S3, SF10, 4 CPU / 8 GB container, ADBC): speed with -Xmx3g, direct 2g
+> (DuckDB 2048 MiB) 75.8 s; same with `-DduckDbMemoryLimit=5120MiB` 19.4 s; with `-Xmx1g -XX:MaxDirectMemorySize=1g`
+> (auto-sized 4914 MiB, peak 4.1 GB of 8) **15.9 s vs plain DuckDB 1.5.6 (GizmoSQL-like) 16.9 s**, same answers;
+> `endpointsPerServer=1` no effect. **Next step:** after Q-40a, apply the chosen sizing (profile code + test, or
+> START-NOTES/harness only), ask the performance repo for a gizmo wave on the harness shape, then "ITEM 40(a) DONE".
+> Side issue: the workflow's settings diff prints nothing although the files differ (194 vs 196 lines) - debug it.
 
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
@@ -699,6 +709,14 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **(Q-40a, item 40(a), 2026-11-10) speed's DuckDB memory vs the JVM reservation.** On S3 the warm TPC-H passes
+  are only as fast as GizmoSQL when DuckDB's limit holds the external file cache (see the 40(a) note in Next steps:
+  75.8 s -> 15.9 s with a 1g heap / 1g direct in an 8 GB container, plain DuckDB 16.9 s). Options: (A) no code change:
+  START-NOTES and the harness give speed a small `-Xmx` / `MaxDirectMemorySize` (or set `duckDbMemoryLimit`);
+  (B) speed counts only part of `-Xmx`/direct as reserved (e.g. half), raising the default limit - risk: the RSS
+  overshoot of item 39(b) if the heap really fills; (C) both. Which -Xmx/direct does the harness run speed with?
+  Plugins lane suggests (A) now, (B) only after a memory-pressure check. Waiting for the maintainer.
+
 - (P2, optional) JWT: only one issuer per server and keys as JWKS (URL or file); Knox without a JWKS endpoint would
   need a PEM public key setting, and several issuers (e.g. Keycloak + Entra) a list - add if production needs them.
   An OpenLDAP container test in CI (`real-services`) for the LDAP provider - only if wanted (UnboundID in-memory
@@ -1046,3 +1064,11 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   11-02 follow-up is answered: package run 41500117177 (7fa1c246) was cancelled and published nothing, but later
   pre-releases contain those commits (latest `server-1.0.0-b69660b9260a`, 2026-11-07, has 7fa1c246 as an
   ancestor). No new release needed. Lock not taken (docs only).
+- 2026-11-10 (plugins lane): ITEM 40(a) step 1 - measurement. `tpch-perf.yml` (branch `fix/40a-s3`, now on `main`:
+  c0fe458f, 3ba03976, 72740e75; tooling only, no server/plugin code): input `plain` (plain in-process DuckDB 1.5.6
+  as the GizmoSQL reference + settings dumps), `more` ('|'-separated configurations, answers checked against the
+  default's), `quick` (skip threads4). Runs (S3 SF10, adbc): 42700198697 (previous session; speed 63.3 s vs plain
+  12.3 s), 42748064489 (red only on the label bug fixed in 72740e75; speed 75.8 s, `duckDbMemoryLimit=5120MiB` 19.4 s,
+  plain 20.3 s), 42751636105 green (speed -Xmx1g/direct 1g 15.9 s, plain 16.9 s, same answers). Cause: DuckDB memory
+  limit bounds the external file cache; decision Q-40a open. Force-push of the rebased branch was refused by the
+  session's permission check, so the branch got a merge of `main` instead. Lock released.

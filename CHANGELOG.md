@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Dev tooling (item 40(a)): `tpch-perf.yml` inputs `plain` (plain DuckDB reference + DuckDB settings dump), `more`
+  (several configurations per run) and `quick`. No server behaviour change.
+
 ### Settings since 7562a5bdb7b9 (summary of the entries below)
 
 Every setting added, or whose default changed, since build `7562a5bdb7b9` (2026-10-27), with its default as of this
