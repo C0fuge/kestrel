@@ -48,7 +48,8 @@ D13 (b) DONE 3a595503 + dd9090a8 (2026-11-09, see Log): the hdfs-ha loss cell no
 
 D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
     behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
-    Optional (Open question material, changes a default): derive `arrowAllocatorLimitBytes` from direct memory.
+    Optional (changes a default): derive `arrowAllocatorLimitBytes` from direct memory - written up as Q3, no code
+    until answered.
 
 D13. Follow-ups of the service matrix (cluster), optional:
     - (a) short-circuit reads: *measured 2026-11-02 (see Log)* - **not used**. *(a1) done 2026-11-02 (19th session):
@@ -160,6 +161,20 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
     get `UNAVAILABLE` and running answers finish (D8 run: 0 non-retryable failures over 3 graceful + 3 kill -9
     restarts). Proposal: default 20 s (below Kubernetes' 30 s grace period; `docker stop` waits 10 s unless `-t`).
     Changes stop behaviour (stops take up to the longest running answer), hence a question: (a) default 20, (b) keep 0.
+
+Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowflight.arrow.allocatorLimitBytes`,
+    today a fixed 2 GiB). The root Arrow allocator holds every outgoing answer and, under `distributedComplete`, every
+    peer stream of a merge. On the stand (`-XX:MaxDirectMemorySize=8g`) 8 concurrent dc full scans hit `Unable to
+    allocate buffer ... Current allocation: 2147231193`: 6 GiB of direct memory were unusable. 39(d) (a952f415) now
+    admits peer streams by min(direct memory, allocator limit), so dc no longer overruns the cap, but it waits instead
+    (16 streams at 2 GiB). Proposal: when the setting is not given, default to 75 % of `MaxDirectMemorySize` (at least
+    2 GiB, i.e. never below today's value; the rest left for Netty/gRPC buffers outside the allocator); log
+    `arrowAllocator limitMiB= source=directMemory|set`; an explicit value keeps today's meaning. Effect: on 8g direct
+    6 GiB and 48 peer streams; on hosts with <= 2.67 GiB direct nothing changes. Risk: with a larger limit a burst of
+    answers can use more direct memory before the allocator refuses (the JVM's own direct limit still holds, giving
+    `OutOfDirectMemoryError` instead of the allocator's clear `OutOfMemoryException` if Netty needs the remaining 25 %).
+    Changes a default, hence a question: (a) derive as proposed, (b) another share, (c) keep 2 GiB (stand sets it).
+    No code until answered.
 
 ## Log
 
@@ -569,3 +584,7 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
   failover and snapshot); 244 answers, 0 wrong, 0 errors. Under `speed` listings stay cached (GetListingOps ~0)
   but every file open reaches the active NameNode. Test/workflow only (no Dev CI, no `package=true`). Lock
   released. Next: D14 (stand results).
+- 2026-11-10 04:03-04:15Z (lane 3 session): lock 04:03Z. D14 still waits for the stand: item 39 is not packaged yet
+  (core lane's package Dev CI 42751144566 running at 04:03Z), so no stand rerun exists. Wrote D14's optional part as
+  Q3 (default of `arrowAllocatorLimitBytes` from direct memory); no code, no CI. Lock released. Next: D14 (stand
+  results of the item 39 pre-release), Q3 answer.
