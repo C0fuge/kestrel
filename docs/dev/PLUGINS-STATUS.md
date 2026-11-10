@@ -717,6 +717,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **Answer Q-40a (maintainer, 2026-11-10 08:20): (C).** Keep the START-NOTES text (A), and do (B): speed reserves
+  for the JVM what it can really use, not the full `-Xmx` + direct (e.g. reserve = min(-Xmx, max(1 GiB, measured
+  heap after warm-up x 2)) + min(direct, 1 GiB + 25 % of direct), never less than item 39(b)'s cgroup bound), with
+  `DuckDbSizingTest` cases and the memory-pressure check in a `MemoryMax` scope (heap filled to 90 %, DuckDB at its
+  limit, no OOM kill). The harness runs servers with the JVM defaults of its container (check `ci/ab.sh` in the
+  performance repo); after the change ask there for a gizmo wave, then "ITEM 40(a) DONE".
 - **(Q-40a, item 40(a), 2026-11-10) speed's DuckDB memory vs the JVM reservation.** On S3 the warm TPC-H passes
   are only as fast as GizmoSQL when DuckDB's limit holds the external file cache (see the 40(a) note in Next steps:
   75.8 s -> 15.9 s with a 1g heap / 1g direct in an 8 GB container, plain DuckDB 16.9 s). Options: (A) no code change:

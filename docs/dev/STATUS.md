@@ -36,6 +36,20 @@
 > check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
 > Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
 
+> **Maintainer, 2026-11-10 08:20 - ITEM 41 (after item 39 is packaged; core lane, may be split): DuckDB reads SASL
+> DataNodes directly.** The extension repo released hadoopfs `51b7220-afc5` (listing cache: a repeated point query with
+> a glob makes no NameNode call) and **`51b7220-afc6`: SASL data-transfer protection on the read path** (DIGEST-MD5 on
+> the block token, authentication / integrity / privacy; Kerberos single-node HDFS 3.4.1 with
+> `dfs.data.transfer.protection=privacy`: an 11-block file read fully and by point reads, identical; a plain read
+> refused). Settings: `dfs.data.transfer.protection` + `hadoop.security.authentication=kerberos` in LIBHDFS3_CONF.
+> Not yet: AES cipher negotiation (3des wrap now, slower), `dfs.encrypt.data.transfer`, write path.
+> (1) Take afc6 into `ci-assets` (I upload it) and make it the default. (2) When the extension supports SASL data
+> transfer (version check or a probe read of a non-local block at start), the `shortCircuitOnly` mode is not needed:
+> plan files to any node, read non-local blocks directly, keep node-local copies only as a fallback (setting
+> `hdfsSaslDataTransfer=auto|on|off`, start line `hdfs=saslDataTransfer ...`). (3) CI: the sasl-cluster cells with
+> copies off must pass TPC-H 22/22 plain + spread set exact, and a timing of spread scans copies vs direct.
+> "ITEM 41 DONE" with `package=true`.
+
 > **Maintainer, 2026-11-10 00:25 - ITEM 40 (after item 39 is packaged): close the gap to GizmoSQL.** The compare
 > harness now runs GizmoSQL v1.42.2 (Flight SQL server on the same DuckDB v1.5.6, C++), results in the performance
 > repo `results/FRESH-gizmo-deafc861cce3.md`: 22/22 everywhere; **S3 TPC-H SF10: gizmo 33.5 s vs our speed 50.4 s
