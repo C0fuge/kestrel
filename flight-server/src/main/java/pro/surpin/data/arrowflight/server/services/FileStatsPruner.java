@@ -158,12 +158,12 @@ final class FileStatsPruner {
      * @param files the table's files, the first one the file its view was described from
      * @param filter WHERE clause as the query parser rendered it
      * @param parsed the condition {@code filter} was rendered from, or null to parse {@code filter}
-     * @param binds the value each stand-in integer literal of {@code parsed} stands for
+     * @param binds the value each stand-in literal of {@code parsed} stands for
      * @return the files kept, in their order, or null when none is left out
      * @throws IOException when a footer cannot be read
      */
     List<DataFile> keep(DataStore store, String table, List<DataFile> files, String filter,
-            Condition parsed, Map<Long, Long> binds) throws IOException {
+            Condition parsed, Map<Object, Object> binds) throws IOException {
         if (parsed == null && !binds.isEmpty()) {
             throw new IllegalArgumentException("stand-in literals need the parsed condition");
         }
@@ -349,10 +349,10 @@ final class FileStatsPruner {
      *
      * @param condition condition
      * @param bounds the file's bounds by lower-case column name
-     * @param binds the value each stand-in integer literal stands for
+     * @param binds the value each stand-in literal stands for
      * @return false when the file can be left out
      */
-    boolean mayMatch(Condition condition, Map<String, Bounds> bounds, Map<Long, Long> binds) {
+    boolean mayMatch(Condition condition, Map<String, Bounds> bounds, Map<Object, Object> binds) {
         if (condition instanceof QOM.And and) {
             return mayMatch(and.$arg1(), bounds, binds) && mayMatch(and.$arg2(), bounds, binds);
         }
@@ -419,7 +419,7 @@ final class FileStatsPruner {
      * @return false only when no value of the file's range satisfies it
      */
     private boolean compare(Field<?> left, Field<?> right, Map<String, Bounds> bounds,
-            Map<Long, Long> binds, Op op) {
+            Map<Object, Object> binds, Op op) {
         String column = column(left);
         Field<?> literal = right;
         Op o = op;
@@ -476,15 +476,15 @@ final class FileStatsPruner {
     }
 
     /**
-     * Reads a literal as {@link #literal(Field, Kind)} does, a stand-in integer literal as the
+     * Reads a literal as {@link #literal(Field, Kind)} does, a stand-in literal as the
      * value it stands for.
      *
      * @param field expression
      * @param kind the column's kind
-     * @param binds the value each stand-in integer literal stands for (also negated)
+     * @param binds the value each stand-in literal stands for (numbers also negated)
      * @return value, or null when it is no usable literal
      */
-    static BigDecimal literal(Field<?> field, Kind kind, Map<Long, Long> binds) {
+    static BigDecimal literal(Field<?> field, Kind kind, Map<Object, Object> binds) {
         if (field instanceof QOM.Neg<?> neg) {
             BigDecimal inner = kind == Kind.INTEGER ? literal(neg.$arg1(), kind, binds) : null;
             return inner == null ? null : inner.negate();
@@ -501,8 +501,12 @@ final class FileStatsPruner {
             return null;   // not a literal, or NULL / a parameter
         }
         Object value = param.getValue();
-        if (value instanceof Long stand && binds.containsKey(stand)) {
-            value = binds.get(stand);   // a client's integer literal, parsed as its stand-in
+        if (!binds.isEmpty()) {
+            Object key = value instanceof java.sql.Date date ? date.toLocalDate() : value;
+            Object bound = binds.get(key);
+            if (bound != null) {
+                value = bound;   // a client's literal, parsed as its stand-in
+            }
         }
         if (kind == Kind.INTEGER) {
             BigDecimal number;

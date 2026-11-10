@@ -25,10 +25,12 @@ import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -164,6 +166,8 @@ public final class CatalogViews {
     private static final int PRUNING_SHAPES = 512;
     /** First stand-in literal of a shape parse: ten digits, never an INTEGER literal. */
     private static final long STAND_IN_BASE = 3_000_000_001L;
+    /** First stand-in date of a shape parse. */
+    private static final LocalDate STAND_IN_DATE = LocalDate.of(2999, 1, 1);
     /**
      * The query parser's reading of a point query shape ({@link DescribeKey}) with stand-in
      * literals, by shape key: texts differing only in such literals are parsed once (item 40 (b)).
@@ -1230,7 +1234,7 @@ public final class CatalogViews {
         ShapedQuery shaped = shapedQuery(sql, reference);
         ParquetQueryParser query = shaped != null ? shaped.query()
                 : singleTableQuery(sql, reference, true);
-        Map<Long, Long> binds = shaped != null ? shaped.binds() : Map.of();
+        Map<Object, Object> binds = shaped != null ? shaped.binds() : Map.of();
         String filter = query == null ? null : query.filter;
         if (filter == null) {
             return null;
@@ -1253,10 +1257,12 @@ public final class CatalogViews {
 
     /**
      * Reads a point query as {@link #singleTableQuery} does, from one parse of its shape: the
-     * text with each integer literal {@link DescribeKey} leaves out replaced by a stand-in
-     * ({@code 3000000001}, {@code 3000000002}, ...; ten digits, so never a left-out literal)
-     * that occurs nowhere else in it, read back as the text's own value when files are kept.
-     * The literals change no name, alias or join of the text, only values its filter compares.
+     * text with each literal {@link DescribeKey#pruningShape} leaves out replaced by a stand-in
+     * of the same kind that occurs nowhere else in it, read back as the text's own value when
+     * files are kept. Literal {@code i} (from 0) stands in as the integer {@code 3000000001 + i},
+     * the decimal {@code 3000000001 + i}{@code .25}, or the date {@code 2999-01-01} plus
+     * {@code i} days. The literals change no name, alias or join of the text, only values its
+     * filter compares.
      *
      * @param sql SQL after the catalog rewrites
      * @param reference the query's one directory table reference
@@ -1267,7 +1273,7 @@ public final class CatalogViews {
         if (!shapeParses || !QueryCacheLimits.cacheable(sql)) {
             return null;
         }
-        DescribeKey.Shape shape = DescribeKey.shape(sql);
+        DescribeKey.Shape shape = DescribeKey.pruningShape(sql);
         if (shape == null) {
             return null;
         }
@@ -1284,13 +1290,36 @@ public final class CatalogViews {
         if (parse.unusable()) {
             return null;   // parsed per text, as before
         }
-        Map<Long, Long> binds = new HashMap<>();
+        Map<Object, Object> binds = new HashMap<>();
         for (int i = 0; i < shape.literals().size(); i++) {
             DescribeKey.Span span = shape.literals().get(i);
-            long value = Long.parseLong(sql.substring(span.start(), span.end()));
-            long stand = STAND_IN_BASE + i;
-            binds.put(stand, value);
-            binds.put(-stand, -value);   // the parser folds a unary minus into the literal
+            String text = sql.substring(span.start(), span.end());
+            switch (span.kind()) {
+                case INTEGER -> {
+                    long value = Long.parseLong(text);
+                    long stand = STAND_IN_BASE + i;
+                    binds.put(stand, value);
+                    binds.put(-stand, -value);   // the parser folds a unary minus into the literal
+                }
+                case DECIMAL -> {
+                    BigDecimal value = new BigDecimal(text);
+                    BigDecimal stand = new BigDecimal(ShapeParse.standIn(span.kind(), i));
+                    binds.put(stand, value);
+                    binds.put(stand.negate(), value.negate());
+                }
+                case DATE -> {
+                    String inner = text.substring(1, text.length() - 1);
+                    LocalDate value;
+                    try {
+                        value = LocalDate.parse(inner);
+                    } catch (java.time.format.DateTimeParseException e) {
+                        return null;   // no valid date: parsed per text, as before
+                    }
+                    // The parser reads DATE '...' as a date value, never as a cast of the text.
+                    binds.put(STAND_IN_DATE.plusDays(i), value);
+                }
+                default -> throw new IllegalStateException(span.kind().toString());
+            }
         }
         ParquetQueryParser pq = parse.query();
         String name = reference.table();
@@ -1328,7 +1357,7 @@ public final class CatalogViews {
      * @param query the reading, or null when the text is no plain single-table query
      * @param binds the value each stand-in literal of its condition stands for
      */
-    private record ShapedQuery(ParquetQueryParser query, Map<Long, Long> binds) {
+    private record ShapedQuery(ParquetQueryParser query, Map<Object, Object> binds) {
     }
 
     /**
@@ -1354,7 +1383,7 @@ public final class CatalogViews {
             int copied = 0;
             for (int i = 0; i < shape.literals().size(); i++) {
                 DescribeKey.Span span = shape.literals().get(i);
-                String stand = Long.toString(STAND_IN_BASE + i);
+                String stand = standIn(span.kind(), i);
                 stands.add(stand);
                 text.append(sql, copied, span.start()).append(stand);
                 copied = span.end();
@@ -1373,6 +1402,21 @@ public final class CatalogViews {
             }
             boolean unusable = pq.filter != null && pq.where == null;
             return new ShapeParse(unusable ? null : pq, unusable);
+        }
+
+        /**
+         * Returns the stand-in text of a shape's literal.
+         *
+         * @param kind the literal's kind
+         * @param i its index in the shape (from 0)
+         * @return the stand-in, as written in the parsed text
+         */
+        static String standIn(DescribeKey.LiteralKind kind, int i) {
+            return switch (kind) {
+                case INTEGER -> Long.toString(STAND_IN_BASE + i);
+                case DECIMAL -> (STAND_IN_BASE + i) + ".25";
+                case DATE -> "'" + STAND_IN_DATE.plusDays(i) + "'";
+            };
         }
     }
 

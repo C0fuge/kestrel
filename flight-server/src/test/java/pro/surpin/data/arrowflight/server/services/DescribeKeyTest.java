@@ -8,6 +8,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -84,6 +85,39 @@ class DescribeKeyTest {
         assertNull(DescribeKey.shape("SELECT * FROM s.t WHERE k = 5.5"));
         assertNull(DescribeKey.shape("SELECT * FROM s.t WHERE k = 5\u0000"));
         assertNull(DescribeKey.shape(null));
+    }
+
+    /** Verifies the pruning shape also leaves out long integers, decimals and dates (item 40 (b)). */
+    @Test
+    void pruningShapesLeaveOutMoreLiterals() {
+        String sql = "SELECT * FROM s.t WHERE k = 12345678901 AND p > -1234.5 AND d >= DATE '1995-01-31'"
+                + " AND e = '1995-01-31' AND f = 1e5 AND g = 7 ORDER BY 1";
+        DescribeKey.Shape shape = DescribeKey.pruningShape(sql);
+        List<String> texts = new java.util.ArrayList<>();
+        List<DescribeKey.LiteralKind> kinds = new java.util.ArrayList<>();
+        for (DescribeKey.Span span : shape.literals()) {
+            texts.add(sql.substring(span.start(), span.end()));
+            kinds.add(span.kind());
+        }
+        assertEquals(List.of("12345678901", "1234.5", "'1995-01-31'", "7"), texts);
+        assertEquals(List.of(DescribeKey.LiteralKind.INTEGER, DescribeKey.LiteralKind.DECIMAL,
+                DescribeKey.LiteralKind.DATE, DescribeKey.LiteralKind.INTEGER), kinds);
+        assertNotEquals(DescribeKey.of(sql), shape.key());
+        DescribeKey.Span describe = DescribeKey.shape(sql).literals().get(0);
+        assertEquals(1, DescribeKey.shape(sql).literals().size());
+        assertEquals("7", sql.substring(describe.start(), describe.end()));
+        // Kinds stay apart in the key: 5 and 5.5 are no texts of one shape.
+        assertNotEquals(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 5").key(),
+                DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 5.5").key());
+        assertEquals(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 5.5").key(),
+                DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 61.25").key());
+        assertNotEquals(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 5").key(),
+                DescribeKey.of("SELECT * FROM s.t WHERE k = 5"));
+        assertNull(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 1234567890123456789"));
+        assertNull(DescribeKey.pruningShape("SELECT * FROM s.t WHERE d = DATE '1995-1-31'"));
+        assertNull(DescribeKey.pruningShape("SELECT * FROM s.t WHERE d = TIMESTAMP '1995-01-31'"));
+        assertNull(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k + 5.5 > 7.5 + k"));
+        assertNull(DescribeKey.pruningShape("SELECT * FROM s.t WHERE k = 5.5\u0000"));
     }
 
     @Test

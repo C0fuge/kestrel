@@ -298,6 +298,20 @@ class FileStatsPrunerTest {
         "SELECT * FROM s.t WHERE k = %d OR s = '3000000001'",
         "SELECT * FROM s.t WHERE k = %d OR k = %d OR k = %d",
         "SELECT * FROM s.t WHERE k = 0%d",
+        // Pruning shapes only (item 40 (b)): decimal, long integer and date literals.
+        "SELECT * FROM s.t WHERE k = %d.0",
+        "SELECT * FROM s.t WHERE k > %d.5",
+        "SELECT * FROM s.t WHERE k <= -%d.5 OR k = %d.00",
+        "SELECT * FROM s.t WHERE v = -%d.0",
+        "SELECT count(*) FROM s.t WHERE k = %d AND v > %d.5",
+        "SELECT * FROM s.t WHERE k < 1000000000%d",
+        "SELECT * FROM s.t WHERE k = %d OR k > 10000000000%d",
+        "SELECT * FROM s.t WHERE d = DATE '2021-01-%02d'",
+        "SELECT * FROM s.t WHERE d >= date '2022-01-%02d' AND k > %d.5",
+        "SELECT * FROM s.t WHERE d < DATE '2019-01-%02d' OR d = DATE '2020-01-%02d'",
+        "SELECT * FROM s.t WHERE k = %d.0 OR s = '3000000001.25'",
+        "SELECT * FROM s.t WHERE d = DATE '2021-01-%02d' OR s = '2999-01-01'",
+        "SELECT * FROM s.t WHERE k = %d.25 OR k = 3000000002.25",
     };
 
     /**
@@ -323,7 +337,7 @@ class FileStatsPrunerTest {
             int pruned = 0;
             int checked = 0;
             for (String shape : SHAPES) {
-                int slots = shape.split("%d", -1).length - 1;
+                int slots = shape.split("%(02)?d", -1).length - 1;
                 for (int v = 0; v <= 32; v += 1 + checked % 3) {
                     Object[] values = new Object[slots];
                     for (int i = 0; i < slots; i++) {

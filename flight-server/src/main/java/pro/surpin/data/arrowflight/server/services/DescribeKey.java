@@ -28,6 +28,12 @@ public final class DescribeKey {
 
     /** An integer literal that is always an INTEGER in DuckDB (below 2^31). */
     private static final Pattern SMALL_INTEGER = Pattern.compile("[0-9]{1,9}");
+    /** An integer literal of a pruning shape: any that fits a {@code long}. */
+    private static final Pattern LONG_INTEGER = Pattern.compile("[0-9]{1,18}");
+    /** A decimal literal of a pruning shape (no exponent). */
+    private static final Pattern DECIMAL = Pattern.compile("[0-9]{1,18}\\.[0-9]{1,18}");
+    /** The string of a {@code DATE '...'} literal of a pruning shape. */
+    private static final Pattern DATE_STRING = Pattern.compile("'[0-9]{4}-[0-9]{2}-[0-9]{2}'");
     /** Comparison operators whose right-hand literal may be left out. */
     private static final Set<String> COMPARISONS = Set.of("=", "==", "<", ">", "<=", ">=", "<>", "!=");
     /** Words that may follow such a literal. */
@@ -40,8 +46,24 @@ public final class DescribeKey {
     private static final String SHAPE = "\u0000L";
     /** Prefix of a client text that holds a NUL itself, so it cannot look like a shape key. */
     private static final String RAW = "\u0000R";
+    /** Prefix of a pruning shape key; never a describe key or a client text. */
+    private static final String PRUNING_SHAPE = "\u0000P";
     /** Stands for a literal left out. */
     private static final char LITERAL = '\u0001';
+    /** Stands for a decimal literal left out of a pruning shape. */
+    private static final char DECIMAL_LITERAL = '\u0002';
+    /** Stands for the string of a date literal left out of a pruning shape. */
+    private static final char DATE_LITERAL = '\u0003';
+
+    /** Kind of a literal left out of a shape. */
+    public enum LiteralKind {
+        /** An integer literal (digits only). */
+        INTEGER,
+        /** A decimal literal (digits, a point, digits). */
+        DECIMAL,
+        /** The quoted string of a {@code DATE 'yyyy-mm-dd'} literal. */
+        DATE
+    }
 
     private DescribeKey() {
     }
@@ -72,6 +94,25 @@ public final class DescribeKey {
      *         left out (the text is then its own key)
      */
     public static Shape shape(String sql) {
+        return shape(sql, false);
+    }
+
+    /**
+     * Returns the shape of a client text for file pruning (item 40 (b)): as {@link #shape(String)},
+     * and also integer literals of up to 18 digits, decimal literals ({@code 1234.5}) and the
+     * strings of {@code DATE 'yyyy-mm-dd'} literals in the same places are left out. Only the
+     * values such literals compare with matter for pruning, not the types DuckDB gives them, so
+     * this is no describe key.
+     *
+     * @param sql client SQL
+     * @return the shape (its key differs from every describe key and client text), or null when
+     *         no literal is left out
+     */
+    public static Shape pruningShape(String sql) {
+        return shape(sql, true);
+    }
+
+    private static Shape shape(String sql, boolean pruning) {
         if (sql == null || sql.indexOf('\u0000') >= 0) {
             return null;
         }
@@ -93,12 +134,22 @@ public final class DescribeKey {
             } else if (depth == 0 && token.kind() == Kind.WORD
                     && WHERE_ENDS.contains(token.text().toUpperCase(Locale.ROOT))) {
                 break;
-            } else if (literalOfComparison(tokens, i)) {
-                if (key == null) {
-                    key = new StringBuilder(sql.length() + SHAPE.length()).append(SHAPE);
+            } else {
+                LiteralKind kind = literalOfComparison(tokens, i, pruning);
+                if (kind == null) {
+                    continue;
                 }
-                key.append(sql, copied, token.start()).append(LITERAL);
-                literals.add(new Span(token.start(), token.end()));
+                if (key == null) {
+                    key = new StringBuilder(sql.length() + SHAPE.length())
+                            .append(pruning ? PRUNING_SHAPE : SHAPE);
+                }
+                char stand = switch (kind) {
+                    case INTEGER -> LITERAL;
+                    case DECIMAL -> DECIMAL_LITERAL;
+                    case DATE -> DATE_LITERAL;
+                };
+                key.append(sql, copied, token.start()).append(stand);
+                literals.add(new Span(token.start(), token.end(), kind));
                 copied = token.end();
             }
         }
@@ -110,7 +161,7 @@ public final class DescribeKey {
      * A text's describe cache key with literals left out, and where they were.
      *
      * @param key      the key ({@link #of(String)})
-     * @param literals spans of the left-out integer literals in the text, in order
+     * @param literals spans of the left-out literals in the text, in order
      */
     public record Shape(String key, List<Span> literals) {
     }
@@ -120,8 +171,9 @@ public final class DescribeKey {
      *
      * @param start index of its first character
      * @param end   index after its last character
+     * @param kind  what kind of literal it is (a date literal's span is its quoted string)
      */
-    public record Span(int start, int end) {
+    public record Span(int start, int end, LiteralKind kind) {
     }
 
     /**
@@ -176,31 +228,47 @@ public final class DescribeKey {
     }
 
     /**
-     * Tells whether a token is a small integer literal that is the whole right-hand side of a
-     * comparison.
+     * Tells whether a token is a literal that is the whole right-hand side of a comparison and
+     * may be left out of a shape.
      *
      * @param tokens tokens of the text
      * @param i index of the token
-     * @return true when it may be left out of the key
+     * @param pruning whether the shape is a pruning shape (more literals left out)
+     * @return the literal's kind, or null when it is kept in the key
      */
-    private static boolean literalOfComparison(List<Token> tokens, int i) {
+    private static LiteralKind literalOfComparison(List<Token> tokens, int i, boolean pruning) {
         Token token = tokens.get(i);
-        if (token.kind() != Kind.NUMBER || !SMALL_INTEGER.matcher(token.text()).matches()) {
-            return false;
-        }
+        LiteralKind kind;
         int before = i - 1;
-        if (before >= 0 && tokens.get(before).kind() == Kind.MINUS) {
-            before--;   // unary minus: -15
+        if (token.kind() == Kind.NUMBER) {
+            if ((pruning ? LONG_INTEGER : SMALL_INTEGER).matcher(token.text()).matches()) {
+                kind = LiteralKind.INTEGER;
+            } else if (pruning && DECIMAL.matcher(token.text()).matches()) {
+                kind = LiteralKind.DECIMAL;
+            } else {
+                return null;
+            }
+            if (before >= 0 && tokens.get(before).kind() == Kind.MINUS) {
+                before--;   // unary minus: -15
+            }
+        } else if (pruning && token.kind() == Kind.STRING && DATE_STRING.matcher(token.text()).matches()
+                && before >= 0 && tokens.get(before).kind() == Kind.WORD
+                && "DATE".equalsIgnoreCase(tokens.get(before).text())) {
+            kind = LiteralKind.DATE;
+            before--;
+        } else {
+            return null;
         }
         if (!COMPARISONS.contains(operatorEndingAt(tokens, before))) {
-            return false;
+            return null;
         }
         if (i + 1 == tokens.size()) {
-            return true;
+            return kind;
         }
         Token next = tokens.get(i + 1);
         return isOther(next, ")")
-                || next.kind() == Kind.WORD && FOLLOWERS.contains(next.text().toUpperCase(Locale.ROOT));
+                || next.kind() == Kind.WORD && FOLLOWERS.contains(next.text().toUpperCase(Locale.ROOT))
+                ? kind : null;
     }
 
     /**
