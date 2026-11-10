@@ -52,6 +52,17 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   ... runningCalls=<n> methods={DoGet=<n>}: these calls are cut`. On the stopping node a distributed-complete merge that
   falls back logs INFO `distributedComplete=fallback stopping=true` (the other nodes refuse its internal calls once it
   left the pool; expected).
+- **hadoopfs build `51b7220-afc6`** (item 41; `ci-assets` `hadoopfs-v1.5.6-afc6.duckdb_extension`, sha256
+  `836299dc639b2fd0f829723e3c7bfe28a403a04be7244482bde88191d8b40948`) is the CI / release default (was afc4; afc5 adds
+  a listing cache, afc6 SASL data-transfer protection on the read path). On DataNodes with `dfs.data.transfer.protection`
+  the new setting `hdfsSaslDataTransfer` (`arrowflight.hdfs.saslDataTransfer`, `HDFS_SASL_DATA_TRANSFER`, default
+  `auto`) lets DuckDB read non-local blocks directly: no short-circuit-only planning, no node-local copies
+  (`hdfsLocalCopyMaxBytes` unused). It needs `dfs.data.transfer.protection` (as on the DataNodes) and
+  `hadoop.security.authentication=kerberos` in the `LIBHDFS3_CONF` file. Check the start line
+  `hdfs=saslDataTransfer mode=auto direct=true extensionVersion=51b7220-afc6`; `direct=false reason=...` says why not
+  (older build, setting missing). `-DhdfsSaslDataTransfer=off` restores the short-circuit-only path with copies; `on`
+  skips the version check (another build that speaks SASL) and stops the start when `LIBHDFS3_CONF` lacks the settings.
+  Not in afc6 yet: AES cipher negotiation (3DES wrap with `privacy`, slower), `dfs.encrypt.data.transfer`.
 - **hadoopfs build `51b7220-afc4`** (DuckDB v1.5.6; `ci-assets` `hadoopfs-v1.5.6-afc4.duckdb_extension`, sha256
   `64a97a6b08e1f725c980d46f25d664a1c3edde8a73b624ac31bdc75f9095942c`) is the CI / release default (was afc3): file-status
   + located-blocks cache, lazy open from cached blocks, real modification times. New setting `hdfsMetadataCacheTtlMs`

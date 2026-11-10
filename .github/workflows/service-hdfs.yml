@@ -10,7 +10,9 @@
 # servers, schemas with replication 3 / 2 / a file no DataNode holds whole; STATUS item 29, see
 # tools/ci/service-hdfs-sasl-check.py; balanced ends with one server on a copy disk smaller than a
 # query's input, tools/ci/service-hdfs-smalldisk-check.py; speed ends with three distributedComplete
-# servers on small copy disks, no deleted copy left open, tools/ci/service-hdfs-dcsmalldisk-check.py); every cell fails when a block goes over TCP;
+# servers on small copy disks, no deleted copy left open, tools/ci/service-hdfs-dcsmalldisk-check.py) and sasl-direct
+# (sasl-cluster with privacy protection, hadoopfs 51b7220-afc6 reading SASL DataNodes directly, no copies; item 41);
+# every other cell fails when a block goes over TCP;
 # short-circuit configured in each (the server runs in the DataNode's network namespace with its
 # domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02
 # bug). Profiles: balanced, speed. Each cell: TPC-H SF<sf> 22/22 answers compared with in-process
@@ -105,7 +107,7 @@ jobs:
             --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
           mkdir -p "$RUNNER_TEMP/all-ext" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64"
           tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
-          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc4 instead of the set's afc3
+          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc6 instead of the set's afc3
           f=$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)
           test -n "$f" || { echo "no hadoopfs for ${DUCKDB_VERSION} in ci-assets"; exit 1; }
           cp "$f" "$RUNNER_TEMP/in/extdir/${DUCKDB_VERSION}/linux_amd64/"
@@ -131,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        topology: [plain, ha, ha-krb, ha-krb-sasl, sasl-cluster]
+        topology: [plain, ha, ha-krb, ha-krb-sasl, sasl-cluster, sasl-direct]
         profile: [balanced, speed]
     name: ${{ matrix.topology }} ${{ matrix.profile }}
     steps:
@@ -205,5 +207,5 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
-          [ "$n" -eq 10 ] || { echo "only $n of 10 cells reported"; exit 1; }
+          [ "$n" -eq 12 ] || { echo "only $n of 12 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt

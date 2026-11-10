@@ -417,7 +417,7 @@ jobs:
           gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
             --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
           tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
-          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc4 instead of the set's afc3
+          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc6 instead of the set's afc3
           cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/httpfs.duckdb_extension" | head -n 1)" \
             "$ext/httpfs.duckdb_extension"
           cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/hadoopfs.duckdb_extension" | head -n 1)" \
@@ -533,7 +533,7 @@ jobs:
           gh release download ci-assets --repo "$GITHUB_REPOSITORY" \
             --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
           tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
-          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc4 instead of the set's afc3
+          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc6 instead of the set's afc3
           for name in httpfs hadoopfs; do
             cp "$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension" \
               | head -n 1)" "$ext/${name}.duckdb_extension"

@@ -205,7 +205,23 @@ public class HadoopArrowFlightServer {
                     config.duckDbHdfsShortcircuit(), config.duckDbHdfsDomainSocketPath(),
                     libhdfs3Properties(System.getenv("LIBHDFS3_CONF")), hadoopConfig);
             LOGGER.info("hdfs=shortCircuit {}", shortCircuit.describe());
-            java.util.Optional<String> unreadable = HdfsShortCircuit.unreadable(shortCircuit);
+            boolean saslDirect = false;
+            if (shortCircuit.transferProtection() != null) {
+                // Item 41: hadoopfs 51b7220-afc6+ speaks SASL data transfer on the read path.
+                HdfsSaslDataTransfer.Decision sasl = HdfsSaslDataTransfer.decide(
+                        HdfsSaslDataTransfer.mode(ConfigSource.system()),
+                        HdfsSaslDataTransfer.extensionVersion(config.duckDbHdfsExtension() == null
+                                ? null : java.nio.file.Path.of(config.duckDbHdfsExtension())),
+                        libhdfs3Properties(System.getenv("LIBHDFS3_CONF")));
+                saslDirect = sasl.direct();
+                LOGGER.info("hdfs=saslDataTransfer {} transferProtection={}{}", sasl.describe(),
+                        shortCircuit.transferProtection(), saslDirect
+                                ? ": DuckDB reads blocks of any DataNode over SASL data transfer;"
+                                        + " files are planned to any node, no node-local copies"
+                                : "");
+            }
+            java.util.Optional<String> unreadable = saslDirect ? java.util.Optional.empty()
+                    : HdfsShortCircuit.unreadable(shortCircuit);
             if (unreadable.isPresent()) {
                 // Every query would fail on its first block read: stop here, with the reason.
                 throw new IllegalStateException(unreadable.get());
@@ -213,7 +229,7 @@ public class HadoopArrowFlightServer {
             if (shortCircuit.enabled() && !HdfsShortCircuit.socketPresent(shortCircuit.socketPath())) {
                 LOGGER.warn("hdfs=shortCircuitSocketMissing socket={}: DuckDB reads every block over TCP"
                         + " on this node", shortCircuit.socketPath());
-            } else if (shortCircuit.transferProtection() != null) {
+            } else if (shortCircuit.transferProtection() != null && !saslDirect) {
                 if (store instanceof HadoopDataStore hadoopStore) {
                     hadoopStore.setWholeFileReadsOnly(true);
                 }

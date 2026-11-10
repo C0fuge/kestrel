@@ -9,6 +9,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- hadoopfs `51b7220-afc6` and SASL data transfer (STATUS item 41, steps 1-2): the CI / release default hadoopfs build is
+  `51b7220-afc6` (`ci-assets` `hadoopfs-v1.5.6-afc6.duckdb_extension`, sha256
+  `836299dc639b2fd0f829723e3c7bfe28a403a04be7244482bde88191d8b40948`, was afc4; afc5: listing cache, afc6: SASL
+  data-transfer protection on the read path). New setting `hdfsSaslDataTransfer` (`arrowflight.hdfs.saslDataTransfer`,
+  `HDFS_SASL_DATA_TRANSFER`) `auto|on|off`, default `auto`: on HDFS whose DataNodes require
+  `dfs.data.transfer.protection`, `auto` reads the loaded hadoopfs file's version (its metadata footer) and, for
+  afc6 and later, lets DuckDB read non-local blocks directly over SASL (files planned to any node, no node-local copies,
+  no short-circuit requirement at start); older builds keep the short-circuit-only path with copies. The extension needs
+  `dfs.data.transfer.protection` and `hadoop.security.authentication=kerberos` in the `LIBHDFS3_CONF` file: without them
+  `auto` stays short-circuit only and `on` stops the start naming the missing setting. `off` = the earlier behaviour.
+  Start line `hdfs=saslDataTransfer mode=auto direct=true|false extensionVersion=... [reason=...] transferProtection=...`.
+  CI: new Service hdfs topology `sasl-direct` (3 DataNodes, `privacy`, copies off: TPC-H 22/22 + the SASL check
+  answers exact); `ha-krb-sasl` / `sasl-cluster` pin `hdfsSaslDataTransfer=off` (copy path).
 - Dev tooling (item 40(a)): `tpch-perf.yml` inputs `plain` (plain DuckDB reference + DuckDB settings dump), `more`
   (several configurations per run) and `quick`. No server behaviour change.
 - Docs (item 40(a)): START-NOTES "Sizing `speed` for S3" - DuckDB's external file cache lives in the
@@ -38,6 +51,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `hdfsSaslDataTransfer` (`arrowflight.hdfs.saslDataTransfer`, `HDFS_SASL_DATA_TRANSFER`) | `auto` | on SASL DataNodes (`dfs.data.transfer.protection`): `auto` = DuckDB reads non-local blocks directly when hadoopfs is 51b7220-afc6+ and `LIBHDFS3_CONF` sets the protection and Kerberos (no copies, files planned to any node), else short-circuit only as before; `on` / `off` force it (item 41) |
 | `hdfsMetadataCacheTtlMs` (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`) | `30000` with an `hdfs://` data dir, else `0` (off) | hadoopfs (51b7220-afc4+) keeps file statuses and located blocks this long (`hdfs_metadata_cache_ttl_ms`); a rewritten file may show its old status that long |
 | `fileStatsPruningMaxFiles` (`arrowflight.fileStatsPruningMaxFiles`, `FLIGHT_FILE_STATS_PRUNING_MAX_FILES`) | `1024` (0 = off) | complete answers of a plain single-table query over a directory table read only the files whose footer min/max of integer / date columns the WHERE clause can match; answers unchanged (item 39 (c) part 3) |
 | `duckDbParquetMetadataCache` (`arrowflight.duckdb.parquetMetadataCache`, `DUCKDB_PARQUET_METADATA_CACHE`) | `false` | every DuckDB keeps the Parquet footers it read (DuckDB `parquet_metadata_cache`); re-read only when the file system reports a newer modification time (item 39 (c)) |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SERVICE MATRIX, HDFS part (core lane, STATUS item 25): one cell of service-hdfs.yml.
 #
-# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb|ha-krb-sasl|sasl-cluster> <balanced|speed> <input dir> <work dir> <server label>
+# Usage: tools/ci/service-hdfs-cell.sh <plain|ha|ha-krb|ha-krb-sasl|sasl-cluster|sasl-direct> <balanced|speed> <input dir> <work dir> <server label>
 #
 # Topologies (apache/hadoop, one DataNode, replication 1, short-circuit configured when the image's
 # native Hadoop library loads):
@@ -28,6 +28,13 @@
 #           and GROUP BY; under speed the copy cache is below one file, so scans go in batches (part 2b).
 #           Under balanced a last stage runs one server whose copy disk (a tmpfs) is smaller than
 #           chunks.lineitem: batches sized by the disk, a join needing every copy refused (part 2b).
+#           ha-krb-sasl and sasl-cluster run with -DhdfsSaslDataTransfer=off (item 41): they keep checking
+#           the short-circuit-only path with node-local copies, which hadoopfs 51b7220-afc6 no longer needs.
+#   sasl-direct  sasl-cluster with dfs.data.transfer.protection=privacy, hdfsSaslDataTransfer left at auto
+#           (hadoopfs 51b7220-afc6 speaks SASL data transfer: the start line must say direct=true) and
+#           hdfsLocalCopyMaxBytes=0 (no node-local copies; item 41 (3)): the same 22/22 and
+#           service-hdfs-sasl-check.py answers, split / chunks read from remote DataNodes directly, no
+#           hdfs=localCopy line; TCP block reads are expected here. No later stages.
 #   ha-krb, ha-krb-sasl (balanced): a last stage stops the server under load and starts one with
 #           tpch.nation's files unreadable for the server's principal (item 37 (a), (b);
 #           tools/ci/service-hdfs-deny-stop-check.py).
@@ -53,11 +60,15 @@ finish() { # status, detail
   [ "$1" = pass ]; exit $?
 }
 
-case "$topo" in plain|ha|ha-krb|ha-krb-sasl|sasl-cluster) ;; *) finish fail "unknown topology $topo" ;; esac
+case "$topo" in plain|ha|ha-krb|ha-krb-sasl|sasl-cluster|sasl-direct) ;; *) finish fail "unknown topology $topo" ;; esac
 case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) finish fail "unknown profile $profile" ;; esac
-krb=false; [[ $topo == ha-krb* || $topo == sasl-cluster ]] && krb=true
-sasl=false; [[ $topo == ha-krb-sasl || $topo == sasl-cluster ]] && sasl=true
-n=1; [ "$topo" = sasl-cluster ] && n=3
+krb=false; [[ $topo == ha-krb* || $topo == sasl-* ]] && krb=true
+sasl=false; [[ $topo == ha-krb-sasl || $topo == sasl-* ]] && sasl=true
+n=1; [[ $topo == sasl-* ]] && n=3
+# Item 41: sasl-direct reads non-local blocks over SASL data transfer (hadoopfs afc6, auto); the
+# other SASL topologies keep the short-circuit-only path.
+direct=false; [ "$topo" = sasl-direct ] && direct=true
+if $sasl && ! $direct; then opts="$opts -DhdfsSaslDataTransfer=off"; fi
 dnIp() { echo "172.31.0.$(( 11 + $1 ))"; }   # DataNode i (and server i): 172.31.0.12, .13, .14
 ha=false; [ "$topo" != plain ] && ha=true
 
@@ -112,7 +123,8 @@ if $krb; then
     dfs.datanode.kerberos.principal "$(principal dn)" dfs.datanode.keytab.file /hd/krb/hdfs.keytab
     dfs.web.authentication.kerberos.principal "$(principal HTTP)" dfs.web.authentication.kerberos.keytab /hd/krb/hdfs.keytab
     ignore.secure.ports.for.testing true)
-  $sasl && hdfs+=(dfs.data.transfer.protection authentication)
+  if $direct; then hdfs+=(dfs.data.transfer.protection privacy)
+  elif $sasl; then hdfs+=(dfs.data.transfer.protection authentication); fi
 fi
 xml() { # key value ...
   echo '<?xml version="1.0"?>'; echo '<configuration>'
@@ -292,7 +304,10 @@ cpus=2 mem=6g xmx=2g
 if [ "$n" -gt 1 ]; then
   cpus=1 mem=3g xmx=1g
   opts="$opts -DdistributedComplete=true"
-  if [ "$profile" = speed ]; then
+  if $direct; then
+    # Item 41 (3): copies off; every file a node lacks blocks of is read from the DataNodes directly.
+    opts="$opts -DhdfsLocalCopyMaxBytes=0"
+  elif [ "$profile" = speed ]; then
     # Item 30 part 2b: a cache smaller than every lineitem file (so smaller than a node's share of
     # chunks.lineitem, and than split.t): scans are copied in batches, every copy deleted after use.
     smallest=$(stat -c %s "$in"/data/tpch/lineitem/*.parquet | sort -n | head -n 1)
@@ -344,9 +359,18 @@ SC_DATANODES=$(for i in $(seq "$n"); do printf '%s:9864,' "$(dnIp "$i")"; done);
 "$py" -I tools/ci/service-cluster-check.py check "$servers" "$in" > "$work/client.log" 2>&1; rc=$?
 cat "$work/client.log"
 if [ "$n" -gt 1 ]; then
+  t0=$SECONDS
   "$py" -I tools/ci/service-hdfs-sasl-check.py "$servers" "$in" "$splitFile" > "$work/sasl-check.log" 2>&1; rc2=$?
   cat "$work/sasl-check.log"
-  note "sasl check: $(grep -m 1 '^result ' "$work/sasl-check.log" || echo 'no result line')"
+  note "sasl check: $(grep -m 1 '^result ' "$work/sasl-check.log" || echo 'no result line') in $(( SECONDS - t0 )) s ($($direct && echo 'direct SASL reads, no copies' || echo 'short-circuit + node-local copies'))"
+  if $direct; then
+    # Item 41: every node decided on direct reads (auto, afc6), and none made a node-local copy.
+    directNodes=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1 | grep -m 1 -c 'hdfs=saslDataTransfer mode=auto direct=true' || true; done | awk '{ s += $1 } END { print s + 0 }')
+    directCopies=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopy ' || true)
+    note "item 41: $directNodes of $n node(s) read SASL DataNodes directly, local copies $directCopies; $(docker logs srv1 2>&1 | grep -m 1 -oE 'hdfs=saslDataTransfer .*' || echo 'no hdfs=saslDataTransfer line')"
+    [ "$directNodes" -eq "$n" ] || finish fail "item 41: only $directNodes of $n node(s) logged hdfs=saslDataTransfer mode=auto direct=true"
+    [ "$directCopies" -eq 0 ] || finish fail "item 41: hdfsLocalCopyMaxBytes=0 and direct reads, but $directCopies hdfs=localCopy line(s)"
+  fi
   for i in $(seq "$n"); do
     note "srv$i: merged $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged'), fallback $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=fallback'), complete from copies $(docker logs "srv$i" 2>&1 | grep -c 'hdfs=completeFromCopies'), inventory $(docker logs "srv$i" 2>&1 | grep -m 1 -oE 'Registered [0-9]+ local Parquet' || echo '?')"
   done
@@ -369,27 +393,27 @@ if [ "$n" -gt 1 ]; then
   copyReads=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -cE 'hdfs=reads .*localCopy=[1-9]' || true)
   footerOnly=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -cE 'hdfs=reads .*footerOnly=[1-9]' || true)
   note "hdfs=reads lines: $readLines, with local copies $copyReads, count(*) from footers without copies $footerOnly"
-  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$copyReads" -eq 0 ] || [ "$footerOnly" -eq 0 ]; }; then
+  if ! $direct && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$copyReads" -eq 0 ] || [ "$footerOnly" -eq 0 ]; }; then
     finish fail "expected hdfs=reads lines with local copies ($copyReads) and count(*) answered from footers without copies ($footerOnly)"
   fi
-  if [ "$profile" = speed ] && [ "$batched" -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
+  if [ "$profile" = speed ] && ! $direct && [ "$batched" -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ]; then
     finish fail "the cache is smaller than chunks.lineitem, but no scan was read in batches of copies"
   fi
-  if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] \
+  if [ "$profile" = speed ] && ! $direct && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] \
       && { [ "$aggMerged" -eq 0 ] || [ "$aggFallback" -ne 0 ]; }; then
     finish fail "the cache is smaller than chunks.lineitem, but the GROUP BY was not merged from batches of copies (merged $aggMerged, fallback $aggFallback)"
   fi
-  if [ "$profile" = speed ] && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$rowsBatched" -eq 0 ]; then
+  if [ "$profile" = speed ] && ! $direct && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && [ "$rowsBatched" -eq 0 ]; then
     finish fail "the cache is smaller than chunks.lineitem, but no DISTINCT / LIMIT scan was merged from batches of copies"
   fi
   # Item 30 part 2b: the free-space guard is on (minFreeBytes in the cache line) and never refuses on a runner's disk.
   guardLines=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopyCache .*minFreeBytes=' || true)
   noSpace=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopyNoSpace' || true)
   note "copy disk guard: $guardLines cache line(s) with minFreeBytes, $noSpace refusal(s) for lack of disk room"
-  if [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$guardLines" -eq 0 ] || [ "$noSpace" -ne 0 ]; }; then
+  if ! $direct && [ "$rc2" -eq 0 ] && [ "$rc" -eq 0 ] && { [ "$guardLines" -eq 0 ] || [ "$noSpace" -ne 0 ]; }; then
     finish fail "copy disk guard: $guardLines cache line(s) with minFreeBytes (want > 0), $noSpace hdfs=localCopyNoSpace (want 0)"
   fi
-  if [ "$profile" != speed ]; then
+  if [ "$profile" != speed ] && ! $direct; then
     # Every node copied into hdfsLocalCopyDir, and its directory there is gone once it stops.
     customDirs=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1 | grep -m 1 -c 'hdfs=localCopyCache dir=/copies/duckdb-' || true; done | awk '{ s += $1 } END { print s + 0 }')
     note "hdfsLocalCopyDir: $customDirs of $n node(s) copy into /copies; $(docker logs srv1 2>&1 | grep -m 1 -oE 'hdfs=localCopyCache .*' || echo 'no hdfs=localCopyCache line')"
@@ -721,14 +745,15 @@ denyAndStop() {
 }
 bound=$(( 3 * n * ${files:-0} + copyBlocks ))
 if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
-  if [ "$sc" = on ] && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
+  # Item 41: with direct SASL reads hadoopfs reads remote blocks over TCP by design.
+  if [ "$sc" = on ] && ! $direct && { [ -z "$read1" ] || [ "$tcp" -gt "$bound" ] || [ "$fds" -eq 0 ]; }; then
     finish fail "answers right, but short-circuit is configured and the server read $tcp blocks over TCP (Java footer + local copy bound $bound, $fds short-circuit fd requests)"
   fi
   if $sasl && [ "$n" -eq 1 ]; then checkReadsPerQid "$srv"; fi
   # shellcheck disable=SC2046
   if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
-  if [ "$n" -gt 1 ] && [ "$profile" = balanced ]; then smallDisk; fi
-  if [ "$n" -gt 1 ] && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
+  if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = balanced ]; then smallDisk; fi
+  if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
   if $krb && [ "$n" -eq 1 ] && [ "$profile" = balanced ]; then denyAndStop; fi
   finish pass ""
 fi
