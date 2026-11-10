@@ -4191,3 +4191,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-10 10:41Z (core lane): nothing open but the cluster package, which waits for "ITEM 40(b) DONE" (catalogs
   lane, its lock held since 10:21Z); no code change, stopped early. Lock released.
 - 2026-11-10 13:42Z (core lane): still waiting for "ITEM 40(b) DONE" (catalogs lane, lock held since 13:24Z, working on 40(b) after 3a01265e); no code change, stopped early. Lock released.
+- 2026-11-10 16:10Z (lane 4): **ITEM 40(b) DONE 135e6dac** (catalogs lane; numbers in CATALOGS-STATUS.md: small
+  query c1 p50 -10..15 % vs deafc861, HDFS point cell +2..6 % vs 894afb9b; Dev CI on main 42837979902 green). The
+  core lane's package for the real cluster (maintainer 11:30) is unblocked.

@@ -25,6 +25,34 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) DONE 135e6dac (2026-11-10, session 9; main head bc7aa004 = 135e6dac + docs). Before/after numbers on
+`main` (no code change this session):
+- Small query perf, prepared client (like JDBC), 2-CPU server container, 3 rounds, baseline deafc861cce3, run
+  42843856272: c1 p50 ms quota balanced 3.62 / 3.72 / 3.81 -> 3.27 / 3.31 / 3.29, quota speed 3.68 / 3.68 / 3.75 ->
+  3.27 / 3.29 / 3.38, pinned balanced 4.12 / 4.20 / 4.24 -> 3.75 / 3.88 / 3.74, pinned speed 4.23 / 4.22 / 4.20 ->
+  3.85 / 3.89 / 3.81; q/s c32 quota balanced 388 / 368 / 369 -> 422 / 411 / 414, quota speed 473 / 466 / 453 ->
+  521 / 502 / 484, pinned speed 473 / 478 / 474 -> 504 / 507 / 518. **The maintainer's c1 regression is gone and
+  c1 p50 is ~10 % below deafc861** in both profiles; server CPU per query equal or lower.
+- Same, statement client (GetFlightInfo + DoGet, like ADBC), run 42843860772: c1 p50 quota balanced 2.22 / 2.23 /
+  2.23 -> 1.91 / 1.92 / 1.91, quota speed 2.21 / 2.21 / 2.21 -> 1.93 / 1.91 / 1.93, pinned balanced 2.65 / 2.67 /
+  2.89 -> 2.27 / 2.30 / 2.36, pinned speed 2.70 / 2.62 / 2.67 -> 2.36 / 2.25 / 2.26 (-13..15 %); q/s c8 quota
+  balanced 568 / 571 / 559 -> 660 / 644 / 664, c32 quota speed 673 / 678 / 662 -> 761 / 780 / 757, pinned speed
+  697 / 691 / 710 -> 796 / 799 / 792 (+12..15 %).
+- HDFS point cell (`hdfs-point-perf.yml`, SF1, point_orders / point_lineitem / count_filter, q/s c1 / c8 / c32),
+  before = 894afb9b (item 39 package, branch `perf/bisect-894afb9b`) run 42843869104, after = main run 42843864824,
+  0 errors everywhere: before balanced 67.2 / 93.7 / 95.2 and 67.0 / 95.5 / 97.0, speed 66.4 / 105.6 / 113.1 and
+  69.0 / 107.8 / 114.0; after, runner a (same speed class as both "before" runners) balanced 69.3 / 97.7 / 96.5,
+  speed 71.9 / 111.1 / 119.6; runner b was a faster machine (balanced 83.9 / 117.5 / 114.0, speed 100.9 / 150.5 /
+  158.0, not comparable). +2..6 % on the comparable runner; the 2-CPU cell stays DuckDB-CPU-bound. Caveat: the
+  "before" workflow pins hadoopfs afc4, "after" afc6 (listing cache + SASL read path; no SASL in this cell).
+- JFR (1 ms, `PointQueryOverheadPerfTest`, main): DoGet pruning samples 62 of 2491 (285 of 3446 in session 7), jOOQ
+  under DoGet 12 - the `count` texts with decimal literals no longer parse per text (session 8's cut confirmed).
+- Not done within 40(b) (follow-ups, not blocking): gizmo vs speed per call on the same box and c32 JFR on the HDFS
+  point cell (old step 4) - best measured by the performance repo on the next package; Q-40b-1 (proposed: close
+  without a default change).
+- **Core lane: the package for the real cluster (maintainer 11:30) can go now.** Throwaway branch `perf/40b-final`
+  (perf dispatch ref only, = bc7aa004) may be deleted by the maintainer with the `perf/bisect-*` ones.
+
 ITEM 40(b) state after session 2026-11-10 (8) - pruning shapes for decimal / long integer / date literals (135e6dac):
 - Done: next step (b) of session (7). `DescribeKey.pruningShape` (pruning only; `DescribeKey.of` / the describe key
   unchanged) also leaves out integers of 10-18 digits, decimals `[0-9]+.[0-9]+` and the string of `DATE 'yyyy-mm-dd'`
@@ -623,6 +651,8 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   Update 2026-11-10 (7): the rest was one jOOQ parse per point text in DoGet's pruning, now one per shape (4228c733):
   pruning on is level with pruning off at c1 on local files (run 42826465868). Proposal: close Q-40b-1 without a
   default change unless you see a gap on the harness.
+  Update 2026-11-10 (9): with pruning on (default) main is ~10 % below deafc861 at c1 p50 on local files (runs
+  42843856272, 42843860772); still proposed for closing without a default change.
 
 - Q11 (2026-11-09, item 39 (c)): in the HDFS point cell the balanced profile asks the DataNode for short-circuit fds
   ~5-6 times per point query (each per-thread DuckDB's libhdfs3 asks again); `duckDbExternalFileCache=true` brings
@@ -969,3 +999,7 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   (135e6dac; describe key unchanged). Tests `FileStatsPrunerTest` (+13 shapes), `DescribeKeyTest` +1; CHANGELOG line.
   Dev CI branch 42835145513 green; `small-query-perf.yml` 42835176027 c1 within noise. Merged to `main`
   (fast-forward). Not DONE yet. Lock released.
+- 2026-11-10 (session 9): **ITEM 40(b) DONE 135e6dac.** Final before/after: Small query perf vs deafc861 prepared
+  42843856272 (c1 p50 -10 %, c32 q/s +8..10 %) and statement 42843860772 (c1 p50 -13..15 %, c8/c32 q/s +12..16 %),
+  HDFS point perf main 42843864824 vs 894afb9b 42843869104 (+2..6 % on the comparable runner, 0 errors); Dev CI on
+  main 42837979902 (34e24d3b) green; JFR confirms one parse per shape for `count` texts. No code change. Lock released.
