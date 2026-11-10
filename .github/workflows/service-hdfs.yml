@@ -11,7 +11,7 @@
 # tools/ci/service-hdfs-sasl-check.py; balanced ends with one server on a copy disk smaller than a
 # query's input, tools/ci/service-hdfs-smalldisk-check.py; speed ends with three distributedComplete
 # servers on small copy disks, no deleted copy left open, tools/ci/service-hdfs-dcsmalldisk-check.py) and sasl-direct
-# (sasl-cluster with privacy protection, hadoopfs 51b7220-afc6 reading SASL DataNodes directly, no copies; item 41);
+# (sasl-cluster with authentication,privacy protection, hadoopfs 51b7220-afc6 reading SASL DataNodes directly, no copies; item 41);
 # every other cell fails when a block goes over TCP;
 # short-circuit configured in each (the server runs in the DataNode's network namespace with its
 # domain socket). hadoopfs is loaded from -Darrowflight.duckdb.extensionDir only (the 2026-11-02

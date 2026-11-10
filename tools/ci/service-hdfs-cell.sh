@@ -30,7 +30,8 @@
 #           chunks.lineitem: batches sized by the disk, a join needing every copy refused (part 2b).
 #           ha-krb-sasl and sasl-cluster run with -DhdfsSaslDataTransfer=off (item 41): they keep checking
 #           the short-circuit-only path with node-local copies, which hadoopfs 51b7220-afc6 no longer needs.
-#   sasl-direct  sasl-cluster with dfs.data.transfer.protection=privacy, hdfsSaslDataTransfer left at auto
+#   sasl-direct  sasl-cluster with dfs.data.transfer.protection=authentication,privacy (several QOPs, as on
+#           the maintainer's real cluster; SASL_DIRECT_PROTECTION overrides it), hdfsSaslDataTransfer left at auto
 #           (hadoopfs 51b7220-afc6 speaks SASL data transfer: the start line must say direct=true) and
 #           hdfsLocalCopyMaxBytes=0 (no node-local copies; item 41 (3)): the same 22/22 and
 #           service-hdfs-sasl-check.py answers, split / chunks read from remote DataNodes directly, no
@@ -123,7 +124,7 @@ if $krb; then
     dfs.datanode.kerberos.principal "$(principal dn)" dfs.datanode.keytab.file /hd/krb/hdfs.keytab
     dfs.web.authentication.kerberos.principal "$(principal HTTP)" dfs.web.authentication.kerberos.keytab /hd/krb/hdfs.keytab
     ignore.secure.ports.for.testing true)
-  if $direct; then hdfs+=(dfs.data.transfer.protection privacy)
+  if $direct; then hdfs+=(dfs.data.transfer.protection "${SASL_DIRECT_PROTECTION:-authentication,privacy}")
   elif $sasl; then hdfs+=(dfs.data.transfer.protection authentication); fi
 fi
 xml() { # key value ...
