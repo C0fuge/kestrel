@@ -347,6 +347,18 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteAdmissionWaitMillis", "soon"), Map.of())));
     }
 
+    /** Item 43: point lookups are computed locally by default; merge keeps them distributed. */
+    @Test
+    void distributedCompletePointLookupsDefaultToLocal() throws IOException {
+        assertTrue(ConfigAdapter.distributedCompletePointLookupsLocal(source(Map.of(), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompletePointLookupsLocal(
+                source(Map.of("distributedCompletePointLookups", " merge "), Map.of())));
+        assertTrue(ConfigAdapter.distributedCompletePointLookupsLocal(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS", "LOCAL"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompletePointLookupsLocal(
+                source(Map.of("distributedCompletePointLookups", "auto"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));

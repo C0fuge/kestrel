@@ -545,6 +545,11 @@ public class HadoopArrowFlightServer {
         distributedComplete = new DistributedComplete(component.queryPlanner(),
                 component.clusterService(), component.executionService(), component.allocator(),
                 DistributedComplete.clientFactory(component.allocator(), certificates), admission);
+        boolean pointLookupsLocal = ConfigAdapter.distributedCompletePointLookupsLocal(ConfigSource.system());
+        distributedComplete.pointLookupsLocal(pointLookupsLocal);
+        LOGGER.info("distributedComplete point lookups: {}", pointLookupsLocal
+                ? "local (computed on the planning node when it can read the files)"
+                : "merge (on probation: no permits until 16 MiB read)");
         component.producer().useDistributedComplete(distributedComplete);
         LOGGER.warn("distributedComplete=true: complete answers are merged from endpoint answers read"
                 + " from the nodes as the client's user; the cluster's ticket secret now allows"

@@ -669,6 +669,31 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompletePointLookups}
+     * ({@code FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS}): how distributed complete mode answers a
+     * point lookup (an equality filter or a small LIMIT, no aggregate; item 43): {@code local}
+     * (default) computes it on the planning node alone when that node can read the files, as
+     * without distributed complete; {@code merge} merges it from endpoint answers, on probation
+     * (without peer-stream permits until it has read 16 MiB).
+     *
+     * @param props configuration source
+     * @return true for {@code local}
+     * @throws IllegalArgumentException for a value other than local or merge
+     */
+    public static boolean distributedCompletePointLookupsLocal(ConfigSource props) {
+        String value = getStringWithEnv("distributedCompletePointLookups",
+                "arrowflight.cluster.distributedCompletePointLookups",
+                "FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS", "local", props).trim();
+        if ("local".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("merge".equalsIgnoreCase(value)) {
+            return false;
+        }
+        throw new IllegalArgumentException("distributedCompletePointLookups must be local or merge: " + value);
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own

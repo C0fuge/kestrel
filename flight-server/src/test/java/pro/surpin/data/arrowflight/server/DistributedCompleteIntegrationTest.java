@@ -290,6 +290,32 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies {@code distributedCompletePointLookups=local}: a point lookup is answered exactly by
+     * this node alone (it reads the files), without merging and without admission (item 43).
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void localPointLookupsAreComputedHere() throws Exception {
+        String query = "SELECT v, k, d, name, amount FROM s.t WHERE v = 41";
+        String alone = answer(query);
+        String count = "SELECT count(*) FROM s.t WHERE k = 9";
+        String countAlone = answer(count);
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        distributed.pointLookupsLocal(true);
+        assertEquals(alone, answer(query));
+        assertEquals(alone, answer(query));
+        assertEquals(2, distributed.localPointLookups());
+        assertEquals(0, distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        assertEquals(0, admission.probation());
+        // Aggregates are still merged.
+        assertEquals(countAlone, answer(count));
+        assertEquals(1, distributed.mergedAnswers());
+    }
+
+    /**
      * Verifies a merge started on probation whose answer turns out large takes its room once it
      * has read more than the probation bytes, waits for it while other merges hold it, and still
      * answers exactly (item 43: a wrong guess costs no correctness and keeps the item 35 bound).

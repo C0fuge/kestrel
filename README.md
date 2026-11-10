@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -419,9 +419,11 @@ share `distributedCompletePeerStreams` streams (`FLIGHT_DISTRIBUTED_COMPLETE_PEE
 128 MiB of the smaller of direct memory and the Arrow allocator limit `arrowAllocatorLimitBytes`, at least 2). A
 merge takes room for all its parts before it opens them, and waits in arrival order while other merges hold the
 room; one-row merges (aggregates without GROUP BY and DISTINCT) take none and never wait. Point lookups (a
-filter with `column = literal` and no OR, or a LIMIT of at most 10 000 rows without aggregation) start without
-room and take it only once they have read more than 16 MiB of part answers (at most eight such merges per
-stream, at least 32, at once; more wait as usual). After `distributedCompleteAdmissionWaitMillis` (default 300000)
+filter with `column = literal` and no OR, or a LIMIT of at most 10 000 rows, without aggregation) are computed
+by the planning node alone when it can read their files (`distributedCompletePointLookups=local`, the default,
+`FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS`); with `merge`, or when the node cannot read the files, they are
+merged on probation: without room until they have read more than 16 MiB of part answers (at most eight such
+merges per stream, at least 32, at once; more wait as usual). After `distributedCompleteAdmissionWaitMillis` (default 300000)
 it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
 `RESOURCE_EXHAUSTED`.
 

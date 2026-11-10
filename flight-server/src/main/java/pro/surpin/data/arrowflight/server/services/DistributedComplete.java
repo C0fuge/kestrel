@@ -92,6 +92,9 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong peerWaitNanos = new AtomicLong();
     private final AtomicLong failovers = new AtomicLong();
     private final AtomicLong peersLost = new AtomicLong();
+    private final AtomicLong localPointLookups = new AtomicLong();
+    /** Point lookups computed on this node alone when it can read the files (item 43). */
+    private volatile boolean pointLookupsLocal;
 
     /**
      * Creates the distributed path of complete answers.
@@ -194,6 +197,15 @@ public final class DistributedComplete implements AutoCloseable {
             if (parsed == null) {
                 return false;
             }
+        }
+        // A point lookup reads little but fans out to every endpoint: one node computes it faster
+        // (item 43: dc point lookups 0.27-0.57 of speed's q/s on 3 nodes even without queueing).
+        if (pointLookupsLocal && !oneRow(parsed) && smallAnswer(parsed)
+                && planner.filesNotReadableHere(partQuery).isEmpty()) {
+            localPointLookups.incrementAndGet();
+            LOGGER.debug("node={} distributedComplete=local reason='point lookup' query='{}'", LogUtil.node(),
+                    LogUtil.oneLine(query));
+            return false;
         }
         QueryPlan plan;
         try {
@@ -474,6 +486,26 @@ public final class DistributedComplete implements AutoCloseable {
          * @param index the endpoint
          */
         void open(int index);
+    }
+
+    /**
+     * Sets whether point lookups are computed on this node alone when it can read their files
+     * ({@code distributedCompletePointLookups=local}) or merged from endpoint answers on probation
+     * ({@code merge}, the default of a new instance) (item 43).
+     *
+     * @param local true to compute point lookups here
+     */
+    public void pointLookupsLocal(boolean local) {
+        this.pointLookupsLocal = local;
+    }
+
+    /**
+     * Counts the point lookups computed on this node alone since start (item 43).
+     *
+     * @return point lookups not merged
+     */
+    public long localPointLookups() {
+        return localPointLookups.get();
     }
 
     /**
