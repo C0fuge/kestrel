@@ -25,6 +25,31 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (5) - speed c1 regression found (bisected); two more cuts merged:
+- **Cause of the c1 regression (maintainer's 13:45 note): footer-statistics file pruning (item 39 (c), b0f82a47,
+  default `fileStatsPruningMaxFiles=1024`) on local data**, in both profiles - not speed-specific, not 39 (b) sizing
+  (same with a 6g container limit), not 40 (a) (after 894afb9b). `small-query-perf.yml` (2-CPU container, prepared
+  client, 4 files x 100k rows): main vs deafc861 c1 p50 +0.3..0.5 ms, server CPU +0.25..0.45 ms/query (runs
+  42806968672, 42806974143 with 6g); bisect (each vs deafc861, same run): 06e3c0e5 / 35d9420a / 53647b1a /
+  c71b71d2 / 2429782f = baseline, 894afb9b +0.27..0.47 ms (runs 42810133238 .. 42810174324, 42811189839);
+  **main with `-DfileStatsPruningMaxFiles=0` = baseline** (quota 3.21 vs 3.23 ms, pinned 3.87 vs 3.88, CPU 1.39 vs
+  1.44 ms/query; with pruning 3.55 / 4.30 ms, CPU 1.67; run 42811208123). On local files a pruned point query pays
+  the rewrite + a `read_parquet([...])` bind and saves only cheap page-cache reads; on HDFS/S3 pruning pays off
+  (fewer NameNode opens, 39 (c) numbers).
+- Proposed fix (needs the maintainer, Q-40b-1 below, it is a default change): prune by default only for stores whose
+  file opens are remote (HDFS, S3 / lakeFS, other plugin stores), off for a local `dataDir`; an explicit
+  `fileStatsPruningMaxFiles` still wins. Alternatively find what the pruned local query pays (JFR on
+  `PointQueryOverheadPerfTest` with 4 local files, pruning on vs off) and cut that instead.
+- Merged this session (Dev CI 42808268971 on `fix/40b-small-4` green): a4e14e03 file pruning reads the parser's WHERE
+  condition (no second jOOQ `parseCondition`); ac2055c8 describe cache key `DescribeKey` - point queries differing
+  only in small integer literals after a comparison in WHERE share one describe (parse check still per text).
+  Small-query perf branch vs main (run 42810177524): within noise on this cell.
+- Next (in order): (a) Q-40b-1 answer, then the fix + regression perf run (`small-query-perf.yml` baseline
+  deafc861cce3, `bothOptions=-DresourceProfile=speed`); (b) check Dev CI on main for ac2055c8; (c) gizmo vs speed per
+  call and c32 JFR on the HDFS point cell (old step 4). `small-query-perf.yml` has a new input `bothOptions` (options
+  measured on the baseline and on the ref). Branches `perf/bisect-*` and `perf/40b-c1-mem` are throwaway (perf
+  dispatch refs only) - delete them.
+
 ITEM 40(b) state after session 2026-11-10 (4) - third improvement (repeated parses of one text) merged (388b81f5):
 - Measured where jOOQ parses run (debug print on every parse-cache miss, `PointQueryOverheadPerfTest`, 4 vCPU): each
   query text is parsed by jOOQ **once** already (complete mode: first in DoGet's `CatalogViews.pruning`; partial:
@@ -511,6 +536,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- Q-40b-1 (2026-11-10, item 40 (b)): the speed (and balanced) c1 point-query regression on local data is file pruning
+  by footer statistics (on by default since item 39 (c)): +0.3..0.5 ms p50 / +0.3 ms CPU per point query at c1 on a
+  local `dataDir`, gone with `-DfileStatsPruningMaxFiles=0` (run 42811208123). Turn pruning off by default for a local
+  `dataDir` and keep it on for HDFS / S3 / plugin stores (an explicit setting wins)? Same answers either way; it is a
+  default change, so not done without you.
+
 - Q11 (2026-11-09, item 39 (c)): in the HDFS point cell the balanced profile asks the DataNode for short-circuit fds
   ~5-6 times per point query (each per-thread DuckDB's libhdfs3 asks again); `duckDbExternalFileCache=true` brings
   that to 0-0.2 and q/s +10..15% (run 42689843600: balanced c32 65.6 -> 75.9 and 52.8 -> 60.6). Make the external
@@ -830,3 +861,10 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   the old rewrite over 5 000 random texts, raw-cache identity / refusals repeated). Branch `fix/40b-small-3` Dev CI
   42800078539 green; merged into `main` as 388b81f5, Dev CI on main 42802352922 green. Not DONE yet; next cuts in
   the state note. Lock released.
+- 2026-11-10 (5): **ITEM 40(b)** speed c1 regression bisected with `small-query-perf.yml` (new input `bothOptions`):
+  cause is footer-statistics file pruning on local data (b0f82a47), both profiles; `-DfileStatsPruningMaxFiles=0`
+  restores deafc861's c1 (runs 42806968672, 42806974143, 42810133238-42810174324, 42811189839, 42811208123). Fix is a
+  default change -> Q-40b-1. Merged two cuts from `fix/40b-small-4` (Dev CI 42808268971 green): a4e14e03 pruning reuses
+  the parser's WHERE condition; ac2055c8 `DescribeKey` (one describe for point queries differing in their key; tests
+  `DescribeKeyTest` incl. a bind check over every column type, `FileStatsPrunerTest` +2). CHANGELOG lines. Not DONE.
+  Lock released.
