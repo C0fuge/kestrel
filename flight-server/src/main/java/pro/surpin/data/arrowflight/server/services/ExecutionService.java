@@ -295,10 +295,6 @@ public final class ExecutionService {
      */
     String prunedFiles(String sql) {
         CatalogViews.Pruning pruning = catalogViews.pruning(sql);
-        if (directReads()) {
-            // Item 41: one hdfs=reads line per query on the direct SASL path, pruned once.
-            logDirectComplete(sql, pruning);
-        }
         String replacement = catalogViews.prunedReplacement(pruning);
         if (replacement == null) {
             return sql;
@@ -2510,6 +2506,10 @@ public final class ExecutionService {
             // (Q-42 (b)): the refusal for files this node lacks looks at the kept files only.
             CatalogViews.Pruning pruning = catalogViews.pruning(clientSql);
             CopiedQuery pruned = pruning == null ? null : prunedHere(clientSql, pruning);
+            if (directReads()) {
+                // Item 41: one hdfs=reads line per complete answer on the direct SASL path.
+                logDirectComplete(clientSql, pruning);
+            }
             return pruned != null ? pruned : new CopiedQuery(clientSql, null);
         }
         String sql;
