@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- File pruning by footer statistics reads the WHERE condition the query parser already parsed (item 40(b)) instead of
+  parsing its rendered filter with jOOQ again on every pruned query. Same files kept (test over the pruning queries).
+
 - Less work per repeated parse of the same SQL text (item 40(b)): a request parses its text several times (describe,
   plan, DoGet's pruning); a text that parsed before now skips the typed-literal rewrite and subquery-wrapper scan too
   (cache by the text as passed, same capacity and size limit as the parse cache, refused texts are never cached), and

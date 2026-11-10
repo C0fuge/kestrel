@@ -122,6 +122,12 @@ public class ParquetQueryParser {
     public final String table;
     public final List<String> columns;
     public final String filter;
+    /**
+     * The WHERE condition {@link #filter} was rendered from, or null when not kept. Shared by
+     * every user of the cached parse: read it, never change it. File pruning reads it instead of
+     * parsing {@link #filter} again (item 40 (b)).
+     */
+    public final Condition where;
 
     public final boolean hasAggregation;
     public final List<String> groupByColumnNames;
@@ -162,7 +168,7 @@ public class ParquetQueryParser {
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs) {
         this(schema, table, columns, filter, hasAggregation, groupByColumnNames, selectExprs,
-                false, Collections.emptyList(), null, null, null, null, false, null, null);
+                false, Collections.emptyList(), null, null, null, null, false, null, null, null);
     }
 
     /**
@@ -182,13 +188,14 @@ public class ParquetQueryParser {
      * @param distinct whether the query is SELECT DISTINCT
      * @param having HAVING condition as executable SQL, or null
      * @param completeAnswerReason why endpoints cannot answer for their own files, or null
+     * @param where the WHERE condition the filter was rendered from, or null
      */
     @SuppressWarnings("java:S107") // One immutable value object built in a single place.
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs,
             boolean isJoin, List<JoinTable> joinTables, String duckDbSql,
             String orderBy, Long limit, Long offset, boolean distinct, String having,
-            String completeAnswerReason) {
+            String completeAnswerReason, Condition where) {
         this.schema = schema;
         this.table = table;
         this.columns = List.copyOf(columns);
@@ -205,6 +212,7 @@ public class ParquetQueryParser {
         this.distinct = distinct;
         this.having = having;
         this.completeAnswerReason = completeAnswerReason;
+        this.where = where;
     }
 
     /**
@@ -239,7 +247,7 @@ public class ParquetQueryParser {
         }
         return new ParquetQueryParser(schema, table, columns, filter, hasAggregation,
                 groupByColumnNames, selectExprs, isJoin, joinTables, duckDbSql, null, null, offset,
-                distinct, having, completeAnswerReason);
+                distinct, having, completeAnswerReason, where);
     }
 
     /**
@@ -875,7 +883,7 @@ public class ParquetQueryParser {
         return new ParquetQueryParser(primary.schema, primary.table, columns, filter,
                 false, Collections.emptyList(), exprs, true, joinTables, duckDbSql,
                 renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
-                rowCount(select.$offset()), false, null, null);
+                rowCount(select.$offset()), false, null, null, where);
     }
 
     /**
@@ -964,7 +972,7 @@ public class ParquetQueryParser {
                 false, Collections.emptyList(), null,
                 renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
                 rowCount(select.$offset()), select.$distinct(),
-                having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason);
+                having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason, where);
     }
 
     /**
