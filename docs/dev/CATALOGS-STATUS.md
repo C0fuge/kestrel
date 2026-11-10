@@ -759,7 +759,7 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-10 (2): **ITEM 40(b)** first improvement: the parse check finds query names with one `indexOf` scan instead
   of two regular expressions (20 us -> 0.6 us per new text, same names/order/refusals; equivalence test against the
   old expressions over DuckDB's own JSON). Branch `fix/40b-small` Dev CI green: run 42784271237 (29dbaf18); merged
-  into `main` as 0e05f9c7 (cherry-pick on top of item 42), Dev CI on main runs on the push. End to end within noise
+  into `main` as 48adb2ac (cherry-pick on top of item 42), Dev CI on main dispatched (run id: see the next Log line). End to end within noise
   (c1 per call and c8 ADBC load, see the 40(b) state note). New profile numbers and the next three cuts are in that
   note. Not DONE yet. Branch `fix/40b-small` now = main + `tools/ci/small-query-rpc.py` (merge commit f8f39197; a
   force-push to rebase it was refused, so main was merged in instead). Lock released.
