@@ -25,6 +25,28 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (8) - pruning shapes for decimal / long integer / date literals (135e6dac):
+- Done: next step (b) of session (7). `DescribeKey.pruningShape` (pruning only; `DescribeKey.of` / the describe key
+  unchanged) also leaves out integers of 10-18 digits, decimals `[0-9]+.[0-9]+` and the string of `DATE 'yyyy-mm-dd'`
+  in the same WHERE positions; kinds are separate key characters (`k = 5` and `k = 5.5` are different shapes).
+  `CatalogViews.shapedQuery` parses with stand-ins of the same kind (`3000000001+i`, `3000000001+i.25`, date
+  `2999-01-01` + i days); `FileStatsPruner.literal` reads stand-ins via `Map<Object, Object>` binds (a
+  `java.sql.Date` key is read as `LocalDate`). jOOQ reads `DATE '...'` as a date value (a mutation test showed the
+  cast branch is never hit). Invalid dates (`2021-01-32`) and stand-in clashes fall back to a per-text parse.
+  Tests: `FileStatsPrunerTest.shapeParsesKeepWhatEachTextKeeps` +13 shapes (decimals incl. negative, 11-12 digit
+  keys, dates incl. invalid ones, clash texts); mutations of the decimal and date binds fail it.
+  `DescribeKeyTest.pruningShapesLeaveOutMoreLiterals`.
+- Numbers: `small-query-perf.yml` 42835176027 (prepared, c1, 3 rounds, baseline 4228c733, head option
+  `-DfileStatsPruningMaxFiles=0`), p50 ms: quota base 4.87 / 4.32 / 4.64, head 5.16 / 4.59 / 4.96, head pruning off
+  4.60 / 4.84 / 4.91; pinned base 5.35 / 6.28 / 5.50, head 5.34 / 5.78 / 5.47, off 5.46 / 5.82 / 5.61. Within noise
+  (quota head vs base +0.3 ms but equal to pruning off, which does not run this code; pinned head <= base). The
+  workflow's mix may not contain decimal filters; the saving is the per-text jOOQ parse of `count`-style queries
+  (~100 of the 285 remaining pruning JFR samples in session (7)) - not re-measured with JFR this session.
+  Dev CI branch 42835145513 green; Dev CI on main dispatched at session end (merge push was `[skip ci]`).
+- Next (in order): (a) check Dev CI on main for 135e6dac; (b) JFR on `PointQueryOverheadPerfTest` (count mix) to
+  confirm the `count` texts no longer parse per text (pruning samples should drop from ~285); (c) gizmo vs speed per
+  call and c32 JFR on the HDFS point cell (old step 4). Next branch from `origin/main` as `fix/40b-small-8`.
+
 ITEM 40(b) state after session 2026-11-10 (7) - the pruned-vs-view gap on local files cut (4228c733), no default change:
 - Where the gap was: not DuckDB. Plain DuckDB JDBC with the server's settings (threads 4/1, `parquet_metadata_cache`,
   external file cache on/off, `allowed_directories` + `enable_external_access=false` + `lock_configuration`) runs the
@@ -943,3 +965,7 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   footer bounds are compared. `small-query-perf.yml` 42826465868: c1 p50 pruning on = pruning off within noise (was
   ~0.25 ms slower). Tests: `FileStatsPrunerTest` +1, `DescribeKeyTest` +1; CHANGELOG line; Q-40b-1 updated (proposal:
   close without default change). Dev CI on main for 4228c733: 42828677361 green. Not DONE yet. Lock released.
+- 2026-11-10 (8): item 40(b) - file pruning shapes for decimal, 10-18 digit integer and `DATE 'yyyy-mm-dd'` literals
+  (135e6dac; describe key unchanged). Tests `FileStatsPrunerTest` (+13 shapes), `DescribeKeyTest` +1; CHANGELOG line.
+  Dev CI branch 42835145513 green; `small-query-perf.yml` 42835176027 c1 within noise. Merged to `main`
+  (fast-forward). Not DONE yet. Lock released.
