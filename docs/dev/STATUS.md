@@ -1926,6 +1926,11 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **Answer (maintainer, 2026-11-10 11:25): yes, log it** - on the direct path one `hdfs=reads` line per query with
+  files read node-local (all blocks on this node's DataNode) vs remote (by block hosts) and remote bytes if cheap; the
+  benchmark package's summary counts them. And **test `authentication,privacy` (several QOPs) with afc6 in CI before
+  item 41's package**: the real cluster's DataNodes are configured exactly so (`dfs.data.transfer.protection =
+  authentication,privacy`); if afc6 fails there, auto must fall back to the short-circuit-only path with copies.
 - **Item 41: per-query `hdfs=reads` lines on the direct SASL path (2026-11-10, core lane, decision wanted).** Item 32's
   per-query `hdfs=reads` line (local / copy / footer-only reads) is written only on the short-circuit-only path with
   copies; with `hdfsSaslDataTransfer` direct (the new default on SASL clusters with afc6) no query has one, so the
