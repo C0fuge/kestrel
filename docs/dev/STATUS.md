@@ -23,6 +23,13 @@
 
 ## Next steps (one per session)
 
+> **BUILD FOR THE REAL CLUSTER DONE (2026-11-10 17:18Z, core lane; maintainer 11:30).** `package=true` on `pkg/2ff22144`
+> (= `main` 2ff22144: 40(a), 40(b) DONE 135e6dac, 41 + follow-ups, merged parts of 42 / 43) green: Dev CI 42857169249
+> (build, service gate, package); Service cluster 42860270956, hdfs 42860277541, security 42860284292, stores
+> 42860290386 -> pre-release **`server-1.0.0-2ff221447b5d`** (7 assets). Next: the stand + the independent cluster
+> check on this pre-release; no open core item until the maintainer's next note. Branches `pkg/2ff22144`,
+> `pkg/37bf9401` can be deleted.
+
 > **ITEM 41 DONE (2026-11-10 08:40Z, core lane).** `package=true` on `pkg/37bf9401` green (Dev CI 42777511119;
 > Service cluster 42777497907, hdfs 42777501115, security 42777504125, stores 42777507448) -> pre-release
 > `server-1.0.0-37bf9401d77c` (7 assets). Steps: (1) hadoopfs `51b7220-afc6` is the CI / release default; (2)
@@ -53,7 +60,7 @@
 > 42794847349 green. Not measured: whether the per-query count costs anything on the real cluster's point queries
 > (no storage call when the file is remembered).
 >
-> **Next for the core lane:** (1) as soon as the catalogs lane writes "ITEM 40(b) DONE": Dev CI `package=true` on `main`
+> **Next for the core lane:** (1) DONE 17:18Z (see top); was: as soon as the catalogs lane writes "ITEM 40(b) DONE": Dev CI `package=true` on `main`
 > (the build for the real cluster, maintainer 11:30); (2) DONE above; was: item 41 follow-up from the 11:25 answer - one
 > `hdfs=reads` line per query on the direct SASL path (files read node-local = all blocks on this node's DataNode vs
 > remote by block hosts, remote bytes if cheap), then re-enable the per-query check for `sasl-direct` in
@@ -4194,3 +4201,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-10 16:10Z (lane 4): **ITEM 40(b) DONE 135e6dac** (catalogs lane; numbers in CATALOGS-STATUS.md: small
   query c1 p50 -10..15 % vs deafc861, HDFS point cell +2..6 % vs 894afb9b; Dev CI on main 42837979902 green). The
   core lane's package for the real cluster (maintainer 11:30) is unblocked.
+- 2026-11-10 16:41-17:20Z (core lane): the build for the real cluster - Dev CI `package=true` 42857169249 on
+  `pkg/2ff22144` (= main after ITEM 40(b) DONE) green with Service cluster 42860270956, hdfs 42860277541, security
+  42860284292, stores 42860290386; pre-release `server-1.0.0-2ff221447b5d`. No code change. Lock released.
