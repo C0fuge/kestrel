@@ -4164,3 +4164,11 @@ S3 slowdown item below stays open for then).
   `distributedCompletePointLookups`, default `local`, Q4 in `LANE3-STATUS.md`), other small merges on probation
   without permits. Service cluster 42786623655, Dev CI 42786620428 green. For the core lane's next package.
 
+- 2026-11-10 08:40-09:45Z (core lane): ITEM 41 DONE - package runs on `pkg/37bf9401` all green, pre-release
+  `server-1.0.0-37bf9401d77c` (7 assets); branch deletion refused by the session's permissions (left for the maintainer).
+  11:00 note: `004d844e` (DuckDB JDBC closes a statement on a refused SET -> look up the hadoopfs version / `hdfs*`
+  settings first, WARN `hdfs=extensionTooOld`; DuckDbAdapterTest +1 real-DuckDB regression test) + `7b36459b`
+  (golden setup test answers the lookups as afc6; Dev CI 42786787681 was red on it, lane 4 flagged it) -> Dev CI
+  42789413482 green. `c48c78d9`: `sasl-direct` cell on `authentication,privacy` -> Service hdfs 42785951630 green
+  (direct=true). `ci-assets` extension set refresh not done (shared asset change refused; sha of the rebuilt set in Next
+  steps). 40(b) not DONE yet, so no cluster package. Lock released.
