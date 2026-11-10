@@ -748,6 +748,10 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **Answer Q-42 (maintainer, 2026-11-10 12:05): yes to both.** (a) cap `balanced`'s per-connection floor and the
+  shared-database floor at the budget too (floor 128 MiB; a WARN at start when the budget is below the old 1 GiB
+  floor, naming the setting to raise it); (b) prune before `requireReadableHere` when copies are off. Small follow-up
+  item in this lane, merge into `main` when green ("Q-42 DONE <sha>").
 - **(Q-42, 2026-11-10, plugins lane) other memory limits above the budget, and point queries without copies.**
   (a) Item 42 caps only `speed`'s node-wide limit. `balanced` (one DuckDB per connection) keeps its 1 GiB floor per
   connection and `duckDbSharedDatabase=true` without speed its 1 GiB floor for the node, even when the budget is
