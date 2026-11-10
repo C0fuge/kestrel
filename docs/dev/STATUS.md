@@ -23,7 +23,9 @@
 
 ## Next steps (one per session)
 
-> **Waiting on Q-43m (balanced 128 MiB OOM on small hosts, 2026-11-10 20:45Z): answer A/B/C becomes the next core item.**
+> **Q-43m answered (maintainer 2026-11-11 00:05): fixed as ITEM 44 in the plugins lane** (parts (1), (3) merged
+> 2335ddc6, balanced 22/22 at 1024 MiB on the harness shape; part (2) Ranger staleness open there). No open core item
+> until the maintainer's next note.
 
 > **BUILD FOR THE REAL CLUSTER DONE (2026-11-10 17:18Z, core lane; maintainer 11:30).** `package=true` on `pkg/2ff22144`
 > (= `main` 2ff22144: 40(a), 40(b) DONE 135e6dac, 41 + follow-ups, merged parts of 42 / 43) green: Dev CI 42857169249
@@ -1957,7 +1959,7 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
-- **(Q-43m, 2026-11-10 20:45Z, core lane) balanced fails heavy TPC-H on small hosts since Q-42(a) - change the budget
+- **(Q-43m, 2026-11-10 20:45Z, core lane; ANSWERED 2026-11-11 00:05 -> plugins-lane ITEM 44, parts (1)(3) merged 2335ddc6) balanced fails heavy TPC-H on small hosts since Q-42(a) - change the budget
   rule?** egret FRESH 42865250390 on `server-1.0.0-2ff221447b5d` (orchestrator 19:58Z): `balanced` runs with DuckDB
   `memory_limit=128MiB` per connection and fails with `Out of Memory Error ... (127.8 MiB/128.0 MiB used)` - local
   SF10 q09/q10/q13 every round (19/22), S3 SF1 3-5 and SF10 5-8 queries per round; `speed` 22/22. Errors, not wrong
@@ -4224,3 +4226,7 @@ S3 slowdown item below stays open for then).
   `server-1.0.0-2ff221447b5d` (egret FRESH 42865250390): cause is Q-42(a)'s budget cap (128 MiB per connection on
   6 GiB / -Xmx3g / direct 2g), not a code bug. New Open question Q-43m with options (A proposed: speed's reservation
   for balanced's cap). No code change, no CI run. Lock released.
+- 2026-11-10 21:45Z (core lane): no open core item. Q-43m answered by the maintainer's 00:05 note and fixed in the
+  plugins lane as item 44 (2335ddc6: balanced cap from the 40(a) reservation, floor 512 MiB; tpch-perf 42903634429
+  fix/44 balanced 22/22); marked answered here. Dev CI 42906724548 on main (a5bccf56) still running (plugins lane's).
+  No code change, no CI run started. Lock released.
