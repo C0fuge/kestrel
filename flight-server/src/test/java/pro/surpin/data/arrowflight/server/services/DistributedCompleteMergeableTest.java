@@ -75,6 +75,37 @@ class DistributedCompleteMergeableTest {
         }
     }
 
+    /** Item 45: typed, cast, negative and decimal literals are point lookups too; columns and ranges are not. */
+    @Test
+    void typedLiteralsArePointLookups() {
+        for (String query : List.of(
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate = DATE '1992-01-01'",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate = date '1992-01-01'",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate = CAST('1992-01-01' AS DATE)",
+                "SELECT * FROM tpch.orders WHERE o_orderdate = TRY_CAST('1992-01-01' AS DATE)",
+                "SELECT * FROM tpch.orders WHERE o_orderdate = '1992-01-01'::DATE",
+                "SELECT * FROM tpch.orders WHERE o_orderdate = TIMESTAMP '1992-01-01 00:00:00'",
+                "SELECT * FROM tpch.orders WHERE o_totalprice = CAST(1234.5 AS DECIMAL(15, 2))",
+                "SELECT * FROM tpch.orders WHERE o_totalprice = 1234.56",
+                "SELECT * FROM tpch.orders WHERE o_totalprice = 1.5e3",
+                "SELECT * FROM tpch.orders WHERE o_custkey = -7",
+                "SELECT * FROM tpch.orders WHERE o_custkey = (7)",
+                "SELECT * FROM tpch.orders WHERE \"o_orderdate\" = DATE '1992-01-01' AND o_custkey > 3")) {
+            assertTrue(DistributedComplete.pointLookup(ParquetQueryParser.parse(query)), query);
+            assertTrue(DistributedComplete.smallAnswer(ParquetQueryParser.parse(query)), query);
+        }
+        for (String query : List.of(
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate >= DATE '1992-01-01'",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate <= CAST('1992-01-01' AS DATE)",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate <> DATE '1992-01-01'",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate = CAST(o_comment AS DATE)",
+                "SELECT count(*) FROM tpch.orders WHERE o_orderdate = DATE '1992-01-01' OR o_custkey = 3",
+                "SELECT o_custkey, count(*) AS n FROM tpch.orders WHERE o_orderdate = DATE '1992-01-01'"
+                        + " GROUP BY o_custkey")) {
+            assertFalse(DistributedComplete.pointLookup(ParquetQueryParser.parse(query)), query);
+        }
+    }
+
     /** A subquery of the same table would see only an endpoint's files: never merged. */
     @Test
     void subqueriesOfTheSameTableAreNotMerged() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Item 43 (lane 3): 32 clients of point queries (point-query-load.py: point_orders, point_lineitem,
-# count_filter) on node 1 of a service-cluster.yml cell (speed or speed-dc).
+# count_filter, and point_date with a DATE literal as in the real cluster's mix, item 45) on node 1 of a service-cluster.yml cell (speed or speed-dc).
 #
 # Usage: tools/ci/service-cluster-point.sh <python> <keys> <cell> <out dir>
 #
@@ -12,6 +12,7 @@
 set -u
 py=$1 keys=$2 cell=$3 out=$4
 seconds=${POINT_SECONDS:-30}
+export POINT_QUERY_CLASSES=${POINT_QUERY_CLASSES:-point_orders,point_lineitem,count_filter,point_date}
 l0=$(docker logs srv1 2>&1)
 waits0=$(grep -c 'distributedComplete=admissionWait' <<< "$l0")
 merged0=$(grep -c 'distributedComplete=merged ' <<< "$l0")

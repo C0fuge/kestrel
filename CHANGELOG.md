@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Distributed complete mode: point lookups with typed literals are computed on the planning node too (item 45,
+  lane 3). `distributedCompletePointLookups=local` matched only a string or plain number after `=`, so
+  `WHERE o_orderdate = DATE '1992-01-01'`, `= CAST('1992-01-01' AS DATE)`, `= TIMESTAMP '...'`, decimals with an
+  exponent and parenthesised literals were still merged over every node. Ranges, column comparisons and ORs are
+  merged as before. CI: the service-cluster point load adds `point_date` (a DATE literal) to its gate.
+
 - File pruning shapes also cover decimal, long integer and date literals (item 40(b)): point and count queries
   comparing with `1234.5`, keys of 10-18 digits or `DATE 'yyyy-mm-dd'` were still parsed by jOOQ per text. Their
   pruning now shares one parse per shape too (the describe cache key is unchanged). Same files kept (test over 38

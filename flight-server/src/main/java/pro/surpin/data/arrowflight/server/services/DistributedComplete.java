@@ -71,9 +71,23 @@ public final class DistributedComplete implements AutoCloseable {
     private static final String VIEW_PREFIX = "__kestrel_endpoint_answers_";
     /** Largest LIMIT whose merge starts on probation (item 43). */
     static final long SMALL_LIMIT = 10_000;
-    /** A column equal to a literal: a quoted or plain name, {@code =}, a string or a number. */
+    /** A string, or a number with an optional sign, fraction and exponent. */
+    private static final String PLAIN_LITERAL =
+            "(?:'(?:[^']|'')*'|[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?(?![\\w.]))";
+    /** A typed string literal (item 45): {@code DATE '1992-01-01'}, {@code TIMESTAMP '...'}, ... . */
+    private static final String TYPED_LITERAL = "(?:(?:DATE|TIME(?:STAMP\\w*)?(?:\\s+WITH(?:OUT)?\\s+TIME\\s+ZONE)?"
+            + "|INTERVAL)\\s+'(?:[^']|'')*')";
+    /** A literal, typed or not, or one cast to a type (item 45): {@code CAST('1992-01-01' AS DATE)}. */
+    private static final String POINT_LITERAL = "(?:" + PLAIN_LITERAL + "|" + TYPED_LITERAL
+            + "|(?:TRY_)?CAST\\s*\\(\\s*(?:" + TYPED_LITERAL + "|" + PLAIN_LITERAL + ")\\s+AS\\s+[A-Za-z_][\\w ]*"
+            + "(?:\\(\\s*\\d+\\s*(?:,\\s*\\d+\\s*)?\\))?\\s*\\))";
+    /**
+     * A column equal to a literal: a quoted or plain name, {@code =}, then a string, a number, a typed
+     * literal or a cast literal (item 45), optionally in parentheses.
+     */
     private static final java.util.regex.Pattern POINT_EQUALITY = java.util.regex.Pattern.compile(
-            "(?:\"(?:[^\"]|\"\")+\"|\\b[A-Za-z_]\\w*)\\s*=\\s*(?:'(?:[^']|'')*'|[-+]?\\d+(?:\\.\\d+)?\\b)");
+            "(?:\"(?:[^\"]|\"\")+\"|\\b[A-Za-z_]\\w*)\\s*=\\s*(?:\\(\\s*)*" + POINT_LITERAL,
+            java.util.regex.Pattern.CASE_INSENSITIVE);
     private static final java.util.regex.Pattern OR_WORD =
             java.util.regex.Pattern.compile("\\bor\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
     /** Start of the {@code UNAVAILABLE} description when an endpoint answer was lost. */
