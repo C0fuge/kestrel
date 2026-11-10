@@ -1190,3 +1190,9 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   not refuse it; a kept file not held here is refused as before; test
   `PrunedLocalCopiesTest.withoutCopiesAPointQueryOnHeldFilesIsPrunedNotRefused`. CI: Dev CI **42791671758** green on the
   branch; on `main` Dev CI 42794664721 was cancelled by the core lane's next push; Dev CI **42794847349** on a8ded50d (core lane's logging follow-up on top of 15220a77) green. README (shared sizing) and CHANGELOG updated. Lock released.
+- 2026-11-10 10:30Z (plugins lane): Q-42 on `main` confirmed. Dev CI 42794664721 (15220a77) was cancelled because a
+  newer run superseded it; Dev CI **42794847349** (a8ded50d, contains 15220a77) green. Service hdfs **42794862424**
+  12/12 green on attempt 2. On attempt 1 only `ha-krb-sasl` balanced was red, at setup: `hadoop checknative` in the
+  image failed before any server started (a CI-setup fault; the same cell was green under speed). Item 42's Service
+  hdfs on `main`, 42785951630, is also green. Nothing open in this lane besides the Q-40a follow-up (gizmo wave,
+  waits for the maintainer). No code change. Lock released.
