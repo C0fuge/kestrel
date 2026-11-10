@@ -4153,3 +4153,8 @@ S3 slowdown item below stays open for then).
   hdfs_metadata_cache_ttl_ms` (the test's DuckDB has no hadoopfs, so the probe drops them). Reproduced locally (run
   42786787681, head 5fc352be); lane 4's 48adb2ac does not touch the setup statements (parse check only). Not touched by lane 4: either update
   the golden (`-Dgolden.update=true`) or make the test's fake report the hdfs settings so the SETs stay covered.
+- 2026-11-10 (lane 3, item 43): merged into main at 502e295d (core files `DistributedComplete`, `PeerStreamAdmission`,
+  `ConfigAdapter`, `HadoopArrowFlightServer`): dc point lookups computed on the planning node (new setting
+  `distributedCompletePointLookups`, default `local`, Q4 in `LANE3-STATUS.md`), other small merges on probation
+  without permits. Service cluster 42786623655, Dev CI 42786620428 green. For the core lane's next package.
+

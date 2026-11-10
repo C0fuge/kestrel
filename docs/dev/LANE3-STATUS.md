@@ -12,6 +12,13 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 > CI: the cluster cell with 32 clients of point queries under dc, q/s within ~20 % of speed. Branch
 > `lane/distributed`, merge when green, "ITEM 43 DONE <sha>".
 
+ITEM 43 DONE 502e295d (2026-11-10, see Log; commits 85df974d, b3d9d38f, 502e295d): dc point lookups no longer fan
+out or queue. Service cluster 42786623655: 32 clients of point queries on node 1, speed-dc / speed q/s hdfs 43.5 / 51.7
+(0.84), hdfs-ha 36.2 / 37.0 (0.98), s3 28.2 / 28.7 (0.98); 12/12 cells green; Dev CI 42786620428 green. Changes a dc
+default: see Q4. For the stand (on the core lane's next pre-release, which carries it): rerun the dc small-query
+classes at 8 / 32 clients; expect the start line `distributedComplete point lookups: local ...`, no
+`admissionWait` for point_orders / point_lineitem / count_filter, q/s close to speed.
+
 ITEM 39(d) DONE a952f415 (2026-11-09, see Log): merge budget from min(direct memory, Arrow allocator limit);
 one-row merges skip the queue. For the stand: rerun the dc small-query classes (8 / 32 clients) and the 8
 concurrent full scans on the core lane's item 39 pre-release; expect `peer streams: 16 (... Arrow allocator limit
@@ -54,7 +61,7 @@ D13 (b) DONE 3a595503 + dd9090a8 (2026-11-09, see Log): the hdfs-ha loss cell no
     answered per failover window; queries planned after each failover reach the new active NameNode (~2 700-3 000
     reads per window, standby ~0). Watch: a `NameNode not reached` warning in later runs.
 
-D14. After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
+D14. (Point lookups: done by item 43, computed on one node.) After the stand's item 39 rerun: if dc point queries (row-returning, e.g. `point_orders`) still have p99 tails
     behind scans, charge them less (per-shape) or compute small plans on one node (threshold on planned bytes).
     Optional (changes a default): derive `arrowAllocatorLimitBytes` from direct memory - written up as Q3, no code
     until answered.
@@ -183,6 +190,15 @@ Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowf
     `OutOfDirectMemoryError` instead of the allocator's clear `OutOfMemoryException` if Netty needs the remaining 25 %).
     Changes a default, hence a question: (a) derive as proposed, (b) another share, (c) keep 2 GiB (stand sets it).
     No code until answered.
+Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `local`** (`FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS`,
+    new). Under `distributedComplete=true`, a query with `column = literal` (no OR) and no aggregate or a one-row
+    aggregate (point_orders, point_lineitem, count_filter) is now computed by the planning node alone when it can read
+    the files, as without dc; `merge` restores merging (on probation, without permits until 16 MiB read). Reason: with
+    probation alone (no admission waits at all) CI dc still did 0.27-0.57 of speed's q/s (run 42781188876): each point
+    lookup cost six part queries on three nodes. Cost of the default: a one-row aggregate with an unselective equality
+    (`count(*) ... WHERE l_returnflag = 'R'` on a large table) runs on one node instead of all. Answers are unchanged
+    either way. Keep `local` as the default, or default to `merge` (then the stand / clients set `local`)? Implemented
+    as `local` because item 43's acceptance (dc within ~20 % of speed) needs it; flipping is a one-word change.
 
 ## Log
 
@@ -598,3 +614,15 @@ Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowf
   results of the item 39 pre-release), Q3 answer.
 - 2026-11-10 07:04Z (lane 3 session): no change. ITEM 39 is packaged (`server-1.0.0-894afb9b48c4`, core lane 06:34Z),
   but no stand results on it yet; D14 waits for them, Q3 still unanswered. No code, no CI, lock not taken.
+- 2026-11-10 08:08-09:20Z (lane 3 session): ITEM 43 DONE 502e295d. Lane branch restarted from `origin/main` (its old
+  content was all merged). (1) `PeerStreamAdmission.admitOnProbation` / `Admitted.charge`: merges expected small
+  (equality filter without OR, or LIMIT <= 10 000 without aggregate) open their streams without permits and take
+  them once they read > 16 MiB (`EndpointAnswers` byte meter); at most max(32, 8 x permits) on probation. Service
+  cluster 42781188876: 0 admission waits, but dc point q/s 0.27-0.57 of speed (fan-out cost). (2) New setting
+  `distributedCompletePointLookups` (`local` default / `merge`): point lookups (no aggregate or one-row aggregate) are
+  computed on the planning node when it can read the files; top-N LIMITs stay merged (DistributedTwoProcessTlsTest
+  caught it, Dev CI 42784392012). (3) `service-cluster.yml`: speed and speed-dc cells run 32 clients of
+  `tools/ci/point-query-load.py` on node 1; the summary fails when dc q/s < 0.8 x speed. Final: Service cluster
+  42786623655 green (ratios 0.84 / 0.98 / 0.98), Dev CI 42786620428 green. Q4 (default `local`). Not packaged: the
+  core lane's next package carries it (STATUS note on item 40(b)). Lock released. Next: Q3 / Q4 answers, D14 after
+  the stand's rerun.
