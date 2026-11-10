@@ -4136,3 +4136,9 @@ S3 slowdown item below stays open for then).
   42775949965 green; its Dev CI push run was cancelled by a later push, code identical to 42774303168). CHANGELOG +
   START-NOTES lines. `package=true` dispatched on `pkg/37bf9401` (= main incl. the plugins lane's d295fe36): runs
   listed in Next steps. Open question added (hdfs=reads on the direct path). Lock released.
+- 2026-11-10 09:05Z (plugins lane, item 42, maintainer exception, core files): merged db35b57a into `main`.
+  `ResourceProfile.speedMemoryBytes` caps speed's shared DuckDB limit at the DuckDB budget (`DuckDbSizing.withinBudget`);
+  `CatalogViews.pruning` + `ExecutionService.completeFromCopies` / `completeInCopyBatches` prune point queries before
+  the local-copy rewrite (SASL short-circuit-only nodes now log `views=prunedFiles`), `CopiedQuery.pruned` skips
+  `requireReadableHere` in `FlightSqlProducer.streamComplete`; `service-hdfs-cell.sh` gains the `pointPruning` stage
+  in the sasl cells. Details and Q-42 in `PLUGINS-STATUS.md`. Branch CI 42781954321 / 42781957575 green.

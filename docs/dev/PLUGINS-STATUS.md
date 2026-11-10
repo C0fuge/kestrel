@@ -20,6 +20,11 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > show `views=prunedFiles` for a point query.
 > Branch `fix/42-sizing-pruning`, maintainer exception to the lane scope, merge into `main` when green, "ITEM 42 DONE <sha>".
 
+*ITEM 42 DONE db35b57a (2026-11-10, plugins lane; see Log 09:05Z).* (1) speed caps the shared DuckDB's default limit at
+the budget (stand shape: 2457 -> 1331 MiB). (2) Cause: on short-circuit-only SASL nodes with node-local copies the
+complete answer went through `completeFromCopies`, which replaced the table by all its files before `prunedFiles`
+ran; pruning now happens first there (and in `completeInCopyBatches`). Follow-ups for the maintainer: Q-42 below.
+
 > **Core lane, 2026-11-09 13:10Z - note on ITEM 39(b) (no action of this lane lost):** the core session had already
 > pushed a fix for (b) to `main` (`39f84617`) before it saw the split: `HostLimits` now reads the memory limit of the
 > process's own cgroup (`/proc/self/cgroup`) and of every parent up to the mount point (smallest wins, v2 then v1),
@@ -743,6 +748,16 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **(Q-42, 2026-11-10, plugins lane) other memory limits above the budget, and point queries without copies.**
+  (a) Item 42 caps only `speed`'s node-wide limit. `balanced` (one DuckDB per connection) keeps its 1 GiB floor per
+  connection and `duckDbSharedDatabase=true` without speed its 1 GiB floor for the node, even when the budget is
+  smaller (the screening container 2 CPU / 6 GB / -Xmx3g / direct 2g has a budget of ~100 MiB and keeps 1024 MiB x 2
+  connections; a test pins it). Cap those at the budget too (floor 128 MiB)? It changes `balanced` defaults on small
+  hosts, so not done without your word. Also speed's private fallback DuckDB (sized as balanced) runs beside the
+  shared one. (b) With local copies off (`hdfsLocalCopyMaxBytes=0`) on short-circuit-only SASL nodes a point query is
+  still refused by `requireReadableHere` when any file of the table is not held here, although the kept file may be;
+  pruning before that check would answer it. Additive in effect (answers instead of refusals); do it?
+
 - **(Q-40a follow-up, 2026-11-10) gizmo wave and the harness's JVM flags.** (B) is on `main` (d295fe36). This lane must
   not touch other repositories, so it could neither read `ci/ab.sh` of the performance repo nor ask there for a
   gizmo wave: please have the coordinator run one on the next kestrel build that contains d295fe36 (a `package=true`
@@ -1141,3 +1156,15 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   no client lost): balanced best pass 1830 s (peak 3497 MiB); speed default 2048 MiB 1110 s (3669 MiB); speed
   4608 MiB 81.4 s (5725 MiB); speed 5120 MiB 101.3 s (5977 MiB) - no OOM kill, raised limits 13.6x faster under
   concurrency; the new default for this shape (4402 MiB) sits just below the 4608 MiB cell. Lock stays released.
+- 2026-11-10 09:05Z (plugins lane): **ITEM 42 DONE db35b57a** (branch `fix/42-sizing-pruning` rebased and merged into
+  `main`). (1) `ResourceProfile.speedMemoryBytes` caps the shared DuckDB's default limit at the DuckDB budget
+  (`DuckDbSizing.withinBudget`, floor 128 MiB); test `speedNeverSizesDuckDbAboveTheBudgetInSmallContainers` (stand
+  shape 16 cores / 3 GiB / -Xmx768m / direct 512m -> 1331 MiB, sweep 1-3 GiB), `smallHostGetsTheMinimumMemoryLimit` now
+  1228 MiB (was 1638 MiB + 512 MiB JVM in 2 GiB). (2) `CatalogViews.pruning` / `prunedFiles(sql, pruning)`;
+  `completeFromCopies` prunes first (kept files all held here -> pruned SQL, `CopiedQuery.pruned`, no
+  `requireReadableHere`; else copies only kept files), `completeInCopyBatches` too; `PrunedLocalCopiesTest`. CI:
+  `service-hdfs-cell.sh` stage `pointPruning` (sasl cells: `point.orders_r`, tpch.orders in 8 key ranges, 3 point
+  queries complete mode on one server, CatalogViews debug log; requires kept=1 x2 and kept=0 x1;
+  `tools/ci/service-hdfs-point-check.py`). Branch runs: Dev CI **42781954321** green, Service hdfs **42781957575** 12/12
+  (all six sasl cells: prunedFiles 3, kept=1: 2, kept=0: 1; sasl-cluster balanced via completeFromCopies). On `main`:
+  Dev CI 42785951498, Service hdfs 42785951630 dispatched by the push (not awaited). New Q-42. Lock released.
