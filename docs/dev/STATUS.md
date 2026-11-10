@@ -4142,3 +4142,6 @@ S3 slowdown item below stays open for then).
   the local-copy rewrite (SASL short-circuit-only nodes now log `views=prunedFiles`), `CopiedQuery.pruned` skips
   `requireReadableHere` in `FlightSqlProducer.streamComplete`; `service-hdfs-cell.sh` gains the `pointPruning` stage
   in the sasl cells. Details and Q-42 in `PLUGINS-STATUS.md`. Branch CI 42781954321 / 42781957575 green.
+- 2026-11-10 (lane 4, item 40(b)): core file touched: `DuckDbAdapter.requireAllowedFunctions` (parse check name scan
+  with `indexOf` instead of two regexes; same names, order and refusals), commit 0e05f9c7. Details in
+  `CATALOGS-STATUS.md`.

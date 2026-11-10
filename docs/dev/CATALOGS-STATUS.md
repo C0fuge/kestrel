@@ -17,6 +17,31 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (2) - first improvement (parse check name scan, see Log) merged:
+- Local cell rebuilt (same shape; this time data sorted by key, 93 750-row groups for orders, 375 000 for lineitem,
+  so DuckDB's own point time is smaller): c1 p50 ms, prepared flow point_orders create 1.45-1.55, GetFlightInfo
+  0.60, DoGet 2.1-2.3, close 0.5 (= round trip); `SELECT k` create 0.95, DoGet 0.9. So per table point query the
+  server adds ~0.5 ms in create over `SELECT k` (describe of a text never seen: the key differs every query, so
+  the describe cache and the parse-check cache never hit) and ~1.2 ms in DoGet (parse check + DuckDB prepare +
+  execute).
+- JFR (executor threads, point_orders only, 6 000 queries): DuckDB execute ~27 % of samples, DuckDB prepare
+  ~13 %, the parse check ~19 % (DuckDB `json_serialize_sql` + the Java regex over its JSON), jOOQ parsing ~7 %
+  (checkQuery / ParquetQueryParser, three times per prepared query: create, GetFlightInfo, DoGet), the rest small.
+  Micro-benchmark of the parse check for a point query (2.2 KB JSON): `json_serialize_sql` ~140 us, the regex 20 us
+  (now 0.6 us); both run twice per query (describe text and the pruned DoGet text differ).
+- End to end the regex fix is within noise (c1 and c8 ADBC load: base 108.8 / 107.4 q/s, new 106.0 / 108.3 q/s; the
+  4-vCPU VM is DuckDB-CPU-bound at c8 by `count_filter`).
+- Next (in order): (1) skip the second `json_serialize_sql` per query: DoGet's text is the describe's text with one
+  table reference replaced by server SQL (`prunedFiles`); accept it when the unpruned text passed the check (needs a
+  careful argument + test that the substitution cannot add a statement or a refused name; ~0.15 ms + one DuckDB
+  parse per query); (2) one jOOQ parse per request instead of several (checkQuery, qualifiedPlainNames,
+  ParquetQueryParser, TableReferences), or cache the parse per SQL text for the GetFlightInfo/DoGet that follow
+  create; (3) a literal-insensitive describe cache key (WHERE-clause literals only; the schema does not depend on
+  them) so create stops describing every new key - needs a proof that output columns cannot depend on the replaced
+  literals; (4) gizmo vs speed per call on the same box, and c32 CPU per query with JFR on the HDFS point cell, as
+  before. JFR here needs `-XX:FlightRecorderOptions=stackdepth=256` *before* `StartFlightRecording` (stacks were cut
+  at 64 frames this session).
+
 ITEM 40(b) state after session 2026-11-10 (1) - profiling only, no code change yet (branch `fix/40b-small` = main +
 the tool `tools/ci/small-query-rpc.py`):
 - Local cell (4 vCPU VM, local disk, synthetic TPC-H-shaped orders 1.5 M / lineitem 6 M rows, 4 key-range files per
@@ -731,3 +756,10 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-10 (1): **ITEM 40(b)** started (profiling): local c1 per-call numbers, DuckDB vs server time,
   JFR breakdown, external file cache check (see the 40(b) state note in Next steps). New tool
   `tools/ci/small-query-rpc.py` on branch `fix/40b-small` (68dc9ea9). No server change, so no CI run. Lock released.
+- 2026-11-10 (2): **ITEM 40(b)** first improvement: the parse check finds query names with one `indexOf` scan instead
+  of two regular expressions (20 us -> 0.6 us per new text, same names/order/refusals; equivalence test against the
+  old expressions over DuckDB's own JSON). Branch `fix/40b-small` Dev CI green: run 42784271237 (29dbaf18); merged
+  into `main` as 0e05f9c7 (cherry-pick on top of item 42), Dev CI on main runs on the push. End to end within noise
+  (c1 per call and c8 ADBC load, see the 40(b) state note). New profile numbers and the next three cuts are in that
+  note. Not DONE yet. Branch `fix/40b-small` now = main + `tools/ci/small-query-rpc.py` (merge commit f8f39197; a
+  force-push to rebase it was refused, so main was merged in instead). Lock released.
