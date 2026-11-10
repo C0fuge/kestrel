@@ -39,7 +39,13 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > clients**, configs default | speed | speed `duckDbMemoryLimit=4608MiB` (~ (B): half of heap+direct reserved) |
 > speed 5120MiB); still in Measure after 90 min. **Next session: read its summary** (client failed = OOM kill;
 > peak MiB per config) and add the result to Q-40a.
-> **Still waiting for Q-40a.** Then: (B) if chosen - profile code + `DuckDbSizingTest` case + a memory-pressure
+> *Step 3 done 2026-11-10 (plugins lane, Q-40a (C)): d295fe36 on `main`.* speed sizes DuckDB with heap
+> min(-Xmx, max(1 GiB, heap in use at startup x 2)) and direct min(direct, 1 GiB + 25 %); tpch-perf's 8 GB / -Xmx3g /
+> direct 2g -> 4402 MiB (was 2048). Dev CI 42775184825 green on the branch incl. the new memory-pressure step.
+> **Next step (open):** a gizmo wave in the performance repo on the harness's JVM flags (this lane cannot touch
+> other repositories - see the open question "Q-40a follow-up"), then "ITEM 40(a) DONE". Also read tpch-perf run
+> 42760596461 (4 clients; still in Measure at 07:40Z) and add its peaks to the Log.
+> *(Old text:)* Then: (B) if chosen - profile code + `DuckDbSizingTest` case + a memory-pressure
 > check (speed with the raised limit in a `MemoryMax` scope, as item 39(b)'s CI step); in any case ask the
 > performance repo for a gizmo wave on the harness's -Xmx/direct, then "ITEM 40(a) DONE".
 
@@ -722,6 +728,15 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **(Q-40a follow-up, 2026-11-10) gizmo wave and the harness's JVM flags.** (B) is on `main` (d295fe36). This lane must
+  not touch other repositories, so it could neither read `ci/ab.sh` of the performance repo nor ask there for a
+  gizmo wave: please have the coordinator run one on the next kestrel build that contains d295fe36 (a `package=true`
+  pre-release - the core lane's or the maintainer's call) and say which -Xmx/direct the harness uses; then this lane
+  writes "ITEM 40(a) DONE". Two notes on the formula: "heap after warm-up" is the heap in use when speed sizes DuckDB
+  (at startup, typically 30-150 MiB, so the 1 GiB floor applies); a re-size after warm-up would need a runtime
+  `SET memory_limit` - say if wanted. "Never less than 39(b)'s cgroup bound" is read as: the memory the limit is cut
+  from stays the cgroup's / host's (item 39(b)), only the JVM reservation shrinks.
+
 - **Answer Q-40a (maintainer, 2026-11-10 08:20): (C).** Keep the START-NOTES text (A), and do (B): speed reserves
   for the JVM what it can really use, not the full `-Xmx` + direct (e.g. reserve = min(-Xmx, max(1 GiB, measured
   heap after warm-up x 2)) + min(direct, 1 GiB + 25 % of direct), never less than item 39(b)'s cgroup bound), with
@@ -1097,3 +1112,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-10 06:45Z (plugins lane): Q-40a still unanswered; dispatched the (B) memory-pressure check `tpch-perf.yml`
   run 42760596461 (S3 SF10, 4 concurrent clients, speed at default / 4608 / 5120 MiB DuckDB limit in an 8 GB
   container); not finished at session end, result to be read next session. No code change. Lock released.
+- 2026-11-10 07:50Z (plugins lane): ITEM 40(a) step 3 - Q-40a (C) implemented on `fix/40a-s3`, cherry-picked to `main`
+  (d295fe36 code + tests + CHANGELOG, 59ddcd60 START-NOTES). `HostLimits` gains `usedHeapBytes` (4-arg constructor
+  kept; start log `usedHeapMiB=`), `ResourceProfile.speedReservation` (tests in `ResourceProfileTest`, new case
+  `speedReservesWhatTheJvmUsesNotItsLimits`; SMALL/MEDIUM/LARGE/egret expectations raised: 3174/24780/209715/2662 MiB).
+  Dev CI step "speed's JVM reservation under memory pressure" (`tools/ci/HeapFillLauncher.java`: server in a 6G
+  `MemoryMax` scope, -Xmx3g / direct 1g, heap filled to 90 % after start, 100 M-group aggregate). Run **42775184825**
+  green: limit 3174 MiB (was 2048), heap 2765/3072 MiB, answer exact in 3.9 s, scope peak 5.73 of 6 GiB, oom_kill 0;
+  caveat: the aggregate spilled only 1 MiB, so DuckDB was near but not proven at its limit. tpch-perf run 42760596461
+  still running (Measure). Gizmo wave not requested (other repository) - see Open questions. Lock released.

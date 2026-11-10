@@ -4076,3 +4076,9 @@ S3 slowdown item below stays open for then).
   archive.ubuntu.com (connection reset). `package=true` 42764387193 (894afb9b) green: build, service gate (Service hdfs
   42764375265, cluster 42767259358, stores 42767268942, security 42767265035), pre-release `server-1.0.0-894afb9b48c4`.
   Dev CI push 42764375712, Catalogs CI 42764375651 green. No CHANGELOG line (no runtime change). Lock released.
+- 2026-11-10 07:50Z (plugins lane, item 40(a), maintainer exception): `flight-server` core change d295fe36 -
+  `resourceProfile=speed` sizes the shared DuckDB's default memory limit with the JVM reservation of Q-40a (C) (heap
+  min(-Xmx, max(1 GiB, in use x 2)), direct min(direct, 1 GiB + 25 %)); `HostLimits.usedHeapBytes`, start log
+  `memoryBudget ... usedHeapMiB=`; Dev CI step "speed's JVM reservation under memory pressure". Dev CI 42775184825
+  green on `fix/40a-s3`. `balanced` unchanged. No `package=true` from this lane yet: the next pre-release should contain
+  it for the gizmo wave (see PLUGINS-STATUS Open questions).
