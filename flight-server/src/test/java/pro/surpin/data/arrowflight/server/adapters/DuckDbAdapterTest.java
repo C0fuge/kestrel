@@ -1856,6 +1856,62 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies the name scan of the parse check finds the same names, in the same order, as the
+     * regular expressions it replaced (item 40 (b)), over DuckDB's own JSON of varied queries.
+     */
+    @Test
+    void parseCheckNameScanMatchesTheRegularExpressions() throws Exception {
+        java.util.regex.Pattern name = java.util.regex.Pattern.compile(
+                "\"(?:function_name|table_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+        java.util.regex.Pattern qualifier = java.util.regex.Pattern.compile(
+                "\"(?:catalog_name|schema_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+        String[] queries = {
+            "SELECT * FROM tpch.orders WHERE o_orderkey = 42",
+            "SELECT sum(x), \"Max\"(y) FROM flight_session_3.s.t JOIN u ON t.k = u.k GROUP BY 1",
+            "SELECT 'a\"function_name\":\"query' AS s, lower('X\\\\') FROM \"we\"\"ird\".\"ta\\\\ble\"",
+            "WITH c AS (SELECT * FROM read_parquet('x.parquet')) SELECT upper(c.v) FROM c, "
+                + "\"Flight_Session_9\".main.v",
+            "SELECT 1",
+        };
+        try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.PreparedStatement ps = c.prepareStatement(
+                        "SELECT json_serialize_sql(?::VARCHAR)")) {
+            for (String query : queries) {
+                ps.setString(1, query);
+                String json;
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertTrue(rs.next());
+                    json = rs.getString(1);
+                }
+                List<String> expected = new java.util.ArrayList<>();
+                java.util.regex.Matcher m = name.matcher(json);
+                while (m.find()) {
+                    String n = m.group(1).toLowerCase(java.util.Locale.ROOT);
+                    if (!expected.contains(n)) {
+                        expected.add(n);
+                    }
+                }
+                java.util.regex.Matcher q = qualifier.matcher(json);
+                while (q.find()) {
+                    String n = q.group(1).toLowerCase(java.util.Locale.ROOT);
+                    if (n.startsWith("flight_session_") && !expected.contains(n)) {
+                        expected.add(n);
+                    }
+                }
+                assertEquals(expected, DuckDbAdapter.requireAllowedFunctions(json), query);
+                assertFalse(expected.isEmpty() && !query.equals("SELECT 1"), query);
+            }
+        }
+        assertEquals(List.of("a\\\"b", "query_x"), DuckDbAdapter.requireAllowedFunctions(
+                "{\"function_name\":\"a\\\"b\",\"subtable_name\":\"no\",\"table_name\":\"Query_X\","
+                        + "\"column_name\":\"c\",\"table_name\":\"cut"));
+        assertThrows(IllegalArgumentException.class, () -> DuckDbAdapter.requireAllowedFunctions(
+                "{\"x\":1,\"function_name\":\"QUERY\"}"));
+        assertEquals(-1, DuckDbAdapter.stringEnd("ab\\", 0));
+        assertEquals(4, DuckDbAdapter.stringEnd("a\\\"b\"", 0));
+    }
+
+    /**
      * Verifies every function a marked setup statement adds is refused in client queries, while
      * functions of other setup statements and DuckDB's own stay allowed (Q4 (b) safety net).
      */

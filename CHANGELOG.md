@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Faster query parse check (item 40(b)): the names a client query uses are found in DuckDB's serialized statement
+  with one `indexOf` scan instead of two regular expressions (same names, same order, same refusals): 20 us -> 0.6 us
+  per new query text for a point query's 2.2 KB statement, twice per query (describe and DoGet texts). No behaviour
+  change.
+
 - Fix: a hadoopfs build without the newer settings (afc3 and older, upstream's) no longer stops the start with
   `IllegalStateException: DuckDB cannot be set up for the data store: Statement was closed` (pre-release
   `894afb9b48c4` with the `ci-assets` afc3 set). DuckDB's JDBC driver closes a statement whose `SET` it refuses, so the
