@@ -151,6 +151,9 @@ export DEBIAN_FRONTEND=noninteractive
 # retries per request, a few whole tries, progress lines in the container log for the next failure.
 apt_opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
 for t in 1 2 3; do
+  # Try 2 switches to the Azure mirror the runners' own apt uses (archive.ubuntu.com reset connections, 2026-11-10).
+  [ "\$t" != 2 ] || sed -i -e 's#http://archive.ubuntu.com#http://azure.archive.ubuntu.com#g' \
+    -e 's#http://security.ubuntu.com#http://azure.archive.ubuntu.com#g' /etc/apt/sources.list.d/ubuntu.sources
   echo "kdc: apt try \$t \$(date -u +%T)"
   timeout 240 apt-get \$apt_opts update -qq && timeout 240 apt-get \$apt_opts install -y -qq --no-install-recommends \
     krb5-kdc krb5-admin-server krb5-user > /dev/null && break

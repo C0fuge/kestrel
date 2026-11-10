@@ -89,11 +89,18 @@ jobs:
         run: |
           set -euo pipefail
           # libssl1.1, and libxml2 2.9 with its ICU (newer runner images ship libxml2.so.16 only).
-          pool=http://archive.ubuntu.com/ubuntu/pool/main
+          # Two mirrors: archive.ubuntu.com reset connections on 2026-11-10 while the Azure mirror answered.
           for deb in o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb \
               libx/libxml2/libxml2_2.9.10+dfsg-5ubuntu0.20.04.10_amd64.deb \
               i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb; do
-            curl -fsSL --retry 4 -o "$RUNNER_TEMP/lib.deb" "$pool/$deb"
+            got=false
+            for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
+              if curl -fsSL --retry 3 --retry-all-errors --max-time 120 -o "$RUNNER_TEMP/lib.deb" "$mirror/pool/main/$deb"; then
+                got=true; break
+              fi
+              echo "::warning::$deb not fetched from $mirror"
+            done
+            $got || { echo "::error::$deb not fetched from any mirror"; exit 1; }
             dpkg-deb -x "$RUNNER_TEMP/lib.deb" "$RUNNER_TEMP/hadoopfs-libs"
           done
           libs="$RUNNER_TEMP/hadoopfs-libs/usr/lib/x86_64-linux-gnu"
