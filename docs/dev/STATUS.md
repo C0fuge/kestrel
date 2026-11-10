@@ -23,23 +23,34 @@
 
 ## Next steps (one per session)
 
-> **ITEM 41 steps (1)-(3) done in code and CI (2026-11-10 07:50Z, core lane; `39edad76`, `14276f6b`, `68d2c866`,
-> `8766455b`); `package=true` dispatched, not yet confirmed.** (1) hadoopfs `51b7220-afc6` is the CI / release default
-> (`tools/ci/hadoopfs-pinned.sh`, sha256 836299dc...0948 = the asset's digest). (2) `hdfsSaslDataTransfer=auto|on|off`
-> (default auto: the loaded hadoopfs file's footer version, afc6+, plus `dfs.data.transfer.protection` and
-> `hadoop.security.authentication=kerberos` in LIBHDFS3_CONF -> DuckDB reads non-local blocks directly, files planned
-> to any node, no copies; start line `hdfs=saslDataTransfer mode=auto direct=true extensionVersion=51b7220-afc6`).
-> The partial-mode rules of SASL clusters (items 31, 33 (E)) stay on the direct path (`DataStore.saslPartialRules`).
-> (3) Service hdfs topology `sasl-direct` (3 DataNodes, `privacy`, `hdfsLocalCopyMaxBytes=0`): TPC-H 22/22 + every
-> `service-hdfs-sasl-check.py` answer (spread, split, chunks, plain, subqueries in parts) exact, 0 copies, both
-> profiles; `ha-krb-sasl` / `sasl-cluster` pin `off` (copy path). Run 42775949664 12/12 green; Dev CI 42774303168.
-> Timing (CI SF1, whole SASL check, not only spread scans): balanced copies 76 s vs direct 116 s; speed (copy cache
-> below one file, batches) 202 s vs direct 96 s; direct runs 3DES (`privacy`), the AES negotiation is not in afc6.
-> **Next session (core lane): check the `package=true` runs on `pkg/37bf9401` (Dev CI 42777511119; Service cluster
-> 42777497907, hdfs 42777501115, security 42777504125, stores 42777507448) -> pre-release `server-1.0.0-37bf9401d77c`,
-> write "ITEM 41 DONE", delete the branch;** red -> fix first. Then item 40(b) if it is still the core lane's (the
-> maintainer moved 40(b) to the catalogs lane on 2026-11-10, see the note there). For the stand: SASL cluster with
-> copies off, start line `direct=true`, TPC-H plain + spread scans vs the copy path.
+> **ITEM 41 DONE (2026-11-10 08:40Z, core lane).** `package=true` on `pkg/37bf9401` green (Dev CI 42777511119;
+> Service cluster 42777497907, hdfs 42777501115, security 42777504125, stores 42777507448) -> pre-release
+> `server-1.0.0-37bf9401d77c` (7 assets). Steps: (1) hadoopfs `51b7220-afc6` is the CI / release default; (2)
+> `hdfsSaslDataTransfer=auto|on|off` (auto: afc6+ and `dfs.data.transfer.protection` + kerberos in LIBHDFS3_CONF ->
+> direct SASL reads of non-local blocks, no copies; start line `hdfs=saslDataTransfer mode=auto direct=true`); (3)
+> CI topology `sasl-direct`. **Since 2026-11-10 09:00Z the `sasl-direct` cell runs `authentication,privacy`** (the
+> real cluster's DataNode value, maintainer's 11:25 answer; `SASL_DIRECT_PROTECTION` overrides): Service hdfs
+> 42785951630 (db35b57a) green, both profiles `direct=true transferProtection=authentication,privacy` - afc6 works
+> with several QOPs, no fallback needed. The branch `pkg/37bf9401` is still there (the session could not delete it).
+>
+> **11:00 note (too-old hadoopfs fails clearly) DONE (`004d844e` + golden-test fix `7b36459b`).** Cause of
+> `Statement was closed`: DuckDB's JDBC driver closes a statement whose SET it refuses (checked with duckdb_jdbc
+> 1.5.6.0), and the setup tried `SET hdfs_metadata_cache_ttl_ms` on afc3. The setup now reads the extension's version /
+> `hdfs*` settings first and sends only what the build has; WARN `hdfs=extensionTooOld version=... need=51b7220-afc4
+> ttlMs=... metadataCache=off`. **Not done: refreshing `duckdb-extensions-v1.5.6.tar.zst` in `ci-assets`** with afc6 -
+> the session's permission rules refused changing that shared release asset. For the maintainer: rebuilt set (same 4
+> files, hadoopfs replaced by afc6) has sha256 `4e4eda87eb4684c926936e9765e34ae4a61587bce89f4b3528f64154e2d26777`
+> (zstd 19, 36.9 MB); recipe: extract the set, `tools/ci/hadoopfs-pinned.sh <dir>`, repack. CI does not need it
+> (`hadoopfs-pinned.sh` swaps the file in every job).
+>
+> **Next for the core lane:** (1) as soon as the catalogs lane writes "ITEM 40(b) DONE": Dev CI `package=true` on `main`
+> (the build for the real cluster, maintainer 11:30); (2) until then: item 41 follow-up from the 11:25 answer - one
+> `hdfs=reads` line per query on the direct SASL path (files read node-local = all blocks on this node's DataNode vs
+> remote by block hosts, remote bytes if cheap), then re-enable the per-query check for `sasl-direct` in
+> `tools/ci/service-hdfs-cell.sh` (line ~754). Today the line is written only when `ParquetAdapter.localCopies()` is
+> true (`ExecutionService.copies`, `logNoFileReads`, `logRefusedReads`, `completeFromCopies` returns early): the direct
+> path needs its own count from `store.readableHere(file)` over the query's files (partial tickets: the ticket's files;
+> complete: `QueryTables` + listings) without new NameNode calls per query where the listing cache already has hosts.
 
 > **ITEM 39 DONE (2026-11-10 06:34Z, core lane).** Dev CI `package=true` 42764387193 on `ci/core-39pkg2` (894afb9b,
 > = main) green incl. the service gate (Service hdfs 42764375265, cluster 42767259358, stores 42767268942, security
@@ -1932,13 +1943,8 @@ S3 slowdown item below stays open for then).
   benchmark package's summary counts them. And **test `authentication,privacy` (several QOPs) with afc6 in CI before
   item 41's package**: the real cluster's DataNodes are configured exactly so (`dfs.data.transfer.protection =
   authentication,privacy`); if afc6 fails there, auto must fall back to the short-circuit-only path with copies.
-- **Item 41: per-query `hdfs=reads` lines on the direct SASL path (2026-11-10, core lane, decision wanted).** Item 32's
-  per-query `hdfs=reads` line (local / copy / footer-only reads) is written only on the short-circuit-only path with
-  copies; with `hdfsSaslDataTransfer` direct (the new default on SASL clusters with afc6) no query has one, so the
-  stand's benchmark summaries that count reads per query see none. Should the direct path log a line too (e.g. files
-  read node-local vs remote by the file's block hosts), or is the absence fine? CI's per-query check is skipped for
-  `sasl-direct` until decided. Also: the CI cell uses `privacy`; the stand's `authentication,privacy` (several QOPs)
-  is untested with afc6 in CI.
+- **Item 41: per-query `hdfs=reads` lines on the direct SASL path** - answered above (11:25: yes, log it; QOPs
+  `authentication,privacy` now tested in CI, green). Implementation is in Next steps.
 
 - **Item 35: default budget of distributed complete merges (2026-11-06, core lane, review wanted).** With
   `distributedComplete=true`, merges now wait for room instead of all running at once. The default is one endpoint
