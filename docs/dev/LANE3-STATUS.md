@@ -12,6 +12,11 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 > CI: the cluster cell with 32 clients of point queries under dc, q/s within ~20 % of speed. Branch
 > `lane/distributed`, merge when green, "ITEM 43 DONE <sha>".
 
+D17 DONE (2026-11-10, see Log): Service cluster on `main` 42789267919 was red only on item 43's summary point gate
+(hdfs speed-dc / speed 0.62). Same server code across runs gave 0.62-1.77 (the two cells run on different runners),
+so the gate now checks the deterministic part in the speed-dc cell (point lookups on node 1: 0 merged, 0 admission
+waits) and the cross-runner ratio warns < 0.8, fails < 0.5. Watch: a speed-dc cell failing with `point load under dc`.
+
 ITEM 43 DONE 502e295d (2026-11-10, see Log; commits 85df974d, b3d9d38f, 502e295d): dc point lookups no longer fan
 out or queue. Service cluster 42786623655: 32 clients of point queries on node 1, speed-dc / speed q/s hdfs 43.5 / 51.7
 (0.84), hdfs-ha 36.2 / 37.0 (0.98), s3 28.2 / 28.7 (0.98); 12/12 cells green; Dev CI 42786620428 green. Changes a dc
@@ -626,3 +631,13 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   42786623655 green (ratios 0.84 / 0.98 / 0.98), Dev CI 42786620428 green. Q4 (default `local`). Not packaged: the
   core lane's next package carries it (STATUS note on item 40(b)). Lock released. Next: Q3 / Q4 answers, D14 after
   the stand's rerun.
+- 2026-11-10 10:03-10:35Z (lane 3 session): lock 10:03Z. **D17 DONE** (workflow/test only, no Dev CI or
+  `package=true` needed). Orchestrator flagged Service cluster on `main` 42789267919 (502e295d) red: all 13 cells pass,
+  only the summary's item 43 gate (dc / speed point q/s >= 0.8) failed with hdfs 0.62, hdfs-ha 0.78; srv1 showed 0
+  admission waits, 0 probation merges. The branch run of the same code had 0.84 / 0.98 / 0.98; a rerun on `main`
+  (42796003792, green) gave 1.06 / 1.10 / 0.81 and the branch run 42796297705 1.77 / 0.88 / 0.76 - cross-runner noise,
+  not a dc cost (the local path adds only two parses). Fix: point load moved to `tools/ci/service-cluster-point.sh`
+  (the cell's run block was over GitHub's 21000-character limit again, dispatch 422); the speed-dc cell fails when a
+  point lookup on srv1 was merged or waited for admission; the summary ratio warns < 0.8 (s3 0.76 warned in
+  42796297705), fails < 0.5 (pre-item-43 fan-out was 0.27-0.57). Branch Service cluster 42796297705 green, merged
+  into `main`. Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
