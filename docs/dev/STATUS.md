@@ -65,7 +65,7 @@
 > - **(a) plugins lane, branch `fix/40a-s3`:** S3 SF10 - compare DuckDB settings/pragmas and the S3 read path
 >   (gizmo uses plain DuckDB httpfs; diff `SELECT * FROM duckdb_settings()` of both servers in the harness, threads,
 >   external file cache, prefetch, `s3_*` settings, statement cache / per-query view setup) and fix ours.
-> - **(b) core lane:** per-query overhead of small queries (Java/Flight path vs DuckDB time: profile the small set,
+> - **(b) MOVED to the catalogs lane (2026-11-10 10:40, `CATALOGS-STATUS.md`):** per-query overhead of small queries (Java/Flight path vs DuckDB time: profile the small set,
 >   speed c1 regression vs balanced) and memory of speed vs gizmo.
 > Each part: measure with the harness against gizmo (the performance repo can run a wave on request), "ITEM 40(x) DONE".
 

@@ -4,6 +4,16 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-10 10:40 - FIRST in this lane: ITEM 40(b)** (moved here from the core lane, which works on item
+> 41). Per-query overhead of small / point queries: on the real cluster point queries are the main gap to upstream
+> (there 460 q/s on 16 cores), and GizmoSQL (same DuckDB) takes 0.70-0.85 of speed's time on the small-query mix
+> locally (performance repo `results/FRESH-gizmo-deafc861cce3.md`); speed c1 p50 is 1.16-1.18x balanced. Profile one
+> point query end to end on the HDFS point cell and locally (JFR / async-profiler: parse + plan + view/describe +
+> DuckDB prepare/execute + Arrow conversion + Flight send), find what the Java/Flight path adds beyond DuckDB's own
+> time, and cut it (statement/plan caching per SQL text, avoid re-describing, fewer copies, smaller first batch,
+> the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
+> green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
+
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(c).** balanced point/small-query collapse on HDFS and the speed point-query rate (item 39 (c)); the small-query path, ExecutionService, DuckDbAdapter and catalog views are allowed for this item. Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
 > `fix/39c-point` (create it from `origin/main` if missing; rebase on `origin/main` each session), tests + CI green on the branch,
