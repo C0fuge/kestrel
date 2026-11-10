@@ -751,7 +751,8 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   fi
   if $sasl && [ "$n" -eq 1 ]; then checkReadsPerQid "$srv"; fi
   # shellcheck disable=SC2046
-  if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
+  # hdfs=reads lines (item 32) belong to the short-circuit-only / copy path; sasl-direct has none.
+  if [ "$n" -gt 1 ] && ! $direct; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi
   if $krb && [ "$n" -eq 1 ] && [ "$profile" = balanced ]; then denyAndStop; fi
