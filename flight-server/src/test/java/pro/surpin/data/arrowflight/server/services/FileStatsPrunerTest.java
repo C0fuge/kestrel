@@ -127,11 +127,64 @@ class FileStatsPrunerTest {
                     assertEquals(sql, pruned, "unchanged: " + sql);
                 }
                 assertEquals(answer(s, sql), answer(s, pruned), sql + " -> " + pruned);
+                if (!pruned.equals(sql)) {
+                    rewriteIsAcceptedWithoutSecondParse(duck, views, s, sql, pruned);
+                }
             }
             assertEquals(4, footerReads.get(), "each footer is read once");
         } finally {
             ioPool.shutdownNow();
         }
+    }
+
+    /**
+     * Checks that DoGet's pruned text of a query whose unpruned text passed the parse check is
+     * accepted without a second parse (item 40 (b)), and that DuckDB's own parse of it is one
+     * statement using no name beyond the original's, {@code read_parquet} and {@code list_value}.
+     */
+    private static void rewriteIsAcceptedWithoutSecondParse(DuckDbAdapter duck, CatalogViews views,
+            Statement s, String sql, String pruned) throws Exception {
+        CatalogViews.Pruning pruning = views.pruning(sql);
+        String replacement = views.prunedReplacement(pruning);
+        TableReferences.Reference reference = pruning.reference();
+        assertEquals(pruned, TableReferences.rewrite(sql, List.of(reference), List.of(replacement)));
+        try (org.apache.arrow.memory.RootAllocator allocator = new org.apache.arrow.memory.RootAllocator()) {
+            duck.describeComplete(allocator, sql, views.current());
+        }
+        assertTrue(duck.acceptRewrite(sql, reference.start(), reference.end(), pruned, replacement),
+                sql);
+        java.util.Set<String> original = serializedNames(s, sql);
+        original.add("read_parquet");
+        original.add("list_value");
+        java.util.Set<String> rewritten = serializedNames(s, pruned);
+        assertTrue(original.containsAll(rewritten), sql + ": " + rewritten + " vs " + original);
+    }
+
+    /**
+     * Reads the function and table names of DuckDB's parse of one statement.
+     *
+     * @return lower-case names
+     */
+    private static java.util.Set<String> serializedNames(Statement s, String sql) throws Exception {
+        String json;
+        try (java.sql.PreparedStatement ps = s.getConnection().prepareStatement(
+                "SELECT (j->>'error')::BOOLEAN, json_array_length(j->'statements'), j::VARCHAR"
+                        + " FROM (SELECT json_serialize_sql(?::VARCHAR) AS j)")) {
+            ps.setString(1, sql);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertFalse(rs.getBoolean(1), sql);
+                assertEquals(1, rs.getInt(2), sql);
+                json = rs.getString(3);
+            }
+        }
+        java.util.Set<String> names = new java.util.HashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "\"(?:function_name|table_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(json);
+        while (m.find()) {
+            names.add(m.group(1).toLowerCase(java.util.Locale.ROOT));
+        }
+        return names;
     }
 
     /** Verifies a table with more files than the bound is not pruned. */

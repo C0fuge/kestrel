@@ -20,6 +20,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   42781188876). Log: `distributedComplete=merged ... probation=true`,
   `distributedComplete=probationOver`. Service cluster CI: 32 clients of point queries in speed and speed-dc.
 
+- One parse check per pruned point query instead of two (item 40(b)): DoGet's text of a query whose files are pruned
+  by footer statistics is the describe's text with one table reference replaced by the server's read of the kept
+  files; it is now accepted without a second DuckDB `json_serialize_sql` (~0.15 ms per query) when DuckDB's parse of
+  the checked text put a base table reference exactly at the replaced span (`query_location`) and the span is a plain
+  table name. Its names for the refusal checks are the original's plus `read_parquet` and `list_value`; any other text
+  is checked in full as before. No behaviour change.
 - Faster query parse check (item 40(b)): the names a client query uses are found in DuckDB's serialized statement
   with one `indexOf` scan instead of two regular expressions (same names, same order, same refusals): 20 us -> 0.6 us
   per new query text for a point query's 2.2 KB statement, twice per query (describe and DoGet texts). No behaviour

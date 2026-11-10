@@ -1912,6 +1912,91 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies the base table locations read from DuckDB's JSON are the UTF-8 byte offsets of
+     * the real table references only, not of names inside literals, quoted names or comments,
+     * nor of keys written into a literal (item 40 (b)).
+     */
+    @Test
+    void baseTableLocationsAreTheRealTableReferences() throws Exception {
+        String[] queries = {
+            "SELECT o_orderkey FROM tpch.orders WHERE o_orderkey = 42",
+            "SELECT '\u00e4\u20ac tpch.fake' AS s FROM /* tpch.c */ \"tpch\" . orders x, tpch.lineitem",
+            "SELECT '\"type\":\"BASE_TABLE\",\"query_location\":3' AS s FROM tpch.orders",
+            "WITH a AS (SELECT 1) SELECT * FROM tpch.orders JOIN a ON true "
+                + "WHERE o_k IN (SELECT k FROM s.t)",
+            "SELECT 1",
+        };
+        String[][] tables = {
+            {"tpch.orders"},
+            {"\"tpch\" . orders", "tpch.lineitem"},
+            {"tpch.orders"},
+            {"tpch.orders", "a ON", "s.t)"},
+            {},
+        };
+        try (Connection c = DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.PreparedStatement ps = c.prepareStatement(
+                        "SELECT json_serialize_sql(?::VARCHAR)")) {
+            for (int i = 0; i < queries.length; i++) {
+                ps.setString(1, queries[i]);
+                String json;
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertTrue(rs.next());
+                    json = rs.getString(1);
+                }
+                java.util.List<Integer> expected = new java.util.ArrayList<>();
+                for (String table : tables[i]) {
+                    int at = queries[i].lastIndexOf(table);
+                    expected.add(queries[i].substring(0, at)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+                }
+                java.util.Collections.sort(expected);
+                assertEquals(expected, java.util.Arrays.stream(DuckDbAdapter.baseTableLocations(json))
+                        .boxed().toList(), queries[i]);
+            }
+        }
+        assertEquals(0, DuckDbAdapter.baseTableLocations(null).length);
+    }
+
+    /**
+     * Verifies a server rewrite of one table reference of an accepted text is accepted without
+     * a second parse only when DuckDB's parse put a table at the replaced span, the span is a
+     * name and the rewrite is exactly the original with that span replaced (item 40 (b)); the
+     * accepted rewrite then runs.
+     */
+    @Test
+    void rewriteOfAnAcceptedTableReferenceSkipsTheSecondParse() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (RootAllocator allocator = new RootAllocator();
+                DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            String sql = "SELECT id, 's.t' AS n FROM s.t WHERE id = 1";
+            int start = sql.lastIndexOf("s.t");
+            int end = start + 3;
+            String replacement = "(SELECT 1 AS id) AS \"t\"";
+            String rewritten = sql.substring(0, start) + replacement + sql.substring(end);
+            // Not accepted yet: nothing to derive from.
+            assertFalse(adapter.acceptRewrite(sql, start, end, rewritten, replacement));
+            adapter.describeComplete(allocator, sql, views());
+            assertTrue(adapter.parseCheckRemembered(sql));
+
+            int literal = sql.indexOf("s.t");
+            String inLiteral = sql.substring(0, literal) + replacement + sql.substring(literal + 3);
+            assertFalse(adapter.acceptRewrite(sql, literal, literal + 3, inLiteral, replacement));
+            assertFalse(adapter.parseCheckRemembered(inLiteral));
+            String wider = sql.substring(0, start) + replacement + sql.substring(end + 6);
+            assertFalse(adapter.acceptRewrite(sql, start, end + 6, wider, replacement));
+            assertFalse(adapter.acceptRewrite(sql, start, end, rewritten + "; SELECT 2", replacement));
+            assertFalse(adapter.acceptRewrite(sql, start, end, rewritten, replacement + " "));
+            assertFalse(adapter.parseCheckRemembered(rewritten));
+
+            assertTrue(adapter.acceptRewrite(sql, start, end, rewritten, replacement));
+            assertTrue(adapter.parseCheckRemembered(rewritten));
+            assertEquals(2, adapter.describeComplete(allocator, rewritten, views()).getFields().size());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies every function a marked setup statement adds is refused in client queries, while
      * functions of other setup statements and DuckDB's own stay allowed (Q4 (b) safety net).
      */

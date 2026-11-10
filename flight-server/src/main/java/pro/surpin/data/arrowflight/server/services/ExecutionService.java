@@ -258,7 +258,7 @@ public final class ExecutionService {
         List<Object> values = parameters == null ? List.of()
                 : pro.surpin.data.arrowflight.server.adapters.QueryParameters.values(allocator, parameters);
         try {
-            String sql = catalogViews.prunedFiles(
+            String sql = prunedFiles(
                     catalogViews.timeTravel(catalogViews.catalogViews(query).sql(), false));
             CatalogViews.Snapshot views = catalogViews.current();
             try (ArrowStreamScans scans = new ArrowStreamScans(duckDbAdapter.connection(),
@@ -281,6 +281,29 @@ public final class ExecutionService {
             }
             throw e;
         }
+    }
+
+    /**
+     * Replaces the pruned table reference of a complete-mode text by a read of its kept files
+     * ({@link CatalogViews#prunedFiles(String)}) and lets the DuckDB adapter accept the result
+     * without a second parse check when the unpruned text passed it (item 40 (b)): the describe
+     * of a client's prepare or GetFlightInfo checked that text, and a point query's pruned text
+     * is new every time.
+     *
+     * @param sql text after the catalog rewrites
+     * @return the text to run
+     */
+    String prunedFiles(String sql) {
+        CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        String replacement = catalogViews.prunedReplacement(pruning);
+        if (replacement == null) {
+            return sql;
+        }
+        catalogViews.logPruned(pruning);
+        TableReferences.Reference reference = pruning.reference();
+        String pruned = TableReferences.rewrite(sql, List.of(reference), List.of(replacement));
+        duckDbAdapter.acceptRewrite(sql, reference.start(), reference.end(), pruned, replacement);
+        return pruned;
     }
 
     /**
