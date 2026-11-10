@@ -1136,8 +1136,24 @@ public final class CatalogViews {
      * @return SQL DuckDB can run, unchanged when pruning is null or the view must stay
      */
     String prunedFiles(String sql, Pruning pruning) {
-        if (pruning == null) {
+        String replacement = prunedReplacement(pruning);
+        if (replacement == null) {
             return sql;
+        }
+        logPruned(pruning);
+        return TableReferences.rewrite(sql, List.of(pruning.reference()), List.of(replacement));
+    }
+
+    /**
+     * Builds the server SQL that {@link #prunedFiles(String, Pruning)} puts in place of the
+     * pruned reference: a parenthesized read of the kept files of quoted names and literals.
+     *
+     * @param pruning the reference and its kept files from {@link #pruning(String)}, or null
+     * @return the replacement, or null when pruning is null or the view must stay
+     */
+    String prunedReplacement(Pruning pruning) {
+        if (pruning == null) {
+            return null;
         }
         DataStore store = parquetAdapter.dataStore();
         String body;
@@ -1146,7 +1162,7 @@ public final class CatalogViews {
         } else {
             List<DataFile> ordered = readableFirst(store, pruning.kept());
             if (store.wholeFileReadsOnly() && !store.readableHere(ordered.get(0))) {
-                return sql;   // the view binds on a file this node reads; keep it
+                return null;   // the view binds on a file this node reads; keep it
             }
             List<String> paths = new ArrayList<>(ordered.size());
             for (DataFile file : ordered) {
@@ -1155,11 +1171,9 @@ public final class CatalogViews {
             body = "SELECT " + pruning.columns() + " FROM "
                     + DuckDbAdapter.readParquetFromClause(paths);
         }
-        logPruned(pruning);
         TableReferences.Reference reference = pruning.reference();
-        return TableReferences.rewrite(sql, List.of(reference), List.of("(" + body + ")"
-                + (reference.aliased() ? "" : " AS "
-                        + DuckDbAdapter.quoteIdentifier(reference.table()))));
+        return "(" + body + ")" + (reference.aliased() ? ""
+                : " AS " + DuckDbAdapter.quoteIdentifier(reference.table()));
     }
 
     /**

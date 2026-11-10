@@ -124,6 +124,19 @@ public final class DuckDbAdapter implements AutoCloseable {
             "enable_logging", "disable_logging", "truncate_duckdb_logs", "duckdb_logs",
             "duckdb_log_contexts", "duckdb_secrets", "which_secret", "query", "query_table",
             "json_execute_serialized_sql");
+    /** The type of a base table reference in DuckDB's serialized statement. */
+    private static final String BASE_TABLE_TYPE = "\"type\":\"BASE_TABLE\"";
+    /** The key of a table reference's position in DuckDB's serialized statement. */
+    private static final String QUERY_LOCATION_KEY = "\"query_location\":";
+    /**
+     * Function names of the server's pruned-file reads as DuckDB's parse reports them: the
+     * table function and the list of its files.
+     */
+    private static final List<String> PRUNED_READ_FUNCTIONS = List.of("read_parquet", "list_value");
+    /** A table name, optionally qualified, of bare or double-quoted identifiers. */
+    private static final java.util.regex.Pattern PLAIN_TABLE_NAME = java.util.regex.Pattern.compile(
+            "(?:[A-Za-z_][A-Za-z0-9_$]*|\"(?:[^\"]|\"\")+\")"
+            + "(?:\\s*\\.\\s*(?:[A-Za-z_][A-Za-z0-9_$]*|\"(?:[^\"]|\"\")+\")){0,2}");
     /** The end of every name key in DuckDB's serialized statement, up to its value's quote. */
     private static final String SERIALIZED_NAME_END = "_name\":\"";
     /** Keys whose value is a function or table name in DuckDB's serialized statement. */
@@ -166,8 +179,18 @@ public final class DuckDbAdapter implements AutoCloseable {
      * DoGet check the same text once per node. The names are checked against the refused ones on
      * every use, because plugins may add refused names later.
      */
-    private final Map<String, List<String>> parseCheckCache = java.util.Collections.synchronizedMap(
+    private final Map<String, Accepted> parseCheckCache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(64, 0.75f, true));
+
+    /**
+     * What the parse check found in a text it accepted.
+     *
+     * @param names  function and table names the text uses, lower case
+     * @param tables UTF-8 byte offsets in the text where DuckDB's parse puts a base table
+     *               reference ({@code query_location}), ascending; empty when unknown
+     */
+    record Accepted(List<String> names, int[] tables) {
+    }
     private final ThreadLocal<Session> threadSession;
     /**
      * Node-wide threads and memory limit of duckDbSharedDatabase; null when every session is a
@@ -3206,7 +3229,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             if (session.describeCheck == null || session.describeCheck.isClosed()) {
                 session.describeCheck = conn.prepareStatement(PARSE_CHECK_SQL);
             }
-            rememberAccepted(sql, requireSingleQuery(session.describeCheck, sql));
+            rememberAccepted(sql, checkSingleQuery(session.describeCheck, sql));
         }
         return conn;
     }
@@ -3222,7 +3245,7 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private void checkSingleQuery(Session session, String sql) throws java.sql.SQLException {
         if (!acceptedBefore(sql)) {
-            rememberAccepted(sql, requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
+            rememberAccepted(sql, checkSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
         }
     }
 
@@ -3235,12 +3258,61 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @throws IllegalArgumentException when the text uses a name refused since
      */
     private boolean acceptedBefore(String sql) {
-        List<String> names = parseCheckCache.get(sql);
-        if (names == null) {
+        Accepted accepted = parseCheckCache.get(sql);
+        if (accepted == null) {
             return false;
         }
-        requireAllowedNames(names);
-        requireNoSessionCatalog(names);
+        requireAllowedNames(accepted.names());
+        requireNoSessionCatalog(accepted.names());
+        return true;
+    }
+
+    /**
+     * Accepts, without parsing it again, a text the server made from an accepted text by
+     * replacing one table reference with its own subquery (file pruning, item 40 (b)): DoGet
+     * would otherwise run DuckDB's parse check a second time per point query. The rewrite is
+     * accepted only when DuckDB's parse of the original put a base table reference exactly where
+     * the replaced span starts, and the span is a plain (possibly qualified) name. The replaced
+     * span is then a table reference in SQL code (not inside a literal, quoted name or comment),
+     * so a parenthesized subquery of quoted names and literals in its place leaves one SELECT
+     * statement. Its names are the original's plus {@code read_parquet} and {@code list_value};
+     * a refused one makes the rewrite go through the full check instead.
+     *
+     * @param original    text that passed the parse check
+     * @param start       first character of the replaced table reference in {@code original}
+     * @param end         end (exclusive) of the replaced reference
+     * @param rewritten   original with that span replaced by server SQL
+     * @param replacement the server SQL in place of the span
+     * @return true when the rewritten text is now accepted without a parse
+     */
+    public boolean acceptRewrite(String original, int start, int end, String rewritten,
+            String replacement) {
+        Accepted accepted = parseCheckCache.get(original);
+        if (accepted == null || start < 0 || end <= start || end > original.length()
+                || rewritten.length() != original.length() - (end - start) + replacement.length()
+                || !rewritten.startsWith(original.substring(0, start))
+                || !rewritten.startsWith(replacement, start)
+                || !rewritten.endsWith(original.substring(end))
+                || !PLAIN_TABLE_NAME.matcher(original.substring(start, end)).matches()) {
+            return false;
+        }
+        int at = original.substring(0, start).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (java.util.Arrays.binarySearch(accepted.tables(), at) < 0) {
+            return false;
+        }
+        List<String> names = new ArrayList<>(accepted.names());
+        for (String function : PRUNED_READ_FUNCTIONS) {
+            if (!names.contains(function)) {
+                names.add(function);
+            }
+        }
+        try {
+            requireAllowedNames(names);
+            requireNoSessionCatalog(names);
+        } catch (IllegalArgumentException e) {
+            return false;   // the full check refuses it with its own message
+        }
+        rememberAccepted(rewritten, new Accepted(List.copyOf(names), new int[0]));
         return true;
     }
 
@@ -3275,17 +3347,17 @@ public final class DuckDbAdapter implements AutoCloseable {
     /**
      * Remembers a text that passed the parse check unless it is too long to be cached.
      *
-     * @param sql   client SQL
-     * @param names function and table names the text uses
+     * @param sql      client SQL
+     * @param accepted what the check found in the text
      */
-    private void rememberAccepted(String sql, List<String> names) {
-        requireNoSessionCatalog(names);
+    private void rememberAccepted(String sql, Accepted accepted) {
+        requireNoSessionCatalog(accepted.names());
         if (!QueryCacheLimits.cacheable(sql)) {
             CacheMetrics.oversize(CacheMetrics.Cache.PARSE_CHECK);
             return;
         }
         synchronized (parseCheckCache) {
-            parseCheckCache.put(sql, names);
+            parseCheckCache.put(sql, accepted);
             if (parseCheckCache.size() > PARSE_CHECK_CACHE_CAPACITY) {
                 parseCheckCache.remove(parseCheckCache.keySet().iterator().next());
                 CacheMetrics.eviction(CacheMetrics.Cache.PARSE_CHECK);
@@ -3303,6 +3375,20 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @throws java.sql.SQLException when the check itself fails
      */
     static List<String> requireSingleQuery(PreparedStatement check, String sql) throws java.sql.SQLException {
+        return checkSingleQuery(check, sql).names();
+    }
+
+    /**
+     * Refuses a text unless DuckDB parses it as exactly one query that reads, as
+     * {@link #requireSingleQuery(PreparedStatement, String)} does, and returns what it found.
+     *
+     * @param check the parse check statement ({@link #PARSE_CHECK_SQL}) of the connection
+     * @param sql client SQL
+     * @return the names and base table locations of the query
+     * @throws IllegalArgumentException when the text is not one query
+     * @throws java.sql.SQLException when the check itself fails
+     */
+    static Accepted checkSingleQuery(PreparedStatement check, String sql) throws java.sql.SQLException {
         check.setString(1, sql);
         boolean error;
         String type;
@@ -3331,7 +3417,46 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw new IllegalArgumentException("Only one query that reads data is allowed"
                     + " (SELECT, WITH, VALUES, FROM, TABLE, DESCRIBE, SHOW, SUMMARIZE), one statement per request");
         }
-        return requireAllowedFunctions(serialized);
+        return new Accepted(requireAllowedFunctions(serialized), baseTableLocations(serialized));
+    }
+
+    /**
+     * Reads where DuckDB's parse puts base table references: the {@code query_location} of each
+     * {@code BASE_TABLE} node of the serialized statement. Inside a JSON string every quote is
+     * escaped, so the key sequence searched for occurs only as the JSON's own keys.
+     *
+     * @param serialized DuckDB's JSON form of the statement, or null
+     * @return UTF-8 byte offsets into the query text, ascending, without duplicates
+     */
+    static int[] baseTableLocations(String serialized) {
+        if (serialized == null) {
+            return new int[0];
+        }
+        java.util.TreeSet<Integer> found = new java.util.TreeSet<>();
+        int from = 0;
+        int at;
+        while ((at = serialized.indexOf(BASE_TABLE_TYPE, from)) >= 0) {
+            from = at + BASE_TABLE_TYPE.length();
+            int location = serialized.indexOf(QUERY_LOCATION_KEY, from);
+            int next = serialized.indexOf("\"type\":", from);
+            if (location < 0 || (next >= 0 && next < location)) {
+                continue;
+            }
+            int digits = location + QUERY_LOCATION_KEY.length();
+            int stop = digits;
+            while (stop < serialized.length() && Character.isDigit(serialized.charAt(stop))) {
+                stop++;
+            }
+            if (stop > digits && stop - digits < 10) {
+                found.add(Integer.parseInt(serialized, digits, stop, 10));
+            }
+        }
+        int[] out = new int[found.size()];
+        int i = 0;
+        for (int location : found) {
+            out[i++] = location;
+        }
+        return out;
     }
 
     /**
