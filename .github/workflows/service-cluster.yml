@@ -437,21 +437,11 @@ jobs:
               echo "::warning title=short-circuit unused::$STORE $CELL: the servers read every block over TCP although the Java client reads short-circuit in the same layout"
             fi
           fi
-          # Item 43: 32 clients of point queries (tools/ci/point-query-load.py) on node 1; the summary compares q/s.
+          # Item 43: point queries on node 1 (tools/ci/service-cluster-point.sh); the summary compares q/s.
           if [ "$CELL" = speed ] || [ "$CELL" = speed-dc ]; then
-            keys=$(awk -v s="${{ inputs.sf || '1' }}" 'BEGIN { printf "%d", 1500000 * s }')
-            l0=$(docker logs srv1 2>&1)
-            waits0=$(grep -c 'distributedComplete=admissionWait' <<< "$l0"); merged0=$(grep -c 'distributedComplete=merged ' <<< "$l0")
-            "$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 4 5 "$keys" > /dev/null 2>&1 || true # warm-up
-            point=$("$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 32 "${POINT_SECONDS:-30}" "$keys" 2> "$RUNNER_TEMP/point.log"); prc=$?
-            echo "$point" > "$RUNNER_TEMP/point.txt"
-            l=$(docker logs srv1 2>&1)
-            note "point load c32 on srv1: ${point:-(no result: $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-200))}"
-            pwaits=$(( $(grep -c 'distributedComplete=admissionWait' <<< "$l") - waits0 )); pmerged=$(( $(grep -c 'distributedComplete=merged ' <<< "$l") - merged0 ))
-            note "srv1 point load: admission waits $pwaits, merged $pmerged, merged on probation $(grep -c 'distributedComplete=merged .*probation=true' <<< "$l"), probation over $(grep -c 'distributedComplete=probationOver' <<< "$l")"
-            [ "$prc" -eq 0 ] && [ -n "$point" ] || finish fail "point load c32: ${point:-no result} $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-150)"
-            # dc point lookups run on srv1 alone (item 43): no merge, no admission wait
-            [ "$CELL" != speed-dc ] || [ "$pwaits$pmerged" = 00 ] || finish fail "point load under dc: $pmerged merged, $pwaits admission waits on srv1"
+            pout=$(bash tools/ci/service-cluster-point.sh "$py" "$(awk -v s="${{ inputs.sf || '1' }}" 'BEGIN { printf "%d", 1500000 * s }')" "$CELL" "$RUNNER_TEMP"); prc=$?
+            while read -r x; do note "$x"; done <<< "$pout"
+            [ "$prc" -eq 0 ] || finish fail "$(tail -n 1 <<< "$pout")"
           fi
           # D15: a merge must never fall back because a table was named without its schema.
           for i in 1 2 3; do
