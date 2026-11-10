@@ -23,6 +23,10 @@
 
 ## Next steps (one per session)
 
+> **Core lane, 2026-11-10 05:25Z - item 39 last step: code on `main` (877cf100), CI green, measured; only the
+> `package=true` pre-release is left.** It is blocked by the runners' Ubuntu apt mirror (see Log): next session, dispatch
+> Dev CI `package=true` on a `ci/core-*` branch at the newest main commit; when it publishes, write "ITEM 39 DONE".
+
 > **Maintainer, 2026-11-10 00:10 - ITEM 39, last step before `package=true` (core lane).** All four parts are on `main`
 > (39(c) DONE bf72114c). Before packaging:
 > (1) **hadoopfs `51b7220-afc4`** (extension repo release, DuckDB v1.5.6; file-status + located-blocks cache, lazy open
@@ -4042,3 +4046,23 @@ S3 slowdown item below stays open for then).
   queries; core files `CatalogViews`, test `FileStatsPrunerTest`). HDFS point perf 42689843600: NameNode opens per
   point-mix query ~20 -> ~11, q/s +3..15% on the CPU-bound cell. Item 39 can be packaged. Follow-ups and Q10/Q11 in
   `CATALOGS-STATUS.md`.
+- 2026-11-10 03:40-05:25Z (cloud session, core lane): item 39 last step. The code was pushed by the previous
+  session (877cf100: hadoopfs afc4 pinned in CI, `hdfsMetadataCacheTtlMs` default 30000 on hdfs://, Q11
+  `duckDbExternalFileCache=true` on hdfs://), which left no Log line and `LOCK` set. On 877cf100: Dev CI 42700518633,
+  Service hdfs 42700518331, Service cluster 42700518286, Catalogs CI 42700518131 green. HDFS point perf 42700537172
+  (two runners): balanced c1 70.2 / 47.8 q/s with the TTL vs 57.0 / 41.4 with `-DhdfsMetadataCacheTtlMs=0`, NameNode
+  opens per query 0.00 vs 10.8; c8 +20 %, c32 +16..25 %; without the file cache c1 56.5 / 44.2 q/s. Rewrite-in-place
+  check `fresh=true` in all four variants: once the TTL is over the rewritten file is read. Within the TTL
+  (`rightAfter`) balanced / speed / no-file-cache still answer from the old file, as the 30 s TTL allows;
+  `-DhdfsMetadataCacheTtlMs=0` reads the new file at once. `package=true` NOT done: run 42751144566 (71959a39)
+  failed in its service gate (Service hdfs 42752652430: KDC containers timed out in two Kerberos cells, then a re-run
+  read the stale attempt-1 artifact; fresh run 42755619561 failed in a third Kerberos cell). Fix 98574893 (CI only):
+  `service-hdfs-cell.sh` KDC apt with retries/timeouts, up to 3 tries, `kdc:` progress lines, wait up to 900 s; the
+  result upload uses `overwrite: true`. Confirmed in Service hdfs 42757164355: ha-krb balanced `apt try 1 04:43:56`,
+  `try 2 04:49:45`, `installed 04:53:01`, pass. `package=true` 42757195073 on `ci/core-39pkg` (98574893): build
+  green after one re-run (curl reset on an asset); the gate failed because `docker build` of the
+  `eclipse-temurin:17-jdk-focal` server images hit apt errors (`apt-get update ... did not complete`) in Service hdfs
+  (ha speed, ha-krb-sasl speed), Service cluster 42759086361 (8 cells) and Service stores 42759093846 (mysql speed:
+  `Commands out of sync` in q08, probably a separate flake). Service security 42759089892, Dev CI push 42757164357,
+  Catalogs CI 42757164549 green. Next: re-dispatch `package=true`. If the mirror stays bad, give the
+  server-image `docker build` steps the same apt retries (several workflows, maybe a shared helper). Lock released.
