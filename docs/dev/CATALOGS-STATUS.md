@@ -863,7 +863,8 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   the state note. Lock released.
 - 2026-11-10 (5): **ITEM 40(b)** speed c1 regression bisected with `small-query-perf.yml` (new input `bothOptions`):
   cause is footer-statistics file pruning on local data (b0f82a47), both profiles; `-DfileStatsPruningMaxFiles=0`
-  restores deafc861's c1 (runs 42806968672, 42806974143, 42810133238-42810174324, 42811189839, 42811208123). Fix is a
+  restores deafc861's c1; b0f82a47 alone +0.65..0.95 ms, its parent 34b7911a = baseline (runs 42811204309, 42811196902,
+  42806968672, 42806974143, 42810133238-42810174324, 42811189839, 42811208123). Fix is a
   default change -> Q-40b-1. Merged two cuts from `fix/40b-small-4` (Dev CI 42808268971 green): a4e14e03 pruning reuses
   the parser's WHERE condition; ac2055c8 `DescribeKey` (one describe for point queries differing in their key; tests
   `DescribeKeyTest` incl. a bind check over every column type, `FileStatsPrunerTest` +2). CHANGELOG lines. Not DONE.
