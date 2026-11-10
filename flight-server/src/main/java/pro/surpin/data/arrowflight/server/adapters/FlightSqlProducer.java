@@ -975,6 +975,26 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
+     * Maps a failure to read the schemas or a table's catalog while a query is resolved: a
+     * storage's permission denial (Ranger / HDFS, e.g. listing a table's directory for a plain
+     * name via {@code defaultSchema}) is UNAUTHORIZED with the generic denial text and a
+     * {@code result=denied} WARN, without the storage's paths (item 44 (3)); anything else stays
+     * UNAVAILABLE.
+     *
+     * @param e     failure
+     * @param query client SQL or table name, for the log
+     * @return status to throw
+     */
+    static FlightRuntimeException unavailableOrDenied(java.io.UncheckedIOException e, String query) {
+        FlightRuntimeException denied = denial(e);
+        if (denied != null) {
+            logDenial(denied, query);
+            return denied;
+        }
+        return CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e).toRuntimeException();
+    }
+
+    /**
      * Logs an access denial as one WARN line, without a stack (item 36 (3)).
      *
      * @param denial the denial
@@ -982,7 +1002,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
      */
     private static void logDenial(FlightRuntimeException denial, String query) {
         String storage = storageDenial(denial.getCause());
-        LOGGER.warn("qid={} node={} query=denied reason='{}' query='{}'", LogUtil.qid(), LogUtil.node(),
+        LOGGER.warn("qid={} node={} query=denied result=denied reason='{}' query='{}'", LogUtil.qid(),
+                LogUtil.node(),
                 storage == null ? denial.status().description() : "storage: " + storage,
                 LogUtil.oneLine(query));
     }
@@ -1095,8 +1116,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage()).withCause(e)
                     .toRuntimeException();
         } catch (java.io.UncheckedIOException e) {
-            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
-                    .toRuntimeException();
+            throw unavailableOrDenied(e, query);
         }
         if (expanded == null || expanded.sources().isEmpty()) {
             return QueryRestrictions.apply(principal, query, authorization, this::tableColumns);
@@ -1131,8 +1151,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                     ? CallStatus.NOT_FOUND : CallStatus.INVALID_ARGUMENT;
             throw status.withDescription(message).withCause(e).toRuntimeException();
         } catch (java.io.UncheckedIOException e) {
-            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
-                    .toRuntimeException();
+            throw unavailableOrDenied(e, schema + "." + table);
         }
     }
 
@@ -1278,8 +1297,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw CallStatus.INVALID_ARGUMENT.withDescription(e.getMessage()).withCause(e)
                     .toRuntimeException();
         } catch (java.io.UncheckedIOException e) {
-            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
-                    .toRuntimeException();
+            throw unavailableOrDenied(e, query);
         }
     }
 
@@ -1318,8 +1336,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             String qualified = executionService.qualifyPlainNames(query);
             return qualified == null ? query : qualified;
         } catch (java.io.UncheckedIOException e) {
-            throw CallStatus.UNAVAILABLE.withDescription(e.getCause().getMessage()).withCause(e)
-                    .toRuntimeException();
+            throw unavailableOrDenied(e, query);
         }
     }
 

@@ -203,8 +203,8 @@ public final class ServerModule {
     @Provides
     @Singleton
     DuckDbAdapter duckDb(AppConfig config, ExecutorService ioPool, StoreRegistry registry) {
-        LOGGER.info("node={} resourceProfile {}", LogUtil.node(),
-                ResourceProfile.resolve(ConfigSource.systemWithoutProfile(), HostLimits::detect).describe());
+        ResourceProfile profile = ResourceProfile.resolve(ConfigSource.systemWithoutProfile(), HostLimits::detect);
+        LOGGER.info("node={} resourceProfile {}", LogUtil.node(), profile.describe());
         DuckDbSizing sizing = ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect());
         LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(), sizing.describe());
         DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared();
@@ -213,6 +213,14 @@ public final class ServerModule {
                 ConfigAdapter.duckDbMemoryLimitSet(ConfigSource.systemWithoutProfile()));
         if (belowFloor != null) {
             LOGGER.warn("node={} duckdb=memoryLimitBelowFloor {}", LogUtil.node(), belowFloor);
+        }
+        // speed sizes its shared DuckDB from the JVM's real reservation by design (Q-40a): no warning there.
+        String aboveJvmLimits = ResourceProfile.SPEED.equals(profile.name()) ? null
+                : DuckDbSizing.aboveJvmLimitsWarning(shared != null ? shared.memoryLimit() : sizing.memoryLimit(),
+                        shared != null ? 1 : sizing.connections(), sizing.budgetBytes(),
+                        ConfigAdapter.duckDbMemoryLimitSet(ConfigSource.systemWithoutProfile()));
+        if (aboveJvmLimits != null) {
+            LOGGER.warn("node={} duckdb=memoryLimitAboveJvmLimits {}", LogUtil.node(), aboveJvmLimits);
         }
         if (config.duckDbExternalFileCache() && shared != null) {
             // One buffer pool: the shared DuckDB's memory limit bounds the cache for the node.

@@ -15,6 +15,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   exponent and parenthesised literals were still merged over every node. Ranges, column comparisons and ORs are
   merged as before. CI: the service-cluster point load adds `point_date` (a DATE literal) to its gate.
 
+- Item 44 (1), fix: `balanced` failed TPC-H SF10 q09/q10/q13 with DuckDB Out of Memory in a 6 GB container with
+  -Xmx3g / direct 2g, where Q-42 had capped each connection's 1 GiB floor at the ~100 MiB budget left by the full
+  -Xmx + direct (128 MiB). The per-connection default and the shared DuckDB without `speed` are now capped at the
+  budget left by the JVM's real reservation of item 40(a) (heap min(-Xmx, max(1 GiB, 2 x heap in use)), direct
+  min(limit, 1 GiB + 25 %)), never below 512 MiB: that shape gets 1024 MiB again. A new start WARN
+  `duckdb=memoryLimitAboveJvmLimits` says when these default limits exceed what the configured -Xmx and direct
+  memory leave (not under `speed`, not for an operator's `duckDbMemoryLimit`).
+- Item 44 (3), fix: a storage denial while plain table names are qualified (`defaultSchema`), a query is
+  resolved against the catalog views or a table's columns are read (e.g. HDFS `READ_EXECUTE` refused by Ranger)
+  was sent as `UNAVAILABLE` with the HDFS path; it is now `UNAUTHORIZED` with the generic denial text, logged as
+  one `query=denied result=denied` WARN line with the storage's reason.
 - File pruning shapes also cover decimal, long integer and date literals (item 40(b)): point and count queries
   comparing with `1234.5`, keys of 10-18 digits or `DATE 'yyyy-mm-dd'` were still parsed by jOOQ per text. Their
   pruning now shares one parse per shape too (the describe cache key is unchanged). Same files kept (test over 38

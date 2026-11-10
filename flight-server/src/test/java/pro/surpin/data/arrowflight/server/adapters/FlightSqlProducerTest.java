@@ -217,6 +217,46 @@ class FlightSqlProducerTest {
         assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, error.status().description());
     }
 
+    /**
+     * Regression for item 44 (3): when the storage refuses to list a table's directory while a
+     * plain name is qualified (defaultSchema, after a Ranger revoke), the client gets
+     * UNAUTHORIZED with the generic denial text, not UNAVAILABLE with the HDFS path, and the log
+     * has one {@code result=denied} WARN line.
+     */
+    @Test
+    void plainNameRefusedByTheStorageIsDeniedWithoutThePath() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "SELECT count(*) FROM types";
+        when(executionService.qualifyPlainNames(query)).thenThrow(new java.io.UncheckedIOException(
+                new RemoteException("Permission denied: user=flight, access=READ_EXECUTE,"
+                        + " inode=\"/data/parquet/types\":hdfs:hdfs:drwxr-x---")));
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                mock(ClusterService.class), "complete");
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        FlightRuntimeException error;
+        try {
+            error = org.junit.jupiter.api.Assertions.assertThrows(
+                    FlightRuntimeException.class, () -> producer.getFlightInfoStatement(
+                            FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build(),
+                            mock(FlightProducer.CallContext.class), FlightDescriptor.command(new byte[]{1})));
+        } finally {
+            System.setErr(err);
+        }
+        assertEquals(FlightStatusCode.UNAUTHORIZED, error.status().code(), error.getMessage());
+        assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, error.status().description());
+        assertTrue(!error.status().description().contains("/data/parquet"), error.status().description());
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(1, text.lines().filter(l -> l.contains("result=denied") && l.contains("WARN")).count(), text);
+        assertEquals(FlightStatusCode.UNAVAILABLE, FlightSqlProducer.unavailableOrDenied(
+                new java.io.UncheckedIOException(new java.io.IOException("Connection refused")), query)
+                .status().code());
+    }
+
     /** Lists catalog views as VIEW when the caller may read them and every table they read. */
     @Test
     @SuppressWarnings("unchecked")

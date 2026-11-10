@@ -258,9 +258,9 @@ class ConfigAdapterTest {
         assertNull(ConfigAdapter.duckDbShared(source(Map.of(), Map.of()), host));
         assertNull(ConfigAdapter.duckDbShared(
                 source(Map.of("duckDbSharedDatabase", "false"), Map.of()), host));
-        assertEquals(new DuckDbSizing.Shared(2, "128MiB"), ConfigAdapter.duckDbShared(
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"), ConfigAdapter.duckDbShared(
                 source(Map.of("duckDbSharedDatabase", "true"), Map.of()), host));
-        assertEquals(new DuckDbSizing.Shared(2, "128MiB"), ConfigAdapter.duckDbShared(
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB"), ConfigAdapter.duckDbShared(
                 source(Map.of(), Map.of("DUCKDB_SHARED_DATABASE", "TRUE")), host));
         assertEquals(new DuckDbSizing.Shared(6, "3GB"), ConfigAdapter.duckDbShared(
                 source(Map.of("arrowflight.duckdb.sharedDatabase", "true", "duckDbThreads", "6",
@@ -273,7 +273,7 @@ class ConfigAdapterTest {
                 source(Map.of("duckDbSharedDatabase", "true", "duckDbThreads", "-1"), Map.of()), host));
         assertEquals(64, ConfigAdapter.duckDbShared(
                 source(Map.of("duckDbSharedDatabase", "true"), Map.of()), host).bufferedConnections());
-        assertEquals(new DuckDbSizing.Shared(2, "128MiB", 8), ConfigAdapter.duckDbShared(
+        assertEquals(new DuckDbSizing.Shared(2, "1024MiB", 8), ConfigAdapter.duckDbShared(
                 source(Map.of("duckDbSharedDatabase", "true"),
                         Map.of("DUCKDB_SHARED_BUFFERED_CONNECTIONS", "8")), host));
         assertEquals(0, ConfigAdapter.duckDbShared(source(Map.of("duckDbSharedDatabase", "true",
