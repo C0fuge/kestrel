@@ -4188,3 +4188,5 @@ S3 slowdown item below stays open for then).
   re-enabled in `service-hdfs-cell.sh`. Dev CI 42794847349 green; Service hdfs 42794862424 green (attempt 2, a
   setup flake on ha-krb-sasl balanced in attempt 1): 402/402 queries with a line, 841 remote files, unknown 0. 40(b)
   not DONE yet, so no cluster package. Lock released.
+- 2026-11-10 10:41Z (core lane): nothing open but the cluster package, which waits for "ITEM 40(b) DONE" (catalogs
+  lane, its lock held since 10:21Z); no code change, stopped early. Lock released.
