@@ -770,7 +770,8 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   not touch other repositories, so it could neither read `ci/ab.sh` of the performance repo nor ask there for a
   gizmo wave: please have the coordinator run one on the next kestrel build that contains d295fe36 (a `package=true`
   pre-release - the core lane's or the maintainer's call) and say which -Xmx/direct the harness uses; then this lane
-  writes "ITEM 40(a) DONE". Two notes on the formula: "heap after warm-up" is the heap in use when speed sizes DuckDB
+  writes "ITEM 40(a) DONE". *Update 2026-11-10 19:15Z:* that build exists - pre-release `server-1.0.0-2ff221447b5d`
+  (core lane, 17:18Z, `main` 2ff22144 contains d295fe36); the gizmo wave can run on it. Two notes on the formula: "heap after warm-up" is the heap in use when speed sizes DuckDB
   (at startup, typically 30-150 MiB, so the 1 GiB floor applies); a re-size after warm-up would need a runtime
   `SET memory_limit` - say if wanted. "Never less than 39(b)'s cgroup bound" is read as: the memory the limit is cut
   from stays the cgroup's / host's (item 39(b)), only the JVM reservation shrinks.
@@ -1196,3 +1197,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   image failed before any server started (a CI-setup fault; the same cell was green under speed). Item 42's Service
   hdfs on `main`, 42785951630, is also green. Nothing open in this lane besides the Q-40a follow-up (gizmo wave,
   waits for the maintainer). No code change. Lock released.
+- 2026-11-10 19:15Z (plugins lane): nothing open. The build for the Q-40a follow-up exists (`server-1.0.0-2ff221447b5d`,
+  contains d295fe36; noted in Open questions); "ITEM 40(a) DONE" waits for the gizmo wave and the harness's JVM flags
+  from the maintainer. No code change, no CI run.
