@@ -4,6 +4,12 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+ITEM 45 DONE b8613fc4 (2026-11-10, see Log): dc point lookups with typed literals (`= DATE '...'`,
+`= CAST('...' AS DATE)`, `TIMESTAMP '...'`, exponents, parenthesised literals) run on the planning node. Service
+cluster 42901104843 (12/12 green, mix now includes `point_date` with a DATE literal): speed-dc 0 merged / 0 admission
+waits on srv1 in all three stores; speed-dc / speed q/s hdfs 48.2 / 37.7, hdfs-ha 36.4 / 38.1, s3 49.1 / 37.4.
+For the stand: rerun the dc point mix with the DATE form; expect no `distributedComplete=merged` for it.
+
 > **Maintainer, 2026-11-11 00:05 - ITEM 45 (item 43 follow-up, stand on `2ff221447b5d`).** The point-lookup
 > pattern (`POINT_EQUALITY` in `DistributedComplete`) matches only a string or number after `=`: `SELECT count(*) FROM
 > tpch.orders WHERE o_orderdate = DATE '1992-01-01'` (and `CAST('1992-01-01' AS DATE)`) is still `merged
@@ -660,3 +666,11 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   point-query path that item 43's dc `local` point lookups take, with no Service cluster run since 33d4d2dc. Dispatched
   Service cluster 42840719877 on `main` (0b467b80): 13/13 cells + summary green, dc / speed point q/s hdfs 1.12, hdfs-ha
   0.94, s3 0.82, no warnings. Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
+- 2026-11-10 (lane 3 session): ITEM 45 DONE b8613fc4 (branch commit ff9d1b3b, fast-forwarded into `main`).
+  `DistributedComplete.POINT_EQUALITY` now accepts typed literals (DATE / TIME / TIMESTAMP[ WITH TIME ZONE] /
+  INTERVAL '...'), `[TRY_]CAST(<literal> AS <type>[(p[, s])])`, numbers with exponent, and literals in parentheses;
+  `CAST(<column> AS ...)`, `>=` / `<=` / `<>` and ORs still merge. Test `typedLiteralsArePointLookups` (12 positive,
+  6 negative shapes through `ParquetQueryParser`). CI: `point-query-load.py` takes `POINT_QUERY_CLASSES` (default
+  unchanged) and a `point_date` class; `service-cluster-point.sh` runs it with `point_date`, so the deterministic
+  speed-dc gate (0 merged, 0 waits) covers the DATE form. Dev CI 42901100322 green, Service cluster 42901104843
+  12/12 green (numbers above). No `package=true`: the core lane's next pre-release carries it.
