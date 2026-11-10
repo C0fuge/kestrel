@@ -7,6 +7,14 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
 > is green (do not hold them for one big merge); the build for the real cluster is the core lane's package right after "ITEM 40(b) DONE" - it waits for 40(b).**
 >
+> **Maintainer, 2026-11-10 13:45 - for 40(b): a measured speed c1 regression to look at first.** Performance repo
+> `results/FRESH-894afb9b48c4.md` (same CPU type as `deafc861cce3`'s run): local small queries at 1 client, speed p50
+> **1.19x balanced over JDBC (15.4 -> 18.4 ms) and 1.28x over ADBC (10.3 -> 13.2 ms)**, all 3 rounds; deafc had
+> 1.10 / 1.08. p95/p99 and 8/32 clients are fine, S3 c1 is 0.53/0.82 - a fixed per-query cost of speed on local data at
+> low concurrency, appeared between `deafc861cce3` and `894afb9b48c4` (suspects: item 39 (b) sizing / the shared
+> DuckDB's settings, the external file cache on local files (+0.8 ms seen in your profiling), item 40(a)'s reservation).
+> Bisect with the harness pairs if cheap (the performance repo runs a wave on request), fix within 40(b).
+
 > **Maintainer, 2026-11-10 10:40 - FIRST in this lane: ITEM 40(b)** (moved here from the core lane, which works on item
 > 41). Per-query overhead of small / point queries: on the real cluster point queries are the main gap to upstream
 > (there 460 q/s on 16 cores), and GizmoSQL (same DuckDB) takes 0.70-0.85 of speed's time on the small-query mix
