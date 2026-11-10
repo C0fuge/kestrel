@@ -1,67 +1,62 @@
-ALL DONE 2026-11-10T15:57Z (refreshed 2026-11-10T16:57Z)
+ALL DONE 2026-11-10T15:57Z (refreshed 2026-11-10T17:58Z; condition 'egret FRESH for the newest pre-release' open again: FRESH for `server-1.0.0-2ff221447b5d` running)
 
 # Orchestration status
 
-Status as of **2026-11-10T16:57Z UTC** (refresh only since ALL DONE; tables below from 12:58Z, see History for newer) (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10T17:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-ALL DONE by the routine's definition: ITEM 26 / 27 DONE (2026-11-03), IMPROVEMENTS DONE in marten and heron, egret
-FRESH for the newest pre-release `server-1.0.0-37bf9401d77c` (run 42791002963). Lane work continues: **ITEM 40(b) in
-progress** (catalogs lane, lock 12:24Z): the c1 regression is bisected to footer-statistics file pruning on local data;
-cut 5 on `fix/40b-small-5` in CI. The build for the real cluster (core lane `package=true`) waits for "ITEM 40(b) DONE".
+**Build for the real cluster is ready:** pre-release **`server-1.0.0-2ff221447b5d`** (core lane `package=true` on
+`pkg/2ff22144` = main 2ff22144 after ITEM 40(b) DONE; Dev CI 42857169249 + Service cluster 42860270956, hdfs 42860277541,
+security 42860284292, stores 42860290386 all green; 7 assets). egret ACCEPT 42865242528 + FRESH 42865250390 running on it.
+No open core item until the maintainer's next note.
 
 For the maintainer:
-- **NEW: Q-40b-1** (`CATALOGS-STATUS.md` Open questions): the speed/balanced local small c1 p50 regression is caused by
-  item 39 (c) footer-stats file pruning (b0f82a47, default `fileStatsPruningMaxFiles=1024`); with
-  `-DfileStatsPruningMaxFiles=0` it is back to baseline (run 42811208123). Proposed default change: prune by default only
-  for stores with remote file opens (HDFS, S3/lakeFS, plugin stores), off for a local `dataDir`. 40(b) is blocked on it.
-- **egret ACCEPT `37bf9401d77c`: DO NOT SHIP on check 6 only** (decision (a)/(b)/(c) asked in egret; item 41 follow-up
-  (2) `a8ded50d` adds the `hdfs=reads` lines, so (a) should pass on the next package).
-- Open questions (unchanged): lane 3 Q3 / Q4 (`distributedCompletePointLookups=local` default); marten TPC-H q16 SF1
-  slowdown (fix or leave); `ci-assets` extension set refresh with afc6.
+- Run the stand / independent cluster check on `server-1.0.0-2ff221447b5d`.
+- Branches `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
+- Open questions: **Q-40b-1** (catalogs: proposed to close without a default change, needs OK), Q8 / Q10 / Q11
+  (catalogs); lane 3 Q3 / Q4 (`distributedCompletePointLookups=local` default); egret ACCEPT 37bf9401d77c check-6
+  decision (should be moot if the 2ff22144 ACCEPT passes); marten TPC-H q16 SF1 slowdown; `ci-assets` extension set
+  refresh with afc6 (sha256 in STATUS.md).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | waits for "ITEM 40(b) DONE", then `package=true` on main | 2026-11-10 11:41Z (unlock) | free | main Dev CI 42812785328 (33d4d2dc) green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 2026-11-10 12:17Z (lock/unlock) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 40(b): cause bisected (b0f82a47 pruning on local data), Q-40b-1 open; cut 5 on fix/40b-small-5 | 2026-11-10 12:24Z (lock) | held 12:24Z (active) | Dev CI 42818682745 + Small query perf 42818686506 running (branch) |
-| lane 3 (`LANE3-STATUS.md`) | service cluster trigger on point load scripts (33d4d2dc) done; Q3/Q4 open | 2026-11-10 12:15Z | free | Service cluster 42812785652 (main) green |
+| core (`STATUS.md`) | real-cluster build done; no open item | 2026-11-10 17:18Z (unlock) | free | main Dev CI 42837979902 green; pkg 42857169249 green |
+| plugins (`PLUGINS-STATUS.md`) | nothing open (Q-40a follow-up waits for maintainer) | earlier today | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 40(b) DONE 135e6dac; no open item | 2026-11-10 17:21Z (unlock) | free | main 42837979902 green |
+| lane 3 (`LANE3-STATUS.md`) | Q3/Q4 answers, D14 after the stand's rerun | earlier today | free | Service cluster 42840719877 green |
 
-No red completed Dev CI on main (42811292025 cancelled, superseded by 42812785328 green). No new bug-first notes in the
-lane files. No stale locks (marten/heron `docs/LOCK` empty; LOCK, LOCK-PLUGINS, LOCK-LANE3 empty; LOCK-CATALOGS 34 min
-old).
+No red Dev CI on main. No new bug-first notes in the lane files. No stale locks (all kestrel locks and marten/heron
+`docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42812785652 | main 33d4d2dc | pass |
-| service-hdfs.yml | 42794862424 | main a8ded50d | pass |
-| service-security.yml | 42777504125 | 37bf9401 (pkg) | pass |
-| service-stores.yml | 42777507448 | 37bf9401 (pkg) | pass |
+| service-cluster.yml | 42860270956 | pkg/2ff22144 | pass |
+| service-hdfs.yml | 42860277541 | pkg/2ff22144 | pass |
+| service-security.yml | 42860284292 | pkg/2ff22144 | pass |
+| service-stores.yml | 42860290386 | pkg/2ff22144 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-37bf9401d77c` (2026-11-10 07:44Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only, decision needed), FRESH done (42791002963).
+- `server-1.0.0-2ff221447b5d` (2026-11-10): build for the real cluster (40(a), 40(b), 41 + follow-ups); egret ACCEPT + FRESH running.
+- `server-1.0.0-37bf9401d77c` (2026-11-10 07:44Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only), FRESH done (42791002963).
 - `server-1.0.0-894afb9b48c4` (2026-11-10 05:48Z): ITEM 39; egret ACCEPT SHIP (42778646542), FRESH done (42775953599).
-- `server-1.0.0-b69660b9260a` (2026-11-07 18:47Z): item 38; egret ACCEPT SHIP (42406253240).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 12:41Z "finish mode, nothing new". Open question: TPC-H q16 SF1.
-- heron: **IMPROVEMENTS DONE**; session 199 (12:52Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 17:45Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 204 (17:51Z): nothing open.
 
 ## egret
 
-- Newest FRESH: **37bf9401d77c** (run 42791002963, 10/10 green; upstream `b7d32cf3b3f0`). Upstream still wrong (TPC-H
-  0/22 ADBC, 1/22 JDBC; small-query errors). Speed vs upstream where comparable: scans x1-x8 1.02-1.10 local, 1.02-1.08
-  S3; ADBC export 1.02; load q/s 0.91-1.02. Speed vs balanced: regression local small c1 p50 1.32 ADBC / 1.14 JDBC
-  (cause now bisected, Q-40b-1); speed S3 RSS +6-14 %.
-- README 'In progress': idle (11:49Z), newest tracked 37bf9401d77c; waits for the check-6 decision and the next pre-release.
+- Newest FRESH result: **37bf9401d77c** (run 42791002963); FRESH for 2ff221447b5d (run 42865250390) running, ACCEPT 42865242528 running.
+- README 'In progress' (17:28Z): 2ff221447b5d ACCEPT + FRESH running.
 
 ## History
 
+- 2026-11-10T17:58Z: real-cluster pre-release `server-1.0.0-2ff221447b5d` published, all package runs green; egret ACCEPT 42865242528 + FRESH 42865250390 running on it; catalogs/marten/heron idle; no locks held, no stale locks, no red CI.
 - 2026-11-10T16:57Z: refresh (ALL DONE). **ITEM 40(b) DONE 135e6dac** written 16:06Z by the catalogs lane (c1 p50 ~10-15 % below deafc861, HDFS point +2..6 %; Q-40b-1 proposed to close without a default change, needs maintainer OK). Core lane took the lock 16:41Z and runs the real-cluster package: Dev CI 42857169249 on `pkg/2ff22144` (`package=true`) in progress; no new pre-release yet (newest `server-1.0.0-37bf9401d77c`). main Dev CI 42837979902 green; service matrix unchanged (cluster 42840719877 pass, hdfs 42794862424, security/stores 42777504125/42777507448 pass). marten/heron: nothing new, locks empty; egret idle, newest FRESH 37bf9401d77c. No stale locks, no red CI.
 - 2026-11-10T15:57Z: refresh (ALL DONE). Catalogs 40(b) session active (lock 15:22Z): Small query perf 42843856272 (main) + 42843860772 (perf/40b-final) running, HDFS point perf 42843864824 (main) / 42843869104 green; ITEM 40(b) DONE not yet written; lane 3 Service cluster 42840719877 green on main; main Dev CI 42837979902 (34e24d3b) green; plugins session 15:16Z nothing open; no new pre-release or egret FRESH; no stale locks, no red CI.
 - 2026-11-10T14:57Z: refresh (ALL DONE). Catalogs 40(b) session (8) merged 135e6dac (pruning shapes for decimal / long / date literals; branch Dev CI 42835145513 green, Small query perf 42835176027 within noise), lock released; ITEM 40(b) DONE not yet written (next: JFR check, gizmo vs speed on HDFS point cell); Q-40b-1 proposed for closing without a default change (needs maintainer OK); main Dev CI 42828677361 (6abf6264) green, 42837979902 (34e24d3b) running; core package for the real cluster still waits for 40(b) DONE; all locks free, no red CI, no new pre-release or egret FRESH.
@@ -101,4 +96,3 @@ old).
 - 2026-11-08 14:56Z: no change: core session 14:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (14:41Z)/heron (session 167)/egret (13:27Z README, idle) idle; no stale locks.
 - 2026-11-08 13:56Z: no change: no core commit since 10:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (12:41Z)/heron (session 166)/egret (13:27Z README, idle) idle; no stale locks.
 - 2026-11-08 12:57Z: no change: no core commit since 10:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (12:41Z)/heron (session 165)/egret (11:26Z README, idle) idle; no stale locks.
-- 2026-11-08 11:57Z: no change: no core commit since 10:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (11:40Z)/heron (session 164)/egret (11:26Z README, idle) idle; no stale locks.
