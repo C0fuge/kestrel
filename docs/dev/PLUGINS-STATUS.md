@@ -28,7 +28,15 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > (auto-sized 4914 MiB, peak 4.1 GB of 8) **15.9 s vs plain DuckDB 1.5.6 (GizmoSQL-like) 16.9 s**, same answers;
 > `endpointsPerServer=1` no effect. **Next step:** after Q-40a, apply the chosen sizing (profile code + test, or
 > START-NOTES/harness only), ask the performance repo for a gizmo wave on the harness shape, then "ITEM 40(a) DONE".
-> Side issue: the workflow's settings diff prints nothing although the files differ (194 vs 196 lines) - debug it.
+> *Step 2 done 2026-11-10 (plugins lane, docs only):* option (A) documented in START-NOTES "Sizing `speed` for S3"
+> (no default changes). The settings-diff side issue was already fixed by 72740e75: run 42751636105 prints the diffs.
+> They show no S3-path setting that explains the gap: under `speed` (`extra`, `more1`) `enable_external_file_cache`
+> equals plain's (true); the differences are the memory limit (4.7 vs 6.3 GiB), lockdown settings, HTTP retries
+> (6 / 200 ms / backoff 2 vs 3 / 100 ms / 4, only on failures), `httpfs_connection_caching` and
+> `enable_http_metadata_cache` / `parquet_metadata_cache` on (ours), `preserve_insertion_order=false`.
+> **Still waiting for Q-40a.** Then: (B) if chosen - profile code + `DuckDbSizingTest` case + a memory-pressure
+> check (speed with the raised limit in a `MemoryMax` scope, as item 39(b)'s CI step); in any case ask the
+> performance repo for a gizmo wave on the harness's -Xmx/direct, then "ITEM 40(a) DONE".
 
 > **Maintainer, 2026-11-09 16:30 - FIRST, before anything else in this lane: ITEM 39(b).** speed / dc memory budget from the cgroup / container limit, not host RAM (item 39 (b)). Full description
 > with the real-cluster numbers: `docs/dev/STATUS.md`, notes "ITEM 39 IS SPLIT ..." and "BUG FIRST, ITEM 39". Work on branch
@@ -1072,3 +1080,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   plain 20.3 s), 42751636105 green (speed -Xmx1g/direct 1g 15.9 s, plain 16.9 s, same answers). Cause: DuckDB memory
   limit bounds the external file cache; decision Q-40a open. Force-push of the rebased branch was refused by the
   session's permission check, so the branch got a merge of `main` instead. Lock released.
+- 2026-11-10 (plugins lane): ITEM 40(a) step 2 - START-NOTES "Sizing `speed` for S3" (option (A), docs only) +
+  CHANGELOG line; settings-diff side issue found already fixed (run 42751636105 prints the diffs; nothing S3-path
+  specific besides the memory limit). Q-40a still open; no CI run needed (docs only). Lock released.

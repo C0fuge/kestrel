@@ -274,6 +274,17 @@ next refusal, so a node under memory pressure holds at most what `balanced` woul
 them on, TPC-H SF10 on S3 was 1.33x slower (one pass reads each file once, the cache only adds a hop and heap);
 without them `speed` is as fast as `balanced` there. Turn a cache on yourself for workloads that re-read the same files.
 
+**Sizing `speed` for S3 (item 40(a)):** DuckDB's external file cache lives inside the node-wide `memory_limit`, and
+`speed` derives that limit from memory - `-Xmx` - `MaxDirectMemorySize` - 15 %. With a large heap and direct reservation
+the limit is small, the cache cannot hold the data a workload re-reads, and the warm passes read S3 again. Measured
+(`tpch-perf.yml`, S3 TPC-H SF10, 4 CPUs / 8 GB container, ADBC; runs 42748064489, 42751636105): `-Xmx3g`, direct 2g
+(limit 2048 MiB) 75.8 s; same JVM with `-DduckDbMemoryLimit=5120MiB` 19.4 s; `-Xmx1g -XX:MaxDirectMemorySize=1g`
+(limit 4914 MiB, peak RSS 4.1 of 8 GB) 15.9 s - plain in-process DuckDB 1.5.6 (the GizmoSQL-like reference) 16.9 s,
+same answers. On an S3 node under `speed`, give the JVM only what it needs (the Java side holds batches in flight,
+not table data: 1 GiB heap and 1 GiB direct served TPC-H SF10 above), or set `duckDbMemoryLimit` yourself; check the
+start line `duckdb=sizing ... memoryLimit=` and keep the sum of heap, direct memory and the DuckDB limit below the
+container's limit. The defaults are unchanged until the maintainer decides Q-40a (docs/dev/PLUGINS-STATUS.md).
+
 ## Settings since 7562a5bdb7b9
 
 Every setting added, or whose default changed, since build `7562a5bdb7b9` (2026-10-27), with its default as of this

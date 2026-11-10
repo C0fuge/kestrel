@@ -11,6 +11,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Dev tooling (item 40(a)): `tpch-perf.yml` inputs `plain` (plain DuckDB reference + DuckDB settings dump), `more`
   (several configurations per run) and `quick`. No server behaviour change.
+- Docs (item 40(a)): START-NOTES "Sizing `speed` for S3" - DuckDB's external file cache lives in the
+  `memory_limit` that `speed` derives from memory minus heap and direct memory; how to size the JVM (or set
+  `duckDbMemoryLimit`) on S3 nodes, with the TPC-H SF10 measurements. No default changes (Q-40a open).
 
 ### Settings since 7562a5bdb7b9 (summary of the entries below)
 
