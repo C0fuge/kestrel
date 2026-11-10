@@ -25,6 +25,31 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (7) - the pruned-vs-view gap on local files cut (4228c733), no default change:
+- Where the gap was: not DuckDB. Plain DuckDB JDBC with the server's settings (threads 4/1, `parquet_metadata_cache`,
+  external file cache on/off, `allowed_directories` + `enable_external_access=false` + `lock_configuration`) runs the
+  pruned text `(SELECT * FROM read_parquet(['one file'])) AS t WHERE k = ?` 0.1-0.2 ms *faster* than the 4-file view.
+  JFR (1 ms, `PointQueryOverheadPerfTest`): `CatalogViews.pruning` was 391 of 3446 DoGet samples, ~300 of them a full
+  jOOQ parse of a never-seen text (`ParquetQueryParser.parse` via `singleTableQuery`; the key differs each query, so
+  the parse cache never hits). With pruning off, complete-mode DoGet parses nothing - that was the ~0.25 ms.
+- Cut: `CatalogViews.shapedQuery` parses a point query's shape (`DescribeKey.shape`: the literals the describe key
+  leaves out, with their spans) once, with ten-digit stand-in literals `3000000001 + i` (unique in the text, else
+  per-text parse as before), cached per shape (512); `FileStatsPruner.keep(..., binds)` reads each stand-in (and its
+  negation, jOOQ folds a unary minus) as the text's value. Test `FileStatsPrunerTest.shapeParsesKeepWhatEachTextKeeps`
+  (25 shapes x 15-33 values: kept files equal a per-text parse, answers equal the view; a broken bind fails it) and
+  `DescribeKeyTest.shapeNamesTheLeftOutLiterals`.
+- Numbers: JFR pruning samples 391 -> 285, the rest are the `count` queries with decimal literals (`o_totalprice >
+  1234.5`, no shape). `small-query-perf.yml` 42826465868 (prepared, c1, 3 rounds, baseline e62006cc, head options
+  `-DfileStatsPruningMaxFiles=0`): quota balanced head 4.08 / 4.00 / 4.70 ms p50 vs head pruning off 4.15 / 4.05 /
+  4.10, speed head 4.11 / 4.21 / 4.05; pinned head 5.68 / 5.00 / 4.96 vs off 5.78 / 5.20 / 5.01 (base 4.41-5.04 and
+  5.23-5.57, noisy runner). **Pruning on is now level with pruning off on local files.** Dev CI branch 42826441121
+  green; Dev CI on main 42828677361 dispatched (merge push was `[skip ci]`).
+- Next (in order): (a) check Dev CI on main 42828677361 for 4228c733; (b) a pruning shape for decimal / date
+  literals too (a separate key: `DescribeKey` must keep decimals in its describe key, DuckDB types them by digits;
+  for pruning only the value matters) - the `count_filter` mix uses decimals; (c) gizmo vs speed per call and c32 JFR
+  on the HDFS point cell (old step 4). Next branch from `origin/main` as `fix/40b-small-7`. `fix/40b-small-6` on the
+  remote is the pre-rebase copy (force-push not used); safe to delete.
+
 ITEM 40(b) state after session 2026-11-10 (6) - the c1 regression's cost found and cut (3a01265e), no default change:
 - What the pruned local point query paid (JFR at 1 ms sampling on `PointQueryOverheadPerfTest`, pruning on vs
   `-DfileStatsPruningMaxFiles=0`): not DuckDB's read of the kept file (plain DuckDB: `read_parquet(['one file'])` is
@@ -573,6 +598,9 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   3a01265e without a default change): c1 p50 is now at or below deafc861 in both profiles (run 42818686506); pruning
   off is still ~0.25 ms p50 faster on local files, so the question stays open but is no longer needed to remove the
   regression.
+  Update 2026-11-10 (7): the rest was one jOOQ parse per point text in DoGet's pruning, now one per shape (4228c733):
+  pruning on is level with pruning off at c1 on local files (run 42826465868). Proposal: close Q-40b-1 without a
+  default change unless you see a gap on the harness.
 
 - Q11 (2026-11-09, item 39 (c)): in the HDFS point cell the balanced profile asks the DataNode for short-circuit fds
   ~5-6 times per point query (each per-thread DuckDB's libhdfs3 asks again); `duckDbExternalFileCache=true` brings
@@ -908,3 +936,10 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   point DoGet p50 4.17 -> 3.76 ms; `small-query-perf.yml` run 42818686506: c1 p50 at or below deafc861 in both
   profiles (balanced quota 4.24 vs 4.44 ms). Dev CI branch 42818682745 green, Dev CI on main 42822143053 green. Test
   `FileStatsPrunerTest` +1, CHANGELOG line, Q-40b-1 updated (still open, optional now). Not DONE yet. Lock released.
+- 2026-11-10 (7): item 40(b) - pruned-vs-view gap on local files cut (4228c733, merged into `main` fast-forward
+  after Dev CI on `fix/40b-small-6` 42826441121 green). Plain-DuckDB microbenchmark with the server's settings showed
+  the pruned `read_parquet` text is faster than the view; JFR showed DoGet's pruning parsing every point text with jOOQ
+  (~300 of 3446 DoGet samples). Now one parse per `DescribeKey` shape with stand-in literals, values bound when
+  footer bounds are compared. `small-query-perf.yml` 42826465868: c1 p50 pruning on = pruning off within noise (was
+  ~0.25 ms slower). Tests: `FileStatsPrunerTest` +1, `DescribeKeyTest` +1; CHANGELOG line; Q-40b-1 updated (proposal:
+  close without default change). Dev CI on main for 4228c733: 42828677361 dispatched. Not DONE yet. Lock released.
