@@ -39,6 +39,10 @@ on:
         description: "extra -D options of this ref's server for more configurations, separated by ';' (empty = none)"
         type: string
         default: "-DduckDbThreads=4"
+      bothOptions:
+        description: "extra -D options measured on the baseline and on this ref, separated by ';' (empty = none; e.g. -DresourceProfile=speed)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -180,6 +184,11 @@ jobs:
               opt="--cpus=2"; [ "$cpu" = pinned ] && opt="--cpuset-cpus=0,1"
               measure "r$r $cpu base" base "$opt" ""
               measure "r$r $cpu head" head "$opt" ""
+              IFS=';' read -ra both <<< "${{ inputs.bothOptions }}"
+              for o in "${both[@]}"; do
+                o=$(echo "$o" | xargs)
+                [ -n "$o" ] && { measure "r$r $cpu base $o" base "$opt" "$o"; measure "r$r $cpu head $o" head "$opt" "$o"; }
+              done
               IFS=';' read -ra extra <<< "${{ inputs.headOptions }}"
               for o in "${extra[@]}"; do
                 o=$(echo "$o" | xargs)
