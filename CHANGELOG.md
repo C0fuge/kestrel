@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- HDFS with SASL DataNodes read directly (item 41 follow-up): every query logs one read line again,
+  `hdfs=reads files=N direct=true nodeLocal=A remote=B remoteBytes=C unknown=D` - files with every block on this
+  node's DataNode vs files read (partly) from other DataNodes over SASL data transfer, and the bytes read remotely.
+  Block locality comes from the listings the server makes anyway (views refresh, local inventory, planning); a file
+  not yet listed has its table directory listed once. Queries reading no file, merged answers and refused queries log
+  the same `files=0` lines as on the copy path. Log only; plans and answers unchanged. Service hdfs CI: the
+  `sasl-direct` cell checks one line per query again and that remote files are read directly.
+
 - Distributed complete mode: point lookups no longer fan out and queue for peer-stream room (item 43). A query with
   an equality of a column and a literal (no OR) and no aggregate, or a one-row aggregate (a filtered count), is computed
   by the planning node alone when it can read the files (new setting `distributedCompletePointLookups`, default

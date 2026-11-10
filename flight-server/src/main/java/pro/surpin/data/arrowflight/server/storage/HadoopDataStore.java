@@ -41,6 +41,8 @@ public final class HadoopDataStore implements DataStore {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HadoopDataStore.class);
     private static final String PARQUET_EXTENSION = ".parquet";
+    /** Files whose locality is remembered for the per-query read line (item 41). */
+    static final int LOCALITY_CAPACITY = 200_000;
 
     private final FileSystem fileSystem;
     private final String dataDirectory;
@@ -51,6 +53,17 @@ public final class HadoopDataStore implements DataStore {
     private volatile boolean wholeFileReadsOnly;
     /** Whether the DataNodes require SASL data-transfer protection (item 41: any read path). */
     private volatile boolean saslCluster;
+    /**
+     * Locality of the files of the latest listings on the direct SASL read path (item 41):
+     * relative path to size and local bytes, the least recently listed dropped first.
+     */
+    private final Map<String, FileLocality> localities = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(1024, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, FileLocality> eldest) {
+                    return size() > LOCALITY_CAPACITY;
+                }
+            });
     /** The data directory as the file system names it; looked up once, it never changes. */
     private volatile URI rootUri;
 
@@ -119,6 +132,16 @@ public final class HadoopDataStore implements DataStore {
     }
 
     @Override
+    public boolean directReads() {
+        return saslCluster && !wholeFileReadsOnly;
+    }
+
+    @Override
+    public FileLocality locality(String relativePath) {
+        return localities.get(relativePath);
+    }
+
+    @Override
     public boolean readableHere(DataFile file) {
         return !wholeFileReadsOnly || hasLocalBlock(file.hosts(), storageHost);
     }
@@ -170,7 +193,7 @@ public final class HadoopDataStore implements DataStore {
         URI root = rootUri();
         List<DataFile> result = new ArrayList<>(statuses.size());
         for (LocatedFileStatus file : statuses) {
-            result.add(dataFile(root, file, readableHosts(file)));
+            result.add(remember(dataFile(root, file, readableHosts(file)), file));
         }
         return result;
     }
@@ -183,7 +206,7 @@ public final class HadoopDataStore implements DataStore {
         URI root = rootUri();
         List<DataFile> result = new ArrayList<>(statuses.size());
         for (LocatedFileStatus file : statuses) {
-            result.add(dataFile(root, file, readableHosts(file)));
+            result.add(remember(dataFile(root, file, readableHosts(file)), file));
         }
         return result;
     }
@@ -277,6 +300,9 @@ public final class HadoopDataStore implements DataStore {
         while (files.hasNext()) {
             LocatedFileStatus file = files.next();
             scanned++;
+            if (isParquetFile(file) && directReads()) {
+                remember(base.relativize(file.getPath().toUri()).getPath(), file);
+            }
             if (isParquetFile(file) && hasLocalBlock(readableHosts(file), host)) {
                 // Decoded, as every other relative path: "part 1.parquet", not "part%201.parquet".
                 String relativePath = base.relativize(file.getPath().toUri()).getPath();
@@ -398,6 +424,64 @@ public final class HadoopDataStore implements DataStore {
      * @param hosts hosts of the file's blocks
      * @return data file
      */
+    /**
+     * Remembers how much of a listed file lies on this node's storage host, on the direct SASL
+     * read path only (item 41); the listing itself is returned unchanged.
+     *
+     * @param listed file as listed
+     * @param status its status with block locations
+     * @return the listed file
+     */
+    private DataFile remember(DataFile listed, LocatedFileStatus status) {
+        if (directReads()) {
+            remember(listed.relativePath(), status);
+        }
+        return listed;
+    }
+
+    /**
+     * Remembers how much of a listed file lies on this node's storage host.
+     *
+     * @param relativePath file below the data directory
+     * @param status its status with block locations
+     */
+    private void remember(String relativePath, LocatedFileStatus status) {
+        FileLocality locality = new FileLocality(status.getLen(), localBytes(status));
+        synchronized (localities) {
+            localities.remove(relativePath);   // a re-listed file goes last
+            localities.put(relativePath, locality);
+        }
+    }
+
+    /**
+     * Sums the lengths of a file's blocks that have a replica on this node's storage host.
+     *
+     * @param file listed file
+     * @return local bytes, at most the file length
+     */
+    long localBytes(LocatedFileStatus file) {
+        BlockLocation[] blocks = file.getBlockLocations();
+        if (blocks == null) {
+            return 0;
+        }
+        String local = HostUtils.normalize(storageHost);
+        long bytes = 0;
+        for (BlockLocation block : blocks) {
+            try {
+                for (String host : block.getHosts()) {
+                    String mapped = HostUtils.LOOPBACK_HOSTS.contains(host) ? storageHost : host;
+                    if (local.equals(HostUtils.normalize(mapped))) {
+                        bytes += block.getLength();
+                        break;
+                    }
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+        return Math.min(bytes, file.getLen());
+    }
+
     private static DataFile dataFile(URI root, LocatedFileStatus file, Set<String> hosts) {
         URI uri = file.getPath().toUri();
         return new DataFile(root.relativize(uri).getPath(), uri.toString(), file.getLen(),

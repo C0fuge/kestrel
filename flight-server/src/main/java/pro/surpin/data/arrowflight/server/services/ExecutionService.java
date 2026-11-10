@@ -295,6 +295,10 @@ public final class ExecutionService {
      */
     String prunedFiles(String sql) {
         CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        if (directReads()) {
+            // Item 41: one hdfs=reads line per query on the direct SASL path, pruned once.
+            logDirectComplete(sql, pruning);
+        }
         String replacement = catalogViews.prunedReplacement(pruning);
         if (replacement == null) {
             return sql;
@@ -953,6 +957,9 @@ public final class ExecutionService {
             pathTracker.unknown("no-parquet-files");
             LOGGER.warn("No Parquet files to read for query: {}", query);
             return;
+        }
+        if (directReads()) {
+            logDirectReads(Arrays.asList(fileUris));
         }
         List<DataFile> unreadable = unreadableFiles(fileUris);
         if (unreadable != null && !unreadable.isEmpty() && footerCountOnly(parsedQuery)) {
@@ -1908,6 +1915,10 @@ public final class ExecutionService {
      * @throws IOException when the files cannot be listed or copied
      */
     LocalCopyCache.Lease localCopies(String[] fileUris) throws IOException {
+        if (fileUris != null && fileUris.length > 0 && directReads()) {
+            logDirectReads(Arrays.asList(fileUris));
+            return null;
+        }
         List<DataFile> unreadable = unreadableFiles(fileUris);
         return unreadable == null ? null : copies(unreadable, fileUris.length);
     }
@@ -1985,15 +1996,162 @@ public final class ExecutionService {
     }
 
     /**
+     * Tells whether DuckDB reads blocks of any DataNode directly over SASL data transfer (item
+     * 41): every node reads every file, nothing is copied.
+     *
+     * @return true on the direct SASL read path
+     */
+    public boolean directReads() {
+        DataStore store = parquetAdapter.dataStore();
+        return store != null && store.directReads();
+    }
+
+    /**
+     * Tells whether queries log an {@code hdfs=reads} line: with local copies and on the direct
+     * SASL read path.
+     *
+     * @return true when every query logs how its files are read
+     */
+    private boolean readLines() {
+        return parquetAdapter.localCopies() || directReads();
+    }
+
+    /**
+     * Logs the {@code hdfs=reads} line of a query on the direct SASL read path (item 41): of the
+     * files it reads, those with every block on this node's DataNode ({@code nodeLocal}), the
+     * others ({@code remote}, read over SASL data transfer) and their bytes on other DataNodes.
+     * Locality comes from the store's latest listing; a file it does not remember has its table
+     * directory listed once, and one still unknown counts as {@code unknown}. Never fails the
+     * query.
+     *
+     * @param relativePaths files the query reads on this node
+     */
+    void logDirectReads(java.util.Collection<String> relativePaths) {
+        DataStore store = parquetAdapter.dataStore();
+        DirectReads reads = DirectReads.of(store, relativePaths);
+        if (reads.unknown() > 0) {
+            Set<String> listed = new HashSet<>();
+            for (String rel : relativePaths) {
+                String directory = tableDirectory(rel);
+                if (store.locality(rel) == null && listed.add(directory)) {
+                    try {
+                        store.parquetFiles(directory);   // remembers the locality of its files
+                    } catch (IOException | RuntimeException e) {
+                        LOGGER.debug("qid={} node={} hdfs=readsListingFailed directory={} error='{}'",
+                                LogUtil.qid(), LogUtil.node(), directory, e.toString());
+                    }
+                }
+            }
+            reads = DirectReads.of(store, relativePaths);
+        }
+        LOGGER.info("qid={} node={} hdfs=reads files={} direct=true nodeLocal={} remote={}"
+                + " remoteBytes={} unknown={}", LogUtil.qid(), LogUtil.node(), relativePaths.size(),
+                reads.nodeLocal(), reads.remote(), reads.remoteBytes(), reads.unknown());
+    }
+
+    /**
+     * Logs the {@code hdfs=reads} line of a complete answer on the direct SASL read path: the
+     * files a pruned query keeps, or else every file of the data store's tables the query names,
+     * as the views list them (no storage call for known files).
+     *
+     * @param sql the query after the catalog rewrites
+     * @param pruning the query's pruned files, or null
+     */
+    private void logDirectComplete(String sql, CatalogViews.Pruning pruning) {
+        if (pruning != null) {
+            // A pruned query reads one table of the data store, only the files kept.
+            List<String> kept = new ArrayList<>(pruning.kept().size());
+            for (DataFile file : pruning.kept()) {
+                kept.add(file.relativePath());
+            }
+            if (kept.isEmpty()) {
+                logNoFileReads("pruned");
+            } else {
+                logDirectReads(kept);
+            }
+            return;
+        }
+        List<String> paths = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        try {
+            if (TimeTravelClause.present(sql)) {
+                logNoFileReads("unknown");
+                return;
+            }
+            for (ParquetQueryParser.JoinTable table : QueryTables.of(qualifyPlainNames(sql))) {
+                String schema = schemaRead(table);
+                if (schema == null || parquetAdapter.isCatalogSchema(schema)
+                        || !seen.add(copyKey(schema, table.table()))) {
+                    continue;
+                }
+                List<DataFile> files = catalogViews.directoryFiles(schema, table.table());
+                if (files == null) {
+                    seen.remove(copyKey(schema, table.table()));   // not a table of the data store
+                    continue;
+                }
+                for (DataFile file : files) {
+                    paths.add(file.relativePath());
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // The query itself reports what is wrong with it.
+            logNoFileReads("unknown");
+            return;
+        }
+        if (seen.isEmpty()) {
+            logNoFileReads("none");
+        } else {
+            logDirectReads(paths);
+        }
+    }
+
+    /**
+     * Counts how a query's files are read on the direct SASL path.
+     *
+     * @param nodeLocal files with every block on this node's DataNode
+     * @param remote files with a block elsewhere
+     * @param remoteBytes bytes of the remote files' blocks elsewhere
+     * @param unknown files whose locality the store does not remember
+     */
+    record DirectReads(int nodeLocal, int remote, long remoteBytes, int unknown) {
+
+        /**
+         * Counts files by the store's remembered locality.
+         *
+         * @param store data store
+         * @param relativePaths files read
+         * @return the counts
+         */
+        static DirectReads of(DataStore store, java.util.Collection<String> relativePaths) {
+            int nodeLocal = 0;
+            int remote = 0;
+            int unknown = 0;
+            long remoteBytes = 0;
+            for (String rel : relativePaths) {
+                DataStore.FileLocality locality = store.locality(rel);
+                if (locality == null) {
+                    unknown++;
+                } else if (locality.nodeLocal()) {
+                    nodeLocal++;
+                } else {
+                    remote++;
+                    remoteBytes += locality.size() - locality.localBytes();
+                }
+            }
+            return new DirectReads(nodeLocal, remote, remoteBytes, unknown);
+        }
+    }
+
+    /**
      * Logs the {@code hdfs=reads} line of a query that reads no file of the data store on this
-     * node (item 32), so that every query on a short-circuit-only store has one; nothing is
-     * logged when local copies are off.
+     * node (item 32), so that every query on a short-circuit-only store has one, as on the
+     * direct SASL read path (item 41); nothing is logged on other stores.
      *
      * @param tables why no file is read: {@code none} (no table of the data store),
      *        {@code unknown} (tables not named), or {@code endpoints=N} (merged from peers)
      */
     public void logNoFileReads(String tables) {
-        if (parquetAdapter.localCopies()) {
+        if (readLines()) {
             LOGGER.info("qid={} node={} hdfs=reads files=0 shortCircuit=0 localCopy=0 tables={}",
                     LogUtil.qid(), LogUtil.node(), tables);
         }
@@ -2001,12 +2159,13 @@ public final class ExecutionService {
 
     /**
      * Logs the {@code hdfs=reads} line of a query refused before it read any file (item 34), so
-     * that a refused query has one too; nothing is logged when local copies are off.
+     * that a refused query has one too; nothing is logged unless local copies are on or DuckDB
+     * reads SASL DataNodes directly.
      *
      * @param refusal where it was refused, e.g. {@code partialPlan}
      */
     public void logRefusedReads(String refusal) {
-        if (parquetAdapter.localCopies()) {
+        if (readLines()) {
             LOGGER.info("qid={} node={} hdfs=reads files=0 shortCircuit=0 localCopy=0 copied=0"
                     + " refused={}", LogUtil.qid(), LogUtil.node(), refusal);
         }

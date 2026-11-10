@@ -797,8 +797,17 @@ if [ "$rc" -eq 0 ] && [ "$result" = "result pass" ]; then
   fi
   if $sasl && [ "$n" -eq 1 ]; then checkReadsPerQid "$srv"; fi
   # shellcheck disable=SC2046
-  # hdfs=reads lines (item 32) belong to the short-circuit-only / copy path; sasl-direct has none.
-  if [ "$n" -gt 1 ] && ! $direct; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
+  # hdfs=reads lines (item 32): one per query, on the copy path and (item 41 follow-up) on the
+  # direct SASL path, where they count files read node-local vs remote (direct=true).
+  if [ "$n" -gt 1 ]; then checkReadsPerQid $(for i in $(seq "$n"); do echo "srv$i"; done); fi
+  if $direct; then
+    directLines=$(grep -c 'hdfs=reads files=[0-9]* direct=true' "$work/reads-qid.log" || true)
+    remoteFiles=$(grep -oE 'hdfs=reads files=[0-9]+ direct=true nodeLocal=[0-9]+ remote=[0-9]+' "$work/reads-qid.log" | awk -F'remote=' '{ s += $2 } END { print s + 0 }')
+    unknownFiles=$(grep -oE 'direct=true .* unknown=[0-9]+' "$work/reads-qid.log" | awk -F'unknown=' '{ s += $2 } END { print s + 0 }')
+    note "item 41 direct reads: $directLines hdfs=reads direct=true line(s), remote files $remoteFiles, unknown $unknownFiles; $(grep -m 1 -oE 'hdfs=reads files=[1-9][0-9]* direct=true.*' "$work/reads-qid.log" || echo 'no direct line with files')"
+    [ "$directLines" -ge 1 ] || finish fail "item 41: no hdfs=reads direct=true line on the direct SASL path"
+    [ "$remoteFiles" -ge 1 ] || finish fail "item 41: no query read a remote file directly (remote=0 on every hdfs=reads direct=true line)"
+  fi
   if $sasl; then pointPruning; fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = balanced ]; then smallDisk; fi
   if [ "$n" -gt 1 ] && ! $direct && [ "$profile" = speed ]; then lowDirect; dcSmallDisk; fi

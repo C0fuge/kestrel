@@ -226,6 +226,62 @@ class HadoopDataStoreTest {
     }
 
     /**
+     * Item 41 follow-up: on the direct SASL read path a listing remembers how much of each file
+     * lies on this node's storage host (loopback blocks are local); off that path it remembers
+     * nothing, and a short-circuit-only store is not on it.
+     *
+     * @throws Exception when the directory cannot be listed
+     */
+    @Test
+    void directReadsRememberTheLocalityOfListedFiles() throws Exception {
+        HadoopDataStore plain = store("localhost");
+        plain.parquetFiles("s1/t1");
+        assertFalse(plain.directReads());
+        assertEquals(null, plain.locality("s1/t1/a.parquet"));
+
+        HadoopDataStore direct = store("localhost");
+        direct.setSaslCluster(true);
+        assertTrue(direct.directReads());
+        assertEquals(null, direct.locality("s1/t1/a.parquet"), "nothing listed yet");
+        direct.parquetFiles("s1/t1");
+        DataStore.FileLocality a = direct.locality("s1/t1/a.parquet");
+        assertEquals(Files.size(root.resolve("s1/t1/a.parquet")), a.size());
+        assertTrue(a.nodeLocal(), a::toString);
+        assertTrue(direct.locality("s1/t1/sub/b.PARQUET").nodeLocal());
+        assertEquals(null, direct.locality("s1/t1/notes.txt"));
+
+        HadoopDataStore inventory = store("localhost");
+        inventory.setSaslCluster(true);
+        inventory.localInventory("localhost");
+        assertTrue(inventory.locality("s1/t1/a.parquet").nodeLocal(), "the inventory remembers too");
+
+        direct.setWholeFileReadsOnly(true);
+        assertFalse(direct.directReads(), "short-circuit only reads no remote block");
+    }
+
+    /**
+     * Item 41 follow-up: the local bytes of a file are the lengths of its blocks with a replica
+     * on this node's storage host.
+     */
+    @Test
+    void localBytesSumTheBlocksOnThisHost() {
+        org.apache.hadoop.fs.LocatedFileStatus file = new org.apache.hadoop.fs.LocatedFileStatus(
+                300L, false, 2, 100L, 0L, 0L, null, null, null, null,
+                new org.apache.hadoop.fs.Path("file:/d/s/t/f.parquet"),
+                new org.apache.hadoop.fs.BlockLocation[] {
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn1", "dn2"}, 0L, 100L),
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn2", "dn3"}, 100L, 100L),
+                    new org.apache.hadoop.fs.BlockLocation(null, new String[] {"dn3", "dn2"}, 200L, 100L)});
+        assertEquals(100L, store("dn1").localBytes(file));
+        assertEquals(300L, store("dn2").localBytes(file));
+        assertEquals(200L, store("dn3").localBytes(file));
+        assertEquals(0L, store("dn4").localBytes(file));
+        assertFalse(new DataStore.FileLocality(300L, 100L).nodeLocal());
+        assertTrue(new DataStore.FileLocality(300L, 300L).nodeLocal());
+        assertTrue(new DataStore.FileLocality(0L, 0L).nodeLocal(), "an empty file is local");
+    }
+
+    /**
      * Verifies that with whole-file reads (SASL DataNodes, short-circuit only) a file's hosts
      * are the hosts holding every block, not every host holding one (item 29).
      */

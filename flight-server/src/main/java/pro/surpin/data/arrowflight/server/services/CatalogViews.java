@@ -1230,6 +1230,25 @@ public final class CatalogViews {
     }
 
     /**
+     * Returns the files of a directory table as the current views read them, without listing
+     * the table again (item 41: the per-query read line of direct SASL reads).
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return the table's files, or null when it is no directory table with a view (catalog
+     *         tables, unknown tables, views that cannot be refreshed)
+     */
+    List<DataFile> directoryFiles(String schema, String table) {
+        try {
+            current();
+        } catch (IOException | SQLException e) {
+            return null;   // the query reports what cannot be listed or described
+        }
+        TableViews views = prunable.get((schema + "\u0000" + table).toLowerCase(Locale.ROOT));
+        return views == null ? null : views.files();
+    }
+
+    /**
      * Logs the {@code views=prunedFiles} line of a pruned query.
      *
      * @param pruning the pruned reference and its kept files

@@ -898,6 +898,76 @@ class ExecutionServiceTest {
     }
 
     /**
+     * Item 41 follow-up: on the direct SASL read path a ticket logs one {@code hdfs=reads} line
+     * that counts its files read node-local (every block on this node's DataNode) and remote,
+     * with the remote bytes; a file the store's listing does not remember has its table
+     * directory listed once, and one still unknown counts as unknown. Nothing is copied.
+     */
+    @Test
+    void directSaslReadsLogNodeLocalAndRemoteFiles() throws Exception {
+        ParquetAdapter parquet = mock(ParquetAdapter.class);
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        when(parquet.dataStore()).thenReturn(store);
+        when(parquet.localCopies()).thenReturn(false);
+        when(store.directReads()).thenReturn(true);
+        java.util.concurrent.atomic.AtomicBoolean listed = new java.util.concurrent.atomic.AtomicBoolean();
+        when(store.locality("s/t/a.parquet")).thenReturn(
+                new pro.surpin.data.arrowflight.server.storage.DataStore.FileLocality(300, 300));
+        when(store.locality("s/t/b.parquet")).thenAnswer(inv -> listed.get()
+                ? new pro.surpin.data.arrowflight.server.storage.DataStore.FileLocality(300, 100) : null);
+        when(store.parquetFiles("s/t")).thenAnswer(inv -> {
+            listed.set(true);
+            return List.of();
+        });
+        ExecutionService service = new ExecutionService(parquet, mock(DuckDbAdapter.class),
+                mock(MetadataService.class), null, null);
+        assertTrue(service.directReads());
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            assertEquals(null, service.localCopies(new String[] {"s/t/a.parquet", "s/t/b.parquet"}));
+            assertEquals(null, service.localCopies(new String[] {"s/u/c.parquet"}));
+            service.logNoFileReads("endpoints=2");
+            service.logRefusedReads("partialPlan");
+        } finally {
+            System.setErr(err);
+        }
+        String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains("hdfs=reads files=2 direct=true nodeLocal=1 remote=1 remoteBytes=200"
+                + " unknown=0"), text);
+        assertTrue(text.contains("hdfs=reads files=1 direct=true nodeLocal=0 remote=0 remoteBytes=0"
+                + " unknown=1"), text);
+        assertTrue(text.contains("hdfs=reads files=0 shortCircuit=0 localCopy=0 tables=endpoints=2"), text);
+        assertTrue(text.contains("hdfs=reads files=0 shortCircuit=0 localCopy=0 copied=0"
+                + " refused=partialPlan"), text);
+        org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).parquetFiles("s/t");
+        org.mockito.Mockito.verify(store, org.mockito.Mockito.times(1)).parquetFiles("s/u");
+        org.mockito.Mockito.verify(store, org.mockito.Mockito.never()).readableHere(
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
+     * Item 41 follow-up: counts of the direct read line from remembered localities.
+     */
+    @Test
+    void directReadsCountRememberedLocalities() {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        when(store.locality("a")).thenReturn(
+                new pro.surpin.data.arrowflight.server.storage.DataStore.FileLocality(10, 10));
+        when(store.locality("b")).thenReturn(
+                new pro.surpin.data.arrowflight.server.storage.DataStore.FileLocality(10, 4));
+        when(store.locality("c")).thenReturn(
+                new pro.surpin.data.arrowflight.server.storage.DataStore.FileLocality(7, 0));
+        assertEquals(new ExecutionService.DirectReads(1, 2, 13, 1),
+                ExecutionService.DirectReads.of(store, List.of("a", "b", "c", "d")));
+        assertEquals(new ExecutionService.DirectReads(0, 0, 0, 0),
+                ExecutionService.DirectReads.of(store, List.of()));
+    }
+
+    /**
      * Item 32: a complete answer that reads no table of the data store still logs one
      * {@code hdfs=reads} line on a short-circuit-only node, and none when local copies are off.
      */

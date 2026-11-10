@@ -68,4 +68,45 @@ public interface DataStore extends pro.surpin.data.arrowflight.spi.storage.DataS
     default boolean readableHere(DataFile file) {
         return true;
     }
+
+    /**
+     * How much of a file lies on this node's storage host, as the latest listing of its
+     * directory saw its blocks (item 41: the per-query read line of direct SASL reads).
+     *
+     * @param size file length in bytes
+     * @param localBytes bytes of the blocks with a replica on this node's storage host
+     */
+    record FileLocality(long size, long localBytes) {
+
+        /**
+         * Tells whether every block of the file has a replica on this node's storage host.
+         *
+         * @return true when the file is read node-local
+         */
+        public boolean nodeLocal() {
+            return localBytes >= size;
+        }
+    }
+
+    /**
+     * Tells whether DuckDB reads blocks of any storage host directly (HDFS DataNodes with SASL
+     * data-transfer protection, read by a hadoopfs build that speaks SASL, item 41): every node
+     * reads every file, and {@link #locality(String)} tells how much of a file is local.
+     *
+     * @return true on the direct SASL read path
+     */
+    default boolean directReads() {
+        return false;
+    }
+
+    /**
+     * Returns how much of a file lies on this node's storage host, from the latest listing of
+     * its directory; no storage call is made.
+     *
+     * @param relativePath file below the data directory
+     * @return the file's locality, or null when no listing of it is remembered
+     */
+    default FileLocality locality(String relativePath) {
+        return null;
+    }
 }
