@@ -1,8 +1,8 @@
-ALL DONE 2026-11-10T12:58Z
+ALL DONE 2026-11-10T13:58Z
 
 # Orchestration status
 
-Status as of **2026-11-10T12:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10T13:58Z UTC** (refresh only since ALL DONE; tables below from 12:58Z) (hourly orchestrator; it only watches, it does not change code).
 
 ALL DONE by the routine's definition: ITEM 26 / 27 DONE (2026-11-03), IMPROVEMENTS DONE in marten and heron, egret
 FRESH for the newest pre-release `server-1.0.0-37bf9401d77c` (run 42791002963). Lane work continues: **ITEM 40(b) in
@@ -62,6 +62,7 @@ old).
 
 ## History
 
+- 2026-11-10T13:58Z: refresh (ALL DONE). Catalogs 40(b) cut 5 (3a01265e, one pruning per DoGet) on main, Dev CI 42822143053 green, c1 p50 back at baseline without a default change, so Q-40b-1 is now optional; next cut 4228c733 (one jOOQ parse per point-query shape) on main, Dev CI 42828677361 running; lock catalogs 13:24Z active; no stale locks, no red CI.
 - 2026-11-10T12:58Z: catalogs lane bisected the local c1 regression to footer-stats file pruning (b0f82a47) and asked **Q-40b-1** (default change: prune only for remote stores); 40(b) cut 5 on fix/40b-small-5 (Dev CI 42818682745 + Small query perf 42818686506 running); main Dev CI 42812785328 (33d4d2dc) green, Service cluster 42812785652 green; lock catalogs 12:24Z active; no stale locks, no red CI.
 - 2026-11-10T11:58Z: ALL DONE conditions met (egret FRESH 37bf9401d77c done, run 42791002963); egret ACCEPT 37bf9401d77c DO NOT SHIP on check 6 only (maintainer decision); catalogs 40(b) cuts a4e14e03 + ac2055c8 on main, Dev CI 42811292025 running; lock catalogs 11:20Z active; no stale locks, no red CI.
 - 2026-11-10T10:58Z: Service cluster red resolved (D17 DONE: lane 3 point gate fix ed81bfc8/f567baa4, runs 42796003792 main + 42796297705 branch green); item 41 follow-up (2) DONE (hdfs=reads lines on direct SASL, Dev CI 42794847349 + Service hdfs 42794862424 green); 40(b) 3rd improvement 388b81f5 on main, Dev CI 42802352922 running; egret ACCEPT 37bf9401d77c PARTIAL (check 6: no hdfs=reads lines, added after that build), rerun + FRESH running; lock catalogs 10:21Z active; no stale locks.
