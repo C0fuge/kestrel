@@ -34,6 +34,11 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > equals plain's (true); the differences are the memory limit (4.7 vs 6.3 GiB), lockdown settings, HTTP retries
 > (6 / 200 ms / backoff 2 vs 3 / 100 ms / 4, only on failures), `httpfs_connection_caching` and
 > `enable_http_metadata_cache` / `parquet_metadata_cache` on (ours), `preserve_insertion_order=false`.
+> *2026-11-10 06:45Z (plugins lane):* memory-pressure check for option (B) dispatched while Q-40a waits:
+> `tpch-perf.yml` run **42760596461** on `main` (S3 SF10, 8 GB container, -Xmx3g/direct 2g, **4 concurrent Java
+> clients**, configs default | speed | speed `duckDbMemoryLimit=4608MiB` (~ (B): half of heap+direct reserved) |
+> speed 5120MiB); still in Measure after 90 min. **Next session: read its summary** (client failed = OOM kill;
+> peak MiB per config) and add the result to Q-40a.
 > **Still waiting for Q-40a.** Then: (B) if chosen - profile code + `DuckDbSizingTest` case + a memory-pressure
 > check (speed with the raised limit in a `MemoryMax` scope, as item 39(b)'s CI step); in any case ask the
 > performance repo for a gizmo wave on the harness's -Xmx/direct, then "ITEM 40(a) DONE".
@@ -1089,3 +1094,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-10 (plugins lane): ITEM 40(a) step 2 - START-NOTES "Sizing `speed` for S3" (option (A), docs only) +
   CHANGELOG line; settings-diff side issue found already fixed (run 42751636105 prints the diffs; nothing S3-path
   specific besides the memory limit). Q-40a still open; no CI run needed (docs only). Lock released.
+- 2026-11-10 06:45Z (plugins lane): Q-40a still unanswered; dispatched the (B) memory-pressure check `tpch-perf.yml`
+  run 42760596461 (S3 SF10, 4 concurrent clients, speed at default / 4608 / 5120 MiB DuckDB limit in an 8 GB
+  container); not finished at session end, result to be read next session. No code change. Lock released.
