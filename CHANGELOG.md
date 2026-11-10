@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- File pruning shapes also cover decimal, long integer and date literals (item 40(b)): point and count queries
+  comparing with `1234.5`, keys of 10-18 digits or `DATE 'yyyy-mm-dd'` were still parsed by jOOQ per text. Their
+  pruning now shares one parse per shape too (the describe cache key is unchanged). Same files kept (test over 38
+  shapes against a per-text parse, answers against the view); invalid dates are parsed per text as before.
+
 - File pruning parses a point query's shape once instead of every text (item 40(b)): DoGet's pruning parsed each
   point query with jOOQ (the key differs every query, so the parse cache never hit), the main part of what pruning
   cost on local files. Texts that differ only in the integer literals the describe cache key leaves out now share one
