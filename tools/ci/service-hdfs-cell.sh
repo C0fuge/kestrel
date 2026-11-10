@@ -147,7 +147,17 @@ if $krb; then
   cat > "$work/kdc.sh" <<EOF
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq && apt-get install -y -qq --no-install-recommends krb5-kdc krb5-admin-server krb5-user > /dev/null
+# The Ubuntu mirror sometimes stalls (2026-11-10: KDC cells timed out with no output): bounded
+# retries per request, a few whole tries, progress lines in the container log for the next failure.
+apt_opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+for t in 1 2 3; do
+  echo "kdc: apt try \$t \$(date -u +%T)"
+  timeout 240 apt-get \$apt_opts update -qq && timeout 240 apt-get \$apt_opts install -y -qq --no-install-recommends \
+    krb5-kdc krb5-admin-server krb5-user > /dev/null && break
+  [ "\$t" -lt 3 ] || { echo "kdc: apt failed"; exit 1; }
+  sleep 5
+done
+echo "kdc: packages installed \$(date -u +%T)"
 cp /conf/krb5.conf /etc/krb5.conf
 mkdir -p /etc/krb5kdc
 printf '%s\n' '[realms]' ' CI.TEST = {' '  master_key_type = aes256-cts-hmac-sha1-96' \
@@ -165,8 +175,12 @@ exec tail -F /var/log/krb5kdc.log /dev/null
 EOF
   docker run -d --name kdc --network hd --ip 172.31.0.5 -e KPASS="$kpass" -v "$conf:/conf:ro" -v "$hd/krb:/krb" \
     -v "$work/kdc.sh:/kdc.sh:ro" ubuntu:24.04 bash /kdc.sh > /dev/null
-  for _ in $(seq 180); do [ -f "$hd/krb/ready" ] && break; sleep 1; done
-  [ -f "$hd/krb/ready" ] || { docker logs kdc 2>&1 | tail -n 20; finish fail "KDC did not come up"; }
+  # Up to three apt tries of at most 2 x 240 s each (kdc.sh); normally ready in under a minute.
+  for _ in $(seq 900); do [ -f "$hd/krb/ready" ] && break
+    [ "$(docker inspect -f '{{.State.Running}}' kdc)" = true ] || break; sleep 1; done
+  [ -f "$hd/krb/ready" ] || { docker logs kdc 2>&1 | tail -n 20
+    finish fail "KDC did not come up: $(docker logs kdc 2>&1 | grep '^kdc:' | tail -n 1)"; }
+  note "KDC ready: $(docker logs kdc 2>&1 | grep '^kdc:' | tr '\n' ' ')"
   hconf+=(-v "$conf/krb5.conf:/etc/krb5.conf:ro" -v "$hd/krb:/hd/krb:ro")
   kenv=(-e KRB5CCNAME=/hd/krb/nn.ccache)
   note "KDC: MIT krb5 (ubuntu:24.04), principals nn/dn/HTTP of hdfs.ci and flight@CI.TEST (server keytab)"
