@@ -1,48 +1,50 @@
 # Orchestration status
 
-Status as of **2026-11-10 03:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10 04:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 39** is in packaging. The maintainer's last step (hadoopfs afc4 default, new setting
-`hdfsMetadataCacheTtlMs`, Q11 = external file cache on HDFS by default) is on `main` as 877cf100 (Dev CI 42700518633,
-Service cluster 42700518286, Service hdfs 42700518331, Catalogs CI 42700518131, HDFS point perf 42700537172 all green).
-The core lane (lock 03:41Z) runs the package build: Dev CI 42751144566 on `ci/core-39pkg` (71959a39), running; then
-"ITEM 39 DONE". **ITEM 40** (close the gap to GizmoSQL) is open: 40(a) S3 in the plugins lane (active), 40(b)
-small-query overhead in the core lane after packaging. ITEM 38 still waits for the stand. The routine's original
-criterion (items 26/27, marten/heron IMPROVEMENTS DONE) is long met.
+Not ALL DONE: **ITEM 39** is still in packaging. The first package run (Dev CI 42751144566 on `ci/core-39pkg`,
+71959a39) failed only at the service gate: Service hdfs (42752652430, rerun 42755619561) red because the KDC
+container's apt stalled on the Ubuntu mirror (infrastructure, not server code). The core lane fixed the cell
+(98574893 on `main`: apt retries/timeouts, re-runs overwrite stale results; main Dev CI 42757164357 and Catalogs CI
+42757164549 green, Service hdfs 42757164355 running) and re-dispatched the package run (Dev CI 42757195073, running).
+Then "ITEM 39 DONE". **ITEM 40**: 40(a) S3 cause found by the plugins lane - DuckDB memory limit of `speed` bounds
+the external file cache (speed with 1g JVM heap/direct: 15.9 s vs plain DuckDB 16.9 s, same answers); START-NOTES
+sizing note written; decision **Q-40a** waits for the maintainer. 40(b) follows packaging in the core lane.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | package item 39 + "ITEM 39 DONE"; then 40(b); item 38 waits for the stand | 2026-11-10 03:41Z (lock); last code 877cf100 2026-11-09 21:13Z | held 03:41Z (active) | main Dev CI 42700518633 (877cf100) green; package Dev CI 42751144566 running |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 40(a) S3 SF10 vs gizmo, branch `fix/40a-s3` | 2026-11-10 03:46Z (branch, 468ec1e9) | held 03:10Z (active) | tpch-perf 42751636105 running; 42748064489 red (branch harness run, superseded); 42700198697 green |
-| catalogs (`CATALOGS-STATUS.md`) | no open item (39(c) DONE, follow-ups (a)/(b) done by core) | 2026-11-10 03:21Z (unlock) | free | - |
-| lane 3 (`LANE3-STATUS.md`) | 39(d) DONE; D13 (b) DONE; next D14 (stand results) | 2026-11-09 20:27Z | free | Service cluster 42691698496 green (branch) |
+| core (`STATUS.md`) | package item 39 (rerun), then "ITEM 39 DONE"; then 40(b); item 38 waits for the stand | 2026-11-10 04:38Z (98574893, CI fix) | held 03:41Z (active, 76 min) | main Dev CI 42757164357 (98574893) green; package Dev CI 42757195073 running |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 40(a): steps 1-2 done (cause + docs); waits for Q-40a | 2026-11-10 04:12Z (unlock) | free | tpch-perf 42751636105 green |
+| catalogs (`CATALOGS-STATUS.md`) | no open item | 2026-11-10 03:21Z (unlock) | free | - |
+| lane 3 (`LANE3-STATUS.md`) | D14 waits for the stand on the item 39 pre-release; Q3 open | 2026-11-10 04:03Z (unlock) | free | Service cluster 42691698496 green (branch) |
 
-No red Dev CI on main; nothing to rerun. No new bug-first notes in the paused-lane files.
+No red Dev CI on main; nothing to rerun (the red Service hdfs runs are on the package branch and already being
+handled by the core lane). No new bug-first notes in the paused-lane files.
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42700518286 | 877cf100 (main) | pass |
-| service-hdfs.yml | 42700518331 | 877cf100 (main) | pass |
-| service-security.yml | 42403047248 | b69660b9 (pkg) | pass |
-| service-stores.yml | 42403049750 | b69660b9 (pkg) | pass |
+| service-cluster.yml | 42752649314 | 71959a39 (pkg) | pass |
+| service-hdfs.yml | 42757164355 | 98574893 (main) | running (pkg 42755619561 fail: KDC mirror stall; main 42700518331 pass) |
+| service-security.yml | 42752655625 | 71959a39 (pkg) | pass |
+| service-stores.yml | 42752659680 | 71959a39 (pkg) | pass |
 
 ## Pre-releases (newest 3)
 
 - `server-1.0.0-b69660b9260a` (2026-11-07 18:47Z): item 38; waits for the stand; egret ACCEPT SHIP (42406253240).
 - `server-1.0.0-06c5adc7d7c9` (2026-11-07 05:57Z): item 37; ITEM 37 DONE on the stand.
-- `server-1.0.0-6384bc55b173` (2026-11-06 18:04Z) / `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z, egret FRESH DONE).
+- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z, egret FRESH DONE).
 
-Item 39 pre-release: package run 42751144566 in progress.
+Item 39 pre-release: package rerun 42757195073 in progress.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 03:40Z "finish mode, nothing new".
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 04:41Z "finish mode, nothing new".
   Open question: TPC-H q16 SF1 slowdown (series effect since `fl1eb792`) - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 190 (03:51Z): nothing open.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 191 (04:51Z): nothing open.
 
 ## egret
 
@@ -54,13 +56,18 @@ Item 39 pre-release: package run 42751144566 in progress.
 
 ## For the maintainer
 
-- Nothing blocking. ITEM 39 package run in progress (core lane); then the stand + the independent cluster check.
+- **Q-40a (plugins lane, new):** speed's DuckDB memory limit vs the JVM reservation - it bounds the external file
+  cache and explains most of the S3 SF10 gap to GizmoSQL; decide the default (docs-only option (A) is written).
+- **Q3 (lane 3, new):** default of `arrowAllocatorLimitBytes` derived from direct memory.
+- ITEM 39 package rerun in progress (core lane); then the stand + the independent cluster check.
 - Stand check of `server-1.0.0-b69660b9260a` for ITEM 38, then "ITEM 38 DONE".
-- **Open questions:** item 35 default `distributedCompletePeerStreams`; item 33 default `hdfsLocalCopyRoomWaitMillis`
-  (0 vs 30000); catalogs Q10 (footer-stats pruning on by default); marten q16 SF1 pushdown slowdown.
+- Older open questions: item 35 default `distributedCompletePeerStreams`; item 33 default
+  `hdfsLocalCopyRoomWaitMillis` (0 vs 30000); catalogs Q10 (footer-stats pruning on by default); marten q16 SF1
+  pushdown slowdown.
 
 ## History
 
+- 2026-11-10 04:57Z: core lane (lock 03:41Z, active): package Dev CI 42751144566 on ci/core-39pkg red only at the service gate (Service hdfs 42752652430/42755619561 red: KDC setup stalled on the Ubuntu mirror); CI fix 98574893 on main (Dev CI 42757164357 + Catalogs CI green, Service hdfs 42757164355 running), package rerun Dev CI 42757195073 running; plugins lane: 40(a) cause found (speed's DuckDB memory limit bounds the external file cache; speed 15.9 s vs plain DuckDB 16.9 s with 1g JVM), docs step done, **Q-40a open**; lane 3 Q3 open; no red Dev CI on main, no stale locks.
 - 2026-11-10 03:57Z: item 39 last step 877cf100 on main (hadoopfs afc4, hdfsMetadataCacheTtlMs, external file cache on HDFS; Dev CI 42700518633 + 4 service/perf runs green); core lane (lock 03:41Z) packaging: Dev CI 42751144566 on ci/core-39pkg running; maintainer opened ITEM 40 (gizmo gap): plugins lane on 40(a) fix/40a-s3 (tpch-perf 42751636105 running, 42748064489 red on the branch); no red CI on main, no stale locks.
 - 2026-11-09 20:58Z: ITEM 39(c) DONE bf72114c (catalogs, parts 1-4 on main, lock released); main Dev CI 42695876926 on bf72114c running (32ebda26: 42690037660 green); core lane next packages (`package=true`, ITEM 39 DONE); lane 3 D13 (b) DONE (42689843545, 42691698496 green); egret EGRET GIZMO DONE (S3 SF10 speed ~1.5x slower than gizmo, local small c1 p50 regression 1.16-1.18); no red CI on main, no stale locks.
 - 2026-11-09 19:57Z: catalogs lane active again (lock 19:22Z): 39(c) file pruning 9f4f901f on fix/39c-point, Dev CI 42684272737 + HDFS point perf 42684276829 green, not merged; lane 3 D13 (c) merged (Service cluster 42680042903/42681427105 green); egret gizmo scan rerun 42684180966 running after harness login fix, draft report written; no red CI, no stale locks.
