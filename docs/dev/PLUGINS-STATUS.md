@@ -1189,4 +1189,4 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   returns a point query pruned (`CopiedQuery.pruned`) when every kept file is held here, so `requireReadableHere` does
   not refuse it; a kept file not held here is refused as before; test
   `PrunedLocalCopiesTest.withoutCopiesAPointQueryOnHeldFilesIsPrunedNotRefused`. CI: Dev CI **42791671758** green on the
-  branch; on `main` Dev CI **42794664721** started by the push (result added below when read). README (shared sizing) and CHANGELOG updated. Lock released.
+  branch; on `main` Dev CI 42794664721 was cancelled by the core lane's next push; Dev CI **42794847349** on a8ded50d (core lane's logging follow-up on top of 15220a77) green. README (shared sizing) and CHANGELOG updated. Lock released.
