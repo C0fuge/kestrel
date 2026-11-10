@@ -21,7 +21,9 @@
 # reference GizmoSQL stands for, writes the DuckDB settings of every server configuration
 # (tools/ci/flight-settings.py) and of plain DuckDB, and puts the settings that differ and a per-query
 # table (best time of each configuration, ratio to plain) in the summary; its answers' checksums must
-# equal those of the ADBC client (client=adbc). Not part of Dev CI.
+# equal those of the ADBC client (client=adbc). Input more = further configurations separated by '|'
+# (labels more1, more2, ...; answers checked against the default's), quick=true skips -DduckDbThreads=4.
+# Not part of Dev CI.
 name: TPC-H perf
 
 on:
@@ -71,6 +73,14 @@ on:
         default: ""
       plain:
         description: "also measure plain in-process DuckDB (GizmoSQL-like reference) and diff the DuckDB settings (item 40(a))"
+        type: boolean
+        default: false
+      more:
+        description: "further configurations on this ref, separated by '|' (labels more1, more2, ...), answers checked against the default's (empty = none)"
+        type: string
+        default: ""
+      quick:
+        description: "skip the -DduckDbThreads=4 configuration and its 10 % check"
         type: boolean
         default: false
 
@@ -215,6 +225,8 @@ jobs:
           echo "connect time to the S3 endpoint: $(curl -sS -o /dev/null -w '%{time_connect}' http://127.0.0.1:9000/) s"
 
       - name: Measure
+        env:
+          MORE: ${{ inputs.more }}
         run: |
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
@@ -272,7 +284,7 @@ jobs:
             docker rm -f srv > /dev/null
           }
           measure "default" head ""
-          if [ "${{ inputs.clients }}" = 1 ]; then
+          if [ "${{ inputs.clients }}" = 1 ] && [ "${{ inputs.quick }}" != true ]; then
             measure "threads4" head "-DduckDbThreads=4"
           fi
           if [ -n "${{ inputs.baseline }}" ]; then
@@ -280,6 +292,15 @@ jobs:
           fi
           if [ -n "${{ inputs.extra }}" ]; then
             measure "extra" head "${{ inputs.extra }}"
+          fi
+          if [ -n "$MORE" ]; then
+            IFS='|' read -ra configs <<< "$MORE"
+            i=0
+            for c in "${configs[@]}"; do
+              i=$((i + 1))
+              echo "more$i: options $c" >> "$out"
+              measure "more$i" head "$c"
+            done
           fi
           if [ "${{ inputs.plain }}" = true ]; then
             if [ "${{ inputs.store }}" = s3 ]; then
@@ -297,10 +318,20 @@ jobs:
               > "$RUNNER_TEMP/plain.log" 2>&1 || echo "plain: client failed" >> "$out"
             grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | sed "s/^/plain: /" >> "$out"
             grep -vE '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | head -n 20
+            for f in "$RUNNER_TEMP"/settings-*.txt; do
+              l=$(basename "$f" .txt); l=${l#settings-}
+              [ "$l" = plain ] && continue
+              echo "DuckDB settings of $l that differ from plain DuckDB (- plain, + $l):"
+              diff <(grep -vE '^(secret_directory|home_directory|temp_directory|extension_directory)=' "$RUNNER_TEMP/settings-plain.txt" 2>/dev/null) \
+                <(grep -vE '^(secret_directory|home_directory|temp_directory|extension_directory)=' "$f") | grep -E '^[<>]' | sed 's/^</-/; s/^>/+/' || true
+            done
           fi
           cat "$out"
 
       - name: Check
+        env:
+          MORE: ${{ inputs.more }}
+          QUICK: ${{ inputs.quick }}
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/results.txt"
@@ -323,10 +354,23 @@ jobs:
             echo "ok: same answers on every client" | tee -a "$RUNNER_TEMP/check.txt"
             exit 0
           fi
-          d=$(best default); t=$(best threads4)
+          d=$(best default)
+          if [ "$QUICK" = true ]; then t=$d; else t=$(best threads4); fi
           echo "default best total ${d:-none} s, -DduckDbThreads=4 best total ${t:-none} s" | tee "$RUNNER_TEMP/check.txt"
           [ -n "$d" ] && [ -n "$t" ] || { echo "a configuration produced no result" | tee -a "$RUNNER_TEMP/check.txt"; exit 1; }
-          if [ "$(sums default | wc -l)" -ne 22 ] || [ "$(sums default)" != "$(sums threads4)" ]; then
+          if [ -n "$MORE" ]; then
+            n=$(awk -F'|' '{ print NF }' <<< "$MORE")
+            for i in $(seq "$n"); do
+              m=$(best "more$i")
+              echo "more$i ($(grep -m1 "^more$i: options " "$out" | cut -d' ' -f3-)) best total ${m:-none} s" | tee -a "$RUNNER_TEMP/check.txt"
+              if [ -z "$m" ] || [ "$(sums default)" != "$(sums "more$i")" ]; then
+                echo "more$i: no result or answers differ from the default's:" | tee -a "$RUNNER_TEMP/check.txt"
+                diff <(sums default) <(sums "more$i") | tee -a "$RUNNER_TEMP/check.txt" || true
+                exit 1
+              fi
+            done
+          fi
+          if [ "$QUICK" != true ] && { [ "$(sums default | wc -l)" -ne 22 ] || [ "$(sums default)" != "$(sums threads4)" ]; }; then
             echo "answers differ between the configurations or a query is missing:" | tee -a "$RUNNER_TEMP/check.txt"
             diff <(sums default) <(sums threads4) | tee -a "$RUNNER_TEMP/check.txt" || true
             exit 1
