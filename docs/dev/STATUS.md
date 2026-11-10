@@ -23,6 +23,14 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-11 00:45 - FIRST at the 2026-11-11 morning session (~04:00Z): the newest build.** Before
+> anything else: (1) make hadoopfs **`51b7220-afc8`** the CI / release default (extension repo release; afc7 = AES
+> cipher option for privacy, afc8 = several QOPs like `authentication,privacy` chosen by the client's order) - it is in
+> `ci-assets` as `hadoopfs-v1.5.6-afc8.duckdb_extension`; (2) if the plugins lane's `fix/44` is green but not merged,
+> merge it (item 44 (1)(3) at least); item 45 is on `main`; (3) Dev CI `package=true` on `main` and a STATUS Log line
+> with the pre-release id. This build goes to the real cluster; the maintainer's stand + the independent cluster check
+> follow.
+
 > **Q-43m answered (maintainer 2026-11-11 00:05): fixed as ITEM 44 in the plugins lane** (parts (1), (3) merged
 > 2335ddc6, balanced 22/22 at 1024 MiB on the harness shape; part (2) Ranger staleness open there). No open core item
 > until the maintainer's next note.
