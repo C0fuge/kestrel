@@ -19,8 +19,9 @@ import org.slf4j.LoggerFactory;
  * @param memoryBytes      memory of the container or machine, 0 when unknown
  * @param maxHeapBytes     JVM heap limit ({@code -Xmx})
  * @param maxDirectBytes   JVM direct memory limit
+ * @param usedHeapBytes    heap in use when the limits were read, 0 when unknown
  */
-public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long maxDirectBytes) {
+public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long maxDirectBytes, long usedHeapBytes) {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HostLimits.class);
 
@@ -29,6 +30,18 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
 
     /** Values at or above this in a cgroup limit file mean "no limit" (cgroup v1 writes ~2^63). */
     private static final long NO_CGROUP_LIMIT = 1L << 60;
+
+    /**
+     * Creates host limits without a measured heap use.
+     *
+     * @param cores          processors available to the JVM
+     * @param memoryBytes    memory of the container or machine, 0 when unknown
+     * @param maxHeapBytes   JVM heap limit
+     * @param maxDirectBytes JVM direct memory limit
+     */
+    public HostLimits(int cores, long memoryBytes, long maxHeapBytes, long maxDirectBytes) {
+        this(cores, memoryBytes, maxHeapBytes, maxDirectBytes, 0);
+    }
 
     /**
      * Reads the limits of the running process.
@@ -44,13 +57,28 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
         if (fromCgroup) {
             memory = cgroup;
         }
+        long usedHeap = usedHeap();
         if (LOGGED.compareAndSet(false, true)) {
-            LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={}",
+            LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={} usedHeapMiB={}",
                     fromCgroup ? "cgroup" : "host", memory >> 20, host >> 20, cgroup >> 20,
-                    String.join(";", ownCgroup));
+                    String.join(";", ownCgroup), usedHeap >> 20);
         }
         return new HostLimits(Runtime.getRuntime().availableProcessors(), memory,
-                Runtime.getRuntime().maxMemory(), OutboundBudget.maxDirectMemory());
+                Runtime.getRuntime().maxMemory(), OutboundBudget.maxDirectMemory(), usedHeap);
+    }
+
+    /**
+     * Returns the heap the JVM uses now.
+     *
+     * @return bytes, 0 when not readable
+     */
+    static long usedHeap() {
+        try {
+            return Math.max(0, ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed());
+        } catch (RuntimeException e) {
+            LOGGER.debug("Heap use not readable", e);
+            return 0;
+        }
     }
 
     /**

@@ -35,6 +35,15 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
     /** Endpoints per node and partial query of {@code speed}. */
     static final int SPEED_ENDPOINTS_PER_SERVER = 4;
 
+    /** Least heap speed reserves for the JVM when it sizes DuckDB's memory limit (Q-40a). */
+    static final long SPEED_MIN_HEAP_RESERVE = 1L << 30;
+
+    /** Fixed part of the direct memory speed reserves for the JVM (Q-40a). */
+    static final long SPEED_DIRECT_RESERVE_BASE = 1L << 30;
+
+    /** Share of the direct memory limit speed reserves on top of the fixed part (Q-40a). */
+    static final int SPEED_DIRECT_RESERVE_PERCENT = 25;
+
     /**
      * Creates a profile with unmodifiable copies of its maps, in insertion order.
      *
@@ -93,7 +102,10 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         }
         if (shared && host.memoryBytes() > 0) {
             // Node-wide only: as a per-connection limit this would let every connection take it.
-            long mib = speedMemoryBytes(host, balanced) >> 20;
+            // Sized with the heap and direct memory the JVM really uses, not their limits (Q-40a): with
+            // -Xmx3g / direct 2g in 8 GB the limit held no S3 file cache, warm TPC-H SF10 75.8 vs 15.9 s.
+            HostLimits reserved = speedReservation(host);
+            long mib = speedMemoryBytes(reserved, ConfigAdapter.duckDbSizing(raw, reserved)) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
         if (shared || hdfsDataDir(raw)) {
@@ -156,6 +168,21 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
      */
     static int speedThreads(HostLimits host, DuckDbSizing balanced) {
         return Math.max(Math.max(1, host.cores()), balanced.threads());
+    }
+
+    /**
+     * Returns the host limits with the JVM's reservation of {@code speed} in place of its heap and
+     * direct memory limits: heap = min(-Xmx, max(1 GiB, heap in use x 2)), direct = min(direct
+     * limit, 1 GiB + 25 % of it). The memory stays the container's (cgroup) or machine's.
+     *
+     * @param host host limits
+     * @return host limits with the reserved heap and direct memory
+     */
+    static HostLimits speedReservation(HostLimits host) {
+        long heap = Math.min(host.maxHeapBytes(), Math.max(SPEED_MIN_HEAP_RESERVE, host.usedHeapBytes() * 2));
+        long direct = Math.min(host.maxDirectBytes(),
+                SPEED_DIRECT_RESERVE_BASE + host.maxDirectBytes() / 100 * SPEED_DIRECT_RESERVE_PERCENT);
+        return new HostLimits(host.cores(), host.memoryBytes(), heap, direct, host.usedHeapBytes());
     }
 
     /**
