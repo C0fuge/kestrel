@@ -776,6 +776,32 @@ public class ConfigAdapter {
         return Boolean.parseBoolean(value);
     }
 
+    /** Default {@code hdfsMetadataCacheTtlMs} for an {@code hdfs://} data dir: 30 s. */
+    public static final int DEFAULT_HDFS_METADATA_CACHE_TTL_MS = 30_000;
+
+    /**
+     * Resolves {@code hdfsMetadataCacheTtlMs} ({@code arrowflight.hdfs.metadataCacheTtlMs},
+     * {@code HDFS_METADATA_CACHE_TTL_MS}): how long the hadoopfs extension (51b7220-afc4 and
+     * later) keeps a file's status and located blocks before it asks the NameNode again, set as
+     * DuckDB's {@code hdfs_metadata_cache_ttl_ms} on every connection (item 39). Default
+     * {@value #DEFAULT_HDFS_METADATA_CACHE_TTL_MS} when the data dir is {@code hdfs://}, else 0;
+     * 0 turns the cache off. A file rewritten in place may be seen with its old status for up to
+     * this long.
+     *
+     * @param props   configuration source
+     * @param dataDir the server's data dir, null when unknown
+     * @return TTL in ms, 0 for off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int hdfsMetadataCacheTtlMs(ConfigSource props, String dataDir) {
+        int value = getIntWithEnv("hdfsMetadataCacheTtlMs", "arrowflight.hdfs.metadataCacheTtlMs",
+                "HDFS_METADATA_CACHE_TTL_MS", isHdfs(dataDir) ? DEFAULT_HDFS_METADATA_CACHE_TTL_MS : 0, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("hdfsMetadataCacheTtlMs must be 0 or more: " + value);
+        }
+        return value;
+    }
+
     /**
      * Returns flightZeroCopyWrites from the system configuration.
      *

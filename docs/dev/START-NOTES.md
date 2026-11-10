@@ -52,6 +52,16 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   ... runningCalls=<n> methods={DoGet=<n>}: these calls are cut`. On the stopping node a distributed-complete merge that
   falls back logs INFO `distributedComplete=fallback stopping=true` (the other nodes refuse its internal calls once it
   left the pool; expected).
+- **hadoopfs build `51b7220-afc4`** (DuckDB v1.5.6; `ci-assets` `hadoopfs-v1.5.6-afc4.duckdb_extension`, sha256
+  `64a97a6b08e1f725c980d46f25d664a1c3edde8a73b624ac31bdc75f9095942c`) is the CI / release default (was afc3): file-status
+  + located-blocks cache, lazy open from cached blocks, real modification times. New setting `hdfsMetadataCacheTtlMs`
+  (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`): DuckDB `hdfs_metadata_cache_ttl_ms` on every
+  connection, default 30000 with an `hdfs://` data dir, else 0 = off; start line `hdfs=metadataCache ttlMs=30000`
+  (afc3 and older: one WARN `hdfs=metadataCacheUnsupported`, no cache). A file rewritten in place may be read with its
+  old status for up to the TTL. On `hdfs://` `duckDbExternalFileCache` is now on by default in `balanced` too
+  (startup line `resourceProfile profile=balanced duckDbExternalFileCache=true`); each connection's cache stays within
+  its `memory_limit`, the node may hold that limit times its live connections - watch RSS under many clients, opt out
+  with `-DduckDbExternalFileCache=false`.
 - DuckDB extensions (httpfs, iceberg, avro, hadoopfs) of DuckDB 1.5.6 (was 1.4.5) must be installed as on the stand; the server
   checks the extension versions at startup. The jdbc plugin (`catalog=jdbc`) also needs `postgres_scanner` and/or
   `mysql_scanner` v1.5.6 in the extension directory; every function they add is refused in client queries, and each
@@ -234,7 +244,8 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 ## Resource profile `speed` (item 23)
 
 `-DresourceProfile=speed` (or `FLIGHT_RESOURCE_PROFILE=speed`) turns on, as defaults, what was measured as faster;
-`balanced` (default) changes nothing. A setting given as `-D` or in the environment (or in a plugin's
+`balanced` (default) changes nothing, except `duckDbExternalFileCache=true` on an `hdfs://` data dir (Q11, item 39;
+also under `speed` without the shared DuckDB). A setting given as `-D` or in the environment (or in a plugin's
 `<ns>.properties`) wins over the profile; the profile wins over the bundled `arrowflight.properties`. Startup line
 `resourceProfile profile=speed <key>=<value> ...` (operator values marked `(explicit)`).
 
@@ -244,7 +255,7 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 | `duckDbSharedMaxThreads` | 0 (no cap) | |
 | `duckDbThreads` | all cores, at least what `balanced` gives one query (4) (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
 | `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
-| `duckDbExternalFileCache` | true (only while the shared DuckDB is on) | DuckDB keeps S3/HDFS file data in memory, within the node-wide `memory_limit` (evicted like any buffer): peak RSS about 2x balanced (S3 TPC-H SF10 on 2 CPUs / 6 GB: 3.3 vs 1.6 GiB); S3 small queries up to 5x faster, TPC-H SF10 on S3 3.1x faster (283.6 -> 91.2 s) |
+| `duckDbExternalFileCache` | true (only while the shared DuckDB is on; on an `hdfs://` data dir always, as in `balanced`) | DuckDB keeps S3/HDFS file data in memory, within the node-wide `memory_limit` (evicted like any buffer): peak RSS about 2x balanced (S3 TPC-H SF10 on 2 CPUs / 6 GB: 3.3 vs 1.6 GiB); S3 small queries up to 5x faster, TPC-H SF10 on S3 3.1x faster (283.6 -> 91.2 s) |
 | `duckDbPreserveInsertionOrder` | false (item 27) | rows of a query without ORDER BY come in any order (as upstream's default; ORDER BY answers are unchanged): one full `lineitem` read on S3 910 -> 1118 MB/s (+23 %), 4 concurrent reads +5 %, same peak memory; `-DduckDbPreserveInsertionOrder=true` (or `DUCKDB_PRESERVE_INSERTION_ORDER=true`) restores the file order |
 | `flightZeroCopyWrites` | true | |
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |

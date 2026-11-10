@@ -77,6 +77,37 @@ class ResourceProfileTest {
         assertTrue(config.duckDbPreserveInsertionOrder());
     }
 
+    /**
+     * Q11 (item 39): on an hdfs:// data dir balanced keeps DuckDB's external file cache, over the
+     * bundled file's false; the operator's value wins, and other data dirs stay unchanged.
+     */
+    @Test
+    void balancedKeepsTheExternalFileCacheOnHdfs() {
+        Map<String, String> file = Map.of("duckDbExternalFileCache", "false", "duckDbSharedDatabase", "false");
+        ConfigSource hdfs = raw(Map.of("dataDir", "hdfs://nn:8020/data"), Map.of(), file);
+        ResourceProfile profile = ResourceProfile.resolve(hdfs, () -> {
+            throw new AssertionError("host read for balanced");
+        });
+        assertEquals("profile=balanced duckDbExternalFileCache=true", profile.describe());
+        assertTrue(ConfigAdapter.getConfig(effective(hdfs, MEDIUM), MEDIUM).duckDbExternalFileCache());
+        assertNull(ConfigAdapter.duckDbShared(effective(hdfs, MEDIUM), MEDIUM));
+
+        ConfigSource off = raw(Map.of("dataDir", "hdfs://nn:8020/data"),
+                Map.of("DUCKDB_EXTERNAL_FILE_CACHE", "false"), file);
+        assertEquals("profile=balanced duckDbExternalFileCache=false(explicit)",
+                ResourceProfile.resolve(off, () -> MEDIUM).describe());
+        assertFalse(ConfigAdapter.getConfig(effective(off, MEDIUM), MEDIUM).duckDbExternalFileCache());
+
+        ConfigSource local = raw(Map.of("dataDir", "/data/parquet"), Map.of(), file);
+        assertEquals("profile=balanced", ResourceProfile.resolve(local, () -> MEDIUM).describe());
+        assertFalse(ConfigAdapter.getConfig(effective(local, MEDIUM), MEDIUM).duckDbExternalFileCache());
+
+        ConfigSource speedPerConnection = raw(Map.of("resourceProfile", "speed", "dataDir", "hdfs://nn/d",
+                "duckDbSharedDatabase", "false"), Map.of(), file);
+        assertTrue(ConfigAdapter.getConfig(effective(speedPerConnection, MEDIUM), MEDIUM)
+                .duckDbExternalFileCache());
+    }
+
     /** A typo is refused instead of running balanced silently; the name ignores case. */
     @Test
     void unknownProfileIsRefusedAndCaseIsIgnored() {

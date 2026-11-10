@@ -2141,6 +2141,38 @@ class DuckDbAdapterTest {
     }
 
     /**
+     * Verifies the hadoopfs metadata cache TTL is set on the connection, also 0 (off), and that a
+     * build without the setting (before 51b7220-afc4) does not stop the server while any other
+     * error of the SET does.
+     */
+    @Test
+    void hdfsMetadataCacheTtlIsSetAndAnOlderBuildIsSkipped() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+            Statement statement = mock(Statement.class);
+            adapter.setHdfsMetadataCache(statement, 30_000, true);
+            adapter.setHdfsMetadataCache(statement, 0, false);
+            verify(statement).execute("SET hdfs_metadata_cache_ttl_ms = 30000");
+            verify(statement).execute("SET hdfs_metadata_cache_ttl_ms = 0");
+
+            Statement unknown = mock(Statement.class);
+            when(unknown.execute(any(String.class))).thenThrow(new java.sql.SQLException(
+                    "Catalog Error: unrecognized configuration parameter \"hdfs_metadata_cache_ttl_ms\""));
+            adapter.setHdfsMetadataCache(unknown, 30_000, true);
+            adapter.setHdfsMetadataCache(unknown, 0, true);
+            verify(unknown).execute("SET hdfs_metadata_cache_ttl_ms = 30000");
+
+            Statement failing = mock(Statement.class);
+            when(failing.execute(any(String.class))).thenThrow(
+                    new java.sql.SQLException("Invalid Input Error: out of range"));
+            assertThrows(java.sql.SQLException.class,
+                    () -> adapter.setHdfsMetadataCache(failing, 30_000, true));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies an HDFS extension DuckDB cannot load (another DuckDB version's build, a broken
      * file) stops the adapter at construction instead of failing every query later.
      */
@@ -2166,9 +2198,10 @@ class DuckDbAdapterTest {
     }
 
     /**
-     * Verifies the real hadoopfs extension (afc2 build for DuckDB 1.4.5) takes the timeouts the
-     * server sets. Needs the extension file: {@code -Dhadoopfs.it.extension=<path>}; skipped
-     * without it. No namenode is contacted.
+     * Verifies the real hadoopfs extension (51b7220-afc4 build in CI) takes the timeouts the
+     * server sets and knows the metadata cache TTL, which the server sets to 0 for a data dir off
+     * HDFS. Needs the extension file: {@code -Dhadoopfs.it.extension=<path>}; skipped without it.
+     * No namenode is contacted.
      */
     @Test
     void hadoopfsExtensionTakesTheConfiguredTimeouts() throws Exception {
@@ -2188,11 +2221,13 @@ class DuckDbAdapterTest {
                 ResultSet rs = s.executeQuery("SELECT current_setting('hdfs_connect_timeout_ms'),"
                         + " current_setting('hdfs_read_timeout_ms'),"
                         + " (SELECT extension_version FROM duckdb_extensions()"
-                        + " WHERE extension_name = 'hadoopfs')")) {
+                        + " WHERE extension_name = 'hadoopfs'),"
+                        + " current_setting('hdfs_metadata_cache_ttl_ms')")) {
             assertTrue(rs.next());
             assertEquals(3000L, rs.getLong(1));
             assertEquals(7000L, rs.getLong(2));
             assertTrue(rs.getString(3).startsWith("51b7220-afc"), rs.getString(3));
+            assertEquals(0L, rs.getLong(4));
         } finally {
             ioPool.shutdownNow();
         }

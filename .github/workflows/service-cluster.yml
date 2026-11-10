@@ -108,6 +108,7 @@ jobs:
             --pattern "duckdb-extensions-${DUCKDB_VERSION}.tar.zst" --dir "$RUNNER_TEMP"
           mkdir -p "$RUNNER_TEMP/all-ext" "$RUNNER_TEMP/in/ext"
           tar --zstd -xf "$RUNNER_TEMP/duckdb-extensions-${DUCKDB_VERSION}.tar.zst" -C "$RUNNER_TEMP/all-ext"
+          tools/ci/hadoopfs-pinned.sh "$RUNNER_TEMP/all-ext"  # hadoopfs 51b7220-afc4 instead of the set's afc3
           for name in httpfs hadoopfs; do
             f=$(find "$RUNNER_TEMP/all-ext" -path "*${DUCKDB_VERSION}/linux_amd64/${name}.duckdb_extension" | head -n 1)
             test -n "$f" || { echo "no ${name} for ${DUCKDB_VERSION} in ci-assets"; exit 1; }
