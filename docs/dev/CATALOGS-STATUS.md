@@ -25,6 +25,34 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > the speed c1 regression). Branch `fix/40b-small`, maintainer exception to the lane scope, merge into `main` when
 > green with the point cell + small-query numbers before/after, "ITEM 40(b) DONE <sha>".
 
+ITEM 40(b) state after session 2026-11-10 (6) - the c1 regression's cost found and cut (3a01265e), no default change:
+- What the pruned local point query paid (JFR at 1 ms sampling on `PointQueryOverheadPerfTest`, pruning on vs
+  `-DfileStatsPruningMaxFiles=0`): not DuckDB's read of the kept file (plain DuckDB: `read_parquet(['one file'])` is
+  as fast as the 4-file view) but the server's DoGet: on a node without local copies `completeFromCopies` prunes
+  first (Q-42 (b) path, `prunedHere` -> `CatalogViews.prunedFiles`, which skipped `acceptRewrite`), so (1) DuckDB's
+  single-query parse check ran in full on the pruned text (~66 of ~800 DoGet samples) and (2) `readComplete` ran the
+  pruning again on the pruned / declined text (tokenize, references, footer keep). Fix: `prunedHere` uses
+  `ExecutionService.prunedFiles(sql, pruning)` (with `acceptRewrite`), `CopiedQuery.pruningDone` (true when the
+  no-copies path pruned or declined the text; a pruning with a kept file this node lacks stays with DoGet as before),
+  `readComplete(..., pruningDone)` skips the pruning for an unchanged text. Test `FileStatsPrunerTest
+  .doGetUsesThePruningDecidedBeforeIt`.
+- Local: complete point DoGet p50 4.17 -> 3.76 ms (3.42 with pruning off). `small-query-perf.yml` run 42818686506
+  (prepared client, c1, 3 rounds, baseline deafc861cce3, ms p50 / CPU ms per query): quota balanced base 4.39-4.48 /
+  2.17-2.40, head 4.23-4.27 / 2.36-2.51, head pruning off 3.96-4.01 / 2.09-2.27; quota speed base 4.35-4.43 /
+  2.25-2.29, head 4.14-4.30 / 2.17-2.56; pinned balanced base 5.12-5.16, head 4.93-5.19, off 4.70-4.82; pinned speed
+  base 5.10-5.24, head 4.89-5.06. **c1 p50 is back at or below deafc861 in both profiles**; pruning off is still
+  ~0.25 ms faster and ~0.1-0.2 ms CPU cheaper on local files. Dev CI on the branch 42818682745 green; Dev CI on main
+  dispatched at session end (the merge push was `[skip ci]`).
+- Next (in order): (a) check Dev CI on main for 3a01265e (workflow_dispatch on main, started 2026-11-10 ~13:15Z);
+  (b) the rest of the pruned-vs-view gap on local files: JFR still shows DuckDB execute ~+47 native samples per
+  ~800 DoGets with pruning (plain DuckDB does not), and create/GetFlightInfo may still evaluate pruning - look whether
+  the shared DuckDB binds `read_parquet([...])` differently from the view (settings: `parquet_metadata_cache`, file
+  cache, threads) and whether one pruning per text can serve the whole request; Q-40b-1 stays open as the simpler
+  alternative; (c) gizmo vs speed per call and c32 JFR on the HDFS point cell (old step 4). Next branch from
+  `origin/main` as `fix/40b-small-6`. JFR at 1 ms: `jfr configure --input profile jdk.ExecutionSample#period=1ms
+  jdk.NativeMethodSample#period=1ms --output <dir>/fast.jfc`, then `settings=<dir>/fast.jfc`; `jfr print
+  --stack-depth 200 --json` (the default depth 5 hides the server frames).
+
 ITEM 40(b) state after session 2026-11-10 (5) - speed c1 regression found (bisected); two more cuts merged:
 - **Cause of the c1 regression (maintainer's 13:45 note): footer-statistics file pruning (item 39 (c), b0f82a47,
   default `fileStatsPruningMaxFiles=1024`) on local data**, in both profiles - not speed-specific, not 39 (b) sizing
@@ -541,6 +569,10 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   local `dataDir`, gone with `-DfileStatsPruningMaxFiles=0` (run 42811208123). Turn pruning off by default for a local
   `dataDir` and keep it on for HDFS / S3 / plugin stores (an explicit setting wins)? Same answers either way; it is a
   default change, so not done without you.
+  Update 2026-11-10 (6): most of the cost was the server's DoGet pruning twice plus a second parse check (fixed in
+  3a01265e without a default change): c1 p50 is now at or below deafc861 in both profiles (run 42818686506); pruning
+  off is still ~0.25 ms p50 faster on local files, so the question stays open but is no longer needed to remove the
+  regression.
 
 - Q11 (2026-11-09, item 39 (c)): in the HDFS point cell the balanced profile asks the DataNode for short-circuit fds
   ~5-6 times per point query (each per-thread DuckDB's libhdfs3 asks again); `duckDbExternalFileCache=true` brings
@@ -869,3 +901,10 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   the parser's WHERE condition; ac2055c8 `DescribeKey` (one describe for point queries differing in their key; tests
   `DescribeKeyTest` incl. a bind check over every column type, `FileStatsPrunerTest` +2). CHANGELOG lines. Not DONE.
   Lock released.
+- 2026-11-10 (6): **ITEM 40(b)** the speed / balanced c1 regression of footer-statistics pruning on local data cut
+  without a default change (3a01265e, branch `fix/40b-small-5`): DoGet's no-local-copies path pruned without
+  `acceptRewrite` (full DuckDB parse check on the pruned text) and `readComplete` pruned again; now one pruning and the
+  rewrite accepted (`CopiedQuery.pruningDone`). Found with JFR at 1 ms sampling; `PointQueryOverheadPerfTest` complete
+  point DoGet p50 4.17 -> 3.76 ms; `small-query-perf.yml` run 42818686506: c1 p50 at or below deafc861 in both
+  profiles (balanced quota 4.24 vs 4.44 ms). Dev CI branch 42818682745 green; Dev CI on main dispatched. Test
+  `FileStatsPrunerTest` +1, CHANGELOG line, Q-40b-1 updated (still open, optional now). Not DONE yet. Lock released.
