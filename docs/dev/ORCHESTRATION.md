@@ -1,22 +1,23 @@
 # Orchestration status
 
-Status as of **2026-11-09 20:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10 03:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 39** (bug first, real-cluster benchmark of build `35c15ab226b9`): all four parts are on `main` -
-39(a) core, 39(b) 39f84617 plugins, 39(c) **DONE bf72114c** (catalogs, 20:44Z; parts 1-4: file pruning by footer
-statistics incl. aliased single-table queries; HDFS point perf 42689843600: NameNode opens per point query ~20 -> ~11),
-39(d) a952f415 lane 3. Remaining: main Dev CI 42695876926 (bf72114c, running), then the core lane's `package=true` and
-"ITEM 39 DONE". ITEM 38 still waits for the stand check on `server-1.0.0-b69660b9260a`. The routine's original
+Not ALL DONE: **ITEM 39** is in packaging. The maintainer's last step (hadoopfs afc4 default, new setting
+`hdfsMetadataCacheTtlMs`, Q11 = external file cache on HDFS by default) is on `main` as 877cf100 (Dev CI 42700518633,
+Service cluster 42700518286, Service hdfs 42700518331, Catalogs CI 42700518131, HDFS point perf 42700537172 all green).
+The core lane (lock 03:41Z) runs the package build: Dev CI 42751144566 on `ci/core-39pkg` (71959a39), running; then
+"ITEM 39 DONE". **ITEM 40** (close the gap to GizmoSQL) is open: 40(a) S3 in the plugins lane (active), 40(b)
+small-query overhead in the core lane after packaging. ITEM 38 still waits for the stand. The routine's original
 criterion (items 26/27, marten/heron IMPROVEMENTS DONE) is long met.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | package item 39 (`package=true`) + "ITEM 39 DONE"; item 38 waits for the stand | 2026-11-09 20:41Z (status: waits for 39(c)) | free | main Dev CI 42695876926 (bf72114c) running; 42690037660 (32ebda26) + Service cluster 42690037488 + Catalogs CI 42690037957 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open (39(b) DONE, finish mode) | 2026-11-09 14:30Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | 39(c) DONE; follow-ups (a)-(d) non-blocking; Q10/Q11 open | 2026-11-09 20:44Z | free (released) | fix/39c-point Dev CI 42693013191 + HDFS point perf 42693005244 green |
-| lane 3 (`LANE3-STATUS.md`) | D13 (b) DONE; next D14 (stand results) | 2026-11-09 20:27Z (branch) | free | Service cluster 42689843545 + 42691698496 green (42689694253 red: workflow-file run on 8a468214, superseded) |
+| core (`STATUS.md`) | package item 39 + "ITEM 39 DONE"; then 40(b); item 38 waits for the stand | 2026-11-10 03:41Z (lock); last code 877cf100 2026-11-09 21:13Z | held 03:41Z (active) | main Dev CI 42700518633 (877cf100) green; package Dev CI 42751144566 running |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 40(a) S3 SF10 vs gizmo, branch `fix/40a-s3` | 2026-11-10 03:46Z (branch, 468ec1e9) | held 03:10Z (active) | tpch-perf 42751636105 running; 42748064489 red (branch harness run, superseded); 42700198697 green |
+| catalogs (`CATALOGS-STATUS.md`) | no open item (39(c) DONE, follow-ups (a)/(b) done by core) | 2026-11-10 03:21Z (unlock) | free | - |
+| lane 3 (`LANE3-STATUS.md`) | 39(d) DONE; D13 (b) DONE; next D14 (stand results) | 2026-11-09 20:27Z | free | Service cluster 42691698496 green (branch) |
 
 No red Dev CI on main; nothing to rerun. No new bug-first notes in the paused-lane files.
 
@@ -24,8 +25,8 @@ No red Dev CI on main; nothing to rerun. No new bug-first notes in the paused-la
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42691698496 | 48d9f99c (lane/distributed) | pass (main: 42690037488 32ebda26 pass) |
-| service-hdfs.yml | 42403044908 | b69660b9 (pkg) | pass |
+| service-cluster.yml | 42700518286 | 877cf100 (main) | pass |
+| service-hdfs.yml | 42700518331 | 877cf100 (main) | pass |
 | service-security.yml | 42403047248 | b69660b9 (pkg) | pass |
 | service-stores.yml | 42403049750 | b69660b9 (pkg) | pass |
 
@@ -33,39 +34,34 @@ No red Dev CI on main; nothing to rerun. No new bug-first notes in the paused-la
 
 - `server-1.0.0-b69660b9260a` (2026-11-07 18:47Z): item 38; waits for the stand; egret ACCEPT SHIP (42406253240).
 - `server-1.0.0-06c5adc7d7c9` (2026-11-07 05:57Z): item 37; ITEM 37 DONE on the stand.
-- `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z): egret FRESH DONE; marten/heron CHECKED.
+- `server-1.0.0-6384bc55b173` (2026-11-06 18:04Z) / `server-1.0.0-deafc861cce3` (2026-11-06 11:04Z, egret FRESH DONE).
 
-No item 39 pre-release yet (next core session).
+Item 39 pre-release: package run 42751144566 in progress.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 20:40Z "finish mode, nothing new".
-  Open question: TPC-H q16 SF1 ~0.5 s slowdown from join-key IN-list pushdown - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 189 (20:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 03:40Z "finish mode, nothing new".
+  Open question: TPC-H q16 SF1 slowdown (series effect since `fl1eb792`) - fix or leave.
+- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 190 (03:51Z): nothing open.
 
 ## egret
 
 - Newest FRESH for a pre-release: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8
   1.30-1.58, load +42-45 % at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **EGRET GIZMO DONE** (20:34Z, `results/FRESH-gizmo-deafc861cce3.md`; runs 42632367579, 42683525682, 42684180966):
-  GizmoSQL v1.42.2 22/22 everywhere, 0 errors, small-set gate fails on `meta_schemas` only, no result compression.
-  Speed / gizmo: local TPC-H 1.01-1.07, raw scans 0.99-1.01, load 0.85-0.91 at 1 client; **S3 TPC-H SF10 1.48-1.51
-  (gizmo ~34 s vs ~51 s)**; S3 small-mix at 8/32 clients 0.76-0.93 (speed ahead). **Local small c1 p50 regression
-  speed vs balanced confirmed: 1.16 JDBC / 1.18 ADBC.**
-- ACCEPT b69660b9260a DONE: SHIP. Next: FRESH/ACCEPT on the item 39 pre-release.
+- **EGRET GIZMO DONE** (`results/FRESH-gizmo-deafc861cce3.md`): S3 TPC-H SF10 speed ~1.5x slower than GizmoSQL;
+  local small c1 p50 regression speed vs balanced 1.16-1.18 (basis of ITEM 40).
+- README 'In progress': idle, newest tracked `b69660b9260a` (03:26Z). Next: FRESH/ACCEPT on the item 39 pre-release.
 
 ## For the maintainer
 
-- ITEM 39: all four parts on `main`; packaging (`package=true`) and "ITEM 39 DONE" by the next core session.
+- Nothing blocking. ITEM 39 package run in progress (core lane); then the stand + the independent cluster check.
 - Stand check of `server-1.0.0-b69660b9260a` for ITEM 38, then "ITEM 38 DONE".
-- egret: S3 TPC-H SF10 ~1.5x slower than GizmoSQL; local small-query c1 p50 speed-profile regression (1.16-1.18) -
-  candidates for a later item.
 - **Open questions:** item 35 default `distributedCompletePeerStreams`; item 33 default `hdfsLocalCopyRoomWaitMillis`
-  (0 vs 30000); catalogs Q10 (footer-stats pruning on by default) and Q11 (balanced fd requests per point query);
-  marten q16 SF1 pushdown slowdown.
+  (0 vs 30000); catalogs Q10 (footer-stats pruning on by default); marten q16 SF1 pushdown slowdown.
 
 ## History
 
+- 2026-11-10 03:57Z: item 39 last step 877cf100 on main (hadoopfs afc4, hdfsMetadataCacheTtlMs, external file cache on HDFS; Dev CI 42700518633 + 4 service/perf runs green); core lane (lock 03:41Z) packaging: Dev CI 42751144566 on ci/core-39pkg running; maintainer opened ITEM 40 (gizmo gap): plugins lane on 40(a) fix/40a-s3 (tpch-perf 42751636105 running, 42748064489 red on the branch); no red CI on main, no stale locks.
 - 2026-11-09 20:58Z: ITEM 39(c) DONE bf72114c (catalogs, parts 1-4 on main, lock released); main Dev CI 42695876926 on bf72114c running (32ebda26: 42690037660 green); core lane next packages (`package=true`, ITEM 39 DONE); lane 3 D13 (b) DONE (42689843545, 42691698496 green); egret EGRET GIZMO DONE (S3 SF10 speed ~1.5x slower than gizmo, local small c1 p50 regression 1.16-1.18); no red CI on main, no stale locks.
 - 2026-11-09 19:57Z: catalogs lane active again (lock 19:22Z): 39(c) file pruning 9f4f901f on fix/39c-point, Dev CI 42684272737 + HDFS point perf 42684276829 green, not merged; lane 3 D13 (c) merged (Service cluster 42680042903/42681427105 green); egret gizmo scan rerun 42684180966 running after harness login fix, draft report written; no red CI, no stale locks.
 - 2026-11-09 18:58Z: released stale LOCK-CATALOGS (15:23:58Z); ITEM 39 waits only for 39(c) (parts 1+2 on main, 42641096583 green; next pruning by footer stats, Q9 answered); lane 3 D16 DONE 97a2b7bb (hdfs-ha fix confirmed, 3 green runs); egret GizmoSQL wave 42632367579 aggregated (SF10 S3 speed 1.51x slower than gizmo; gizmo fails scan/small gates), report file pending; no red CI; no orchestrator status 15:56Z-17:56Z (no runs).
@@ -104,5 +100,3 @@ No item 39 pre-release yet (next core session).
 - 2026-11-07 20:57Z: egret ACCEPT b69660b9260a DONE: SHIP (42406253240); core session 20:40Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (20:40Z)/heron (session 154) idle; no stale locks.
 - 2026-11-07 19:58Z: item 38 packaged: pre-release `server-1.0.0-b69660b9260a` (pkg/b69660b9: Dev CI 42403052289 + 4 service runs green; main Dev CI 42403022881 green); core unlocked 19:05Z, waits for the stand ("ITEM 38 DONE"); egret ACCEPT b69660b9260a running (42406253240); marten (19:41Z)/heron (session 153) idle; no stale locks.
 - 2026-11-07 18:57Z: maintainer wrote ITEM 37 DONE (stand, 06c5adc7d7c9, ~30k answers none wrong) and opened ITEM 38 (minor log/hint follow-ups); core session (lock 18:41Z, active) pushed b69660b9 (item 38 (1)-(4)) and dispatched package runs on pkg/b69660b9 (Dev CI 42403052289 + 4 service runs) plus main Dev CI 42403022881, all running; egret ACCEPT 06c5adc7d7c9 recheck SHIP (42396888303, after harness fix fcf1eb3); marten (18:40Z)/heron (session 152) idle; no stale locks.
-- 2026-11-07 17:58Z: egret: ACCEPT 06c5adc7d7c9 rerun 42390647941 lost 3 speed cells to a harness layout flake (report file now says DO NOT SHIP, setup-only); harness fix fcf1eb3, reruns 42396888303/42398263063 running. Kestrel unchanged since 13:41Z (item 37 waits for the stand); no new CI/pre-releases; marten (17:41Z)/heron (session 151) idle; no stale locks.
-- 2026-11-07 16:56Z: no change: no core commits since the 13:41Z unlock (item 37 waits for the stand re-check of server-1.0.0-06c5adc7d7c9); no new CI runs or pre-releases; marten (16:41Z)/heron (session 150)/egret (15:26Z) idle; no stale locks.
