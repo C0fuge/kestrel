@@ -785,4 +785,5 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   (`query_location`); tests `DuckDbAdapterTest` (+2), `FileStatsPrunerTest` (every pruned query: accepted, one
   statement, names within original + `read_parquet` + `list_value`). Branch `fix/40b-small-2` Dev CI 42791067194 green;
   HDFS point perf branch 42791070774 vs main 42791075306 within noise (state note). Merged into `main` as 345627f1
-  (Dev CI on main 42794210815 started at session end). Not DONE yet. Lock released.
+  (Dev CI on main: 42794210815 / 42794491688 / 42794664721 cancelled by newer pushes of other lanes; 42794847349 on
+  head a8ded50d, which includes it and Q-42, green). Not DONE yet. Lock released.
