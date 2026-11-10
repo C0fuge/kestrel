@@ -9,6 +9,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Q-42 (follow-up of item 42, maintainer's answer): (a) the default DuckDB memory limit never exceeds the DuckDB budget
+  (memory - `-Xmx` - direct memory - 15 %; floor 128 MiB) in `balanced` (per connection, also speed's private fallback
+  DuckDB) and with `duckDbSharedDatabase=true` either: the 1 GiB floors applied even when the budget was smaller (2 CPUs /
+  6 GB / `-Xmx3g` / direct 2g: 1024 -> 128 MiB per connection; 8 GB / 4g / 2g: 1024 -> 819 MiB). Hosts with a budget of
+  at least 1 GiB are unchanged. A default limit below the old floor logs one WARN `duckdb=memoryLimitBelowFloor
+  memoryLimit=... floorMiB=1024 hint=...` naming `duckDbMemoryLimit`; explicit limits are never changed or warned about.
+  (b) With local copies off (`hdfsLocalCopyMaxBytes=0`) on HDFS nodes read short-circuit only, a point query whose
+  kept files (footer-statistics pruning) are all held on this node is answered from them instead of being refused
+  because other files of the table are not held here; a kept file not held here is refused as before.
+
 - HDFS with SASL DataNodes read directly (item 41 follow-up): every query logs one read line again,
   `hdfs=reads files=N direct=true nodeLocal=A remote=B remoteBytes=C unknown=D` - files with every block on this
   node's DataNode vs files read (partly) from other DataNodes over SASL data transfer, and the bytes read remotely.

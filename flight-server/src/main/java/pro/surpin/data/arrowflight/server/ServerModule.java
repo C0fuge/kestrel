@@ -208,6 +208,12 @@ public final class ServerModule {
         DuckDbSizing sizing = ConfigAdapter.duckDbSizing(ConfigSource.system(), HostLimits.detect());
         LOGGER.info("node={} duckdb=sizing {}", LogUtil.node(), sizing.describe());
         DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared();
+        String belowFloor = DuckDbSizing.belowFloorWarning(
+                shared != null ? shared.memoryLimit() : sizing.memoryLimit(),
+                ConfigAdapter.duckDbMemoryLimitSet(ConfigSource.systemWithoutProfile()));
+        if (belowFloor != null) {
+            LOGGER.warn("node={} duckdb=memoryLimitBelowFloor {}", LogUtil.node(), belowFloor);
+        }
         if (config.duckDbExternalFileCache() && shared != null) {
             // One buffer pool: the shared DuckDB's memory limit bounds the cache for the node.
             LOGGER.info("node={} duckdb=externalFileCache {}", LogUtil.node(), shared.describeExternalFileCache());

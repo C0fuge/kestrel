@@ -2454,7 +2454,8 @@ public final class ExecutionService {
      * to the node-local cache and replaces each reference to such a table (named with its
      * schema) by {@code read_parquet} over the files as they are read here, local copies for the
      * missing ones, typed as the table's view. SQL is returned unchanged when local copies are
-     * off, when every file is readable here, or when DuckDB cannot name the query's tables;
+     * off (except a point query whose kept files are all held here, returned pruned), when every
+     * file is readable here, or when DuckDB cannot name the query's tables;
      * table names written without a schema are qualified first ({@link #qualifyPlainNames}).
      * Every query that reads a table of the data store logs one {@code hdfs=reads} line, also
      * when nothing is copied ({@code localCopy=0}).
@@ -2467,6 +2468,24 @@ public final class ExecutionService {
      */
     public CopiedQuery completeFromCopies(String clientSql) throws IOException {
         return completeFromCopies(clientSql, null);
+    }
+
+    /**
+     * Returns a point query reading only its kept files when this node holds every one of them.
+     *
+     * @param sql     SQL of the complete answer
+     * @param pruning the query's one table and its kept files
+     * @return the pruned query, or null when a kept file is not held here or the view must stay
+     */
+    private CopiedQuery prunedHere(String sql, CatalogViews.Pruning pruning) {
+        DataStore store = parquetAdapter.dataStore();
+        for (DataFile file : pruning.kept()) {
+            if (!store.readableHere(file)) {
+                return null;
+            }
+        }
+        String pruned = catalogViews.prunedFiles(sql, pruning);
+        return pruned.equals(sql) ? null : new CopiedQuery(pruned, null, true);
     }
 
     /**
@@ -2483,8 +2502,15 @@ public final class ExecutionService {
      *         the rewrite cannot replace (e.g. without its schema), naming its files
      */
     public CopiedQuery completeFromCopies(String clientSql, String notBatched) throws IOException {
-        if (!parquetAdapter.localCopies() || TimeTravelClause.present(clientSql)) {
+        if (TimeTravelClause.present(clientSql)) {
             return new CopiedQuery(clientSql, null);
+        }
+        if (!parquetAdapter.localCopies()) {
+            // Without copies a point query whose kept files are all held here is still answered
+            // (Q-42 (b)): the refusal for files this node lacks looks at the kept files only.
+            CatalogViews.Pruning pruning = catalogViews.pruning(clientSql);
+            CopiedQuery pruned = pruning == null ? null : prunedHere(clientSql, pruning);
+            return pruned != null ? pruned : new CopiedQuery(clientSql, null);
         }
         String sql;
         try {
@@ -2505,16 +2531,10 @@ public final class ExecutionService {
         CatalogViews.Pruning pruning = catalogViews.pruning(sql);
         String prunedKey = null;
         if (pruning != null) {
-            boolean allHere = true;
-            for (DataFile file : pruning.kept()) {
-                allHere &= store.readableHere(file);
-            }
-            if (allHere) {
-                String pruned = catalogViews.prunedFiles(sql, pruning);
-                if (!pruned.equals(sql)) {
-                    copies(List.of(), pruning.kept().size());
-                    return new CopiedQuery(pruned, null, true);
-                }
+            CopiedQuery pruned = prunedHere(sql, pruning);
+            if (pruned != null) {
+                copies(List.of(), pruning.kept().size());
+                return pruned;
             }
             prunedKey = copyKey(pruning.reference().schema(), pruning.reference().table());
         }
