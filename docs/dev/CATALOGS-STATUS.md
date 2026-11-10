@@ -43,7 +43,7 @@ ITEM 40(b) state after session 2026-11-10 (6) - the c1 regression's cost found a
   base 5.10-5.24, head 4.89-5.06. **c1 p50 is back at or below deafc861 in both profiles**; pruning off is still
   ~0.25 ms faster and ~0.1-0.2 ms CPU cheaper on local files. Dev CI on the branch 42818682745 green; Dev CI on main
   dispatched at session end (the merge push was `[skip ci]`).
-- Next (in order): (a) check Dev CI on main for 3a01265e (workflow_dispatch on main, started 2026-11-10 ~13:15Z);
+- Next (in order): (a) done: Dev CI on main 42822143053 green for 3a01265e;
   (b) the rest of the pruned-vs-view gap on local files: JFR still shows DuckDB execute ~+47 native samples per
   ~800 DoGets with pruning (plain DuckDB does not), and create/GetFlightInfo may still evaluate pruning - look whether
   the shared DuckDB binds `read_parquet([...])` differently from the view (settings: `parquet_metadata_cache`, file
@@ -906,5 +906,5 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   `acceptRewrite` (full DuckDB parse check on the pruned text) and `readComplete` pruned again; now one pruning and the
   rewrite accepted (`CopiedQuery.pruningDone`). Found with JFR at 1 ms sampling; `PointQueryOverheadPerfTest` complete
   point DoGet p50 4.17 -> 3.76 ms; `small-query-perf.yml` run 42818686506: c1 p50 at or below deafc861 in both
-  profiles (balanced quota 4.24 vs 4.44 ms). Dev CI branch 42818682745 green; Dev CI on main dispatched. Test
+  profiles (balanced quota 4.24 vs 4.44 ms). Dev CI branch 42818682745 green, Dev CI on main 42822143053 green. Test
   `FileStatsPrunerTest` +1, CHANGELOG line, Q-40b-1 updated (still open, optional now). Not DONE yet. Lock released.
