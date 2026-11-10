@@ -23,6 +23,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
+QUERY SELECT extension_version FROM duckdb_extensions() WHERE loaded AND extension_name = 'hadoopfs'
+QUERY SELECT name FROM duckdb_settings() WHERE name LIKE 'hdfs%'
 SET hdfs_connect_timeout_ms = 3000
 SET hdfs_read_timeout_ms = 10000
 SET hdfs_metadata_cache_ttl_ms = 30000
@@ -47,6 +49,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
+QUERY SELECT extension_version FROM duckdb_extensions() WHERE loaded AND extension_name = 'hadoopfs'
+QUERY SELECT name FROM duckdb_settings() WHERE name LIKE 'hdfs%'
 SET hdfs_connect_timeout_ms = 3000
 SET hdfs_read_timeout_ms = 10000
 SET hdfs_metadata_cache_ttl_ms = 30000
@@ -84,6 +88,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
+QUERY SELECT extension_version FROM duckdb_extensions() WHERE loaded AND extension_name = 'hadoopfs'
+QUERY SELECT name FROM duckdb_settings() WHERE name LIKE 'hdfs%'
 SET hdfs_connect_timeout_ms = 4000
 SET hdfs_metadata_cache_ttl_ms = 30000
 QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pragma_version()) FROM duckdb_extensions() WHERE loaded AND extension_name IN ('httpfs', 'hadoopfs')
@@ -107,6 +113,8 @@ SET hdfs_default_namenode = 'hdfs-ns1'
 SET hdfs_ha_namenodes = 'nn1=nn:8020,nn2=nn2:8020'
 SET hdfs_shortcircuit = true
 SET hdfs_domain_socket_path = '/var/lib/hadoop-hdfs/dn_socket'
+QUERY SELECT extension_version FROM duckdb_extensions() WHERE loaded AND extension_name = 'hadoopfs'
+QUERY SELECT name FROM duckdb_settings() WHERE name LIKE 'hdfs%'
 SET hdfs_connect_timeout_ms = 4000
 SET hdfs_metadata_cache_ttl_ms = 30000
 SET allowed_directories = ['hdfs://hdfs-ns1/data/parquet/', '<TMP>/duckdb-tmp/<RUN>/']

@@ -332,6 +332,8 @@ class GoldenDuckDbSetupTest {
             private final Map<String, String> settings = new LinkedHashMap<>();
             private final List<String> allowedDirectories = new ArrayList<>();
             private final Map<String, String> secrets = new LinkedHashMap<>();
+            /** Whether a hadoopfs build was loaded (answered as 51b7220-afc6 with its settings). */
+            private boolean hadoopfsLoaded;
 
             /**
              * Applies a statement.
@@ -339,6 +341,9 @@ class GoldenDuckDbSetupTest {
              * @param sql statement run
              */
             void run(String sql) {
+                if (sql.startsWith("LOAD ") && sql.contains("hadoopfs")) {
+                    hadoopfsLoaded = true;
+                }
                 Matcher secret = SECRET.matcher(sql);
                 if (secret.matches()) {
                     secrets.put(secret.group(1), secret.group(2).replace("''", "'"));
@@ -370,7 +375,21 @@ class GoldenDuckDbSetupTest {
              */
             List<String[]> answer(String sql) {
                 List<String[]> rows = new ArrayList<>();
-                if (sql.contains("FROM duckdb_settings()")) {
+                if (sql.contains("FROM duckdb_settings() WHERE name LIKE 'hdfs%'")) {
+                    if (hadoopfsLoaded) {
+                        for (String name : new String[] {"hdfs_default_namenode",
+                                "hdfs_ha_namenodes", "hdfs_shortcircuit", "hdfs_domain_socket_path",
+                                "hdfs_connect_timeout_ms", "hdfs_read_timeout_ms",
+                                "hdfs_metadata_cache_ttl_ms"}) {
+                            rows.add(new String[] {name});
+                        }
+                    }
+                } else if (sql.contains("extension_version FROM duckdb_extensions()")
+                        && sql.contains("extension_name = 'hadoopfs'")) {
+                    if (hadoopfsLoaded) {
+                        rows.add(new String[] {"51b7220-afc6"});
+                    }
+                } else if (sql.contains("FROM duckdb_settings()")) {
                     // DuckDB's defaults for what was not set.
                     Map<String, String> defaults = new LinkedHashMap<>();
                     defaults.put("enable_external_access", "true");
