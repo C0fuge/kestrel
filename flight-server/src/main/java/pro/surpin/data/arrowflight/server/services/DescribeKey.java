@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server.services;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -59,12 +60,28 @@ public final class DescribeKey {
         if (sql.indexOf('\u0000') >= 0) {
             return RAW + sql;
         }
+        Shape shape = shape(sql);
+        return shape == null ? sql : shape.key();
+    }
+
+    /**
+     * Returns the key of a client text with literals left out and where each one was.
+     *
+     * @param sql client SQL
+     * @return the key and the literals' spans in the text, in order, or null when no literal is
+     *         left out (the text is then its own key)
+     */
+    public static Shape shape(String sql) {
+        if (sql == null || sql.indexOf('\u0000') >= 0) {
+            return null;
+        }
         List<Token> tokens = TimeTravelClause.tokens(sql);
         int where = whereIndex(tokens);
         if (where < 0) {
-            return sql;
+            return null;
         }
         StringBuilder key = null;
+        List<Span> literals = new ArrayList<>();
         int copied = 0;
         int depth = 0;
         for (int i = where + 1; i < tokens.size(); i++) {
@@ -81,10 +98,30 @@ public final class DescribeKey {
                     key = new StringBuilder(sql.length() + SHAPE.length()).append(SHAPE);
                 }
                 key.append(sql, copied, token.start()).append(LITERAL);
+                literals.add(new Span(token.start(), token.end()));
                 copied = token.end();
             }
         }
-        return key == null ? sql : key.append(sql, copied, sql.length()).toString();
+        return key == null ? null
+                : new Shape(key.append(sql, copied, sql.length()).toString(), List.copyOf(literals));
+    }
+
+    /**
+     * A text's describe cache key with literals left out, and where they were.
+     *
+     * @param key      the key ({@link #of(String)})
+     * @param literals spans of the left-out integer literals in the text, in order
+     */
+    public record Shape(String key, List<Span> literals) {
+    }
+
+    /**
+     * Where a left-out literal is in a text.
+     *
+     * @param start index of its first character
+     * @param end   index after its last character
+     */
+    public record Span(int start, int end) {
     }
 
     /**

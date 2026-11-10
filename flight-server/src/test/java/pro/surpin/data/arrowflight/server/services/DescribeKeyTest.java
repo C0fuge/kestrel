@@ -11,6 +11,7 @@ import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests the describe cache key that point queries differing in their key share (item 40 (b)). */
@@ -71,6 +72,20 @@ class DescribeKeyTest {
     }
 
     /** Verifies texts whose literals can change the answer's columns or the bind keep their own key. */
+    /** Verifies that a shape names where each left-out literal is, in order. */
+    @Test
+    void shapeNamesTheLeftOutLiterals() {
+        String sql = "SELECT a, 7 FROM s.t WHERE k = 15 AND j >= -3 AND x IN (4, 5) ORDER BY 1";
+        DescribeKey.Shape shape = DescribeKey.shape(sql);
+        assertEquals(DescribeKey.of(sql), shape.key());
+        assertEquals(2, shape.literals().size());
+        assertEquals("15", sql.substring(shape.literals().get(0).start(), shape.literals().get(0).end()));
+        assertEquals("3", sql.substring(shape.literals().get(1).start(), shape.literals().get(1).end()));
+        assertNull(DescribeKey.shape("SELECT * FROM s.t WHERE k = 5.5"));
+        assertNull(DescribeKey.shape("SELECT * FROM s.t WHERE k = 5\u0000"));
+        assertNull(DescribeKey.shape(null));
+    }
+
     @Test
     void otherTextsKeepTheirOwnKey() {
         for (String[] pair : DIFFERENT) {

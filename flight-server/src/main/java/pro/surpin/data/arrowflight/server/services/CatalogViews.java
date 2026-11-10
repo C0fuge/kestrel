@@ -160,6 +160,24 @@ public final class CatalogViews {
     private volatile Map<String, TableViews> prunable = Map.of();
     /** Leaves out files by footer statistics (setting fileStatsPruning), or null when off. */
     private volatile FileStatsPruner pruner;
+    /** Point query shapes remembered for {@link #pruning(String)}. */
+    private static final int PRUNING_SHAPES = 512;
+    /** First stand-in literal of a shape parse: ten digits, never an INTEGER literal. */
+    private static final long STAND_IN_BASE = 3_000_000_001L;
+    /**
+     * The query parser's reading of a point query shape ({@link DescribeKey}) with stand-in
+     * literals, by shape key: texts differing only in such literals are parsed once (item 40 (b)).
+     */
+    private final Map<String, ShapeParse> pruningShapes = new java.util.LinkedHashMap<>(64, 0.75f, true) {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, ShapeParse> eldest) {
+            return size() > PRUNING_SHAPES;
+        }
+    };
+    /** Whether {@link #pruning(String)} reads point query shapes from {@link #pruningShapes}. */
+    private volatile boolean shapeParses = true;
     /** Catalog schemas without views because their catalog failed: schema to error. */
     private final Map<String, String> unavailable = new java.util.concurrent.ConcurrentHashMap<>();
     /** Data tables without views because their first file could not be described: key to error. */
@@ -1209,7 +1227,10 @@ public final class CatalogViews {
         if (threePartName(sql, reference)) {
             return null;
         }
-        ParquetQueryParser query = singleTableQuery(sql, reference, true);
+        ShapedQuery shaped = shapedQuery(sql, reference);
+        ParquetQueryParser query = shaped != null ? shaped.query()
+                : singleTableQuery(sql, reference, true);
+        Map<Long, Long> binds = shaped != null ? shaped.binds() : Map.of();
         String filter = query == null ? null : query.filter;
         if (filter == null) {
             return null;
@@ -1219,7 +1240,7 @@ public final class CatalogViews {
         List<DataFile> kept;
         try {
             kept = p.keep(parquetAdapter.dataStore(), reference.schema() + "." + reference.table(),
-                    views.files(), filter, query.where);
+                    views.files(), filter, query.where, binds);
         } catch (IOException | RuntimeException e) {
             // No pruning: DuckDB reads the view and reports what it cannot read itself.
             LOGGER.warn("node={} pruning=footerError table={}.{} error='{}'", LogUtil.node(),
@@ -1228,6 +1249,131 @@ public final class CatalogViews {
         }
         return kept == null ? null : new Pruning(reference, List.copyOf(kept), views.files().size(),
                 views.columns(), views.emptyBody());
+    }
+
+    /**
+     * Reads a point query as {@link #singleTableQuery} does, from one parse of its shape: the
+     * text with each integer literal {@link DescribeKey} leaves out replaced by a stand-in
+     * ({@code 3000000001}, {@code 3000000002}, ...; ten digits, so never a left-out literal)
+     * that occurs nowhere else in it, read back as the text's own value when files are kept.
+     * The literals change no name, alias or join of the text, only values its filter compares.
+     *
+     * @param sql SQL after the catalog rewrites
+     * @param reference the query's one directory table reference
+     * @return the reading and the stand-ins' values (its query null when the text is no plain
+     *         single-table query of the reference), or null when the text has no such shape
+     */
+    private ShapedQuery shapedQuery(String sql, TableReferences.Reference reference) {
+        if (!shapeParses || !QueryCacheLimits.cacheable(sql)) {
+            return null;
+        }
+        DescribeKey.Shape shape = DescribeKey.shape(sql);
+        if (shape == null) {
+            return null;
+        }
+        ShapeParse parse;
+        synchronized (pruningShapes) {
+            parse = pruningShapes.get(shape.key());
+        }
+        if (parse == null) {
+            parse = ShapeParse.of(sql, shape);
+            synchronized (pruningShapes) {
+                pruningShapes.put(shape.key(), parse);
+            }
+        }
+        if (parse.unusable()) {
+            return null;   // parsed per text, as before
+        }
+        Map<Long, Long> binds = new HashMap<>();
+        for (int i = 0; i < shape.literals().size(); i++) {
+            DescribeKey.Span span = shape.literals().get(i);
+            long value = Long.parseLong(sql.substring(span.start(), span.end()));
+            long stand = STAND_IN_BASE + i;
+            binds.put(stand, value);
+            binds.put(-stand, -value);   // the parser folds a unary minus into the literal
+        }
+        ParquetQueryParser pq = parse.query();
+        String name = reference.table();
+        if (reference.aliased()) {
+            name = aliasOf(sql, reference);
+        }
+        boolean matches = pq != null && name != null && TableReferences.singleSelect(sql) && !pq.isJoin
+                && reference.schema().equalsIgnoreCase(pq.schema) && name.equalsIgnoreCase(pq.table);
+        return new ShapedQuery(matches ? pq : null, Map.copyOf(binds));
+    }
+
+    /**
+     * Turns the shape parses of {@link #pruning(String)} on or off (tests compare both).
+     *
+     * @param on whether point query shapes are parsed once
+     */
+    void shapeParses(boolean on) {
+        shapeParses = on;
+    }
+
+    /**
+     * Returns how many point query shapes are remembered.
+     *
+     * @return number of shapes
+     */
+    int pruningShapes() {
+        synchronized (pruningShapes) {
+            return pruningShapes.size();
+        }
+    }
+
+    /**
+     * A point query's reading from its shape's parse.
+     *
+     * @param query the reading, or null when the text is no plain single-table query
+     * @param binds the value each stand-in literal of its condition stands for
+     */
+    private record ShapedQuery(ParquetQueryParser query, Map<Long, Long> binds) {
+    }
+
+    /**
+     * One parse of a point query shape.
+     *
+     * @param query the query parser's reading of the text with stand-ins, or null when it does
+     *              not read it (then no text of the shape is a single-table query)
+     * @param unusable whether texts of the shape are parsed one by one instead (a stand-in that
+     *                 also occurs elsewhere in the text, or no parsed WHERE condition)
+     */
+    private record ShapeParse(ParquetQueryParser query, boolean unusable) {
+
+        /**
+         * Parses the shape of a text with stand-in literals.
+         *
+         * @param sql a text of the shape
+         * @param shape its shape
+         * @return the parse
+         */
+        static ShapeParse of(String sql, DescribeKey.Shape shape) {
+            StringBuilder text = new StringBuilder(sql.length() + 10 * shape.literals().size());
+            List<String> stands = new ArrayList<>(shape.literals().size());
+            int copied = 0;
+            for (int i = 0; i < shape.literals().size(); i++) {
+                DescribeKey.Span span = shape.literals().get(i);
+                String stand = Long.toString(STAND_IN_BASE + i);
+                stands.add(stand);
+                text.append(sql, copied, span.start()).append(stand);
+                copied = span.end();
+            }
+            String template = text.append(sql, copied, sql.length()).toString();
+            for (String stand : stands) {
+                if (template.indexOf(stand) != template.lastIndexOf(stand)) {
+                    return new ShapeParse(null, true);
+                }
+            }
+            ParquetQueryParser pq;
+            try {
+                pq = ParquetQueryParser.parse(template);
+            } catch (RuntimeException e) {
+                return new ShapeParse(null, false);   // no text of the shape is read either
+            }
+            boolean unusable = pq.filter != null && pq.where == null;
+            return new ShapeParse(unusable ? null : pq, unusable);
+        }
     }
 
     /**
