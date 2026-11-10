@@ -10,6 +10,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
@@ -32,6 +33,13 @@ public final class PeerStreamAdmission {
     public static final long DEFAULT_WAIT_MILLIS = 300_000;
     /** Fewest permits a derived budget gives: one merge of two endpoints. */
     static final int MIN_PERMITS = 2;
+    /**
+     * Bytes a merge admitted on probation reads from its endpoint answers before it takes its
+     * permits: 16 MiB (item 43).
+     */
+    public static final long PROBATION_BYTES = 16L << 20;
+    /** Fewest merges a node keeps on probation at once (item 43). */
+    static final int MIN_PROBATION = 32;
     /** How often a waiting merge checks whether its client went away. */
     private static final long CHECK_MILLIS = 1000;
     private static final Logger LOGGER = LoggerFactory.getLogger(PeerStreamAdmission.class);
@@ -47,6 +55,12 @@ public final class PeerStreamAdmission {
     private final AtomicLong waitNanos = new AtomicLong();
     private final AtomicLong refused = new AtomicLong();
     private final AtomicLong unmetered = new AtomicLong();
+    /** Merges on probation now: admitted without permits, not charged yet (item 43). */
+    private final AtomicInteger onProbation = new AtomicInteger();
+    private final int probationLimit;
+    private final long probationBytes;
+    private final AtomicLong probation = new AtomicLong();
+    private final AtomicLong charged = new AtomicLong();
 
     /**
      * Creates the admission of a node.
@@ -56,6 +70,22 @@ public final class PeerStreamAdmission {
      * @throws IllegalArgumentException when permits is not positive or waitMillis is negative
      */
     public PeerStreamAdmission(int permits, long waitMillis) {
+        this(permits, waitMillis, PROBATION_BYTES);
+    }
+
+    /**
+     * Creates the admission of a node with the bytes a merge on probation may read uncharged.
+     *
+     * @param permits endpoint streams all merges of the node may hold open together
+     * @param waitMillis longest wait of a merge for permits
+     * @param probationBytes bytes a merge on probation reads before it takes its permits
+     * @throws IllegalArgumentException when permits is not positive, or waitMillis or
+     *         probationBytes is negative
+     */
+    public PeerStreamAdmission(int permits, long waitMillis, long probationBytes) {
+        if (probationBytes < 0) {
+            throw new IllegalArgumentException("Probation bytes must not be negative: " + probationBytes);
+        }
         if (permits <= 0) {
             throw new IllegalArgumentException("Peer stream permits must be positive: " + permits);
         }
@@ -65,6 +95,8 @@ public final class PeerStreamAdmission {
         this.permits = permits;
         this.waitMillis = waitMillis;
         this.free = permits;
+        this.probationBytes = probationBytes;
+        this.probationLimit = (int) Math.max(MIN_PROBATION, Math.min(Integer.MAX_VALUE, 8L * permits));
     }
 
     /**
@@ -163,6 +195,61 @@ public final class PeerStreamAdmission {
     }
 
     /**
+     * Counts the merges admitted on probation since start (item 43).
+     *
+     * @return merges admitted on probation
+     */
+    public long probation() {
+        return probation.get();
+    }
+
+    /**
+     * Counts the merges on probation that read more than the probation bytes and took their
+     * permits since start (item 43).
+     *
+     * @return merges charged after probation
+     */
+    public long charged() {
+        return charged.get();
+    }
+
+    /**
+     * Returns the merges that may be on probation at once: eight per permit, at least
+     * {@link #MIN_PROBATION}.
+     *
+     * @return merges
+     */
+    public int probationLimit() {
+        return probationLimit;
+    }
+
+    /**
+     * Admits a merge whose answer is expected to be small (a point lookup: an equality filter, or
+     * a small LIMIT) on probation (item 43): it opens its endpoint streams at once, without permits,
+     * and takes them through {@link Admitted#charge(long)} only once it has read more than the
+     * probation bytes ({@link #PROBATION_BYTES} by default) of endpoint answers. Charging every
+     * point lookup like a full scan let one merge of four endpoints hold all four permits of a node, so 61-63 % of the point
+     * lookups of 32 clients queued (217 q/s against 1348 without distributed complete). When
+     * {@link #probationLimit()} merges are on probation already, this one is admitted as
+     * {@link #admit(int, BooleanSupplier, String)} admits it.
+     *
+     * @param streams endpoint streams the merge opens
+     * @param cancelled tells whether the merge's client went away
+     * @param query client SQL, for the log
+     * @return the merge's admission; close it when the merge ends
+     * @throws InterruptedException when interrupted while waiting (only when admitted at once)
+     */
+    public Admitted admitOnProbation(int streams, BooleanSupplier cancelled, String query)
+            throws InterruptedException {
+        if (onProbation.incrementAndGet() > probationLimit) {
+            onProbation.decrementAndGet();
+            return admit(streams, cancelled, query);
+        }
+        probation.incrementAndGet();
+        return new Admitted(streams, cancelled, query);
+    }
+
+    /**
      * Admits a merge whose endpoint answers are one row each (an aggregate without GROUP BY and
      * DISTINCT) without permits and without waiting (item 39 (d)): their streams hold one small
      * batch, so charging them like full scans only queued small queries behind the scans (dc
@@ -188,6 +275,19 @@ public final class PeerStreamAdmission {
      *         permits came free in time, {@code CANCELLED} when the client went away while waiting
      */
     public Admitted admit(int streams, BooleanSupplier cancelled, String query) throws InterruptedException {
+        return new Admitted(take(streams, cancelled, query));
+    }
+
+    /**
+     * Takes the permits of a merge's endpoint streams, waiting as {@link #admit} describes.
+     *
+     * @param streams endpoint streams the merge opens
+     * @param cancelled tells whether the merge's client went away
+     * @param query client SQL, for the log
+     * @return permits taken
+     * @throws InterruptedException when interrupted while waiting
+     */
+    private int take(int streams, BooleanSupplier cancelled, String query) throws InterruptedException {
         int wanted = Math.max(1, Math.min(streams, permits));
         Object me = new Object();
         long start = System.nanoTime();
@@ -234,7 +334,7 @@ public final class PeerStreamAdmission {
             LOGGER.info("node={} distributedComplete=admitted streams={} waitedMs={}", LogUtil.node(), wanted,
                     waitedNanos / 1_000_000);
         }
-        return new Admitted(wanted);
+        return wanted;
     }
 
     /**
@@ -249,11 +349,22 @@ public final class PeerStreamAdmission {
         }
     }
 
-    /** The permits one merge holds; closing returns them once. */
+    /**
+     * The permits one merge holds; closing returns them once. A merge admitted on probation holds
+     * none until {@link #charge(long)} takes them.
+     */
     public final class Admitted implements AutoCloseable {
 
-        private final int held;
-        private final AtomicBoolean released = new AtomicBoolean();
+        /** Guarded by this. */
+        private int held;
+        /** Guarded by this. */
+        private boolean released;
+        /** Endpoint streams to charge once probation ends; 0 when not on probation. */
+        private final int streams;
+        private final BooleanSupplier cancelled;
+        private final String query;
+        /** Set once the merge left probation: charged, or closed. */
+        private final AtomicBoolean probationOver;
 
         /**
          * Holds permits.
@@ -262,6 +373,25 @@ public final class PeerStreamAdmission {
          */
         private Admitted(int held) {
             this.held = held;
+            this.streams = 0;
+            this.cancelled = null;
+            this.query = null;
+            this.probationOver = new AtomicBoolean(true);
+        }
+
+        /**
+         * Holds no permits yet: on probation.
+         *
+         * @param streams endpoint streams to charge once probation ends
+         * @param cancelled tells whether the merge's client went away
+         * @param query client SQL, for the log
+         */
+        private Admitted(int streams, BooleanSupplier cancelled, String query) {
+            this.held = 0;
+            this.streams = streams;
+            this.cancelled = cancelled;
+            this.query = query;
+            this.probationOver = new AtomicBoolean(false);
         }
 
         /**
@@ -269,14 +399,59 @@ public final class PeerStreamAdmission {
          *
          * @return permits
          */
-        public int held() {
+        public synchronized int held() {
             return held;
+        }
+
+        /**
+         * Tells whether this merge is on probation: admitted without permits and not charged.
+         *
+         * @return true while on probation
+         */
+        public boolean onProbation() {
+            return !probationOver.get();
+        }
+
+        /**
+         * Ends the probation of a merge once it has read more than the probation bytes: takes
+         * its permits, waiting as {@link PeerStreamAdmission#admit} waits. Does nothing for a merge
+         * not on probation or while it has read less.
+         *
+         * @param bytesRead bytes of endpoint answers the merge has read so far
+         * @throws InterruptedException when interrupted while waiting
+         * @throws org.apache.arrow.flight.FlightRuntimeException {@code RESOURCE_EXHAUSTED} or
+         *         {@code CANCELLED} as {@link PeerStreamAdmission#admit} throws them
+         */
+        public void charge(long bytesRead) throws InterruptedException {
+            if (bytesRead <= probationBytes || probationOver.get() || !probationOver.compareAndSet(false, true)) {
+                return;
+            }
+            onProbation.decrementAndGet();
+            charged.incrementAndGet();
+            LOGGER.info("node={} distributedComplete=probationOver bytesRead={} streams={} query='{}'",
+                    LogUtil.node(), bytesRead, streams, query);
+            int taken = take(streams, cancelled, query);
+            synchronized (this) {
+                if (released) {
+                    release(taken);
+                } else {
+                    held = taken;
+                }
+            }
         }
 
         @Override
         public void close() {
-            if (released.compareAndSet(false, true) && held > 0) {
-                release(held);
+            if (probationOver.compareAndSet(false, true)) {
+                onProbation.decrementAndGet();
+            }
+            synchronized (this) {
+                if (!released) {
+                    released = true;
+                    if (held > 0) {
+                        release(held);
+                    }
+                }
             }
         }
     }

@@ -65,6 +65,88 @@ class PeerStreamAdmissionTest {
         assertEquals(0, admission.waited());
     }
 
+    /**
+     * Item 43: a merge on probation (a point lookup) neither waits nor takes room while its answer
+     * stays small, even when no room is free.
+     */
+    @Test
+    void probationMergesNeitherWaitNorTakeRoomWhileSmall() throws Exception {
+        PeerStreamAdmission admission = new PeerStreamAdmission(4, 100, 1000);
+        try (PeerStreamAdmission.Admitted running = admission.admit(4, () -> false, "scan")) {
+            PeerStreamAdmission.Admitted point = admission.admitOnProbation(4, () -> false, "point");
+            assertTrue(point.onProbation());
+            point.charge(1000);
+            assertEquals(0, point.held());
+            assertTrue(point.onProbation());
+            point.close();
+            assertFalse(point.onProbation());
+            point.charge(5000);
+            assertEquals(0, point.held(), "a closed merge takes no room");
+            assertEquals(0, admission.available());
+        }
+        assertEquals(4, admission.available());
+        assertEquals(1, admission.probation());
+        assertEquals(0, admission.charged());
+        assertEquals(0, admission.waited());
+    }
+
+    /**
+     * Item 43: a merge on probation whose answer grows past the probation bytes takes its room,
+     * waiting like any merge for it, holds it until it ends and returns it once.
+     */
+    @Test
+    void aProbationMergeThatGrowsTakesItsRoom() throws Exception {
+        PeerStreamAdmission admission = new PeerStreamAdmission(4, 30_000, 1000);
+        PeerStreamAdmission.Admitted running = admission.admit(4, () -> false, "scan");
+        PeerStreamAdmission.Admitted point = admission.admitOnProbation(3, () -> false, "point");
+        CompletableFuture<Void> grow = CompletableFuture.runAsync(() -> {
+            try {
+                point.charge(1001);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitFor(() -> admission.waited() == 1);
+        assertFalse(grow.isDone(), "the grown merge waits for room");
+        assertFalse(point.onProbation());
+        running.close();
+        grow.get(10, TimeUnit.SECONDS);
+        assertEquals(3, point.held());
+        assertEquals(1, admission.available());
+        point.charge(1_000_000);
+        assertEquals(3, point.held(), "charged once");
+        point.close();
+        point.close();
+        assertEquals(4, admission.available());
+        assertEquals(1, admission.charged());
+    }
+
+    /**
+     * Item 43: once the probation limit of merges is on probation, the next point lookup is
+     * admitted with its room, so many point lookups cannot hold unbounded memory uncharged.
+     */
+    @Test
+    void probationIsBoundedByItsLimit() throws Exception {
+        PeerStreamAdmission admission = new PeerStreamAdmission(4, 30_000);
+        assertEquals(PeerStreamAdmission.MIN_PROBATION, admission.probationLimit());
+        assertEquals(64, new PeerStreamAdmission(8, 1).probationLimit());
+        java.util.List<PeerStreamAdmission.Admitted> points = new java.util.ArrayList<>();
+        for (int i = 0; i < admission.probationLimit(); i++) {
+            points.add(admission.admitOnProbation(4, () -> false, "point"));
+        }
+        try (PeerStreamAdmission.Admitted over = admission.admitOnProbation(2, () -> false, "point")) {
+            assertFalse(over.onProbation());
+            assertEquals(2, over.held());
+        }
+        points.remove(0).close();
+        try (PeerStreamAdmission.Admitted again = admission.admitOnProbation(2, () -> false, "point")) {
+            assertTrue(again.onProbation(), "a closed probation merge frees its place");
+        }
+        points.forEach(PeerStreamAdmission.Admitted::close);
+        assertEquals(4, admission.available());
+        assertThrows(IllegalArgumentException.class, () -> new PeerStreamAdmission(1, 1, -1));
+    }
+
     @Test
     void mergesTakeRoomAndReturnItOnce() throws Exception {
         PeerStreamAdmission admission = new PeerStreamAdmission(16, 1000);

@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Distributed complete mode: point lookups no longer queue for peer-stream room (item 43). A merge whose part query
+  has an equality of a column and a literal (no OR), or a LIMIT of at most 10 000 rows without aggregation, starts on
+  probation without permits and takes them only once it has read more than 16 MiB of endpoint answers (then it waits
+  like any merge); at most max(32, 8 x permits) merges are on probation at once. Before, each point lookup took all
+  the permits of its endpoints (4 of 4 with 512 MiB direct), so 61-63 % of dc point lookups waited (217 q/s against
+  1348 without dc at 32 clients). Log: `distributedComplete=merged ... probation=true`,
+  `distributedComplete=probationOver`. Service cluster CI: 32 clients of point queries in speed and speed-dc.
+
 - Faster query parse check (item 40(b)): the names a client query uses are found in DuckDB's serialized statement
   with one `indexOf` scan instead of two regular expressions (same names, same order, same refusals): 20 us -> 0.6 us
   per new query text for a point query's 2.2 KB statement, twice per query (describe and DoGet texts). No behaviour

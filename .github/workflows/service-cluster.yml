@@ -437,6 +437,19 @@ jobs:
               echo "::warning title=short-circuit unused::$STORE $CELL: the servers read every block over TCP although the Java client reads short-circuit in the same layout"
             fi
           fi
+          # Item 43: 32 clients of point queries (tools/ci/point-query-load.py: point_orders, point_lineitem,
+          # count_filter) on node 1 in speed and speed-dc; the summary compares q/s (dc within 20 % of speed).
+          if [ "$CELL" = speed ] || [ "$CELL" = speed-dc ]; then
+            keys=$(awk -v s="${{ inputs.sf || '1' }}" 'BEGIN { printf "%d", 1500000 * s }')
+            waits0=$(docker logs srv1 2>&1 | grep -c 'distributedComplete=admissionWait')
+            "$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 4 5 "$keys" > /dev/null 2>&1 || true # warm-up
+            point=$("$py" -I tools/ci/point-query-load.py 172.30.0.11:32010 32 "${POINT_SECONDS:-30}" "$keys" 2> "$RUNNER_TEMP/point.log"); prc=$?
+            echo "$point" > "$RUNNER_TEMP/point.txt"
+            l=$(docker logs srv1 2>&1)
+            note "point load c32 on srv1: ${point:-(no result: $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-200))}"
+            note "srv1 point load: admission waits $(( $(grep -c 'distributedComplete=admissionWait' <<< "$l") - waits0 )), merged on probation $(grep -c 'distributedComplete=merged .*probation=true' <<< "$l"), probation over $(grep -c 'distributedComplete=probationOver' <<< "$l")"
+            [ "$prc" -eq 0 ] && [ -n "$point" ] || finish fail "point load c32: ${point:-no result} $(tail -n 1 "$RUNNER_TEMP/point.log" | cut -c1-150)"
+          fi
           # D15: a merge must never fall back because a table was named without its schema.
           for i in 1 2 3; do
             unqualified=$(docker logs "srv$i" 2>&1 | grep 'distributedComplete=fallback' | grep -m 1 'Name the table with its schema' || true)
@@ -467,6 +480,8 @@ jobs:
             ${{ runner.temp }}/result-notes.txt
             ${{ runner.temp }}/client.log
             ${{ runner.temp }}/locality.log
+            ${{ runner.temp }}/point.txt
+            ${{ runner.temp }}/point.log
             ${{ runner.temp }}/srv*.log
             ${{ runner.temp }}/dn*.log
             ${{ runner.temp }}/nn*.log
@@ -501,8 +516,28 @@ jobs:
             for d in "$RUNNER_TEMP"/results/*/; do echo "[$(basename "$d")]"; cat "$d/result-notes.txt" 2>/dev/null; done
             echo '```'
             echo '</details>'
+            # Item 43: point queries, 32 clients on node 1, speed-dc q/s against speed q/s per store.
+            echo
+            echo "| store | point q/s speed | point q/s speed-dc | dc / speed | p99 speed / dc (ms) |"
+            echo "|---|---|---|---|---|"
+            : > "$RUNNER_TEMP/point-verdict.txt"
+            for store in hdfs hdfs-ha s3; do
+              sp=$(cat "$RUNNER_TEMP/results/result-$store-speed/point.txt" 2>/dev/null)
+              dc=$(cat "$RUNNER_TEMP/results/result-$store-speed-dc/point.txt" 2>/dev/null)
+              q1=$(grep -oE 'qps=[0-9.]+' <<< "$sp" | cut -d= -f2); q2=$(grep -oE 'qps=[0-9.]+' <<< "$dc" | cut -d= -f2)
+              p1=$(grep -oE 'p99=[0-9]+' <<< "$sp" | cut -d= -f2); p2=$(grep -oE 'p99=[0-9]+' <<< "$dc" | cut -d= -f2)
+              ratio=$(awk -v a="${q1:-0}" -v b="${q2:-0}" 'BEGIN { if (a > 0) printf "%.2f", b / a; else print "?" }')
+              echo "| $store | ${q1:-?} | ${q2:-?} | $ratio | ${p1:-?} / ${p2:-?} |"
+              if [ "$ratio" = "?" ] || awk -v r="$ratio" 'BEGIN { exit !(r < 0.8) }'; then
+                echo "$store: speed-dc point q/s ${q2:-?} not within 20 % of speed ${q1:-?} (ratio $ratio)" >> "$RUNNER_TEMP/point-verdict.txt"
+              fi
+            done
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
           [ "$n" -eq 12 ] || { echo "only $n of 12 cells reported"; exit 1; }
-          ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt
+          ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt || exit 1
+          if [ -s "$RUNNER_TEMP/point-verdict.txt" ]; then
+            while read -r l; do echo "::error title=item 43 point q/s::$l"; done < "$RUNNER_TEMP/point-verdict.txt"
+            exit 1
+          fi

@@ -69,6 +69,13 @@ public final class DistributedComplete implements AutoCloseable {
     private static final java.util.regex.Pattern SELECT_WORD =
             java.util.regex.Pattern.compile("\\bselect\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
     private static final String VIEW_PREFIX = "__kestrel_endpoint_answers_";
+    /** Largest LIMIT whose merge starts on probation (item 43). */
+    static final long SMALL_LIMIT = 10_000;
+    /** A column equal to a literal: a quoted or plain name, {@code =}, a string or a number. */
+    private static final java.util.regex.Pattern POINT_EQUALITY = java.util.regex.Pattern.compile(
+            "(?:\"(?:[^\"]|\"\")+\"|\\b[A-Za-z_]\\w*)\\s*=\\s*(?:'(?:[^']|'')*'|[-+]?\\d+(?:\\.\\d+)?\\b)");
+    private static final java.util.regex.Pattern OR_WORD =
+            java.util.regex.Pattern.compile("\\bor\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
     /** Start of the {@code UNAVAILABLE} description when an endpoint answer was lost. */
     static final String PEER_LOST = "peer lost during distributed complete answer; retry";
 
@@ -207,9 +214,15 @@ public final class DistributedComplete implements AutoCloseable {
         PeerStreamAdmission.Admitted admitted;
         try {
             // Waits while the merges running here hold their endpoint streams' memory (item 35);
-            // one-row answers hold almost none and do not queue behind scans (item 39 (d)).
-            admitted = oneRow(parsed) ? admission.admitUnmetered()
-                    : admission.admit(endpoints.size(), listener::isCancelled, query);
+            // one-row answers hold almost none and do not queue behind scans (item 39 (d)); point
+            // lookups start without permits and take them only if their answer grows (item 43).
+            if (oneRow(parsed)) {
+                admitted = admission.admitUnmetered();
+            } else if (smallAnswer(parsed)) {
+                admitted = admission.admitOnProbation(endpoints.size(), listener::isCancelled, query);
+            } else {
+                admitted = admission.admit(endpoints.size(), listener::isCancelled, query);
+            }
         } catch (InterruptedException | RuntimeException e) {
             releaseLoads(endpoints);
             throw e;
@@ -255,6 +268,9 @@ public final class DistributedComplete implements AutoCloseable {
             StreamOpener opener = nodes == null ? null
                     : index -> openLater(endpoints, streams, gates, identity, index, schema);
             answers = new EndpointAnswers(allocator, streams, gates, schema, nodes, opener);
+            if (admitted.onProbation()) {
+                answers.meter(admitted::charge);
+            }
             try {
                 execution.readArrowParts(allocator, answers, name, sql, client);
             } finally {
@@ -267,9 +283,9 @@ public final class DistributedComplete implements AutoCloseable {
             // The endpoint nodes log how they read the files; this node read none of them.
             execution.logNoFileReads("endpoints=" + endpoints.size());
             LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
-                    + " peerWaitMs={} permits={} query='{}'", LogUtil.node(), endpoints.size(),
+                    + " peerWaitMs={} permits={} probation={} query='{}'", LogUtil.node(), endpoints.size(),
                     (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
-                    answers.waitNanos() / 1_000_000, admitted.held(), query);
+                    answers.waitNanos() / 1_000_000, admitted.held(), admitted.onProbation(), query);
             return true;
         } catch (Exception e) {
             cancel(streams);
@@ -326,6 +342,24 @@ public final class DistributedComplete implements AutoCloseable {
      */
     static boolean oneRow(ParquetQueryParser parsed) {
         return parsed.hasAggregation && parsed.groupByColumnNames.isEmpty() && !parsed.distinct;
+    }
+
+    /**
+     * Tells whether a part query's answer is expected to be small (item 43): a point lookup, i.e.
+     * a filter with an equality of a column and a literal and no OR, or a LIMIT of at most
+     * {@link #SMALL_LIMIT} rows without aggregation. A wrong guess costs no correctness: the merge takes its permits
+     * once it has read more than the admission's probation bytes.
+     *
+     * @param parsed the part query
+     * @return true when the merge may start on probation
+     */
+    static boolean smallAnswer(ParquetQueryParser parsed) {
+        // An aggregate's endpoints may answer every group whatever its LIMIT.
+        if (!parsed.hasAggregation && parsed.limit != null && parsed.limit <= SMALL_LIMIT) {
+            return true;
+        }
+        String filter = parsed.filter;
+        return filter != null && !OR_WORD.matcher(filter).find() && POINT_EQUALITY.matcher(filter).find();
     }
 
     /**
@@ -783,6 +817,19 @@ public final class DistributedComplete implements AutoCloseable {
         clients.clear();
     }
 
+    /** Told the bytes an endpoint reader has read so far (item 43). */
+    @FunctionalInterface
+    interface ByteMeter {
+
+        /**
+         * Takes the bytes read so far.
+         *
+         * @param bytesRead bytes of endpoint answers read
+         * @throws InterruptedException when interrupted while waiting
+         */
+        void read(long bytesRead) throws InterruptedException;
+    }
+
     /**
      * Reads the batches of all endpoint answers one stream after the other, as one Arrow stream
      * DuckDB can scan; a stream reads ahead only once it is the one being read
@@ -801,6 +848,8 @@ public final class DistributedComplete implements AutoCloseable {
         private final AtomicLong waitNanos = new AtomicLong();
         /** First failure of an endpoint stream; written by DuckDB's scan thread. */
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        /** Told the bytes read after each batch (item 43); null when not metered. */
+        private volatile ByteMeter meter;
 
         /**
          * Creates the reader over endpoint streams of one schema.
@@ -873,6 +922,16 @@ public final class DistributedComplete implements AutoCloseable {
             }
         }
 
+        /**
+         * Tells a meter the bytes read so far after each batch, before the batch is loaded: a
+         * merge on probation takes its permits there once its answer grows (item 43).
+         *
+         * @param meter told the bytes read; may wait or throw
+         */
+        void meter(ByteMeter meter) {
+            this.meter = meter;
+        }
+
         @Override
         public boolean loadNextBatch() throws IOException {
             prepareLoadNextBatch();
@@ -893,7 +952,16 @@ public final class DistributedComplete implements AutoCloseable {
                 waitNanos.addAndGet(System.nanoTime() - waitStart);
                 if (next) {
                     try (ArrowRecordBatch batch = new VectorUnloader(stream.getRoot()).getRecordBatch()) {
-                        bytes.addAndGet(batch.computeBodyLength());
+                        long read = bytes.addAndGet(batch.computeBodyLength());
+                        ByteMeter m = meter;
+                        if (m != null) {
+                            try {
+                                m.read(read);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new java.io.InterruptedIOException("Interrupted while the merge waited for room");
+                            }
+                        }
                         loadRecordBatch(batch);
                     }
                     return true;

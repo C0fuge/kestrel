@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -253,6 +254,74 @@ class DistributedCompleteIntegrationTest {
         assertEquals(0, admission.refused());
         assertEquals(queries.size(), admission.unmetered());
         assertEquals(FILES, admission.available());
+    }
+
+    /**
+     * Verifies point lookups (an equality filter) do not queue behind merges that hold all the
+     * room (item 43: 61-63 % of dc point lookups waited for admission, 217 q/s against 1348
+     * without distributed complete), and answer exactly while the room stays held.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void pointLookupsDoNotWaitForRoom() throws Exception {
+        List<String> queries = List.of("SELECT v, k, d, name, amount FROM s.t WHERE v = 41",
+                "SELECT v, name FROM s.t WHERE k = 9 AND v < 400 ORDER BY v",
+                "SELECT v FROM s.t ORDER BY v DESC LIMIT 3");
+        List<String> alone = new ArrayList<>();
+        for (String query : queries) {
+            alone.add(answer(query));
+        }
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        try (PeerStreamAdmission.Admitted held = admission.admit(FILES, () -> false, "scan")) {
+            for (int i = 0; i < queries.size(); i++) {
+                assertEquals(alone.get(i), answer(queries.get(i)), queries.get(i));
+            }
+            assertEquals(0, admission.available());
+        }
+        assertEquals(queries.size(), distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        assertEquals(0, admission.waited());
+        assertEquals(0, admission.refused());
+        assertEquals(queries.size(), admission.probation());
+        assertEquals(0, admission.charged());
+        assertEquals(FILES, admission.available());
+    }
+
+    /**
+     * Verifies a merge started on probation whose answer turns out large takes its room once it
+     * has read more than the probation bytes, waits for it while other merges hold it, and still
+     * answers exactly (item 43: a wrong guess costs no correctness and keeps the item 35 bound).
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void aGrownPointLookupWaitsForRoomAndStaysExact() throws Exception {
+        String query = "SELECT v, k, d, name, amount FROM s.t WHERE name = 'n3' ORDER BY v";
+        String alone = answer(query);
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 60_000, 1);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> answer;
+            try (PeerStreamAdmission.Admitted held = admission.admit(FILES, () -> false, "scan")) {
+                answer = pool.submit(() -> answer(query));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                while (admission.waited() < 1 && System.nanoTime() < deadline) {
+                    Thread.sleep(20);
+                }
+                assertEquals(1, admission.waited(), "the grown merge waits for room");
+                assertEquals(1, admission.charged());
+                assertFalse(answer.isDone());
+            }
+            assertEquals(alone, answer.get(60, TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        assertEquals(FILES, admission.available(), "the grown merge returned its room");
     }
 
     /**

@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests which complete-mode queries distributed complete mode merges from endpoint answers.
@@ -38,6 +40,28 @@ class DistributedCompleteMergeableTest {
                 "SELECT l_returnflag, count(*) AS n FROM tpch.lineitem GROUP BY l_returnflag")) {
             assertNull(DistributedComplete.otherTables(query), query);
             assertNotNull(DistributedComplete.mergeable(query), query);
+        }
+    }
+
+    /** Item 43: point lookups and small LIMITs start on probation; scans and ORs do not. */
+    @Test
+    void pointLookupsAreSmallAnswers() {
+        for (String query : List.of("SELECT * FROM tpch.orders WHERE o_orderkey = 5",
+                "SELECT * FROM tpch.lineitem WHERE l_orderkey = 12 ORDER BY l_linenumber",
+                "SELECT o_orderkey FROM tpch.orders WHERE o_custkey = 7 AND o_totalprice > 1000",
+                "SELECT * FROM tpch.orders WHERE o_orderstatus = 'F'",
+                "SELECT o_orderkey FROM tpch.orders ORDER BY o_orderkey LIMIT 10")) {
+            assertTrue(DistributedComplete.smallAnswer(ParquetQueryParser.parse(query)), query);
+        }
+        for (String query : List.of("SELECT * FROM tpch.orders",
+                "SELECT * FROM tpch.orders WHERE o_orderkey <= 5",
+                "SELECT * FROM tpch.orders WHERE o_orderkey >= 5",
+                "SELECT * FROM tpch.orders WHERE o_orderkey <> 5",
+                "SELECT * FROM tpch.orders WHERE o_orderkey = 5 OR o_custkey > 3",
+                "SELECT o_orderkey FROM tpch.orders WHERE o_orderkey % 7 = 0",
+                "SELECT o_orderkey FROM tpch.orders ORDER BY o_orderkey LIMIT 100000",
+                "SELECT o_custkey, count(*) AS n FROM tpch.orders GROUP BY o_custkey LIMIT 5")) {
+            assertFalse(DistributedComplete.smallAnswer(ParquetQueryParser.parse(query)), query);
         }
     }
 
