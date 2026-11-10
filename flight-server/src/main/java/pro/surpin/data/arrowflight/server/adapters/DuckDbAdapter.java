@@ -120,12 +120,12 @@ public final class DuckDbAdapter implements AutoCloseable {
             "enable_logging", "disable_logging", "truncate_duckdb_logs", "duckdb_logs",
             "duckdb_log_contexts", "duckdb_secrets", "which_secret", "query", "query_table",
             "json_execute_serialized_sql");
-    /** A function or table name in DuckDB's serialized statement. */
-    private static final java.util.regex.Pattern SERIALIZED_NAME = java.util.regex.Pattern.compile(
-            "\"(?:function_name|table_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
-    /** A catalog or schema qualifier of a table in DuckDB's serialized statement. */
-    private static final java.util.regex.Pattern SERIALIZED_QUALIFIER = java.util.regex.Pattern.compile(
-            "\"(?:catalog_name|schema_name)\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+    /** The end of every name key in DuckDB's serialized statement, up to its value's quote. */
+    private static final String SERIALIZED_NAME_END = "_name\":\"";
+    /** Keys whose value is a function or table name in DuckDB's serialized statement. */
+    private static final String[] SERIALIZED_NAME_KEYS = {"\"function", "\"table"};
+    /** Keys whose value is a catalog or schema qualifier in DuckDB's serialized statement. */
+    private static final String[] SERIALIZED_QUALIFIER_KEYS = {"\"catalog", "\"schema"};
     /** A string literal in a DuckDB error, possibly cut off before its closing quote. */
     private static final java.util.regex.Pattern SETUP_LITERAL =
             java.util.regex.Pattern.compile("'(?:[^']|'')*(?:'|$)");
@@ -3294,26 +3294,84 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (serialized == null) {
             return List.of();
         }
+        // One scan with indexOf instead of two regular expressions over the whole JSON: this
+        // runs for every new query text, and the JSON of a point query is several KB (item 40 (b)).
         List<String> names = new ArrayList<>();
-        java.util.regex.Matcher m = SERIALIZED_NAME.matcher(serialized);
-        while (m.find()) {
-            String name = m.group(1).toLowerCase(java.util.Locale.ROOT);
-            if (!names.contains(name)) {
-                names.add(name);
+        List<String> qualifiers = new ArrayList<>();
+        int from = 0;
+        int at;
+        while ((at = serialized.indexOf(SERIALIZED_NAME_END, from)) >= 0) {
+            int valueStart = at + SERIALIZED_NAME_END.length();
+            boolean name = endsWithKey(serialized, at, SERIALIZED_NAME_KEYS);
+            if (!name && !endsWithKey(serialized, at, SERIALIZED_QUALIFIER_KEYS)) {
+                from = at + 1;
+                continue;
             }
+            int valueEnd = stringEnd(serialized, valueStart);
+            if (valueEnd < 0) {
+                break;
+            }
+            String value = serialized.substring(valueStart, valueEnd).toLowerCase(java.util.Locale.ROOT);
+            List<String> into = name ? names : qualifiers;
+            if (!into.contains(value)) {
+                into.add(value);
+            }
+            from = valueEnd + 1;
         }
-        java.util.regex.Matcher q = SERIALIZED_QUALIFIER.matcher(serialized);
-        while (q.find()) {
+        for (String qualifier : qualifiers) {
             // Only the qualifiers a shared DuckDB refuses, and databases a plugin attached, are
             // kept; others are no names to check.
-            String name = q.group(1).toLowerCase(java.util.Locale.ROOT);
-            if ((name.startsWith(SESSION_CATALOG_PREFIX) || PluginRefusedFunctions.contains(name))
-                    && !names.contains(name)) {
-                names.add(name);
+            if ((qualifier.startsWith(SESSION_CATALOG_PREFIX) || PluginRefusedFunctions.contains(qualifier))
+                    && !names.contains(qualifier)) {
+                names.add(qualifier);
             }
         }
         requireAllowedNames(names);
         return List.copyOf(names);
+    }
+
+    /**
+     * Tells whether one of the given keys ends where a name key's ending starts.
+     *
+     * @param serialized DuckDB's JSON form of a statement
+     * @param at index of {@link #SERIALIZED_NAME_END}
+     * @param keys quote and first part of each key
+     * @return true when the key in front is one of them
+     */
+    private static boolean endsWithKey(String serialized, int at, String[] keys) {
+        for (String key : keys) {
+            int keyStart = at - key.length();
+            if (keyStart >= 0 && serialized.startsWith(key, keyStart)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Finds the closing quote of a JSON string, skipping escaped characters.
+     *
+     * @param serialized JSON text
+     * @param start index of the string's first character
+     * @return index of its closing quote, or -1 when the text ends first
+     */
+    static int stringEnd(String serialized, int start) {
+        int i = start;
+        while (i < serialized.length()) {
+            char c = serialized.charAt(i);
+            if (c == '"') {
+                return i;
+            }
+            if (c == '\\') {
+                if (i + 1 >= serialized.length()) {
+                    return -1;
+                }
+                i += 2;
+            } else {
+                i++;
+            }
+        }
+        return -1;
     }
 
     /**

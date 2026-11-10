@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Faster query parse check (item 40(b)): the names a client query uses are found in DuckDB's serialized statement
+  with one `indexOf` scan instead of two regular expressions (same names, same order, same refusals): 20 us -> 0.6 us
+  per new query text for a point query's 2.2 KB statement, twice per query (describe and DoGet texts). No behaviour
+  change.
+
 - `resourceProfile=speed` sizes the shared DuckDB's default memory limit with the JVM memory it can really use
   (item 40(a), Q-40a): reserved heap = min(`-Xmx`, max(1 GiB, heap in use at startup x 2)), reserved direct =
   min(`MaxDirectMemorySize`, 1 GiB + 25 %), instead of the full `-Xmx` + direct; the memory stays the container's
