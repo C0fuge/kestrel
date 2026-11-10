@@ -188,6 +188,38 @@ class FileStatsPrunerTest {
     }
 
     /**
+     * Verifies that point queries differing only in their key are described once (item 40 (b),
+     * {@link DescribeKey}), and that a text whose literal is not left out is described itself.
+     */
+    @Test
+    void pointQueriesShareOneDescription(@TempDir Path dir) throws Exception {
+        List<DataFile> files = writeFiles(dir);
+        ParquetAdapter parquet = adapter(files, new AtomicInteger());
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool);
+                org.apache.arrow.memory.RootAllocator allocator = new org.apache.arrow.memory.RootAllocator()) {
+            CatalogViews views = new CatalogViews(parquet, duck, true);
+            long before = duck.describeRuns();
+            org.apache.arrow.vector.types.pojo.Schema first =
+                    duck.describeComplete(allocator, "SELECT k, s FROM s.t WHERE k = 5", views.current());
+            for (int k = 6; k < 20; k++) {
+                assertEquals(first, duck.describeComplete(allocator,
+                        "SELECT k, s FROM s.t WHERE k = " + k, views.current()));
+            }
+            assertEquals(before + 1, duck.describeRuns(), "one describe for every key");
+            org.apache.arrow.vector.types.pojo.Schema other =
+                    duck.describeComplete(allocator, "SELECT k, s FROM s.t WHERE k = 5.5", views.current());
+            assertEquals(before + 2, duck.describeRuns());
+            assertEquals(first, other);
+            assertEquals(2, duck.describeComplete(allocator, "SELECT k + 1, d FROM s.t WHERE k = 7",
+                    views.current()).getFields().size());
+            assertEquals(before + 3, duck.describeRuns(), "another select list is described");
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
      * Verifies that pruning with the query parser's own WHERE condition keeps the same files as
      * parsing its rendered filter again (item 40 (b): one jOOQ parse per query text).
      */

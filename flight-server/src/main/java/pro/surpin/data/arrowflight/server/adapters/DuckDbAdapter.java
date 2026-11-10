@@ -173,6 +173,9 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private final Map<String, Description> describeCache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(64, 0.75f, true));
+    /** Describes run in a describe DuckDB without parameter values (cache misses). */
+    private final java.util.concurrent.atomic.AtomicLong describeRuns =
+            new java.util.concurrent.atomic.AtomicLong();
     /**
      * Function and table names of the texts that passed the single-query parse check, by text.
      * The check only parses, so its outcome depends on the text alone: a client's prepare and its
@@ -3003,6 +3006,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         if (parameters.isEmpty()) {
             Description cached = cachedDescription(sql, views);
             if (cached != null) {
+                checkSharedDescription(sql, views);
                 return cached.result();
             }
         }
@@ -3040,6 +3044,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             // Read before the run: DuckDB closes a statement whose run failed.
             org.apache.arrow.vector.types.pojo.Schema parameterSchema =
                     QueryParameters.schema(parameterMetaData);
+            describeRuns.incrementAndGet();
             org.apache.arrow.vector.types.pojo.Schema result =
                     describeBound(allocator, conn, sql, ps, parameterMetaData, parameters);
             cacheDescription(sql, new Description(views, result, parameterSchema));
@@ -3099,6 +3104,41 @@ public final class DuckDbAdapter implements AutoCloseable {
     }
 
     /**
+     * Runs the single-query parse check of a text served by another text's description
+     * ({@link pro.surpin.data.arrowflight.server.services.DescribeKey}) unless it passed on this
+     * node before: a refused text is refused at describe time as before, and DoGet's pruned
+     * text is accepted without a second check ({@link #acceptRewrite}).
+     *
+     * @param sql   client SQL
+     * @param views current view definitions
+     * @throws Exception on refusal or when the check fails
+     */
+    private void checkSharedDescription(String sql,
+            pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
+            throws Exception {
+        if (acceptedBefore(sql)) {
+            return;
+        }
+        Session session = session();
+        try {
+            describeConnection(session, sql, views);
+        } catch (Exception e) {
+            dropSessionIfInvalidated(session, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Returns how many describes ran in a describe DuckDB without parameter values, that is how
+     * often the describe cache missed (tests, item 40 (b)).
+     *
+     * @return describes run since start
+     */
+    public long describeRuns() {
+        return describeRuns.get();
+    }
+
+    /**
      * Returns the cached description of a query text over the given views.
      *
      * @param sql   client SQL
@@ -3107,7 +3147,9 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private Description cachedDescription(String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views) {
-        Description cached = describeCache.get(sql);
+        // Point queries that differ only in their key share one description (DescribeKey).
+        Description cached = describeCache.get(
+                pro.surpin.data.arrowflight.server.services.DescribeKey.of(sql));
         // Identity: a new snapshot is made whenever any view changes.
         return cached != null && cached.views() == views ? cached : null;
     }
@@ -3124,7 +3166,8 @@ public final class DuckDbAdapter implements AutoCloseable {
             return;
         }
         synchronized (describeCache) {
-            describeCache.put(sql, description);
+            describeCache.put(pro.surpin.data.arrowflight.server.services.DescribeKey.of(sql),
+                    description);
             if (describeCache.size() > DESCRIBE_CACHE_CAPACITY) {
                 describeCache.remove(describeCache.keySet().iterator().next());
                 CacheMetrics.eviction(CacheMetrics.Cache.DESCRIBE);
@@ -3176,6 +3219,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             throws Exception {
         Description cached = cachedDescription(sql, views);
         if (cached != null) {
+            checkSharedDescription(sql, views);
             return cached.parameters();
         }
         Session session = session();

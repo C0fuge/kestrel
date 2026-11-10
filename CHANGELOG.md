@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Point queries that differ only in their key share one describe (item 40(b)): the describe cache key leaves out
+  integer literals of at most nine digits that are the whole right-hand side of a comparison in the WHERE clause of a
+  single-SELECT text (`... WHERE k = 5` and `... WHERE k = 6`), so CreatePreparedStatement / GetFlightInfo stop running
+  a DuckDB describe for every new key. The answer's columns come from the select list alone and such a literal cannot
+  change whether DuckDB binds the query (test over every column type); the single-query parse check still runs for
+  each new text. Every other text keeps its own entry.
+
 - File pruning by footer statistics reads the WHERE condition the query parser already parsed (item 40(b)) instead of
   parsing its rendered filter with jOOQ again on every pruned query. Same files kept (test over the pruning queries).
 
