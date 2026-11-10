@@ -647,3 +647,8 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   Fixed (33d4d2dc, workflow only): the trigger also takes `tools/ci/service-cluster-*.sh` and
   `tools/ci/point-query-load.py`. Service cluster 42812785652 on `main` green (13/13 cells + summary: first `main` run
   with the D17 point gate). Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
+- 2026-11-10 15:04-15:16Z (lane 3 session): lock 15:04Z. No open item (Q3 / Q4 unanswered, D14 waits for the stand).
+  Guard check only, no code: the catalogs lane's 40(b) pruning cuts (3a01265e, 4228c733, 135e6dac) changed the
+  point-query path that item 43's dc `local` point lookups take, with no Service cluster run since 33d4d2dc. Dispatched
+  Service cluster 42840719877 on `main` (0b467b80): 13/13 cells + summary green, dc / speed point q/s hdfs 1.12, hdfs-ha
+  0.94, s3 0.82, no warnings. Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
