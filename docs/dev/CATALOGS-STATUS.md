@@ -1003,3 +1003,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   42843856272 (c1 p50 -10 %, c32 q/s +8..10 %) and statement 42843860772 (c1 p50 -13..15 %, c8/c32 q/s +12..16 %),
   HDFS point perf main 42843864824 vs 894afb9b 42843869104 (+2..6 % on the comparable runner, 0 errors); Dev CI on
   main 42837979902 (34e24d3b) green; JFR confirms one parse per shape for `count` texts. No code change. Lock released.
+- 2026-11-10 17:25Z (session 10): no open item (40(b) DONE, C3 step 2 / C4 (b) / (d) stay backlog per the 2026-10-29 finish-mode note, Q-40b-1 / Q8 / Q10 / Q11 unanswered); no code change, stopped early. Lock released.
