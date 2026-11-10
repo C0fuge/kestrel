@@ -1209,7 +1209,8 @@ public final class CatalogViews {
         if (threePartName(sql, reference)) {
             return null;
         }
-        String filter = singleTableFilter(sql, reference, true);
+        ParquetQueryParser query = singleTableQuery(sql, reference, true);
+        String filter = query == null ? null : query.filter;
         if (filter == null) {
             return null;
         }
@@ -1218,7 +1219,7 @@ public final class CatalogViews {
         List<DataFile> kept;
         try {
             kept = p.keep(parquetAdapter.dataStore(), reference.schema() + "." + reference.table(),
-                    views.files(), filter);
+                    views.files(), filter, query.where);
         } catch (IOException | RuntimeException e) {
             // No pruning: DuckDB reads the view and reports what it cannot read itself.
             LOGGER.warn("node={} pruning=footerError table={}.{} error='{}'", LogUtil.node(),
@@ -1502,6 +1503,21 @@ public final class CatalogViews {
      */
     static String singleTableFilter(String sql, TableReferences.Reference reference,
             boolean aliases) {
+        ParquetQueryParser pq = singleTableQuery(sql, reference, aliases);
+        return pq == null ? null : pq.filter;
+    }
+
+    /**
+     * Returns the query parser's parse of a query that reads one table and nothing else.
+     *
+     * @param sql client SQL
+     * @param reference the query's only reference to the table
+     * @param aliases whether a reference with an alias is read too, as in
+     *        {@link #singleTableFilter(String, TableReferences.Reference, boolean)}
+     * @return the parse (shared, cached), or null
+     */
+    static ParquetQueryParser singleTableQuery(String sql, TableReferences.Reference reference,
+            boolean aliases) {
         if (!TableReferences.singleSelect(sql)) {
             return null;
         }
@@ -1519,7 +1535,7 @@ public final class CatalogViews {
                     || !name.equalsIgnoreCase(pq.table)) {
                 return null;
             }
-            return pq.filter;
+            return pq;
         } catch (RuntimeException e) {
             return null;   // no hints: DuckDB applies every filter anyway
         }

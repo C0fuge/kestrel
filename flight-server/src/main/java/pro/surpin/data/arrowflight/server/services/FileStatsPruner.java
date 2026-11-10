@@ -128,6 +128,23 @@ final class FileStatsPruner {
      */
     List<DataFile> keep(DataStore store, String table, List<DataFile> files, String filter)
             throws IOException {
+        return keep(store, table, files, filter, null);
+    }
+
+    /**
+     * Returns the files a WHERE clause may select rows of, reading its condition as the query
+     * parser parsed it instead of parsing the rendered text again (item 40 (b)).
+     *
+     * @param store store the files are read through
+     * @param table table name, for logs
+     * @param files the table's files, the first one the file its view was described from
+     * @param filter WHERE clause as the query parser rendered it
+     * @param parsed the condition {@code filter} was rendered from, or null to parse {@code filter}
+     * @return the files kept, in their order, or null when none is left out
+     * @throws IOException when a footer cannot be read
+     */
+    List<DataFile> keep(DataStore store, String table, List<DataFile> files, String filter,
+            Condition parsed) throws IOException {
         if (filter == null || filter.isBlank() || files.size() < 2 || store == null) {
             return null;
         }
@@ -138,9 +155,9 @@ final class FileStatsPruner {
             }
             return null;
         }
-        Condition condition;
+        Condition condition = parsed;
         try {
-            condition = DSL.using(SQLDialect.DEFAULT,
+            condition = condition != null ? condition : DSL.using(SQLDialect.DEFAULT,
                     new Settings().withParseNameCase(ParseNameCase.AS_IS)).parser()
                     .parseCondition(filter);
         } catch (RuntimeException e) {

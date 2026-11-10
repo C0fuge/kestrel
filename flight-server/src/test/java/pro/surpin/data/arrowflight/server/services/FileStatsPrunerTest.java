@@ -187,6 +187,35 @@ class FileStatsPrunerTest {
         return names;
     }
 
+    /**
+     * Verifies that pruning with the query parser's own WHERE condition keeps the same files as
+     * parsing its rendered filter again (item 40 (b): one jOOQ parse per query text).
+     */
+    @Test
+    void parsedConditionKeepsWhatTheRenderedFilterKeeps(@TempDir Path dir) throws Exception {
+        List<DataFile> files = writeFiles(dir);
+        DataStore store = store(new AtomicInteger());
+        FileStatsPruner pruner = new FileStatsPruner(16, 16);
+        int compared = 0;
+        for (Object[] q : QUERIES) {
+            String sql = (String) q[0];
+            ParquetQueryParser pq;
+            try {
+                pq = ParquetQueryParser.parse(sql);
+            } catch (RuntimeException e) {
+                continue;   // not a query the parser reads: never pruned
+            }
+            if (pq.isJoin || pq.filter == null) {
+                continue;
+            }
+            assertTrue(pq.where != null, sql);
+            assertEquals(pruner.keep(store, "s.t", files, pq.filter, null),
+                    pruner.keep(store, "s.t", files, pq.filter, pq.where), sql);
+            compared++;
+        }
+        assertTrue(compared >= 30, "compared " + compared);
+    }
+
     /** Verifies a table with more files than the bound is not pruned. */
     @Test
     void tablesWithTooManyFilesAreNotPruned(@TempDir Path dir) throws Exception {
