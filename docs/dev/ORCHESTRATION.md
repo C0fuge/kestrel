@@ -1,61 +1,68 @@
 # Orchestration status
 
-Status as of **2026-11-10 06:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10 07:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-Not ALL DONE: **ITEM 39 DONE** (06:34Z, pre-release `server-1.0.0-894afb9b48c4`). The core lane (lock 06:41Z, active)
-is on **ITEM 41**: 39edad76 on main (hadoopfs `51b7220-afc6` default - afc5/afc6 are in `ci-assets`,
-`hdfsSaslDataTransfer=auto|on|off`, CI sasl-direct cell); Dev CI 42770827832, Service hdfs 42770827746 and Service
-cluster 42770827766 running. Catalogs CI 42770828168 on 39edad76 was red only in `iceberg-rest (polaris)` "Start
-polaris" (docker pull: connection reset by peer, infrastructure) - failed jobs rerun once by the orchestrator. Queued:
-item 40(b) (core) after 41; item 38 and lane 3 D14 wait for the stand on `894afb9b48c4`.
+Not ALL DONE. Core lane (lock free, last session 07:27-07:46Z) finished **ITEM 41 steps (1)-(3)** on main (hadoopfs
+`51b7220-afc6` default, `hdfsSaslDataTransfer=auto|on|off`, CI topology `sasl-direct`: TPC-H 22/22 + SASL check exact, 0
+copies); `package=true` on `pkg/37bf9401` is running (Dev CI 42777511119; Service cluster 42777497907, hdfs 42777501115,
+security 42777504125, stores 42777507448) -> expected pre-release `server-1.0.0-37bf9401d77c`, then "ITEM 41 DONE".
+Plugins lane: 40(a) Q-40a answer (C) implemented (`d295fe36`, JVM reservation when sizing speed's DuckDB; Dev CI
+42775184825 on `fix/40a-s3` green), lock released. Catalogs lane (lock 07:27Z, active) now owns **ITEM 40(b)**
+(moved from the core lane by the maintainer, 10:40 local).
 
-Note for the maintainer: the plugins lane's 06:45Z Log line says "Q-40a still unanswered", but your answer **(C)** is
-on main (commit of 05:14Z, `PLUGINS-STATUS.md` Open questions). That session took its lock at 05:11Z, before the
-answer landed; the next plugins session should implement (C). Its (B) memory-pressure run tpch-perf 42760596461 is
-still running (started 05:12Z).
+For the maintainer:
+- Your 11:00 note (too-old hadoopfs must fail clearly + refresh `duckdb-extensions-v1.5.6.tar.zst` in `ci-assets`) is
+  at the top area of `STATUS.md` Next steps; the core lane has not picked it up yet (it was written after that session).
+- egret ACCEPT on `894afb9b48c4` (run 42772192151): **DO NOT SHIP**, but only because the harness loaded the `ci-assets`
+  set's afc3 hadoopfs - every server, the reference included, failed setup with "Statement was closed" (exactly the
+  case of your note). egret fixed the harness (`6d7671d`, takes the release's pinned extension); a re-run is needed.
+- New open question in `STATUS.md` (core lane, item 41): `hdfs=reads` check on the direct path.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 41 (afc6 default + direct SASL DataNode reads); then 40(b); item 38 waits for the stand | 2026-11-10 06:47Z (39edad76) | held 06:41Z (active, 17 min) | main Dev CI 42770827832 running; newest completed main Dev CI 42764375712 (894afb9b) green |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 40(a): implement Q-40a answer (C) (measured JVM reservation + `DuckDbSizingTest` + memory check) | 2026-11-10 06:43Z (unlock) | free | tpch-perf 42760596461 running (main) |
-| catalogs (`CATALOGS-STATUS.md`) | no open item | 2026-11-10 03:21Z (unlock) | free | Catalogs CI 42770828168 polaris infra fail, rerun |
-| lane 3 (`LANE3-STATUS.md`) | D14 waits for the stand on `894afb9b48c4`; Q3 open | 2026-11-10 04:03Z (unlock) | free | Service cluster 42691698496 green (branch) |
+| core (`STATUS.md`) | ITEM 41: confirm package run -> "ITEM 41 DONE"; too-old-hadoopfs note; stand on the new pre-release | 2026-11-10 07:46Z (5eb04a8f unlock) | free | newest completed main Dev CI 42774303168 (68d2c866) green; main 42777385100 (37bf9401) running |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 40(a) S3 gap, step 3 done (Q-40a (C)) | 2026-11-10 07:44Z (unlock) | free | Dev CI 42775184825 (fix/40a-s3) green |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 40(b) small/point query overhead (`fix/40b-small`) | 2026-11-10 07:27Z (lock) | held 07:27Z (active, 31 min) | Catalogs CI 42775949965 (main) green |
+| lane 3 (`LANE3-STATUS.md`) | D14 waits for the stand; Q3 open | 2026-11-10 07:04Z (no change) | free | - |
 
-No red completed Dev CI on main; no new bug-first notes in the plugins/catalogs/lane 3 files. No stale locks
-(kestrel LOCK 06:41Z held; marten/heron `docs/LOCK` empty).
+No red completed Dev CI on main (the red Service hdfs runs 42770827746 / 42772689452 / 42774301990 were item 41
+iterations, fixed by 8766455b: 42775949664 green). No new bug-first notes in the plugins/catalogs/lane 3 files. No stale
+locks (kestrel: only LOCK-CATALOGS held; marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42770827766 | 39edad76 (main) | running (42767259358 pkg 894afb9b pass) |
-| service-hdfs.yml | 42770827746 | 39edad76 (main) | running (42764375265 main 894afb9b pass) |
-| service-security.yml | 42767265035 | 894afb9b (pkg) | pass |
-| service-stores.yml | 42767268942 | 894afb9b (pkg) | pass |
+| service-cluster.yml | 42777497907 | 37bf9401 (pkg) | queued (42770827766 main 39edad76 pass) |
+| service-hdfs.yml | 42777501115 | 37bf9401 (pkg) | queued (42775949664 main 8766455b pass) |
+| service-security.yml | 42777504125 | 37bf9401 (pkg) | running (42767265035 pkg 894afb9b pass) |
+| service-stores.yml | 42777507448 | 37bf9401 (pkg) | queued (42767268942 pkg 894afb9b pass) |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-894afb9b48c4` (2026-11-10 05:48Z): ITEM 39 DONE; waits for the stand + independent cluster check; no egret run yet.
+- `server-1.0.0-894afb9b48c4` (2026-11-10 05:48Z): ITEM 39 DONE; egret ACCEPT failed on the harness's afc3 (re-run needed); FRESH 42775953599 running.
 - `server-1.0.0-b69660b9260a` (2026-11-07 18:47Z): item 38; waits for the stand; egret ACCEPT SHIP (42406253240).
 - `server-1.0.0-06c5adc7d7c9` (2026-11-07 05:57Z): item 37; ITEM 37 DONE on the stand.
+- Coming: `server-1.0.0-37bf9401d77c` (item 41 package run).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); SERVER deafc861cce3 CHECKED; session 06:40Z "finish mode, nothing new".
-  Open question: TPC-H q16 SF1 slowdown (series effect since `fl1eb792`) - fix or leave.
-- heron: **IMPROVEMENTS DONE**; SERVER deafc861cce3 CHECKED; session 193 (06:53Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 07:41Z "finish mode, nothing new". Open question: TPC-H q16 SF1
+  slowdown - fix or leave.
+- heron: **IMPROVEMENTS DONE**; session 194 (07:51Z): nothing open.
 
 ## egret
 
-- Newest FRESH for a pre-release: **FRESH deafc861cce3 DONE** (run 42223833724): speed vs balanced scans x4/x8
-  1.30-1.58, load +42-45 % at 128 clients, 22/22, 0 errors; upstream native `9e4787906b07` still fails TPC-H/small.
-- **EGRET GIZMO DONE** (`results/FRESH-gizmo-deafc861cce3.md`): S3 TPC-H SF10 speed ~1.5x slower than GizmoSQL (basis of ITEM 40).
-- README 'In progress': idle, newest tracked `b69660b9260a` (05:26Z). Not yet tracked: `894afb9b48c4` (item 39).
+- Newest FRESH for a pre-release: **FRESH deafc861cce3 DONE** (run 42223833724); EGRET GIZMO DONE (S3 SF10 speed ~1.5x
+  slower than GizmoSQL, basis of ITEM 40).
+- README 'In progress': RUNNING 07:33Z on `894afb9b48c4`: ACCEPT 42772192151 finished DO NOT SHIP (setup, afc3 - see
+  above); FRESH 42775953599 (wave `fresh-up-894afb9b48c4`, upstream `cec626bbb54a`) running.
 
 ## History
 
+- 2026-11-10 07:58Z: ITEM 41 steps (1)-(3) on main (afc6 default, hdfsSaslDataTransfer, sasl-direct cell; Dev CI 42774303168 green, Service hdfs 42775949664 12/12 green), package=true on pkg/37bf9401 running (Dev CI 42777511119 + 4 service runs); plugins lane 40(a) Q-40a (C) on main d295fe36; catalogs lane (lock 07:27Z) on ITEM 40(b); maintainer added too-old-hadoopfs note; egret ACCEPT 894afb9b48c4 DO NOT SHIP (harness loaded afc3, every server failed setup; harness fixed 6d7671d), FRESH 42775953599 running; no red Dev CI on main, no stale locks.
 - 2026-11-10 06:58Z: ITEM 39 DONE (pre-release server-1.0.0-894afb9b48c4); core lane (lock 06:41Z) on ITEM 41: 39edad76 on main (afc6 default, hdfsSaslDataTransfer), Dev CI 42770827832 + Service hdfs/cluster running; Catalogs CI 42770828168 polaris docker-pull reset (infra) -> failed jobs rerun; plugins lane logged Q-40a as unanswered though (C) is on main (lock taken before the answer); egret not yet on 894afb9b48c4; no stale locks.
 - 2026-11-10 05:56Z: core lane (lock 05:41Z, active): package Dev CI 42757195073 red at the service gate (apt errors in `docker build` of the server images); CI-only mirror fixes 90b3def5 + 894afb9b on main (Dev CI 42763742753 on 90b3def5 red in the hadoopfs-libraries apt step, superseded), main Dev CI 42764375712 + package rerun 42764387193 on ci/core-39pkg2 running; maintainer answered **Q-40a (C)** and opened **ITEM 41** (hadoopfs afc6, SASL DataNodes read directly); plugins lane (lock 05:11Z) tpch-perf 42760596461 running; no stale locks.
 - 2026-11-10 04:57Z: core lane (lock 03:41Z, active): package Dev CI 42751144566 on ci/core-39pkg red only at the service gate (Service hdfs 42752652430/42755619561 red: KDC setup stalled on the Ubuntu mirror); CI fix 98574893 on main (Dev CI 42757164357 + Catalogs CI green, Service hdfs 42757164355 running), package rerun Dev CI 42757195073 running; plugins lane: 40(a) cause found (speed's DuckDB memory limit bounds the external file cache; speed 15.9 s vs plain DuckDB 16.9 s with 1g JVM), docs step done, **Q-40a open**; lane 3 Q3 open; no red Dev CI on main, no stale locks.
@@ -95,4 +102,3 @@ No red completed Dev CI on main; no new bug-first notes in the plugins/catalogs/
 - 2026-11-08 04:57Z: no change: core session 04:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (04:41Z)/heron (session 157)/egret (03:27Z README, idle) idle; no stale locks.
 - 2026-11-08 03:57Z: no change: core session 03:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (03:40Z)/heron (session 156)/egret (03:27Z README, idle) idle; no stale locks.
 - 2026-11-07 21:56Z: no change: core session 21:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (21:40Z)/heron (session 155)/egret (21:27Z README, idle) idle; no stale locks.
-- 2026-11-07 20:57Z: egret ACCEPT b69660b9260a DONE: SHIP (42406253240); core session 20:40Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (20:40Z)/heron (session 154) idle; no stale locks.
