@@ -641,3 +641,9 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   point lookup on srv1 was merged or waited for admission; the summary ratio warns < 0.8 (s3 0.76 warned in
   42796297705), fails < 0.5 (pre-item-43 fan-out was 0.27-0.57). Branch Service cluster 42796297705 green, merged
   into `main`. Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
+- 2026-11-10 12:04-12:35Z (lane 3 session): lock 12:04Z. No open item to take: D14 waits for the stand's rerun on
+  the item 39/43 pre-release, Q3 / Q4 unanswered. Found: `service-cluster.yml`'s push trigger did not cover D17's
+  `tools/ci/service-cluster-point.sh` (nor `point-query-load.py`), so D17's merge never ran the matrix on `main`.
+  Fixed (33d4d2dc, workflow only): the trigger also takes `tools/ci/service-cluster-*.sh` and
+  `tools/ci/point-query-load.py`. Service cluster 42812785652 on `main` green (13/13 cells + summary: first `main` run
+  with the D17 point gate). Lock released. Next: Q3 / Q4 answers, D14 after the stand's rerun.
