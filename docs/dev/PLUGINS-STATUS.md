@@ -5,6 +5,24 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-11 00:05 - BUG FIRST in this lane, ITEM 44 (regression from Q-42, real-cluster build
+> `2ff221447b5d`).** Performance repo `results/FRESH-2ff221447b5d.md`: **balanced fails TPC-H heavy queries with DuckDB
+> Out of Memory at a 128 MiB `memory_limit`** - local SF10 q09/q10/q13 every round, S3 SF1 3-5 and SF10 5-8 queries
+> (harness container 2 CPU / 6 GB, -Xmx3g, direct 2g: the budget after the JVM reservation is ~100 MiB, so Q-42's cap
+> put the per-connection limit at the 128 MiB floor). `37bf9401d77c` balanced was 22/22. A memory cap must never make
+> queries fail that ran before: for balanced use the item 40(a) reservation (what the JVM really uses, not the full
+> -Xmx + direct) to compute the budget, keep a usable floor (e.g. 512 MiB per connection or the old 1 GiB when the
+> container has the room), and WARN at start when the configured heap+direct leave less than that. Test with the
+> harness shape (6 GB, -Xmx3g, direct 2g): TPC-H SF10 22/22 in balanced. Also from the stand (same build):
+> (2) **Ranger revoke delayed 45-70 s on the direct SASL path** (`ranger-policy ... off`: queries keep answering at
+> +25 s and +45 s, also 3 tables never read before; denial only between +45 and +70 s; with
+> `-DhdfsSaslDataTransfer=off` or `-DhdfsMetadataCacheTtlMs=0` denial at +25 s): with the metadata/listing caches a
+> repeat query makes no NameNode call, so no Ranger check. Bound the authorization staleness: re-validate access with
+> one cheap NameNode call per table at most every N s (default 10 s, setting), or cap the cache TTL for permissions.
+> (3) plain-name denial status: after the revoke, plain `q01` (via defaultSchema) gets `UNAVAILABLE: Permission
+> denied: user=flight, access=READ_EXECUTE, inode="/data/parquet/types"...` - should be UNAUTHORIZED, no HDFS path in
+> the client text, a `result=denied` WARN. Branch `fix/44`, merge when green, "ITEM 44 DONE <sha>".
+
 > **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 42 (two stand bugs (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).**
 > (1) **speed sizes DuckDB above the budget in small cgroups.** 3g container, `-Xmx768m -XX:MaxDirectMemorySize=512m
 > -DresourceProfile=speed`, no `duckDbMemoryLimit`, a self-join GROUP BY of lineitem: start log `duckdb=sizing

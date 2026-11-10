@@ -4,6 +4,14 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-11 00:05 - ITEM 45 (item 43 follow-up, stand on `2ff221447b5d`).** The point-lookup
+> pattern (`POINT_EQUALITY` in `DistributedComplete`) matches only a string or number after `=`: `SELECT count(*) FROM
+> tpch.orders WHERE o_orderdate = DATE '1992-01-01'` (and `CAST('1992-01-01' AS DATE)`) is still `merged
+> endpoints=8`, p50 73 ms vs 14 ms under speed; with `= '1992-01-01'` the mix reaches 0.92 of speed. The real
+> cluster's benchmark mix uses the DATE form. Accept typed literals (DATE / TIMESTAMP / CAST(... AS type) / negative
+> numbers / decimals). Overall dc 32-client point mix was 899 q/s vs speed 2198 (0.41; target >= 0.8). CI: the point
+> gate with a DATE literal. Merge when green, "ITEM 45 DONE <sha>".
+
 > **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 43 (stand bug (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).** distributedComplete point
 > lookups queue for all peer streams: each takes `permits=4` (all 4 peer streams of a node with 512 MiB direct), so
 > 61-63 % of dc queries wait for admission; at 32 clients dc does 217 q/s vs speed's 1348, dc small-query p99 297 ms
