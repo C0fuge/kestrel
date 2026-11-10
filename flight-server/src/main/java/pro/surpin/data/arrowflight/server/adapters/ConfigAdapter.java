@@ -66,11 +66,7 @@ public class ConfigAdapter {
         String dataDir = getString("dataDir", null, "/data/parquet", props);
         DuckDbSizing sizing = duckDbSizing(props, host);
         int duckDbThreads = sizing.threads();
-        String duckDbHdfsExtension = getStringWithEnv("duckDbHdfsExtension",
-                "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
-        if (duckDbHdfsExtension == null && isHdfs(dataDir)) {
-            duckDbHdfsExtension = hadoopfsFromExtensionDir(props).orElse(null);
-        }
+        String duckDbHdfsExtension = duckDbHdfsExtension(props);
         boolean duckDbAllowUnsignedExtensions = getBooleanWithEnv("duckDbAllowUnsignedExtensions",
                 "arrowflight.duckdb.allowUnsignedExtensions", "DUCKDB_ALLOW_UNSIGNED_EXTENSIONS",
                 false, props);
@@ -970,6 +966,24 @@ public class ConfigAdapter {
      */
     static boolean isHdfs(String dataDir) {
         return dataDir != null && dataDir.regionMatches(true, 0, "hdfs://", 0, "hdfs://".length());
+    }
+
+    /**
+     * Resolves the hadoopfs extension file DuckDB loads: {@code duckDbHdfsExtension}
+     * ({@code DUCKDB_HDFS_EXTENSION}), else, for an {@code hdfs://} data dir, the one in
+     * arrowflight.duckdb.extensionDir. Read again after the command line set the data dir.
+     *
+     * @param props configuration source
+     * @return extension file, or null when DuckDB loads none
+     * @throws IllegalArgumentException when an hdfs:// data dir's extension directory has none
+     */
+    public static String duckDbHdfsExtension(ConfigSource props) {
+        String file = getStringWithEnv("duckDbHdfsExtension",
+                "arrowflight.duckdb.hdfs.extension", "DUCKDB_HDFS_EXTENSION", null, props);
+        if (file == null && isHdfs(getString("dataDir", null, "/data/parquet", props))) {
+            file = hadoopfsFromExtensionDir(props).orElse(null);
+        }
+        return file;
     }
 
     /**

@@ -210,8 +210,9 @@ public class HadoopArrowFlightServer {
                 // Item 41: hadoopfs 51b7220-afc6+ speaks SASL data transfer on the read path.
                 HdfsSaslDataTransfer.Decision sasl = HdfsSaslDataTransfer.decide(
                         HdfsSaslDataTransfer.mode(ConfigSource.system()),
-                        HdfsSaslDataTransfer.extensionVersion(config.duckDbHdfsExtension() == null
-                                ? null : java.nio.file.Path.of(config.duckDbHdfsExtension())),
+                        // Not config's value: it was read before --data-dir set dataDir, and the
+                        // extension is looked up in extensionDir only for an hdfs:// data dir.
+                        HdfsSaslDataTransfer.extensionVersion(hdfsExtensionFile()),
                         libhdfs3Properties(System.getenv("LIBHDFS3_CONF")));
                 saslDirect = sasl.direct();
                 LOGGER.info("hdfs=saslDataTransfer {} transferProtection={}{}", sasl.describe(),
@@ -808,6 +809,16 @@ public class HadoopArrowFlightServer {
             }
         }
         return problems;
+    }
+
+    /**
+     * Returns the hadoopfs extension file DuckDB loads, resolved with the command line's data dir.
+     *
+     * @return file, or null when none is configured
+     */
+    static java.nio.file.Path hdfsExtensionFile() {
+        String file = ConfigAdapter.duckDbHdfsExtension(ConfigSource.system());
+        return file == null ? null : java.nio.file.Path.of(file);
     }
 
     /**

@@ -857,6 +857,13 @@ class ConfigAdapterTest {
         AppConfig found = ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/data/parquet",
                 "arrowflight.duckdb.extensionDir", dir.resolve("ext").toString()), Map.of()));
         assertEquals(file.toString(), found.duckDbHdfsExtension());
+        // Item 41 regression: the start reads it again once --data-dir set dataDir (its first
+        // config had the default local dir and no extension, so the SASL version check saw none).
+        assertEquals(file.toString(), ConfigAdapter.duckDbHdfsExtension(source(Map.of(
+                "dataDir", "hdfs://ns/data/parquet", "arrowflight.duckdb.extensionDir",
+                dir.resolve("ext").toString()), Map.of())));
+        assertNull(ConfigAdapter.duckDbHdfsExtension(source(Map.of(
+                "arrowflight.duckdb.extensionDir", dir.resolve("ext").toString()), Map.of())));
 
         AppConfig explicit = ConfigAdapter.getConfig(source(Map.of("dataDir", "hdfs://ns/data/parquet",
                 "arrowflight.duckdb.extensionDir", empty.toString(), "duckDbHdfsExtension", "/x/h.ext"),
