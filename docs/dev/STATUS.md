@@ -60,6 +60,11 @@
 > check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
 > Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
 
+> **Maintainer, 2026-11-10 11:10 - PACKAGE RIGHT AFTER 40(b).** As soon as the catalogs lane writes "ITEM 40(b)
+> DONE" (merged into `main`), run Dev CI `package=true` on `main` with whatever else is green there (item 41 too if
+> merged, 40(a) is), before any other core work; then a STATUS Log line with the pre-release id. Items 42 (plugins
+> lane) and 43 (lane 3) do not block it.
+
 > **Maintainer, 2026-11-10 11:00 - small, with item 41: a too-old hadoopfs must fail clearly.** `894afb9b48c4` started
 > with the afc3 extension (the `ci-assets` extension set) fails `IllegalStateException: DuckDB cannot be set up for
 > the data store: Statement was closed`. At start, check the loaded hadoopfs version / that `hdfs_metadata_cache_ttl_ms`

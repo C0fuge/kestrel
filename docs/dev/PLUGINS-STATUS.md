@@ -5,6 +5,21 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 42 (two stand bugs (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).**
+> (1) **speed sizes DuckDB above the budget in small cgroups.** 3g container, `-Xmx768m -XX:MaxDirectMemorySize=512m
+> -DresourceProfile=speed`, no `duckDbMemoryLimit`, a self-join GROUP BY of lineitem: start log `duckdb=sizing
+> threads=16 memoryLimit=2457MiB ... budgetMiB=1331` (2457 + 768 + 512 > 3072) -> OOM kill (exit 137) in 5-13 s,
+> client `UNAVAILABLE: Network closed for unknown reason`. Cause: `DuckDbSizing.compute` gives each of 4 connections
+> at least 1 GiB, capped at 80 % of memory instead of the budget. The DuckDB limit must never exceed the budget
+> (budget = cgroup/host memory - JVM reservation of item 40(a)); test with small budgets (1-3 GiB).
+> (2) **file pruning by footer statistics (item 39 (c) part 3) never runs with SASL DataNodes.** One server, debug
+> log for `...server.services`, `SELECT ... FROM tpch.orders WHERE o_orderkey = 49378`: no `views=prunedFiles` line,
+> `-DfileStatsPruningMaxFiles=0` gives the same rate; with privileged DataNodes the same query logs
+> `views=prunedFiles table=tpch.orders kept=1 files=8`. The real cluster has SASL DataNodes. Find the SASL /
+> short-circuit-only (or direct SASL, item 41) path that skips pruning and apply it there; CI: the sasl cells must
+> show `views=prunedFiles` for a point query.
+> Branch `fix/42-sizing-pruning`, maintainer exception to the lane scope, merge into `main` when green, "ITEM 42 DONE <sha>".
+
 > **Core lane, 2026-11-09 13:10Z - note on ITEM 39(b) (no action of this lane lost):** the core session had already
 > pushed a fix for (b) to `main` (`39f84617`) before it saw the split: `HostLimits` now reads the memory limit of the
 > process's own cgroup (`/proc/self/cgroup`) and of every parent up to the mount point (smallest wins, v2 then v1),

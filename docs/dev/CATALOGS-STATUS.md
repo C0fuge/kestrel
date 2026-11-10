@@ -4,6 +4,9 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
+> is green (do not hold them for one big merge); the core lane packages right after "ITEM 40(b) DONE".**
+>
 > **Maintainer, 2026-11-10 10:40 - FIRST in this lane: ITEM 40(b)** (moved here from the core lane, which works on item
 > 41). Per-query overhead of small / point queries: on the real cluster point queries are the main gap to upstream
 > (there 460 q/s on 16 cores), and GizmoSQL (same DuckDB) takes 0.70-0.85 of speed's time on the small-query mix

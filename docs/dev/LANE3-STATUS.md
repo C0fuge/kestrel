@@ -4,6 +4,14 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 43 (stand bug (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).** distributedComplete point
+> lookups queue for all peer streams: each takes `permits=4` (all 4 peer streams of a node with 512 MiB direct), so
+> 61-63 % of dc queries wait for admission; at 32 clients dc does 217 q/s vs speed's 1348, dc small-query p99 297 ms
+> vs speed 54 ms. A query whose answer is one row / a few rows (point lookup, count) needs no merge budget: take
+> permits by the expected result size (or none for single-row answers), keep the item 35 bound for large scans.
+> CI: the cluster cell with 32 clients of point queries under dc, q/s within ~20 % of speed. Branch
+> `lane/distributed`, merge when green, "ITEM 43 DONE <sha>".
+
 ITEM 39(d) DONE a952f415 (2026-11-09, see Log): merge budget from min(direct memory, Arrow allocator limit);
 one-row merges skip the queue. For the stand: rerun the dc small-query classes (8 / 32 clients) and the 8
 concurrent full scans on the core lane's item 39 pre-release; expect `peer streams: 16 (... Arrow allocator limit
