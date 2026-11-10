@@ -23,9 +23,11 @@
 
 ## Next steps (one per session)
 
-> **Core lane, 2026-11-10 05:25Z - item 39 last step: code on `main` (877cf100), CI green, measured; only the
-> `package=true` pre-release is left.** It is blocked by the runners' Ubuntu apt mirror (see Log): next session, dispatch
-> Dev CI `package=true` on a `ci/core-*` branch at the newest main commit; when it publishes, write "ITEM 39 DONE".
+> **ITEM 39 DONE (2026-11-10 06:34Z, core lane).** Dev CI `package=true` 42764387193 on `ci/core-39pkg2` (894afb9b,
+> = main) green incl. the service gate (Service hdfs 42764375265, cluster 42767259358, stores 42767268942, security
+> 42767265035); pre-release `server-1.0.0-894afb9b48c4` (7 assets). **Next for the core lane: item 41** (afc6 into
+> `ci-assets` waits for the maintainer's upload), item 40(b) after it. The stand + the independent cluster check
+> follow on this pre-release.
 
 > **Maintainer, 2026-11-10 00:10 - ITEM 39, last step before `package=true` (core lane).** All four parts are on `main`
 > (39(c) DONE bf72114c). Before packaging:
@@ -4066,3 +4068,11 @@ S3 slowdown item below stays open for then).
   `Commands out of sync` in q08, probably a separate flake). Service security 42759089892, Dev CI push 42757164357,
   Catalogs CI 42757164549 green. Next: re-dispatch `package=true`. If the mirror stays bad, give the
   server-image `docker build` steps the same apt retries (several workflows, maybe a shared helper). Lock released.
+- 2026-11-10 05:40-06:40Z (cloud session, core lane): **ITEM 39 DONE.** CI only, two commits: `tools/ci/server-image.sh`
+  (shared by Service hdfs / cluster / HDFS point perf: the focal server image with apt retries/timeouts, up to three
+  `docker build` tries, `server-image:` lines) and an Ubuntu mirror fallback (Azure mirror first, archive.ubuntu.com
+  second) for that image, the KDC container (`service-hdfs-cell.sh`, try 2) and Dev CI's hadoopfs library debs
+  (`curl --retry-all-errors`), after `package=true` 42763755240 (90b3def5) failed fetching libssl1.1 from
+  archive.ubuntu.com (connection reset). `package=true` 42764387193 (894afb9b) green: build, service gate (Service hdfs
+  42764375265, cluster 42767259358, stores 42767268942, security 42767265035), pre-release `server-1.0.0-894afb9b48c4`.
+  Dev CI push 42764375712, Catalogs CI 42764375651 green. No CHANGELOG line (no runtime change). Lock released.
