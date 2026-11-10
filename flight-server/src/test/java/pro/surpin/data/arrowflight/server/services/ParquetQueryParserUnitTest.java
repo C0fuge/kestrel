@@ -256,6 +256,100 @@ class ParquetQueryParserUnitTest {
     }
 
     /**
+     * Item 40(b): a text parsed before comes back without its preparation running again; what is
+     * refused stays refused on every call, and texts that differ only in preparation parse alike.
+     */
+    @Test
+    void reparsesASeenTextFromItsRawText() {
+        String sql = "SELECT a, b FROM s.raw40b WHERE t = TIME '01:02:03.5';";
+        ParquetQueryParser first = ParquetQueryParser.parse(sql);
+        assertSame(first, ParquetQueryParser.parse(sql));
+        ParquetQueryParser bare = ParquetQueryParser.parse(
+                "SELECT a, b FROM s.raw40b WHERE t = TIME '01:02:03.5'");
+        assertEquals(String.valueOf(first.filter), String.valueOf(bare.filter));
+        assertEquals(first.columns, bare.columns);
+        String marker = "SELECT a FROM s.raw40b WHERE a = ?";
+        for (int i = 0; i < 2; i++) {
+            RuntimeException e = assertThrows(RuntimeException.class,
+                    () -> ParquetQueryParser.parse(marker));
+            assertTrue(String.valueOf(e.getCause().getMessage()).contains("parameters"), e.toString());
+        }
+        String update = "UPDATE s.raw40b SET a = 1";
+        for (int i = 0; i < 2; i++) {
+            assertThrows(RuntimeException.class, () -> ParquetQueryParser.parse(update));
+        }
+    }
+
+    /**
+     * Item 40(b): the typed-literal rewrite with one matcher tried at {@code t} only gives what the
+     * matcher tried at every position gave, over hand-picked and random texts.
+     */
+    @Test
+    void castTypedLiteralsMatchesTheMatcherAtEveryPosition() {
+        List<String> texts = new java.util.ArrayList<>(List.of(
+                "SELECT TIME '12:34:56.789' AS t", "SELECT time'1', Time  '2', tImEsTaMpTz '3'",
+                "SELECT xtime '1', _time '2', 1time '3', \"time '4'\", 'time ''5'''",
+                "SELECT timestamptz '2024-01-01 00:00:00+02' AS z, timestamp '2024-01-01'",
+                "SELECT a FROM t WHERE t.time = TIME '00:00' AND s = 'it''s TIME ''x'''",
+                "time '9'", "", "t", "TIME", "time 'unterminated"));
+        java.util.Random random = new java.util.Random(40);
+        String[] parts = {"time", "TIME", "timestamptz", "TimeStampTZ", " ", "  ", "'", "''", "\"",
+            "x", "_", "1", "t", "e", "(", ",", "a'b"};
+        for (int n = 0; n < 5000; n++) {
+            StringBuilder text = new StringBuilder();
+            int len = random.nextInt(12);
+            for (int k = 0; k < len; k++) {
+                text.append(parts[random.nextInt(parts.length)]);
+            }
+            texts.add(text.toString());
+        }
+        for (String text : texts) {
+            assertEquals(castTypedLiteralsEveryPosition(text),
+                    ParquetQueryParser.castTypedLiterals(text), text);
+        }
+    }
+
+    /**
+     * The typed-literal rewrite as it was before item 40(b): a new matcher at every position.
+     *
+     * @param sql SQL text
+     * @return rewritten text
+     */
+    private static String castTypedLiteralsEveryPosition(String sql) {
+        java.util.regex.Pattern typed = java.util.regex.Pattern.compile(
+                "(?i)(time|timestamptz)\\s+'((?:[^']|'')*)'");
+        StringBuilder out = new StringBuilder();
+        char quote = 0;
+        int i = 0;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (quote != 0) {
+                out.append(c);
+                if (c == quote) {
+                    quote = 0;
+                }
+                i++;
+                continue;
+            }
+            boolean wordStart = i == 0 || !Character.isLetterOrDigit(sql.charAt(i - 1))
+                    && sql.charAt(i - 1) != '_';
+            java.util.regex.Matcher m = typed.matcher(sql).region(i, sql.length());
+            if (wordStart && m.lookingAt()) {
+                String type = m.group(1).equalsIgnoreCase("time") ? "TIME" : "TIMESTAMP WITH TIME ZONE";
+                out.append("CAST('").append(m.group(2)).append("' AS ").append(type).append(')');
+                i = m.end();
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
+
+    /**
      * Builds a query whose IN list makes it longer than the cache limit.
      *
      * @return SQL text

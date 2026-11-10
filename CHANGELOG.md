@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Less work per repeated parse of the same SQL text (item 40(b)): a request parses its text several times (describe,
+  plan, DoGet's pruning); a text that parsed before now skips the typed-literal rewrite and subquery-wrapper scan too
+  (cache by the text as passed, same capacity and size limit as the parse cache, refused texts are never cached), and
+  the typed-literal rewrite uses one matcher tried only where `TIME` / `TIMESTAMPTZ` can start. Same results; JFR
+  samples under the parser per point query -35 % locally, end to end within noise.
+
 - Q-42 (follow-up of item 42, maintainer's answer): (a) the default DuckDB memory limit never exceeds the DuckDB budget
   (memory - `-Xmx` - direct memory - 15 %; floor 128 MiB) in `balanced` (per connection, also speed's private fallback
   DuckDB) and with `duckDbSharedDatabase=true` either: the 1 GiB floors applied even when the budget was smaller (2 CPUs /

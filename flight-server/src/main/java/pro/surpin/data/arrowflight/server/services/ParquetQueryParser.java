@@ -30,6 +30,13 @@ public class ParquetQueryParser {
     private static final Map<String, ParquetQueryParser> PARSE_CACHE =
             Collections.synchronizedMap(
                     new LinkedHashMap<>(PARSE_CACHE_CAPACITY, 0.75f, true));
+    /**
+     * Parses by the text as callers pass it, before {@link #normalized} preparation; holds only
+     * texts that parsed, so a refused text is checked (and refused) again every time.
+     */
+    private static final Map<String, ParquetQueryParser> RAW_PARSE_CACHE =
+            Collections.synchronizedMap(
+                    new LinkedHashMap<>(PARSE_CACHE_CAPACITY, 0.75f, true));
 
     /**
      * A table reference in a JOIN, with optional schema and alias.
@@ -270,13 +277,30 @@ public class ParquetQueryParser {
      * @throws RuntimeException if parsing fails
      */
     public static ParquetQueryParser parse(String query) {
+        // Item 40(b): a request parses its text several times (describe, plan, DoGet); the
+        // preparation below is a pure function of the text, so a text seen before skips it too.
+        ParquetQueryParser seen = RAW_PARSE_CACHE.get(query);
+        if (seen != null) {
+            return seen;
+        }
+        String raw = query;
         query = castTypedLiterals(withoutTrailingSemicolon(query));
+        ParquetQueryParser parsed;
         try {
             rejectParameterMarkers(query);
-            return parseChecked(query);
+            parsed = parseChecked(query);
         } catch (IllegalArgumentException e) {
             throw new RuntimeException("Invalid SQL query: " + query, e);
         }
+        if (QueryCacheLimits.cacheable(raw)) {
+            synchronized (RAW_PARSE_CACHE) {
+                RAW_PARSE_CACHE.put(raw, parsed);
+                if (RAW_PARSE_CACHE.size() > PARSE_CACHE_CAPACITY) {
+                    RAW_PARSE_CACHE.remove(RAW_PARSE_CACHE.keySet().iterator().next());
+                }
+            }
+        }
+        return parsed;
     }
 
     /**
@@ -316,6 +340,7 @@ public class ParquetQueryParser {
         StringBuilder out = new StringBuilder(sql.length() + 16);
         char quote = 0;
         int i = 0;
+        Matcher m = null;
         while (i < sql.length()) {
             char c = sql.charAt(i);
             if (quote != 0) {
@@ -326,10 +351,14 @@ public class ParquetQueryParser {
                 i++;
                 continue;
             }
-            boolean wordStart = i == 0 || !Character.isLetterOrDigit(sql.charAt(i - 1))
-                    && sql.charAt(i - 1) != '_';
-            Matcher m = TYPED_LITERAL.matcher(sql).region(i, sql.length());
-            if (wordStart && m.lookingAt()) {
+            // Both keywords start with t; one matcher, tried only there (item 40(b)).
+            boolean wordStart = (c == 't' || c == 'T')
+                    && (i == 0 || !Character.isLetterOrDigit(sql.charAt(i - 1))
+                    && sql.charAt(i - 1) != '_');
+            if (wordStart && m == null) {
+                m = TYPED_LITERAL.matcher(sql);
+            }
+            if (wordStart && m.region(i, sql.length()).lookingAt()) {
                 String type = m.group(1).equalsIgnoreCase("time")
                         ? "TIME" : "TIMESTAMP WITH TIME ZONE";
                 out.append("CAST('").append(m.group(2)).append("' AS ").append(type).append(')');
@@ -512,6 +541,8 @@ public class ParquetQueryParser {
         return item instanceof TableField<?, ?> column ? column : gf;
     }
 
+    private static final Pattern FROM_PAREN = Pattern.compile("(?i)\\bfrom\\s*\\(");
+
     /**
      * Flattens "SELECT ... FROM (SELECT ...) alias" → "SELECT ... FROM innerTable".
      * Regex-based, operates on the raw SQL string before jOOQ parsing.
@@ -523,7 +554,7 @@ public class ParquetQueryParser {
     private static String flattenSubqueryWrapper(String query) {
         String q = query.trim();
 
-        Matcher fromParen = Pattern.compile("(?i)\\bfrom\\s*\\(").matcher(q);
+        Matcher fromParen = FROM_PAREN.matcher(q);
         if (!fromParen.find()) {
             return q;
         }
