@@ -271,6 +271,94 @@ class FileStatsPrunerTest {
         }
     }
 
+    /** Point query shapes whose integer literals {@link DescribeKey} leaves out; %d is a value. */
+    private static final String[] SHAPES = {
+        "SELECT * FROM s.t WHERE k = %d",
+        "SELECT * FROM s.t WHERE k = -%d",
+        "SELECT * FROM s.t WHERE k = - %d",
+        "SELECT * FROM s.t WHERE k > %d",
+        "SELECT * FROM s.t WHERE k <= -%d",
+        "SELECT * FROM s.t WHERE k >= %d AND k < %d",
+        "SELECT * FROM s.t WHERE k = %d OR k = %d",
+        "SELECT * FROM s.t WHERE k = %d OR v = %d",
+        "SELECT * FROM s.t WHERE (k = %d) AND s LIKE 'a%%'",
+        "SELECT * FROM s.t WHERE k <> %d",
+        "SELECT * FROM s.t WHERE v = %d",
+        "SELECT * FROM s.t WHERE k != %d AND k == %d",
+        "SELECT count(*), sum(v) FROM s.t WHERE k = %d",
+        "SELECT * FROM s.t AS x WHERE x.k = %d ORDER BY x.k LIMIT 1",
+        "SELECT x.k, count(*) FROM s.t x WHERE x.k > %d GROUP BY x.k ORDER BY 1",
+        "SELECT * FROM s.t \"X y\" WHERE \"X y\".k = %d",
+        "SELECT * FROM s.t WHERE k = %d AND k IN (3, 27)",
+        "SELECT * FROM s.t WHERE k BETWEEN 9 AND 12 AND k = %d",
+        "SELECT * FROM s.t a JOIN s.t b ON a.k = b.k WHERE b.k = %d",
+        "SELECT s.t.k FROM s.t WHERE k = %d",
+        "SELECT * FROM s.t WHERE k = 3000000001 OR k = %d",
+        "SELECT * FROM s.t WHERE k = %d OR k = 30000000010",
+        "SELECT * FROM s.t WHERE k = %d OR s = '3000000001'",
+        "SELECT * FROM s.t WHERE k = %d OR k = %d OR k = %d",
+        "SELECT * FROM s.t WHERE k = 0%d",
+    };
+
+    /**
+     * Verifies that point queries of one shape, parsed once with stand-in literals (item 40 (b)),
+     * keep exactly the files each text keeps when it is parsed itself, and answer as the view does.
+     */
+    @Test
+    void shapeParsesKeepWhatEachTextKeeps(@TempDir Path dir) throws Exception {
+        List<DataFile> files = writeFiles(dir);
+        ParquetAdapter parquet = adapter(files, new AtomicInteger());
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool);
+                Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            CatalogViews shaped = new CatalogViews(parquet, duck, true);
+            CatalogViews each = new CatalogViews(parquet, duck, true);
+            for (String statement : shaped.current().dataStatements()) {
+                s.execute(statement);
+            }
+            shaped.filePruning(1024);
+            each.filePruning(1024);
+            each.shapeParses(false);
+            int pruned = 0;
+            int checked = 0;
+            for (String shape : SHAPES) {
+                int slots = shape.split("%d", -1).length - 1;
+                for (int v = 0; v <= 32; v += 1 + checked % 3) {
+                    Object[] values = new Object[slots];
+                    for (int i = 0; i < slots; i++) {
+                        values[i] = (v + 7 * i) % 33;
+                    }
+                    String sql = String.format(java.util.Locale.ROOT, shape, values);
+                    List<String> kept = kept(shaped.pruning(sql));
+                    assertEquals(kept(each.pruning(sql)), kept, sql);
+                    checked++;
+                    if (kept != null) {
+                        pruned++;
+                        String text = shaped.prunedFiles(sql);
+                        assertEquals(answer(s, sql), answer(s, text), sql + " -> " + text);
+                    }
+                }
+            }
+            assertTrue(pruned > checked / 3, "pruned " + pruned + " of " + checked);
+            assertTrue(shaped.pruningShapes() <= SHAPES.length, "one parse per shape");
+            assertEquals(0, each.pruningShapes());
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    private static List<String> kept(CatalogViews.Pruning pruning) {
+        if (pruning == null) {
+            return null;
+        }
+        List<String> paths = new ArrayList<>();
+        for (DataFile file : pruning.kept()) {
+            paths.add(file.relativePath());
+        }
+        return paths;
+    }
+
     /**
      * Verifies that pruning with the query parser's own WHERE condition keeps the same files as
      * parsing its rendered filter again (item 40 (b): one jOOQ parse per query text).

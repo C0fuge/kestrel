@@ -145,6 +145,28 @@ final class FileStatsPruner {
      */
     List<DataFile> keep(DataStore store, String table, List<DataFile> files, String filter,
             Condition parsed) throws IOException {
+        return keep(store, table, files, filter, parsed, Map.of());
+    }
+
+    /**
+     * Returns the files a WHERE clause may select rows of, as {@link #keep(DataStore, String,
+     * List, String, Condition)} does, with stand-in literals of the condition read as other
+     * values: the condition parsed once for every text of one shape (item 40 (b)).
+     *
+     * @param store store the files are read through
+     * @param table table name, for logs
+     * @param files the table's files, the first one the file its view was described from
+     * @param filter WHERE clause as the query parser rendered it
+     * @param parsed the condition {@code filter} was rendered from, or null to parse {@code filter}
+     * @param binds the value each stand-in integer literal of {@code parsed} stands for
+     * @return the files kept, in their order, or null when none is left out
+     * @throws IOException when a footer cannot be read
+     */
+    List<DataFile> keep(DataStore store, String table, List<DataFile> files, String filter,
+            Condition parsed, Map<Long, Long> binds) throws IOException {
+        if (parsed == null && !binds.isEmpty()) {
+            throw new IllegalArgumentException("stand-in literals need the parsed condition");
+        }
         if (filter == null || filter.isBlank() || files.size() < 2 || store == null) {
             return null;
         }
@@ -177,7 +199,7 @@ final class FileStatsPruner {
         List<DataFile> kept = new ArrayList<>(files.size());
         for (int i = 0; i < files.size(); i++) {
             FileStats s = stats.get(i);
-            if (!s.columns().equals(columns) || mayMatch(condition, s.bounds())) {
+            if (!s.columns().equals(columns) || mayMatch(condition, s.bounds(), binds)) {
                 kept.add(files.get(i));
             }
         }
@@ -318,34 +340,47 @@ final class FileStatsPruner {
      * @return false when the file can be left out
      */
     boolean mayMatch(Condition condition, Map<String, Bounds> bounds) {
+        return mayMatch(condition, bounds, Map.of());
+    }
+
+    /**
+     * Tells whether a condition may hold for some row of a file, as
+     * {@link #mayMatch(Condition, Map)} does, reading stand-in literals as other values.
+     *
+     * @param condition condition
+     * @param bounds the file's bounds by lower-case column name
+     * @param binds the value each stand-in integer literal stands for
+     * @return false when the file can be left out
+     */
+    boolean mayMatch(Condition condition, Map<String, Bounds> bounds, Map<Long, Long> binds) {
         if (condition instanceof QOM.And and) {
-            return mayMatch(and.$arg1(), bounds) && mayMatch(and.$arg2(), bounds);
+            return mayMatch(and.$arg1(), bounds, binds) && mayMatch(and.$arg2(), bounds, binds);
         }
         if (condition instanceof QOM.Or or) {
-            return mayMatch(or.$arg1(), bounds) || mayMatch(or.$arg2(), bounds);
+            return mayMatch(or.$arg1(), bounds, binds) || mayMatch(or.$arg2(), bounds, binds);
         }
         if (condition instanceof QOM.Eq<?> eq) {
-            return compare(eq.$arg1(), eq.$arg2(), bounds, Op.EQ);
+            return compare(eq.$arg1(), eq.$arg2(), bounds, binds, Op.EQ);
         }
         if (condition instanceof QOM.Lt<?> lt) {
-            return compare(lt.$arg1(), lt.$arg2(), bounds, Op.LT);
+            return compare(lt.$arg1(), lt.$arg2(), bounds, binds, Op.LT);
         }
         if (condition instanceof QOM.Le<?> le) {
-            return compare(le.$arg1(), le.$arg2(), bounds, Op.LE);
+            return compare(le.$arg1(), le.$arg2(), bounds, binds, Op.LE);
         }
         if (condition instanceof QOM.Gt<?> gt) {
-            return compare(gt.$arg1(), gt.$arg2(), bounds, Op.GT);
+            return compare(gt.$arg1(), gt.$arg2(), bounds, binds, Op.GT);
         }
         if (condition instanceof QOM.Ge<?> ge) {
-            return compare(ge.$arg1(), ge.$arg2(), bounds, Op.GE);
+            return compare(ge.$arg1(), ge.$arg2(), bounds, binds, Op.GE);
         }
         if (condition instanceof QOM.Between<?> between && !between.$symmetric()) {
-            return compare(between.$arg1(), between.$arg2(), bounds, Op.GE)
-                    && compare(between.$arg1(), between.$arg3(), bounds, Op.LE);
+            return compare(between.$arg1(), between.$arg2(), bounds, binds, Op.GE)
+                    && compare(between.$arg1(), between.$arg3(), bounds, binds, Op.LE);
         }
         if (condition instanceof QOM.InList<?> in) {
             for (Field<?> element : in.$arg2()) {
-                if (compare(in.$arg1(), element, bounds, Op.EQ)) {
+                if (compare(in.$arg1(), element, bounds, binds, Op.EQ)) {
                     return true;
                 }
             }
@@ -383,7 +418,8 @@ final class FileStatsPruner {
      * @param op operator
      * @return false only when no value of the file's range satisfies it
      */
-    private boolean compare(Field<?> left, Field<?> right, Map<String, Bounds> bounds, Op op) {
+    private boolean compare(Field<?> left, Field<?> right, Map<String, Bounds> bounds,
+            Map<Long, Long> binds, Op op) {
         String column = column(left);
         Field<?> literal = right;
         Op o = op;
@@ -399,7 +435,7 @@ final class FileStatsPruner {
         if (b == null) {
             return true;
         }
-        BigDecimal value = literal(literal, b.kind());
+        BigDecimal value = literal(literal, b.kind(), binds);
         if (value == null) {
             return true;
         }
@@ -436,8 +472,21 @@ final class FileStatsPruner {
      * @return value (days since the epoch for dates), or null when it is no usable literal
      */
     static BigDecimal literal(Field<?> field, Kind kind) {
+        return literal(field, kind, Map.of());
+    }
+
+    /**
+     * Reads a literal as {@link #literal(Field, Kind)} does, a stand-in integer literal as the
+     * value it stands for.
+     *
+     * @param field expression
+     * @param kind the column's kind
+     * @param binds the value each stand-in integer literal stands for (also negated)
+     * @return value, or null when it is no usable literal
+     */
+    static BigDecimal literal(Field<?> field, Kind kind, Map<Long, Long> binds) {
         if (field instanceof QOM.Neg<?> neg) {
-            BigDecimal inner = kind == Kind.INTEGER ? literal(neg.$arg1(), kind) : null;
+            BigDecimal inner = kind == Kind.INTEGER ? literal(neg.$arg1(), kind, binds) : null;
             return inner == null ? null : inner.negate();
         }
         if (field instanceof QOM.Cast<?> cast) {
@@ -452,6 +501,9 @@ final class FileStatsPruner {
             return null;   // not a literal, or NULL / a parameter
         }
         Object value = param.getValue();
+        if (value instanceof Long stand && binds.containsKey(stand)) {
+            value = binds.get(stand);   // a client's integer literal, parsed as its stand-in
+        }
         if (kind == Kind.INTEGER) {
             BigDecimal number;
             if (value instanceof Integer || value instanceof Long || value instanceof Short
