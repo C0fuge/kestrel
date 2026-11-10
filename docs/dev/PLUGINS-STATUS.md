@@ -24,6 +24,9 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 the budget (stand shape: 2457 -> 1331 MiB). (2) Cause: on short-circuit-only SASL nodes with node-local copies the
 complete answer went through `completeFromCopies`, which replaced the table by all its files before `prunedFiles`
 ran; pruning now happens first there (and in `completeInCopyBatches`). Follow-ups for the maintainer: Q-42 below.
+*Q-42 DONE 15220a77 (2026-11-10): (a) balanced / shared / fallback floors capped at the budget, WARN below 1 GiB;
+(b) pruning before `requireReadableHere` with copies off. Nothing open in this lane's Next steps besides the
+Q-40a follow-up (gizmo wave, waits for the maintainer).*
 
 > **Core lane, 2026-11-09 13:10Z - note on ITEM 39(b) (no action of this lane lost):** the core session had already
 > pushed a fix for (b) to `main` (`39f84617`) before it saw the split: `HostLimits` now reads the memory limit of the
@@ -748,6 +751,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- *Q-42 DONE 15220a77 (2026-11-10, plugins lane; see Log 10:30Z).*
 - **Answer Q-42 (maintainer, 2026-11-10 12:05): yes to both.** (a) cap `balanced`'s per-connection floor and the
   shared-database floor at the budget too (floor 128 MiB; a WARN at start when the budget is below the old 1 GiB
   floor, naming the setting to raise it); (b) prune before `requireReadableHere` when copies are off. Small follow-up
@@ -1172,3 +1176,17 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   `tools/ci/service-hdfs-point-check.py`). Branch runs: Dev CI **42781954321** green, Service hdfs **42781957575** 12/12
   (all six sasl cells: prunedFiles 3, kept=1: 2, kept=0: 1; sasl-cluster balanced via completeFromCopies). On `main`:
   Dev CI 42785951498, Service hdfs 42785951630 dispatched by the push (not awaited). New Q-42. Lock released.
+- 2026-11-10 10:30Z (plugins lane): **Q-42 DONE 15220a77** (branch `fix/q42-floors-b`, cherry-picked onto `main`; the first
+  branch `fix/q42-floors` is stale - its CI 42789460785 failed only on the golden DuckDB setup that the core lane fixed
+  in 7b36459b; a force-push of the rebase was refused, so the rebased commit went to a new branch). (a)
+  `DuckDbSizing.compute` (per connection: balanced and speed's private fallback) and `DuckDbSizing.shared` cap their
+  1 GiB floor at the budget (`withinBudget`, floor 128 MiB): screening shape 2 CPU / 6 GB / -Xmx3g / direct 2g 1024 ->
+  128 MiB per connection (speed's shared limit there stays 2662 MiB, Q-40a reservation); 8 GB / 4g / 2g 1024 -> 819 MiB;
+  budgets >= 1 GiB unchanged. Start WARN `duckdb=memoryLimitBelowFloor memoryLimit= floorMiB=1024 hint=` (only for a
+  default limit; `ConfigAdapter.duckDbMemoryLimitSet` on the source without profile defaults). Tests:
+  `DuckDbSizingTest.smallBudgetsCapTheOneGibFloors` (1-3 GiB sweep, both modes, warning cases) and updated expectations
+  in `DuckDbSizingTest`, `ResourceProfileTest`, `ConfigAdapterTest`. (b) `completeFromCopies` with local copies off
+  returns a point query pruned (`CopiedQuery.pruned`) when every kept file is held here, so `requireReadableHere` does
+  not refuse it; a kept file not held here is refused as before; test
+  `PrunedLocalCopiesTest.withoutCopiesAPointQueryOnHeldFilesIsPrunedNotRefused`. CI: Dev CI **42791671758** green on the
+  branch; on `main` Dev CI **42794664721** started by the push (result added below when read). README (shared sizing) and CHANGELOG updated. Lock released.
