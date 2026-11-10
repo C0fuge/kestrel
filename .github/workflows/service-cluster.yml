@@ -44,6 +44,8 @@ on:
     paths:
       - .github/workflows/service-cluster.yml
       - tools/ci/service-cluster-*.py
+      - tools/ci/service-cluster-*.sh
+      - tools/ci/point-query-load.py
 
 permissions:
   contents: read
