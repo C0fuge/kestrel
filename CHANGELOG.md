@@ -27,6 +27,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the same `files=0` lines as on the copy path. Log only; plans and answers unchanged. Service hdfs CI: the
   `sasl-direct` cell checks one line per query again and that remote files are read directly.
 
+- CI (lane 3, service cluster): the item 43 point gate no longer compares q/s across runners as a hard check. The
+  speed-dc cells fail themselves when a point lookup on node 1 was merged or waited for peer-stream admission; the
+  summary's dc / speed q/s ratio (two runners) warns below 0.8 and fails below 0.5. Main run 42789267919 had failed at
+  0.62 on the server code that gave 0.84 on the branch. Point load moved to `tools/ci/service-cluster-point.sh`.
+
 - Distributed complete mode: point lookups no longer fan out and queue for peer-stream room (item 43). A query with
   an equality of a column and a literal (no OR) and no aggregate, or a one-row aggregate (a filtered count), is computed
   by the planning node alone when it can read the files (new setting `distributedCompletePointLookups`, default
