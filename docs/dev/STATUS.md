@@ -4145,3 +4145,11 @@ S3 slowdown item below stays open for then).
 - 2026-11-10 (lane 4, item 40(b)): core file touched: `DuckDbAdapter.requireAllowedFunctions` (parse check name scan
   with `indexOf` instead of two regexes; same names, order and refusals), commit 48adb2ac. Details in
   `CATALOGS-STATUS.md`.
+- 2026-11-10 (lane 4, bug-first for the core lane): Dev CI on main red since 004d844e ("older hadoopfs build no longer
+  fails the start"; its own push run 42785235869 was cancelled): `GoldenDuckDbSetupTest
+  .setupStatementsOfEveryStorageConfiguration` differs from `golden/duckdb-setup.txt` - the hdfs configs now record
+  `QUERY SELECT extension_version FROM duckdb_extensions() ... 'hadoopfs'` + `QUERY SELECT name FROM duckdb_settings()
+  WHERE name LIKE 'hdfs%'` and no longer `SET hdfs_connect_timeout_ms / hdfs_read_timeout_ms /
+  hdfs_metadata_cache_ttl_ms` (the test's DuckDB has no hadoopfs, so the probe drops them). Reproduced locally (run
+  42786787681, head 5fc352be); lane 4's 48adb2ac does not touch the setup statements (parse check only). Not touched by lane 4: either update
+  the golden (`-Dgolden.update=true`) or make the test's fake report the hdfs settings so the SETs stay covered.
