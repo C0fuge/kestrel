@@ -1,33 +1,39 @@
-ALL DONE 2026-11-10T15:57Z (refreshed 2026-11-10T18:56Z; condition 'egret FRESH for the newest pre-release' open again: FRESH for `server-1.0.0-2ff221447b5d` running)
+ALL DONE 2026-11-10T19:58Z (all conditions met; but see the WRONG-ANSWER finding below: egret FRESH on `server-1.0.0-2ff221447b5d` shows the default profile failing TPC-H)
 
 # Orchestration status
 
-Status as of **2026-11-10T18:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-10T19:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-**Build for the real cluster is ready:** pre-release **`server-1.0.0-2ff221447b5d`** (core lane `package=true` on
-`pkg/2ff22144` = main 2ff22144 after ITEM 40(b) DONE; Dev CI 42857169249 + Service cluster 42860270956, hdfs 42860277541,
-security 42860284292, stores 42860290386 all green; 7 assets). egret ACCEPT 42865242528 on it: **SHIP** (all 6 checks incl. check 6); FRESH 42865250390 still running.
-No open core item until the maintainer's next note.
+**NEEDS THE MAINTAINER: default (balanced) profile fails TPC-H on `server-1.0.0-2ff221447b5d`.** egret FRESH run
+42865250390 (`results/FRESH-2ff221447b5d.md` in egret): balanced runs with a DuckDB `memory_limit` of 128 MiB on the
+egret TPC-H jobs (2 CPUs, 6 GB container, `-Xmx3g`, direct 2g, same start as every earlier FRESH) and fails heavy
+queries with `Out of Memory Error: could not allocate block of size 256.0 KiB (127.8 MiB/128.0 MiB used)`: local SF10
+q09/q10/q13 every round (19/22), S3 SF1 3-5 and S3 SF10 5-8 queries per round, slow link 19/22. Balanced TPC-H RSS fell
+to 640-727 MB (37bf9401d77c: ~1.6 GB; it was 22/22 there). Server errors, not silently wrong rows. `speed` is 22/22
+everywhere; small / scan / load 0 errors in both profiles. Not a red Dev CI, so no bug-first note was written in a lane
+(orchestrator rule); the core lane has no open item. Decide whether this blocks the stand on this pre-release (the
+stand may use `speed`) and give the core lane an item (likely suspect: memory-limit sizing changed between
+37bf9401d77c and 2ff221447b5d, e.g. 40(a)/40(b)).
 
-For the maintainer:
-- Run the stand / independent cluster check on `server-1.0.0-2ff221447b5d`.
+Other points for the maintainer:
+- Run the stand / independent cluster check on `server-1.0.0-2ff221447b5d` (egret ACCEPT 42865242528: SHIP).
+- egret: local small ADBC c1 p50 speed/balanced 1.11 (was 1.14-1.19): 40(b) reduces but does not remove it.
 - Branches `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
 - Open questions: **Q-40b-1** (catalogs: proposed to close without a default change, needs OK), Q8 / Q10 / Q11
-  (catalogs); lane 3 Q3 / Q4 (`distributedCompletePointLookups=local` default); egret ACCEPT 37bf9401d77c check-6
-  decision (moot: the 2ff22144 ACCEPT passed, SHIP); marten TPC-H q16 SF1 slowdown; `ci-assets` extension set
-  refresh with afc6 (sha256 in STATUS.md).
+  (catalogs); lane 3 Q3 / Q4 (`distributedCompletePointLookups=local` default); marten TPC-H q16 SF1 slowdown;
+  `ci-assets` extension set refresh with afc6 (sha256 in STATUS.md); plugins Q-40a follow-up (build exists, 19:14Z).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | real-cluster build done; no open item (session 18:40Z: nothing open) | 2026-11-10 18:41Z (unlock) | free | main Dev CI 42837979902 green; pkg 42857169249 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open (Q-40a follow-up waits for maintainer) | earlier today | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 40(b) DONE 135e6dac; no open item | 2026-11-10 17:21Z (unlock) | free | main 42837979902 green |
+| core (`STATUS.md`) | real-cluster build done; no open item | 2026-11-10 18:41Z (unlock) | free | main Dev CI 42837979902 green; pkg 42857169249 green |
+| plugins (`PLUGINS-STATUS.md`) | nothing open (Q-40a follow-up build exists) | 2026-11-10 19:14Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 40(b) DONE 135e6dac; no open item | 2026-11-10 17:21Z | free | main 42837979902 green |
 | lane 3 (`LANE3-STATUS.md`) | Q3/Q4 answers, D14 after the stand's rerun | earlier today | free | Service cluster 42840719877 green |
 
-No red Dev CI on main. No new bug-first notes in the lane files. No stale locks (all kestrel locks and marten/heron
-`docs/LOCK` empty).
+No red Dev CI on main (no runs since 16:59Z). No new bug-first notes in the lane files. No stale locks (all kestrel
+locks and marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
@@ -40,22 +46,23 @@ No red Dev CI on main. No new bug-first notes in the lane files. No stale locks 
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-2ff221447b5d` (2026-11-10): build for the real cluster (40(a), 40(b), 41 + follow-ups); egret ACCEPT SHIP (42865242528), FRESH running.
-- `server-1.0.0-37bf9401d77c` (2026-11-10 07:44Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only), FRESH done (42791002963).
-- `server-1.0.0-894afb9b48c4` (2026-11-10 05:48Z): ITEM 39; egret ACCEPT SHIP (42778646542), FRESH done (42775953599).
+- `server-1.0.0-2ff221447b5d` (2026-11-10 17:17Z): build for the real cluster; egret ACCEPT SHIP (42865242528); FRESH done (42865250390): **balanced TPC-H OOM**.
+- `server-1.0.0-37bf9401d77c` (2026-11-10 08:17Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only), FRESH done (42791002963).
+- `server-1.0.0-894afb9b48c4` (2026-11-10 06:34Z): ITEM 39; egret ACCEPT SHIP (42778646542), FRESH done (42775953599).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 18:40Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 205 (18:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 19:41Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 206 (19:51Z): nothing open.
 
 ## egret
 
-- Newest FRESH result: **37bf9401d77c** (run 42791002963); FRESH for 2ff221447b5d (run 42865250390) running (6/10 jobs green at 18:30Z); ACCEPT 2ff221447b5d DONE: SHIP (42865242528).
-- README 'In progress' (18:35Z): FRESH 42865250390 running; then results/FRESH-2ff221447b5d.md.
+- Newest FRESH: **2ff221447b5d** (run 42865250390; upstream native `0ecca4f9b01e`, still fails TPC-H/small gates, local x8 scan errors back). Speed vs balanced: S3 small p95 0.04-0.06, load +36-44 % at 128 clients (0.94-0.97 of upstream), scans x4/x8 1.31-1.45, slow-link ZSTD 1.02; balanced TPC-H OOM (see top).
+- README 'In progress' (19:55Z): gizmo wave 42888240521 running (~2.5 h), maintainer ACCEPT 42885490049 running.
 
 ## History
 
+- 2026-11-10T19:58Z: egret FRESH 2ff221447b5d DONE (run 42865250390, results/FRESH-2ff221447b5d.md): **default balanced profile fails TPC-H with DuckDB OOM at 128 MiB memory_limit** (new vs 37bf9401d77c; errors, not silent; speed 22/22); local ADBC c1 speed/balanced 1.11; ALL DONE conditions met again (with this finding). Gizmo wave 42888240521 + maintainer ACCEPT 42885490049 running. Plugins lane 19:14Z note (Q-40a build exists); no new CI runs, no locks, no red CI.
 - 2026-11-10T18:56Z: egret ACCEPT 2ff221447b5d SHIP (42865242528, check 6 passes); FRESH 42865250390 still running. Core/marten/heron sessions: nothing open. No new CI runs, no locks, no stale locks, no red CI.
 - 2026-11-10T17:58Z: real-cluster pre-release `server-1.0.0-2ff221447b5d` published, all package runs green; egret ACCEPT 42865242528 + FRESH 42865250390 running on it; catalogs/marten/heron idle; no locks held, no stale locks, no red CI.
 - 2026-11-10T16:57Z: refresh (ALL DONE). **ITEM 40(b) DONE 135e6dac** written 16:06Z by the catalogs lane (c1 p50 ~10-15 % below deafc861, HDFS point +2..6 %; Q-40b-1 proposed to close without a default change, needs maintainer OK). Core lane took the lock 16:41Z and runs the real-cluster package: Dev CI 42857169249 on `pkg/2ff22144` (`package=true`) in progress; no new pre-release yet (newest `server-1.0.0-37bf9401d77c`). main Dev CI 42837979902 green; service matrix unchanged (cluster 42840719877 pass, hdfs 42794862424, security/stores 42777504125/42777507448 pass). marten/heron: nothing new, locks empty; egret idle, newest FRESH 37bf9401d77c. No stale locks, no red CI.
@@ -95,4 +102,3 @@ No red Dev CI on main. No new bug-first notes in the lane files. No stale locks 
 - 2026-11-08 16:56Z: no change: core session 16:43Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (16:40Z)/heron (session 169)/egret (15:26Z README, idle) idle; no stale locks.
 - 2026-11-08 15:56Z: no change: core session 15:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (15:41Z)/heron (session 168)/egret (15:26Z README, idle) idle; no stale locks.
 - 2026-11-08 14:56Z: no change: core session 14:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (14:41Z)/heron (session 167)/egret (13:27Z README, idle) idle; no stale locks.
-- 2026-11-08 13:56Z: no change: no core commit since 10:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases; marten (12:41Z)/heron (session 166)/egret (13:27Z README, idle) idle; no stale locks.
