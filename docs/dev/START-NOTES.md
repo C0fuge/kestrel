@@ -265,7 +265,7 @@ also under `speed` without the shared DuckDB). A setting given as `-D` or in the
 | `duckDbSharedDatabase` | true | one DuckDB per node: node-wide thread pool and memory limit |
 | `duckDbSharedMaxThreads` | 0 (no cap) | |
 | `duckDbThreads` | all cores, at least what `balanced` gives one query (4) (not set when `duckDbSharedMaxThreads` is set) | every core busy on one heavy query; small-query tails may grow |
-| `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 15564 MiB (balanced: 4 x 3891 MiB); 6 GB / `-Xmx3g` / direct 2g on S3: 2 GiB (balanced: 2 x 1 GiB) |
+| `duckDbMemoryLimit` | node-wide: what `balanced` gives its expected connections together (per-connection limit x connections) when only the JVM's reservation is taken off the memory (heap min(`-Xmx`, max(1 GiB, in use x 2)), direct min(direct, 1 GiB + 25 %); Q-40a), at least 1 GiB, at most 80 % of memory (only while the shared DuckDB is on) | e.g. 32 GB / `-Xmx8g` / direct 4g: 24780 MiB (was 15564); 6 GB / `-Xmx3g` / direct 2g on S3: 2662 MiB (was 2 GiB); 8 GB / `-Xmx3g` / direct 2g: 4402 MiB (was 2 GiB) |
 | `duckDbExternalFileCache` | true (only while the shared DuckDB is on; on an `hdfs://` data dir always, as in `balanced`) | DuckDB keeps S3/HDFS file data in memory, within the node-wide `memory_limit` (evicted like any buffer): peak RSS about 2x balanced (S3 TPC-H SF10 on 2 CPUs / 6 GB: 3.3 vs 1.6 GiB); S3 small queries up to 5x faster, TPC-H SF10 on S3 3.1x faster (283.6 -> 91.2 s) |
 | `duckDbPreserveInsertionOrder` | false (item 27) | rows of a query without ORDER BY come in any order (as upstream's default; ORDER BY answers are unchanged): one full `lineitem` read on S3 910 -> 1118 MB/s (+23 %), 4 concurrent reads +5 %, same peak memory; `-DduckDbPreserveInsertionOrder=true` (or `DUCKDB_PRESERVE_INSERTION_ORDER=true`) restores the file order |
 | `flightZeroCopyWrites` | true | |
@@ -286,15 +286,18 @@ them on, TPC-H SF10 on S3 was 1.33x slower (one pass reads each file once, the c
 without them `speed` is as fast as `balanced` there. Turn a cache on yourself for workloads that re-read the same files.
 
 **Sizing `speed` for S3 (item 40(a)):** DuckDB's external file cache lives inside the node-wide `memory_limit`, and
-`speed` derives that limit from memory - `-Xmx` - `MaxDirectMemorySize` - 15 %. With a large heap and direct reservation
-the limit is small, the cache cannot hold the data a workload re-reads, and the warm passes read S3 again. Measured
+`speed` derived that limit from memory - `-Xmx` - `MaxDirectMemorySize` - 15 %. With a large heap and direct reservation
+the limit was small, the cache cannot hold the data a workload re-reads, and the warm passes read S3 again. Measured
 (`tpch-perf.yml`, S3 TPC-H SF10, 4 CPUs / 8 GB container, ADBC; runs 42748064489, 42751636105): `-Xmx3g`, direct 2g
 (limit 2048 MiB) 75.8 s; same JVM with `-DduckDbMemoryLimit=5120MiB` 19.4 s; `-Xmx1g -XX:MaxDirectMemorySize=1g`
 (limit 4914 MiB, peak RSS 4.1 of 8 GB) 15.9 s - plain in-process DuckDB 1.5.6 (the GizmoSQL-like reference) 16.9 s,
 same answers. On an S3 node under `speed`, give the JVM only what it needs (the Java side holds batches in flight,
 not table data: 1 GiB heap and 1 GiB direct served TPC-H SF10 above), or set `duckDbMemoryLimit` yourself; check the
 start line `duckdb=sizing ... memoryLimit=` and keep the sum of heap, direct memory and the DuckDB limit below the
-container's limit. The defaults are unchanged until the maintainer decides Q-40a (docs/dev/PLUGINS-STATUS.md).
+container's limit. **Since Q-40a (C)** `speed` reserves only what the JVM can use: heap min(`-Xmx`, max(1 GiB, heap in
+use at startup x 2)), direct min(`MaxDirectMemorySize`, 1 GiB + 25 %) - the 8 GB / `-Xmx3g` / direct 2g case now gets
+4402 MiB without settings. A heap that really fills then competes with DuckDB for the container: keep `-Xmx` near what
+the node needs, or set `duckDbMemoryLimit`. `balanced` is unchanged.
 
 ## Settings since 7562a5bdb7b9
 
