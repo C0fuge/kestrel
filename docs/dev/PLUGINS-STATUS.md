@@ -23,6 +23,21 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > denied: user=flight, access=READ_EXECUTE, inode="/data/parquet/types"...` - should be UNAUTHORIZED, no HDFS path in
 > the client text, a `result=denied` WARN. Branch `fix/44`, merge when green, "ITEM 44 DONE <sha>".
 
+*Item 44 step 1 (2026-11-10 21:15Z, plugins lane): parts (1) and (3) done on `fix/44` (7641ebfd; see Log). Open: part
+(2).* **Next step for (2):** the staleness comes from three caches that make no NameNode call for a repeat query on the
+direct SASL path: `QueryPlanner.filePlanCache` (30 s, `FILE_PLAN_TTL_NANOS`), the store's listing (`listedFiles`) and
+hadoopfs' `hdfs_metadata_cache_ttl_ms` (30 s, `ConfigAdapter.DEFAULT_HDFS_METADATA_CACHE_TTL_MS`); Ranger's own refresh
+adds ~25 s. Plan: new optional setting `hdfsAccessRecheckMs` (default 10000, 0 = off) and a small `AccessRecheck`
+(table directory -> last-checked nanos); a default method `checkReadable(String relativeDir)` on the server's
+`storage.DataStore` (not the SPI), implemented in `HadoopDataStore` with `fileSystem.access(path, FsAction.READ_EXECUTE)`
+(goes through Ranger's enforcer on the NameNode). Call it for each table directory of a query before planning: in
+`QueryPlanner.validatedPathLocations` (both the cached and the loaded branch) and on the catalog-view path (directory
+views of `CatalogViews` / `ExecutionService.completeSchema`, which complete-mode queries take without the planner).
+An `AccessControlException` then maps through `FlightSqlProducer.denial` to UNAUTHORIZED (part (3) covers the
+resolving paths). Tests: unit test with a fake store (one call per table per interval, denial after revoke within
+N s); CI: `service-hdfs-cell.sh` already revokes in item 37 (a) - add a timed check that a repeat query of a table
+read before is denied within ~Ranger refresh + 10 s on the sasl cells.
+
 > **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 42 (two stand bugs (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).**
 > (1) **speed sizes DuckDB above the budget in small cgroups.** 3g container, `-Xmx768m -XX:MaxDirectMemorySize=512m
 > -DresourceProfile=speed`, no `duckDbMemoryLimit`, a self-join GROUP BY of lineitem: start log `duckdb=sizing
@@ -1218,3 +1233,19 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-10 19:15Z (plugins lane): nothing open. The build for the Q-40a follow-up exists (`server-1.0.0-2ff221447b5d`,
   contains d295fe36; noted in Open questions); "ITEM 40(a) DONE" waits for the gizmo wave and the harness's JVM flags
   from the maintainer. No code change, no CI run.
+- 2026-11-10 21:15Z (plugins lane): **ITEM 44 step 1 - parts (1) and (3)** on `fix/44` (7641ebfd), merged into `main`.
+  (1) `DuckDbSizing.compute` (per connection, also speed's private fallback) and `DuckDbSizing.shared` (without speed)
+  cap their default limit at `reservedBudget` (memory - item 40(a) reservation - 15 %) instead of the full-limit
+  budget, floor `MIN_USABLE_BYTES` 512 MiB (speed's shared limit unchanged, floor 128 MiB); harness shape 2 CPU / 6 GB /
+  -Xmx3g / direct 2g: 128 -> 1024 MiB per connection and shared. New start WARN `duckdb=memoryLimitAboveJvmLimits`
+  (`aboveJvmLimitsWarning`: default limit x instances above the full-limit budget; not under speed, not for an
+  operator's limit). Tests: `DuckDbSizingTest.harnessContainerKeepsOneGibAndWarnsAboutTheJvmLimits`, updated
+  expectations in `DuckDbSizingTest`, `ResourceProfileTest`, `ConfigAdapterTest`. (3) `FlightSqlProducer.unavailableOrDenied`
+  on the four resolving paths (`qualifyPlainNames`, `qualifyForSchema`, `catalogViews`, `tableColumns`): a storage denial
+  is UNAUTHORIZED with `STORAGE_DENIED_MESSAGE` (no HDFS path) and one `query=denied result=denied` WARN; test
+  `plainNameRefusedByTheStorageIsDeniedWithoutThePath`. README sizing text updated, CHANGELOG lines. CI: Dev CI
+  **42903630231** green on the branch; `tpch-perf.yml` **42903634429** (local SF10, 2 CPU / 6 GB, -Xmx3g / direct 2g,
+  baseline 2ff22144, quick, 1 round): fix/44 balanced **22/22**, 42.1 s, `memoryLimit=1024MiB`, peak 1756 MiB;
+  baseline q09/q10/q13 DuckDB Out of Memory at 128 MiB both rounds (the stand's failure reproduced) - the run is red
+  only because of the baseline's failures. Part (2) (Ranger staleness) open: plan in Next steps. Lock released.
+

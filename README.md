@@ -296,7 +296,9 @@ Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThre
 `memory.max`) or machine minus `-Xmx`, the direct memory limit and 15 % headroom; each connection
 gets budget / `duckDbMemoryConnections` (`DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at
 least 2, where threads here count as cores / 4 between 2 and 16) as `memory_limit`, at least
-1 GiB and at most 80 % of the memory; threads are cores / 4 between 4 and 16, and above 4 at most
+1 GiB and at most 80 % of the memory, but never more than the budget left by what the JVM really uses (heap
+min(-Xmx, max(1 GiB, 2 x heap in use)), direct min(limit, 1 GiB + 25 %)), and never less than 512 MiB (item 44;
+a WARN `duckdb=memoryLimitAboveJvmLimits` when these defaults exceed what `-Xmx` and the direct limit leave); threads are cores / 4 between 4 and 16, and above 4 at most
 one per GiB of that limit (fewer than 4 made TPC-H SF10 1.35-1.7x slower on 4-16 core hosts). `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
@@ -362,8 +364,9 @@ the node, so N parallel streams share the cores instead of starting N x `duckDbT
 one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
 are checked as before); `duckDbThreads` and `duckDbMemoryLimit` then mean the node's threads and
 memory (unset = the cores, at most `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, default 8,
-0 = no cap), and the whole DuckDB budget, at least 1 GiB unless the budget is smaller (then the
-budget, at least 128 MiB, with a WARN `duckdb=memoryLimitBelowFloor`), at most 80 % of the memory);
+0 = no cap), and the whole DuckDB budget, at least 1 GiB unless the budget left by what the JVM really uses is
+smaller (then that budget, at least 512 MiB, with a WARN `duckdb=memoryLimitBelowFloor`; under `speed` the
+floor is 128 MiB), at most 80 % of the memory);
 `duckDbThreadsUnderLoad` and `duckDbThreadsWhenIdle` are ignored with a WARN.
 `duckDbStreamingBufferSize` is a per-connection DuckDB setting that the lockdown freezes, so with it
 `duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64) connections are
