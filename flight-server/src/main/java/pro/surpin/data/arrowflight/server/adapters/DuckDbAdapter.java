@@ -62,6 +62,10 @@ import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
  */
 public final class DuckDbAdapter implements AutoCloseable {
 
+    /** hadoopfs setting of the file-status / located-blocks cache (build afc4 and later). */
+    static final String HDFS_METADATA_CACHE_SETTING = "hdfs_metadata_cache_ttl_ms";
+    /** First hadoopfs build with {@link #HDFS_METADATA_CACHE_SETTING}. */
+    static final String FIRST_METADATA_CACHE_BUILD = "51b7220-afc4";
     private static final Logger LOGGER = LoggerFactory.getLogger(DuckDbAdapter.class);
     /** Prefix of the catalog view statements. */
     private static final String CREATE_VIEW = "CREATE OR REPLACE VIEW ";
@@ -1087,11 +1091,14 @@ public final class DuckDbAdapter implements AutoCloseable {
                         appConfig.duckDbHdfsShortcircuit());
                 setOptionIfPresent(s, "hdfs_domain_socket_path",
                         appConfig.duckDbHdfsDomainSocketPath());
-                setHdfsTimeout(s, "hdfs_connect_timeout_ms",
+                // A SET DuckDB refuses closes the JDBC statement, so the optional settings of
+                // newer builds are looked up first and only set when the build has them.
+                HdfsExtensionInfo hdfsInfo = hdfsExtensionInfo(conn);
+                setHdfsTimeout(s, hdfsInfo, "hdfs_connect_timeout_ms",
                         appConfig.duckDbHdfsConnectTimeoutMs(), logExtensions);
-                setHdfsTimeout(s, "hdfs_read_timeout_ms",
+                setHdfsTimeout(s, hdfsInfo, "hdfs_read_timeout_ms",
                         appConfig.duckDbHdfsReadTimeoutMs(), logExtensions);
-                setHdfsMetadataCache(s, hdfsMetadataCacheTtlMs, logExtensions);
+                setHdfsMetadataCache(s, hdfsInfo, hdfsMetadataCacheTtlMs, logExtensions);
             }
             runStorageSetup(s);
             if (logExtensions) {
@@ -1131,16 +1138,17 @@ public final class DuckDbAdapter implements AutoCloseable {
      * Sets a DataNode timeout of the hadoopfs extension. The setting is read when the extension
      * first connects to a namenode, so it applies to the whole connection. An extension built
      * without these settings (upstream's) keeps its own timeouts: that is logged once, not an
-     * error.
+     * error, and the SET is not sent (a refused SET would close the statement).
      *
      * @param s statement of the connection to set up
+     * @param extension version and settings of the loaded hadoopfs extension
      * @param name setting name
      * @param valueMs timeout in ms; 0 leaves the setting to the extension (LIBHDFS3_CONF)
      * @param log whether to log the value (first connection)
      * @throws java.sql.SQLException when the setting exists and cannot be set
      */
-    void setHdfsTimeout(Statement s, String name, int valueMs, boolean log)
-            throws java.sql.SQLException {
+    void setHdfsTimeout(Statement s, HdfsExtensionInfo extension, String name, int valueMs,
+            boolean log) throws java.sql.SQLException {
         if (valueMs <= 0) {
             if (log) {
                 LOGGER.info("node={} duckdb=hdfsTimeout setting={} value=extensionDefault",
@@ -1148,21 +1156,16 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             return;
         }
-        try {
-            s.execute("SET " + name + " = " + valueMs);
-        } catch (java.sql.SQLException e) {
-            String message = e.getMessage();
-            if (message == null || !message.contains("unrecognized configuration parameter")) {
-                throw e;
-            }
+        if (!extension.settings().contains(name)) {
             if (unknownHdfsSettings.add(name)) {
-                LOGGER.warn("node={} duckdb=hdfsTimeoutUnsupported setting={} value={} reason="
-                        + "\"the hadoopfs extension has no such setting (built without the"
+                LOGGER.warn("node={} duckdb=hdfsTimeoutUnsupported setting={} value={} version={}"
+                        + " reason=\"the hadoopfs extension has no such setting (built without the"
                         + " timeout patch); its own or LIBHDFS3_CONF timeouts apply\"",
-                        LogUtil.node(), name, valueMs);
+                        LogUtil.node(), name, valueMs, extension.version());
             }
             return;
         }
+        s.execute("SET " + name + " = " + valueMs);
         if (log) {
             LOGGER.info("node={} duckdb=hdfsTimeout setting={} valueMs={}", LogUtil.node(), name,
                     valueMs);
@@ -1173,35 +1176,83 @@ public final class DuckDbAdapter implements AutoCloseable {
      * Sets how long the hadoopfs extension keeps file statuses and located blocks
      * ({@code hdfs_metadata_cache_ttl_ms}, build 51b7220-afc4 and later), so repeated point
      * queries do not ask the NameNode for them again; 0 turns the cache off. An older build
-     * without the setting keeps working without the cache: a positive TTL is warned about once,
-     * 0 is logged only on the logging connection.
+     * without the setting keeps working without the cache and without sending the SET (a refused
+     * SET closes the JDBC statement, which made the start fail with "Statement was closed"): a
+     * positive TTL is warned about once as {@code hdfs=extensionTooOld}, 0 is logged only on the
+     * logging connection.
      *
-     * @param s     statement of the connection to set up
-     * @param ttlMs TTL in ms, 0 for off
-     * @param log   whether to log the value (once per node)
-     * @throws java.sql.SQLException when DuckDB refuses the setting for another reason
+     * @param s         statement of the connection to set up
+     * @param extension version and settings of the loaded hadoopfs extension
+     * @param ttlMs     TTL in ms, 0 for off
+     * @param log       whether to log the value (once per node)
+     * @throws java.sql.SQLException when DuckDB refuses the setting
      */
-    void setHdfsMetadataCache(Statement s, int ttlMs, boolean log) throws java.sql.SQLException {
-        String name = "hdfs_metadata_cache_ttl_ms";
-        try {
-            s.execute("SET " + name + " = " + ttlMs);
-        } catch (java.sql.SQLException e) {
-            String message = e.getMessage();
-            if (message == null || !message.contains("unrecognized configuration parameter")) {
-                throw e;
-            }
+    void setHdfsMetadataCache(Statement s, HdfsExtensionInfo extension, int ttlMs, boolean log)
+            throws java.sql.SQLException {
+        String name = HDFS_METADATA_CACHE_SETTING;
+        if (!extension.settings().contains(name)) {
             if (ttlMs > 0 && unknownHdfsSettings.add(name)) {
-                LOGGER.warn("node={} hdfs=metadataCacheUnsupported ttlMs={} reason=\"the hadoopfs"
-                        + " extension has no {} setting (build before 51b7220-afc4); file statuses"
-                        + " are asked of the NameNode on every open\"", LogUtil.node(), ttlMs, name);
+                LOGGER.warn("node={} hdfs=extensionTooOld version={} need={} ttlMs={}"
+                        + " metadataCache=off reason=\"the hadoopfs extension has no {} setting;"
+                        + " file statuses are asked of the NameNode on every open\"",
+                        LogUtil.node(), extension.version(), FIRST_METADATA_CACHE_BUILD, ttlMs,
+                        name);
             } else if (log) {
-                LOGGER.info("node={} hdfs=metadataCache ttlMs=0 supported=false", LogUtil.node());
+                LOGGER.info("node={} hdfs=metadataCache ttlMs=0 supported=false version={}",
+                        LogUtil.node(), extension.version());
             }
             return;
         }
+        s.execute("SET " + name + " = " + ttlMs);
         if (log) {
             LOGGER.info("node={} hdfs=metadataCache ttlMs={}", LogUtil.node(), ttlMs);
         }
+    }
+
+    /**
+     * Version and setting names of the loaded hadoopfs extension.
+     *
+     * @param version  {@code extension_version} DuckDB reports, "unknown" when it reports none
+     * @param settings names of the {@code hdfs*} settings DuckDB knows
+     */
+    record HdfsExtensionInfo(String version, Set<String> settings) {
+        /**
+         * Copies the setting names.
+         */
+        HdfsExtensionInfo {
+            settings = Set.copyOf(settings);
+        }
+    }
+
+    /**
+     * Reads the loaded hadoopfs extension's version and the {@code hdfs*} settings DuckDB knows,
+     * on a statement of its own.
+     *
+     * @param conn connection the extension was loaded into
+     * @return version and settings
+     * @throws java.sql.SQLException when DuckDB's catalog functions fail
+     */
+    static HdfsExtensionInfo hdfsExtensionInfo(Connection conn) throws java.sql.SQLException {
+        String version = "unknown";
+        Set<String> settings = new HashSet<>();
+        try (Statement q = conn.createStatement()) {
+            try (ResultSet rs = q.executeQuery("SELECT extension_version FROM duckdb_extensions()"
+                    + " WHERE loaded AND extension_name = 'hadoopfs'")) {
+                if (rs.next()) {
+                    String reported = rs.getString(1);
+                    if (reported != null && !reported.isBlank()) {
+                        version = reported.trim();
+                    }
+                }
+            }
+            try (ResultSet rs = q.executeQuery(
+                    "SELECT name FROM duckdb_settings() WHERE name LIKE 'hdfs%'")) {
+                while (rs.next()) {
+                    settings.add(rs.getString(1));
+                }
+            }
+        }
+        return new HdfsExtensionInfo(version, settings);
     }
 
     /**

@@ -68,7 +68,7 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
   + located-blocks cache, lazy open from cached blocks, real modification times. New setting `hdfsMetadataCacheTtlMs`
   (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`): DuckDB `hdfs_metadata_cache_ttl_ms` on every
   connection, default 30000 with an `hdfs://` data dir, else 0 = off; start line `hdfs=metadataCache ttlMs=30000`
-  (afc3 and older: one WARN `hdfs=metadataCacheUnsupported`, no cache). A file rewritten in place may be read with its
+  (afc3 and older: one WARN `hdfs=extensionTooOld version=... need=51b7220-afc4`, no cache; the start no longer fails with "Statement was closed"). A file rewritten in place may be read with its
   old status for up to the TTL. On `hdfs://` `duckDbExternalFileCache` is now on by default in `balanced` too
   (startup line `resourceProfile profile=balanced duckDbExternalFileCache=true`); each connection's cache stays within
   its `memory_limit`, the node may hold that limit times its live connections - watch RSS under many clients, opt out

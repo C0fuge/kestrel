@@ -42,6 +42,15 @@ import static org.mockito.Mockito.when;
 @Tag("unit")
 class DuckDbAdapterTest {
 
+    /** hadoopfs afc4 or later: has the timeout and metadata cache settings. */
+    private static final DuckDbAdapter.HdfsExtensionInfo CURRENT_HADOOPFS =
+            new DuckDbAdapter.HdfsExtensionInfo("51b7220-afc6", java.util.Set.of(
+                    "hdfs_connect_timeout_ms", "hdfs_read_timeout_ms",
+                    DuckDbAdapter.HDFS_METADATA_CACHE_SETTING));
+    /** An upstream hadoopfs build: none of those settings. */
+    private static final DuckDbAdapter.HdfsExtensionInfo OLD_HADOOPFS =
+            new DuckDbAdapter.HdfsExtensionInfo("51b7220-afc3", java.util.Set.of());
+
     /** Verifies least recently used statements close when the per-thread cache fills. */
     @Test
     void statementCacheEvictsAndClosesLeastRecentlyUsedStatement() throws Exception {
@@ -2102,13 +2111,15 @@ class DuckDbAdapterTest {
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
         try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
             Statement statement = mock(Statement.class);
-            adapter.setHdfsTimeout(statement, "hdfs_connect_timeout_ms", 5000, true);
-            adapter.setHdfsTimeout(statement, "hdfs_read_timeout_ms", 15000, false);
+            adapter.setHdfsTimeout(statement, CURRENT_HADOOPFS, "hdfs_connect_timeout_ms", 5000,
+                    true);
+            adapter.setHdfsTimeout(statement, CURRENT_HADOOPFS, "hdfs_read_timeout_ms", 15000,
+                    false);
             verify(statement).execute("SET hdfs_connect_timeout_ms = 5000");
             verify(statement).execute("SET hdfs_read_timeout_ms = 15000");
 
             Statement untouched = mock(Statement.class);
-            adapter.setHdfsTimeout(untouched, "hdfs_read_timeout_ms", 0, true);
+            adapter.setHdfsTimeout(untouched, CURRENT_HADOOPFS, "hdfs_read_timeout_ms", 0, true);
             verifyNoInteractions(untouched);
         } finally {
             ioPool.shutdownNow();
@@ -2117,56 +2128,84 @@ class DuckDbAdapterTest {
 
     /**
      * Verifies an extension without the timeout settings (upstream's build) does not stop the
-     * server, while any other error of the SET does.
+     * server and gets no SET at all, while any other error of the SET does.
      */
     @Test
     void hdfsTimeoutUnknownToTheExtensionIsSkipped() throws Exception {
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
         try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
             Statement unknown = mock(Statement.class);
-            when(unknown.execute(any(String.class))).thenThrow(new java.sql.SQLException(
-                    "Catalog Error: unrecognized configuration parameter \"hdfs_read_timeout_ms\""));
-            adapter.setHdfsTimeout(unknown, "hdfs_read_timeout_ms", 15000, true);
-            adapter.setHdfsTimeout(unknown, "hdfs_read_timeout_ms", 15000, false);
-            verify(unknown, org.mockito.Mockito.times(2)).execute("SET hdfs_read_timeout_ms = 15000");
+            adapter.setHdfsTimeout(unknown, OLD_HADOOPFS, "hdfs_read_timeout_ms", 15000, true);
+            adapter.setHdfsTimeout(unknown, OLD_HADOOPFS, "hdfs_read_timeout_ms", 15000, false);
+            verifyNoInteractions(unknown);
 
             Statement failing = mock(Statement.class);
             when(failing.execute(any(String.class))).thenThrow(
                     new java.sql.SQLException("Invalid Input Error: out of range"));
             assertThrows(java.sql.SQLException.class, () -> adapter.setHdfsTimeout(failing,
-                    "hdfs_connect_timeout_ms", 5000, true));
+                    CURRENT_HADOOPFS, "hdfs_connect_timeout_ms", 5000, true));
         } finally {
             ioPool.shutdownNow();
         }
     }
 
     /**
-     * Verifies the hadoopfs metadata cache TTL is set on the connection, also 0 (off), and that a
-     * build without the setting (before 51b7220-afc4) does not stop the server while any other
-     * error of the SET does.
+     * Verifies the hadoopfs metadata cache TTL is set on the connection, also 0 (off), that a
+     * build without the setting (before 51b7220-afc4) gets no SET and does not stop the server,
+     * and that any other error of the SET does.
      */
     @Test
     void hdfsMetadataCacheTtlIsSetAndAnOlderBuildIsSkipped() throws Exception {
         ExecutorService ioPool = Executors.newSingleThreadExecutor();
         try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
             Statement statement = mock(Statement.class);
-            adapter.setHdfsMetadataCache(statement, 30_000, true);
-            adapter.setHdfsMetadataCache(statement, 0, false);
+            adapter.setHdfsMetadataCache(statement, CURRENT_HADOOPFS, 30_000, true);
+            adapter.setHdfsMetadataCache(statement, CURRENT_HADOOPFS, 0, false);
             verify(statement).execute("SET hdfs_metadata_cache_ttl_ms = 30000");
             verify(statement).execute("SET hdfs_metadata_cache_ttl_ms = 0");
 
             Statement unknown = mock(Statement.class);
-            when(unknown.execute(any(String.class))).thenThrow(new java.sql.SQLException(
-                    "Catalog Error: unrecognized configuration parameter \"hdfs_metadata_cache_ttl_ms\""));
-            adapter.setHdfsMetadataCache(unknown, 30_000, true);
-            adapter.setHdfsMetadataCache(unknown, 0, true);
-            verify(unknown).execute("SET hdfs_metadata_cache_ttl_ms = 30000");
+            adapter.setHdfsMetadataCache(unknown, OLD_HADOOPFS, 30_000, true);
+            adapter.setHdfsMetadataCache(unknown, OLD_HADOOPFS, 0, true);
+            verifyNoInteractions(unknown);
 
             Statement failing = mock(Statement.class);
             when(failing.execute(any(String.class))).thenThrow(
                     new java.sql.SQLException("Invalid Input Error: out of range"));
             assertThrows(java.sql.SQLException.class,
-                    () -> adapter.setHdfsMetadataCache(failing, 30_000, true));
+                    () -> adapter.setHdfsMetadataCache(failing, CURRENT_HADOOPFS, 30_000, true));
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /**
+     * Regression (pre-release 894afb9b48c4 with hadoopfs afc3 failed its start with "Statement
+     * was closed"): DuckDB's JDBC driver closes a statement whose SET it refuses, so the setup
+     * must look the settings up instead of trying them. With real DuckDB and no hadoopfs loaded
+     * (the same as a build without the settings): no setting is known, the version is unknown,
+     * nothing is sent, and the setup statement still runs the next statement.
+     */
+    @Test
+    void hdfsSettingsOfAnOlderBuildLeaveTheSetupStatementOpen() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool);
+                java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            DuckDbAdapter.HdfsExtensionInfo info = DuckDbAdapter.hdfsExtensionInfo(conn);
+            assertEquals("unknown", info.version());
+            assertFalse(info.settings().contains(DuckDbAdapter.HDFS_METADATA_CACHE_SETTING));
+            adapter.setHdfsTimeout(s, info, "hdfs_read_timeout_ms", 15000, true);
+            adapter.setHdfsMetadataCache(s, info, 30_000, true);
+            assertFalse(s.isClosed());
+            try (java.sql.ResultSet rs = s.executeQuery("SELECT 42")) {
+                assertTrue(rs.next());
+                assertEquals(42, rs.getInt(1));
+            }
+            // What the old code did: a refused SET closes the statement.
+            assertThrows(java.sql.SQLException.class,
+                    () -> s.execute("SET " + DuckDbAdapter.HDFS_METADATA_CACHE_SETTING + " = 1"));
+            assertTrue(s.isClosed());
         } finally {
             ioPool.shutdownNow();
         }

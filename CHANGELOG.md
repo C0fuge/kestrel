@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Fix: a hadoopfs build without the newer settings (afc3 and older, upstream's) no longer stops the start with
+  `IllegalStateException: DuckDB cannot be set up for the data store: Statement was closed` (pre-release
+  `894afb9b48c4` with the `ci-assets` afc3 set). DuckDB's JDBC driver closes a statement whose `SET` it refuses, so the
+  connection setup now looks the loaded extension's version (`duckdb_extensions()`) and `hdfs*` settings
+  (`duckdb_settings()`) up first and sends only the SETs it has. A positive `hdfsMetadataCacheTtlMs` on such a build
+  logs one WARN `hdfs=extensionTooOld version=... need=51b7220-afc4 ttlMs=... metadataCache=off` (was
+  `hdfs=metadataCacheUnsupported`) and runs without the cache; missing timeout settings keep their
+  `duckdb=hdfsTimeoutUnsupported` WARN, now with `version=`.
+
 - `resourceProfile=speed` sizes the shared DuckDB's default memory limit with the JVM memory it can really use
   (item 40(a), Q-40a): reserved heap = min(`-Xmx`, max(1 GiB, heap in use at startup x 2)), reserved direct =
   min(`MaxDirectMemorySize`, 1 GiB + 25 %), instead of the full `-Xmx` + direct; the memory stays the container's
