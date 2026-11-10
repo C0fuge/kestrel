@@ -68,7 +68,7 @@
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
-         https://poizon.ru/product/s28294-2   <artifactId>apache-client</artifactId>
+            <artifactId>apache-client</artifactId>
         </dependency>
 
         <dependency>
