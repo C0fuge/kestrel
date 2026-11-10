@@ -159,11 +159,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
           # The hadoopfs build links libssl.so.1.1: an Ubuntu 20.04 base, the runner's JDK 21 mounted.
-          mkdir -p "$RUNNER_TEMP/img"
-          printf '%s\n' 'FROM eclipse-temurin:17-jdk-focal' \
-            'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libxml2 libkrb5-3 libgsasl7 libuuid1 > /dev/null && rm -rf /var/lib/apt/lists/*' \
-            > "$RUNNER_TEMP/img/Dockerfile"
-          docker build -q -t sc-server "$RUNNER_TEMP/img"
+          tools/ci/server-image.sh "$RUNNER_TEMP/img" sc-server libxml2 libkrb5-3 libgsasl7 libuuid1
           docker run --rm -v "$RUNNER_TEMP/in/ext:/ext:ro" sc-server bash -c 'ldd /ext/hadoopfs.duckdb_extension | grep "not found" || echo "hadoopfs: all libraries found"'
           docker network create --subnet 172.30.0.0/24 sc > /dev/null
 

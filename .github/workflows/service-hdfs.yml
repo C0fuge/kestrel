@@ -147,11 +147,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
           # The hadoopfs build links libssl.so.1.1: an Ubuntu 20.04 base, the runner's JDK 21 mounted.
-          mkdir -p "$RUNNER_TEMP/img"
-          printf '%s\n' 'FROM eclipse-temurin:17-jdk-focal' \
-            'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libxml2 libkrb5-3 libgssapi-krb5-2 libgsasl7 libuuid1 > /dev/null && rm -rf /var/lib/apt/lists/*' \
-            > "$RUNNER_TEMP/img/Dockerfile"
-          docker build -q -t sc-server "$RUNNER_TEMP/img"
+          tools/ci/server-image.sh "$RUNNER_TEMP/img" sc-server libxml2 libkrb5-3 libgssapi-krb5-2 libgsasl7 libuuid1
 
       - name: Run the cell
         run: tools/ci/service-hdfs-cell.sh "${{ matrix.topology }}" "${{ matrix.profile }}" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work" "${{ needs.prepare.outputs.server }}"
