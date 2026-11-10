@@ -43,8 +43,18 @@
 > (zstd 19, 36.9 MB); recipe: extract the set, `tools/ci/hadoopfs-pinned.sh <dir>`, repack. CI does not need it
 > (`hadoopfs-pinned.sh` swaps the file in every job).
 >
+> **Item 41 follow-up (2) DONE (2026-11-10 10:30Z, core lane; `7e716797` + `a8ded50d`).** On the direct SASL path
+> every query logs `hdfs=reads files=N direct=true nodeLocal=A remote=B remoteBytes=C unknown=D` (partial tickets in
+> `readParquet` / the join path; complete answers in `completeFromCopies`, from the same pruning Q-42 now does there);
+> `files=0` lines (no table, merged, refused) as on the copy path. Locality: `HadoopDataStore` remembers each listed
+> file's local bytes (views refresh, inventory, planning listings; LRU 200 000 files); a file not remembered lists its
+> table directory once. Service hdfs 42794862424 (attempt 2; attempt 1's ha-krb-sasl balanced failed in setup, 1 s)
+> green: sasl-direct balanced 402 of 402 queries with a line, 367 direct lines, remote files 841, unknown 0. Dev CI
+> 42794847349 green. Not measured: whether the per-query count costs anything on the real cluster's point queries
+> (no storage call when the file is remembered).
+>
 > **Next for the core lane:** (1) as soon as the catalogs lane writes "ITEM 40(b) DONE": Dev CI `package=true` on `main`
-> (the build for the real cluster, maintainer 11:30); (2) until then: item 41 follow-up from the 11:25 answer - one
+> (the build for the real cluster, maintainer 11:30); (2) DONE above; was: item 41 follow-up from the 11:25 answer - one
 > `hdfs=reads` line per query on the direct SASL path (files read node-local = all blocks on this node's DataNode vs
 > remote by block hosts, remote bytes if cheap), then re-enable the per-query check for `sasl-direct` in
 > `tools/ci/service-hdfs-cell.sh` (line ~754). Today the line is written only when `ParquetAdapter.localCopies()` is
@@ -4172,3 +4182,9 @@ S3 slowdown item below stays open for then).
   42789413482 green. `c48c78d9`: `sasl-direct` cell on `authentication,privacy` -> Service hdfs 42785951630 green
   (direct=true). `ci-assets` extension set refresh not done (shared asset change refused; sha of the rebuilt set in Next
   steps). 40(b) not DONE yet, so no cluster package. Lock released.
+- 2026-11-10 (core lane, 09:43-10:35Z): item 41 follow-up (2): `hdfs=reads ... direct=true nodeLocal remote
+  remoteBytes unknown` per query on the direct SASL path (`7e716797`; `a8ded50d` moves the complete-answer line into
+  `completeFromCopies` after the plugins lane's Q-42 `15220a77` started pruning there), `sasl-direct` per-query check
+  re-enabled in `service-hdfs-cell.sh`. Dev CI 42794847349 green; Service hdfs 42794862424 green (attempt 2, a
+  setup flake on ha-krb-sasl balanced in attempt 1): 402/402 queries with a line, 841 remote files, unknown 0. 40(b)
+  not DONE yet, so no cluster package. Lock released.
