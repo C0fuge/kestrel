@@ -822,3 +822,11 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   HDFS point perf branch 42791070774 vs main 42791075306 within noise (state note). Merged into `main` as 345627f1
   (Dev CI on main: 42794210815 / 42794491688 / 42794664721 cancelled by newer pushes of other lanes; 42794847349 on
   head a8ded50d, which includes it and Q-42, green). Not DONE yet. Lock released.
+- 2026-11-10 (4): **ITEM 40(b)** third improvement: measured that each point query is parsed by jOOQ once already
+  (the later parses of a request hit the parse cache), but every `ParquetQueryParser.parse` call re-ran the text
+  preparation (`castTypedLiterals` built a regex Matcher per character, `flattenSubqueryWrapper` compiled its
+  pattern). Now a raw-text cache in front of it + one matcher tried at `t`/`T` only; JFR samples under `parse()`
+  39 -> 25, end to end within noise (DuckDB-bound VM). Tests in `ParquetQueryParserUnitTest` (+2: equivalence with
+  the old rewrite over 5 000 random texts, raw-cache identity / refusals repeated). Branch `fix/40b-small-3` Dev CI
+  42800078539 green; merged into `main` as 388b81f5, Dev CI on main 42802352922 green. Not DONE yet; next cuts in
+  the state note. Lock released.
