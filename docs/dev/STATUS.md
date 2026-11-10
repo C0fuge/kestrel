@@ -23,6 +23,24 @@
 
 ## Next steps (one per session)
 
+> **ITEM 41 steps (1)-(3) done in code and CI (2026-11-10 07:50Z, core lane; `39edad76`, `14276f6b`, `68d2c866`,
+> `8766455b`); `package=true` dispatched, not yet confirmed.** (1) hadoopfs `51b7220-afc6` is the CI / release default
+> (`tools/ci/hadoopfs-pinned.sh`, sha256 836299dc...0948 = the asset's digest). (2) `hdfsSaslDataTransfer=auto|on|off`
+> (default auto: the loaded hadoopfs file's footer version, afc6+, plus `dfs.data.transfer.protection` and
+> `hadoop.security.authentication=kerberos` in LIBHDFS3_CONF -> DuckDB reads non-local blocks directly, files planned
+> to any node, no copies; start line `hdfs=saslDataTransfer mode=auto direct=true extensionVersion=51b7220-afc6`).
+> The partial-mode rules of SASL clusters (items 31, 33 (E)) stay on the direct path (`DataStore.saslPartialRules`).
+> (3) Service hdfs topology `sasl-direct` (3 DataNodes, `privacy`, `hdfsLocalCopyMaxBytes=0`): TPC-H 22/22 + every
+> `service-hdfs-sasl-check.py` answer (spread, split, chunks, plain, subqueries in parts) exact, 0 copies, both
+> profiles; `ha-krb-sasl` / `sasl-cluster` pin `off` (copy path). Run 42775949664 12/12 green; Dev CI 42774303168.
+> Timing (CI SF1, whole SASL check, not only spread scans): balanced copies 76 s vs direct 116 s; speed (copy cache
+> below one file, batches) 202 s vs direct 96 s; direct runs 3DES (`privacy`), the AES negotiation is not in afc6.
+> **Next session (core lane): check the `package=true` runs on `pkg/37bf9401` (Dev CI 42777511119; Service cluster
+> 42777497907, hdfs 42777501115, security 42777504125, stores 42777507448) -> pre-release `server-1.0.0-37bf9401d77c`,
+> write "ITEM 41 DONE", delete the branch;** red -> fix first. Then item 40(b) if it is still the core lane's (the
+> maintainer moved 40(b) to the catalogs lane on 2026-11-10, see the note there). For the stand: SASL cluster with
+> copies off, start line `direct=true`, TPC-H plain + spread scans vs the copy path.
+
 > **ITEM 39 DONE (2026-11-10 06:34Z, core lane).** Dev CI `package=true` 42764387193 on `ci/core-39pkg2` (894afb9b,
 > = main) green incl. the service gate (Service hdfs 42764375265, cluster 42767259358, stores 42767268942, security
 > 42767265035); pre-release `server-1.0.0-894afb9b48c4` (7 assets). **Next for the core lane: item 41** (afc6 into
@@ -1895,6 +1913,14 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Item 41: per-query `hdfs=reads` lines on the direct SASL path (2026-11-10, core lane, decision wanted).** Item 32's
+  per-query `hdfs=reads` line (local / copy / footer-only reads) is written only on the short-circuit-only path with
+  copies; with `hdfsSaslDataTransfer` direct (the new default on SASL clusters with afc6) no query has one, so the
+  stand's benchmark summaries that count reads per query see none. Should the direct path log a line too (e.g. files
+  read node-local vs remote by the file's block hosts), or is the absence fine? CI's per-query check is skipped for
+  `sasl-direct` until decided. Also: the CI cell uses `privacy`; the stand's `authentication,privacy` (several QOPs)
+  is untested with afc6 in CI.
 
 - **Item 35: default budget of distributed complete merges (2026-11-06, core lane, review wanted).** With
   `distributedComplete=true`, merges now wait for room instead of all running at once. The default is one endpoint
@@ -4082,3 +4108,13 @@ S3 slowdown item below stays open for then).
   `memoryBudget ... usedHeapMiB=`; Dev CI step "speed's JVM reservation under memory pressure". Dev CI 42775184825
   green on `fix/40a-s3`. `balanced` unchanged. No `package=true` from this lane yet: the next pre-release should contain
   it for the gizmo wave (see PLUGINS-STATUS Open questions).
+- 2026-11-10 06:41-07:52Z (core lane): ITEM 41 steps (1)-(3). `39edad76` afc6 default + `hdfsSaslDataTransfer` + CI
+  topology `sasl-direct` (Dev CI 42770827832, Service cluster 42770827766, Catalogs CI 42770828168 green; Service hdfs
+  42770827746 red only in sasl-direct: `extensionVersion=unknown`, the start's AppConfig is read before `--data-dir`);
+  `14276f6b` fix + regression (`ConfigAdapter.duckDbHdfsExtension`; Service hdfs 42772689452: data exact, partial-mode
+  subqueries / plain names fell back to generic partial rules); `68d2c866` `DataStore.saslPartialRules` keeps items 31 /
+  33 (E) on the direct path (Dev CI 42774303168 green; Service hdfs 42774301990 red only in the item 32 per-query
+  hdfs=reads check); `8766455b` sasl-direct skips that check (Service hdfs 42775949664 12/12 green, Catalogs CI
+  42775949965 green; its Dev CI push run was cancelled by a later push, code identical to 42774303168). CHANGELOG +
+  START-NOTES lines. `package=true` dispatched on `pkg/37bf9401` (= main incl. the plugins lane's d295fe36): runs
+  listed in Next steps. Open question added (hdfs=reads on the direct path). Lock released.
