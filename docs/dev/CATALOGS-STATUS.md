@@ -5,7 +5,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 ## Next steps
 
 > **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
-> is green (do not hold them for one big merge); the core lane's next package (item 41) takes whatever of 40(b) is merged by then.**
+> is green (do not hold them for one big merge); the build for the real cluster is the core lane's package right after "ITEM 40(b) DONE" - it waits for 40(b).**
 >
 > **Maintainer, 2026-11-10 10:40 - FIRST in this lane: ITEM 40(b)** (moved here from the core lane, which works on item
 > 41). Per-query overhead of small / point queries: on the real cluster point queries are the main gap to upstream

@@ -60,10 +60,11 @@
 > check holds on the point cell (a rewritten file is read fresh); document it in START-NOTES / CHANGELOG.
 > Then Dev CI `package=true` and "ITEM 39 DONE". The stand + the independent cluster check follow.
 
-> **Maintainer, 2026-11-10 11:20 - NEXT PACKAGE = item 41's `package=true` (replaces the 11:10 "package right after
-> 40(b)" note).** Finish item 41; its `package=true` run on `main` includes every part of the other items that is
-> merged and green by then (40(a) is; 40(b) parts, 42, 43 as far as merged). Do not wait for unfinished parts of
-> 40(b)/42/43 - they go into the next package.
+> **Maintainer, 2026-11-10 11:30 - THE BUILD FOR THE REAL CLUSTER = the package right after "ITEM 40(b) DONE"
+> (corrects the 11:20 note).** Item 41's own `package=true` may go out as an intermediate pre-release. Then, as soon as
+> the catalogs lane writes "ITEM 40(b) DONE" (merged into `main`), run Dev CI `package=true` on `main` before any other
+> core work, with everything else that is merged and green there by then (40(a), 41, and whatever parts of 42 / 43 are
+> merged); do not wait for unfinished parts of 42 / 43. STATUS Log line with the pre-release id.
 
 > **Maintainer, 2026-11-10 11:00 - small, with item 41: a too-old hadoopfs must fail clearly.** `894afb9b48c4` started
 > with the afc3 extension (the `ci-assets` extension set) fails `IllegalStateException: DuckDB cannot be set up for
