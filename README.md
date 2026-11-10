@@ -362,7 +362,8 @@ the node, so N parallel streams share the cores instead of starting N x `duckDbT
 one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
 are checked as before); `duckDbThreads` and `duckDbMemoryLimit` then mean the node's threads and
 memory (unset = the cores, at most `duckDbSharedMaxThreads` (`DUCKDB_SHARED_MAX_THREADS`, default 8,
-0 = no cap), and the whole DuckDB budget, at least 1 GiB, at most 80 % of the memory);
+0 = no cap), and the whole DuckDB budget, at least 1 GiB unless the budget is smaller (then the
+budget, at least 128 MiB, with a WARN `duckdb=memoryLimitBelowFloor`), at most 80 % of the memory);
 `duckDbThreadsUnderLoad` and `duckDbThreadsWhenIdle` are ignored with a WARN.
 `duckDbStreamingBufferSize` is a per-connection DuckDB setting that the lockdown freezes, so with it
 `duckDbSharedBufferedConnections` (`DUCKDB_SHARED_BUFFERED_CONNECTIONS`, default 64) connections are

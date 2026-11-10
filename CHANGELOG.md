@@ -9,6 +9,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Q-42 (follow-up of item 42, maintainer's answer): (a) the default DuckDB memory limit never exceeds the DuckDB budget
+  (memory - `-Xmx` - direct memory - 15 %; floor 128 MiB) in `balanced` (per connection, also speed's private fallback
+  DuckDB) and with `duckDbSharedDatabase=true` either: the 1 GiB floors applied even when the budget was smaller (2 CPUs /
+  6 GB / `-Xmx3g` / direct 2g: 1024 -> 128 MiB per connection; 8 GB / 4g / 2g: 1024 -> 819 MiB). Hosts with a budget of
+  at least 1 GiB are unchanged. A default limit below the old floor logs one WARN `duckdb=memoryLimitBelowFloor
+  memoryLimit=... floorMiB=1024 hint=...` naming `duckDbMemoryLimit`; explicit limits are never changed or warned about.
+  (b) With local copies off (`hdfsLocalCopyMaxBytes=0`) on HDFS nodes read short-circuit only, a point query whose
+  kept files (footer-statistics pruning) are all held on this node is answered from them instead of being refused
+  because other files of the table are not held here; a kept file not held here is refused as before.
+
 - Faster query parse check (item 40(b)): the names a client query uses are found in DuckDB's serialized statement
   with one `indexOf` scan instead of two regular expressions (same names, same order, same refusals): 20 us -> 0.6 us
   per new query text for a point query's 2.2 KB statement, twice per query (describe and DoGet texts). No behaviour

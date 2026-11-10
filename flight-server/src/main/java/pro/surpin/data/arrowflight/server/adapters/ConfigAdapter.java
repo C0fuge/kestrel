@@ -934,6 +934,18 @@ public class ConfigAdapter {
     }
 
     /**
+     * Tells whether {@code duckDbMemoryLimit} is set in a source (pass one without profile
+     * defaults to ask whether the operator set it).
+     *
+     * @param props configuration source
+     * @return true when set and not blank
+     */
+    public static boolean duckDbMemoryLimitSet(ConfigSource props) {
+        String limit = getString("duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null, props);
+        return limit != null && !limit.isBlank();
+    }
+
+    /**
      * Returns the DuckDB threads per connection the cores alone give: a quarter of the cores,
      * between 4 and 16.
      *

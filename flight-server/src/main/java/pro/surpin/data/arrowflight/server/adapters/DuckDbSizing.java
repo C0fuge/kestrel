@@ -9,7 +9,8 @@ import java.util.regex.Pattern;
  * Every worker connection is a DuckDB instance of its own, so the node's DuckDB memory budget
  * (memory minus heap, direct memory and 15 % headroom) is split between the connections
  * expected to run at once. Threads are a quarter of the cores, at least 4; above 4 they are
- * capped at one per GiB of that share. Explicit settings always win.
+ * capped at one per GiB of that share. A connection gets at least 1 GiB, but never more than the
+ * whole budget (down to 128 MiB, Q-42). Explicit settings always win.
  *
  * @param threads             DuckDB threads per connection
  * @param memoryLimit         DuckDB {@code memory_limit} per connection, null = DuckDB's default
@@ -58,7 +59,8 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     /**
      * Smallest default memory limit when the DuckDB budget is smaller than
      * {@link #MIN_CONNECTION_BYTES}: a limit above the budget got speed servers OOM-killed in a
-     * 3 GiB container (item 42), so under {@code speed} the budget wins over the 1 GiB floor down to this size.
+     * 3 GiB container (item 42), so the budget wins over the 1 GiB floor down to this size, under
+     * {@code speed}, per connection and for the shared DuckDB (Q-42).
      */
     static final long MIN_BUDGET_BYTES = 128L << 20;
 
@@ -102,6 +104,9 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         } else {
             long perConnection = Math.max(MIN_CONNECTION_BYTES, budget / connections);
             perConnection = Math.min(perConnection, memory / 100 * MAX_CONNECTION_PERCENT);
+            // Never above the budget (Q-42): 2 CPUs / 6 GB / -Xmx3g / direct 2g leaves ~100 MiB,
+            // and the 1 GiB floor gave each connection ten times that.
+            perConnection = withinBudget(perConnection, budget);
             long mib = Math.max(1, perConnection >> 20);
             memoryLimit = mib + "MiB";
             limitBytes = mib << 20;
@@ -224,7 +229,8 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     /**
      * Computes the node-wide sizing of one shared DuckDB: the threads are the cores up to a cap
      * (more threads on a large node lengthened small-query tails on the stand) and the memory
-     * limit is the whole DuckDB budget (at least 1 GiB, at most 80 % of the memory). Explicit
+     * limit is the whole DuckDB budget (at most 80 % of the memory, at least 1 GiB unless the
+     * budget is smaller, then at least {@link #MIN_BUDGET_BYTES}). Explicit
      * settings win and then apply to the node, not to a connection.
      *
      * @param host                host limits
@@ -247,6 +253,7 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
             long budget = memory - host.maxHeapBytes() - host.maxDirectBytes()
                     - memory / 100 * HEADROOM_PERCENT;
             long bytes = Math.min(Math.max(MIN_CONNECTION_BYTES, budget), memory / 100 * MAX_CONNECTION_PERCENT);
+            bytes = withinBudget(bytes, budget);
             memoryLimit = Math.max(1, bytes >> 20) + "MiB";
         }
         return new Shared(threads, memoryLimit);
@@ -264,6 +271,24 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
      */
     static long withinBudget(long bytes, long budget) {
         return Math.min(bytes, Math.max(MIN_BUDGET_BYTES, budget));
+    }
+
+    /**
+     * Describes a default DuckDB memory limit that the budget cut below the old 1 GiB floor
+     * (Q-42), for a WARN at start; an operator's {@code duckDbMemoryLimit} is never warned about.
+     *
+     * @param appliedLimit memory limit DuckDB gets, null = DuckDB's default
+     * @param operatorSet  whether the operator set {@code duckDbMemoryLimit}
+     * @return key=value pairs with a hint naming the setting, or null when there is nothing to warn about
+     */
+    public static String belowFloorWarning(String appliedLimit, boolean operatorSet) {
+        Long bytes = appliedLimit == null ? null : parseBytes(appliedLimit);
+        if (operatorSet || bytes == null || bytes >= MIN_CONNECTION_BYTES) {
+            return null;
+        }
+        return "memoryLimit=" + appliedLimit + " floorMiB=" + (MIN_CONNECTION_BYTES >> 20)
+                + " hint=the DuckDB budget (memory - heap - direct - headroom) is below the floor;"
+                + " set duckDbMemoryLimit, give the container more memory or lower -Xmx / -XX:MaxDirectMemorySize";
     }
 
     /**
