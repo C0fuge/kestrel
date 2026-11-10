@@ -48,7 +48,7 @@ ITEM 40(b) state after session 2026-11-10 (5) - speed c1 regression found (bisec
   deafc861cce3, `bothOptions=-DresourceProfile=speed`); (b) check Dev CI on main for ac2055c8; (c) gizmo vs speed per
   call and c32 JFR on the HDFS point cell (old step 4). `small-query-perf.yml` has a new input `bothOptions` (options
   measured on the baseline and on the ref). Branches `perf/bisect-*` and `perf/40b-c1-mem` are throwaway (perf
-  dispatch refs only) - delete them.
+  dispatch refs only) - deleted except `perf/bisect-34b7911a` and `perf/bisect-b0f82a47` (runs still going at session end).
 
 ITEM 40(b) state after session 2026-11-10 (4) - third improvement (repeated parses of one text) merged (388b81f5):
 - Measured where jOOQ parses run (debug print on every parse-cache miss, `PointQueryOverheadPerfTest`, 4 vCPU): each
