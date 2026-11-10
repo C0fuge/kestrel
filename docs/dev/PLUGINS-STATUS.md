@@ -43,8 +43,8 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > min(-Xmx, max(1 GiB, heap in use at startup x 2)) and direct min(direct, 1 GiB + 25 %); tpch-perf's 8 GB / -Xmx3g /
 > direct 2g -> 4402 MiB (was 2048). Dev CI 42775184825 green on the branch incl. the new memory-pressure step.
 > **Next step (open):** a gizmo wave in the performance repo on the harness's JVM flags (this lane cannot touch
-> other repositories - see the open question "Q-40a follow-up"), then "ITEM 40(a) DONE". Also read tpch-perf run
-> 42760596461 (4 clients; still in Measure at 07:40Z) and add its peaks to the Log.
+> other repositories - see the open question "Q-40a follow-up"), then "ITEM 40(a) DONE". tpch-perf 42760596461
+> (4 clients) read: see Log 08:00Z.
 > *(Old text:)* Then: (B) if chosen - profile code + `DuckDbSizingTest` case + a memory-pressure
 > check (speed with the raised limit in a `MemoryMax` scope, as item 39(b)'s CI step); in any case ask the
 > performance repo for a gizmo wave on the harness's -Xmx/direct, then "ITEM 40(a) DONE".
@@ -1121,3 +1121,8 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   green: limit 3174 MiB (was 2048), heap 2765/3072 MiB, answer exact in 3.9 s, scope peak 5.73 of 6 GiB, oom_kill 0;
   caveat: the aggregate spilled only 1 MiB, so DuckDB was near but not proven at its limit. tpch-perf run 42760596461
   still running (Measure). Gizmo wave not requested (other repository) - see Open questions. Lock released.
+- 2026-11-10 08:00Z (plugins lane): Dev CI dispatch on `main` 37bf9401 run **42777385100** green. tpch-perf run
+  **42760596461** (S3 SF10, 8 GB container, -Xmx3g/direct 2g, 4 concurrent Java clients, success = answers agree,
+  no client lost): balanced best pass 1830 s (peak 3497 MiB); speed default 2048 MiB 1110 s (3669 MiB); speed
+  4608 MiB 81.4 s (5725 MiB); speed 5120 MiB 101.3 s (5977 MiB) - no OOM kill, raised limits 13.6x faster under
+  concurrency; the new default for this shape (4402 MiB) sits just below the 4608 MiB cell. Lock stays released.
