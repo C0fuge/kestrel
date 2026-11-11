@@ -199,7 +199,7 @@ jobs:
               c.execute(f\"COPY (SELECT * FROM lineitem WHERE l_orderkey % 8 = {f}) TO '{sys.argv[1]}/part-{f}.parquet' (FORMAT PARQUET)\")
           " "$work/data/tpch/lineitem"
           ./mvnw -B -q -pl flight-server dependency:build-classpath -Dmdep.outputFile="$work/cp.txt" -Dmdep.includeScope=runtime
-          # 8g: the maintainer's cluster (item 39 (d)) - 64 streams were admitted into a 2 GiB allocator.
+          # 8g: the maintainer's cluster (item 39 (d)) - 64 streams were admitted into a 2 GiB allocator (Q3: now 6 GiB).
           for direct in 2g 8g; do
             FLIGHT_ALLOW_INSECURE=true LANG=C.UTF-8 java -Xmx2g -XX:MaxDirectMemorySize="$direct" \
               --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED \
@@ -214,9 +214,14 @@ jobs:
             for _ in $(seq 120); do grep -q 'Server Arrow Flight SQL started' "$work/server-$direct.log" && break; sleep 1; done
             grep -q 'Server Arrow Flight SQL started' "$work/server-$direct.log" || { tail -n 40 "$work/server-$direct.log"; exit 1; }
             grep -m 1 'distributedComplete peer streams' "$work/server-$direct.log" || true
-            # Item 39 (d): the streams are read into the 2 GiB Arrow allocator whatever direct memory says.
-            grep -q 'distributedComplete peer streams: 16 ' "$work/server-$direct.log" \
-              || { echo "peer stream budget is not 16 with direct $direct"; exit 1; }
+            # Item 39 (d): the streams are read into the Arrow allocator, one per 128 MiB of it; Q3: unset, the
+            # allocator limit is 75 % of direct memory (2g -> 1536 MiB, 12 streams; 8g -> 6144 MiB, 48 streams).
+            want=$([ "$direct" = 2g ] && echo 12 || echo 48)
+            grep -m 1 'arrowAllocator limitMiB' "$work/server-$direct.log" | sed 's/.* - //' || true
+            grep -q "arrowAllocator limitMiB=$(( want * 128 )) source=directMemory" "$work/server-$direct.log" \
+              || { echo "Arrow allocator limit is not $(( want * 128 )) MiB from direct memory with direct $direct"; exit 1; }
+            grep -q "distributedComplete peer streams: $want " "$work/server-$direct.log" \
+              || { echo "peer stream budget is not $want with direct $direct"; exit 1; }
             rc=0
             "$RUNNER_TEMP/py/bin/python" -I tools/ci/distributed-concurrency-check.py 127.0.0.1:32010 \
               "$work/data/tpch/lineitem" 16 32 > "$work/client-$direct.log" 2>&1 || rc=$?
