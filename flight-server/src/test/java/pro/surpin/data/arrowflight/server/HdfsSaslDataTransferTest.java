@@ -40,6 +40,17 @@ class HdfsSaslDataTransferTest {
     }
 
     /** Unset is auto; the property, its alias and the environment variable are read. */
+    /** Item 46 (3): the start line names the QOP and cipher the client config asks for. */
+    @Test
+    void startLineNamesTheRequestedQopAndCipher() {
+        assertEquals("requestedQop=privacy encryptDataTransfer=true cipherSuites=AES/CTR/NoPadding negotiated=unknown",
+                HdfsSaslDataTransfer.requestedSecurity(Map.of("dfs.data.transfer.protection", " privacy ",
+                        "dfs.encrypt.data.transfer", "true",
+                        "dfs.encrypt.data.transfer.cipher.suites", "AES/CTR/NoPadding")));
+        assertEquals("requestedQop=integrity,privacy encryptDataTransfer=unset cipherSuites=unset negotiated=unknown",
+                HdfsSaslDataTransfer.requestedSecurity(Map.of("dfs.data.transfer.protection", "integrity, privacy")));
+    }
+
     @Test
     void modeIsReadFromEveryName() {
         assertEquals(HdfsSaslDataTransfer.Mode.AUTO, HdfsSaslDataTransfer.mode(source(Map.of(), Map.of())));

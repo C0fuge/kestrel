@@ -217,7 +217,7 @@ public final class ServerModule {
         // speed sizes its shared DuckDB from the JVM's real reservation by design (Q-40a): no warning there.
         String aboveJvmLimits = ResourceProfile.SPEED.equals(profile.name()) ? null
                 : DuckDbSizing.aboveJvmLimitsWarning(shared != null ? shared.memoryLimit() : sizing.memoryLimit(),
-                        shared != null ? 1 : sizing.connections(), sizing.budgetBytes(),
+                        shared != null ? 1 : sizing.connections(), sizing.reservedBudgetBytes(),
                         ConfigAdapter.duckDbMemoryLimitSet(ConfigSource.systemWithoutProfile()));
         if (aboveJvmLimits != null) {
             LOGGER.warn("node={} duckdb=memoryLimitAboveJvmLimits {}", LogUtil.node(), aboveJvmLimits);

@@ -995,14 +995,17 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     }
 
     /**
-     * Logs an access denial as one WARN line, without a stack (item 36 (3)).
+     * Logs an access denial as one WARN line, without a stack (item 36 (3)), under the query's id
+     * or, while a query is planned before it has one, under an id of its own (item 46 (2)).
      *
      * @param denial the denial
      * @param query client SQL
      */
-    private static void logDenial(FlightRuntimeException denial, String query) {
+    static void logDenial(FlightRuntimeException denial, String query) {
         String storage = storageDenial(denial.getCause());
-        LOGGER.warn("qid={} node={} query=denied result=denied reason='{}' query='{}'", LogUtil.qid(),
+        String qid = LogUtil.qid() != null ? LogUtil.qid()
+                : qid(copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8)));
+        LOGGER.warn("qid={} node={} query=denied result=denied reason='{}' query='{}'", qid,
                 LogUtil.node(),
                 storage == null ? denial.status().description() : "storage: " + storage,
                 LogUtil.oneLine(query));
@@ -1086,9 +1089,16 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         long t = LogUtil.mark();
         ByteString handle = copyFrom(randomUUID().toString().getBytes(StandardCharsets.UTF_8));
         String query = withSessionSchema(command.getQuery(), context);
-        boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
-                .restricted();
         String qid = qid(handle);
+        // A denial while the query is checked logs this query's id (item 46 (2)).
+        String previous = LogUtil.qid();
+        LogUtil.setQid(qid);
+        boolean restricted;
+        try {
+            restricted = checkQuery(context == null ? null : context.peerIdentity(), query).restricted();
+        } finally {
+            LogUtil.setQid(previous);
+        }
         LogUtil.logTiming(t, "schema.resolveQuery", "qid=" + qid);
         return flightInfoForQuery(query, null, descriptor, context,
                 restricted || completeAnswer(context));

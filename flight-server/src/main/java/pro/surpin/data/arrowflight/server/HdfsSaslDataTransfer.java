@@ -26,6 +26,12 @@ final class HdfsSaslDataTransfer {
     /** Client setting the extension reads to turn on Kerberos (LIBHDFS3_CONF). */
     static final String AUTHENTICATION = "hadoop.security.authentication";
 
+    /** Client setting that asks DataNodes to encrypt the data transferred (LIBHDFS3_CONF). */
+    static final String ENCRYPT_DATA_TRANSFER = "dfs.encrypt.data.transfer";
+
+    /** Client setting naming the cipher suites of encrypted data transfer (LIBHDFS3_CONF). */
+    static final String CIPHER_SUITES = "dfs.encrypt.data.transfer.cipher.suites";
+
     /** First hadoopfs build number (the {@code -afcN} suffix) that speaks SASL data transfer. */
     static final int FIRST_SASL_BUILD = 6;
 
@@ -135,6 +141,31 @@ final class HdfsSaslDataTransfer {
                     + " and later do); set hdfsSaslDataTransfer=on for another build that does");
         }
         return new Decision(mode, true, version, null);
+    }
+
+    /**
+     * Describes the data-transfer QOP and cipher the LIBHDFS3_CONF file asks the extension for,
+     * for the start line (item 46 (3)): what DataNodes really negotiate is known only inside the
+     * extension, which reports none yet ({@code negotiated=unknown}).
+     *
+     * @param libhdfs3 properties of the LIBHDFS3_CONF file
+     * @return key=value pairs
+     */
+    static String requestedSecurity(Map<String, String> libhdfs3) {
+        return "requestedQop=" + valueOrUnset(libhdfs3.get(HdfsShortCircuit.TRANSFER_PROTECTION))
+                + " encryptDataTransfer=" + valueOrUnset(libhdfs3.get(ENCRYPT_DATA_TRANSFER))
+                + " cipherSuites=" + valueOrUnset(libhdfs3.get(CIPHER_SUITES))
+                + " negotiated=unknown";
+    }
+
+    /**
+     * Returns a setting's trimmed value with spaces removed, or {@code unset}.
+     *
+     * @param value setting value, may be null
+     * @return value for a key=value pair
+     */
+    private static String valueOrUnset(String value) {
+        return value == null || value.isBlank() ? "unset" : value.trim().replace(" ", "");
     }
 
     /**
