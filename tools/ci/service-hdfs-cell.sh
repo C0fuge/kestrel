@@ -172,6 +172,9 @@ for t in 1 2 3; do
   # Try 2 switches to the Azure mirror the runners' own apt uses (archive.ubuntu.com reset connections, 2026-11-10).
   [ "\$t" != 2 ] || sed -i -e 's#http://archive.ubuntu.com#http://azure.archive.ubuntu.com#g' \
     -e 's#http://security.ubuntu.com#http://azure.archive.ubuntu.com#g' /etc/apt/sources.list.d/ubuntu.sources
+  # Try 3 uses kernel.org's full mirror of the archive (2026-11-11: runners could not resolve any *.ubuntu.com host).
+  [ "\$t" != 3 ] || sed -i -E 's#http://[a-z.]*ubuntu[.]com/ubuntu#http://mirrors.kernel.org/ubuntu#g' \
+    /etc/apt/sources.list.d/ubuntu.sources
   echo "kdc: apt try \$t \$(date -u +%T)"
   timeout 240 apt-get \$apt_opts update -qq && timeout 240 apt-get \$apt_opts install -y -qq --no-install-recommends \
     krb5-kdc krb5-admin-server krb5-user > /dev/null && break
