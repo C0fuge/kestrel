@@ -378,7 +378,7 @@ jobs:
           for path, want in (("flight-plugin-jdbc/target/surefire-reports/"
                               "TEST-pro.surpin.data.arrowflight.plugin.jdbc.ScannerFunctionsTest.xml", 2),
                              ("flight-server/target/surefire-reports/"
-                              "TEST-pro.surpin.data.arrowflight.server.catalog.JdbcFederationIntegrationTest.xml", 4)):
+                              "TEST-pro.surpin.data.arrowflight.server.catalog.JdbcFederationIntegrationTest.xml", 5)):
               s = ET.parse(path).getroot()
               tests, skipped = int(s.get("tests")), int(s.get("skipped"))
               print(f"{path}: {tests} tests, {skipped} skipped")
