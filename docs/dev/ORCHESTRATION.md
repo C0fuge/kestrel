@@ -1,8 +1,8 @@
-ALL DONE 2026-11-11T11:56Z
+ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T12:56Z: no change)
 
 # Orchestration status
 
-Status as of **2026-11-11T11:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-11T12:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 All conditions met: ITEM 26 / 27 DONE (kestrel core), IMPROVEMENTS DONE (marten, heron), egret FRESH on the newest
 pre-release **`server-1.0.0-29f1267b995f`** (results/FRESH-29f1267b995f.md, run 42965886044) and ACCEPT SHIP.
@@ -22,7 +22,7 @@ Points for the maintainer:
 - Branches `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
 - Open questions still listed: Q-40b-1 (catalogs, close without a default change - needs OK), Q8 / Q10 / Q11
   (catalogs); lane 3 Q3 / Q4; marten TPC-H q16 SF1 slowdown; `ci-assets` extension set refresh (sha256 in STATUS.md).
-- PLUGINS-STATUS: the maintainer's ITEM 44 bug-first note is still at the top of Next steps though ITEM 44 is DONE.
+- PLUGINS-STATUS: state line 12:20Z says nothing open (ITEM 44 note kept as record); waits on your stand (ranger-policy off repeat, Q-40a gizmo wave).
 
 ## Lanes
 
@@ -62,6 +62,7 @@ No new bug-first notes. No stale locks (all kestrel locks and marten/heron `docs
 
 ## History
 
+- 2026-11-11T12:57Z: ALL DONE kept; no change (lanes nothing open, plugins state line 12:20Z; locks free; no new CI runs or pre-releases; marten 12:40Z / heron session 218 / egret 11:29Z README idle).
 - 2026-11-11T09:58Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron idle; egret idle on 29f1267b995f).
 - 2026-11-11T07:57Z: **ALL DONE** again: egret FRESH 29f1267b995f DONE (run 42965886044, balanced TPC-H OOM fixed, 22/22 everywhere; local small c1 speed/balanced 1.19 JDBC / 1.16 ADBC regression by the rule) and ACCEPT 29f1267b995f SHIP (42965889054 + rerun 42972471705); lanes nothing open, locks free, no new kestrel CI runs or pre-releases; marten/heron idle.
 - 2026-11-11T06:57Z: no change in lanes (all nothing open, locks free, no new kestrel CI runs or pre-releases); egret ACCEPT 42965889054 on 29f1267b995f hit apt mirror failures in 4 cells (infra, harness retry 95395a4), rerun 42972471705 + FRESH 42965886044 running; ALL DONE still suspended.
