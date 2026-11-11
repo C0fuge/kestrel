@@ -115,8 +115,17 @@ jobs:
           fi
 
       # MIT klist / kvno read the HDFS ticket cache the server writes (HdfsTicketCacheTest), as libhdfs3 does.
+      # 2026-11-11: runners could not resolve any *.ubuntu.com host for hours; apt then falls back to kernel.org's
+      # full mirror of the Ubuntu archive (security suites included).
       - name: MIT Kerberos client tools
         run: |
+          set -euo pipefail
+          if ! getent hosts azure.archive.ubuntu.com > /dev/null; then
+            echo "::warning::azure.archive.ubuntu.com unresolvable, apt uses mirrors.kernel.org"
+            if [ -f /etc/apt/apt-mirrors.txt ]; then echo "http://mirrors.kernel.org/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt; fi
+            find /etc/apt \( -name '*.list' -o -name '*.sources' \) -print0 | xargs -0 -r sudo sed -i -E \
+              's#https?://(azure\.)?(archive|security)\.ubuntu\.com/ubuntu#http://mirrors.kernel.org/ubuntu#g'
+          fi
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends krb5-user
 
