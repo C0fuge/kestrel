@@ -4278,3 +4278,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-11 (core session, 17:44-18:25Z): no open core item; item 46 (plugins lane) was merged unpackaged, so
   `package=true` on `pkg/74464701`: Dev CI 43071198734, Service cluster 43074009015, security 43074016951, stores
   43074022598, hdfs 43064709693, Catalogs CI 43064709784 all green -> pre-release `server-1.0.0-74464701e372`.
+- 2026-11-11 (core session, 18:40-18:50Z): no open core item. Q-40b-1 (catalogs lane, 2f31c071, pruning off by
+  default for a local dataDir) is on `main` unpackaged; catalogs (item 47) and lane 3 (item 48) hold their locks, so
+  the next `package=true` waits for their DONE lines. No code change; lock released.
