@@ -12,12 +12,12 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > query id. (3) Log once at start which data-transfer QOP / cipher the extension negotiated (needs a hadoopfs
 > setting or function from the extension repo - ask there if not available). Merge when green, "ITEM 46 DONE <sha>".
 
-**ITEM 46 in progress (plugins lane, 2026-11-11 15:45Z): all three parts on branch `fix/46` (9c743d11 + CI fix
-5cfbedba), NOT yet merged: Dev CI cannot run while GitHub runners cannot resolve `*.ubuntu.com` (apt-get / curl,
-runs 43047425944, 43048145637, Service hdfs 43047453329 - infrastructure, not the change). TPC-H SF10 run
-43047430684 on the branch is green (see Log). Next step: re-dispatch Dev CI and Service hdfs on `fix/46`; when both
-are green, rebase-merge into `main`, write "ITEM 46 DONE <sha>" here; packaging is left to the core lane's
-`package=true`. Part (3) needs the extension repo: Q-46 below.**
+ITEM 46 DONE c96a1272 (2026-11-11, plugins lane; `fix/46` rebase-merged into `main` at 74464701, see Log 17:10Z).
+Parts (1) and (2) complete; part (3) logs the requested QOP / cipher (`negotiated=unknown`) - the negotiated value
+waits on the extension repo (Q-46). Packaging is left to the core lane's `package=true`. **Next for the maintainer's
+stand:** on the next build, check the `duckdb=sizing` line in the 6 GB / -Xmx3g / direct 2g shape (expected
+`memoryLimit=665MiB budgetMiB=2662`-ish, no limits above the container) and a `qid=` on denial WARNs. Nothing else
+open in this lane besides Q-46 and the Q-40a follow-up.
 
 **State 2026-11-11 12:20Z: nothing open in this lane.** Every maintainer note below is DONE (ITEM 44 e75705c9,
 ITEM 42 db35b57a, Q-42 15220a77, 39(b), service matrix); they stay as the record. Waiting on the maintainer only:
@@ -1318,3 +1318,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   krb5-user, apt-get in the service images). 5cfbedba adds `mirrors.edge.kernel.org` as a third mirror for the test
   libs (that step then passed); apt-get still needs ubuntu.com. CHANGELOG / README lines are on the branch. Lock
   released.
+- 2026-11-11 17:10Z (plugins session): ITEM 46 merged - `fix/46` rebase-merged into `main` (item 46 c96a1272, tip
+  74464701). CI was blocked all afternoon because runners could not resolve any `*.ubuntu.com` host; added
+  `mirrors.kernel.org` as apt fallback in Dev CI (Kerberos tools step: switch apt sources when azure.archive is
+  unresolvable), `tools/ci/server-image.sh` (try 3) and the Service hdfs KDC container (`service-hdfs-cell.sh` apt
+  try 3). Green on the branch: Dev CI 43056505119 (c6f08354), Service hdfs 43060538104 (bea11172; 11/12 cells first
+  time, `ha-krb-sasl speed` hit one connect failure to kernel.org during KDC setup and was green on the re-run of the
+  failed job); TPC-H SF10 43047430684 earlier. Service cluster / security / stores and Catalogs CI also build
+  Ubuntu images: if they fail the same way before ubuntu.com resolves again, give them the same kernel.org try
+  (not done here: not needed for this item). Lock released.

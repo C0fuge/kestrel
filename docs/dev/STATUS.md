@@ -4262,3 +4262,8 @@ S3 slowdown item below stays open for then).
   42955011583, security 42958566480, stores 42958570049, Catalogs CI 42955011409 -> pre-release
   `server-1.0.0-29f1267b995f`. Gate note for later sessions: dispatch `package=true` on a `pkg/<sha>` branch from the
   start, since docs commits from other lanes move `main` during the ~20 min build.
+- 2026-11-11 17:10Z (plugins lane, FYI): ITEM 46 merged into `main` (c96a1272; core files `DuckDbSizing`,
+  `FlightSqlProducer`, `HdfsSaslDataTransfer`, `ServerModule`, `HadoopArrowFlightServer`). Runners could not resolve
+  `*.ubuntu.com`: Dev CI, `tools/ci/server-image.sh` and the Service hdfs KDC container now fall back to
+  `mirrors.kernel.org` (03cc8190, 74464701). Dev CI 43056505119, Service hdfs 43060538104 green on `fix/46`.
+  Not packaged: the next `package=true` is the core lane's call.

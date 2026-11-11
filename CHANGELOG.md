@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- CI: when the runners cannot resolve `*.ubuntu.com`, apt in Dev CI, the HDFS service server image and the Service hdfs
+  KDC container falls back to the `mirrors.kernel.org` Ubuntu mirror (no runtime change).
 - Item 46, fix: `balanced` gave each expected DuckDB connection at least 1 GiB within the budget left by the JVM's
   real reservation, so 4 connections in a 6 GB container with -Xmx3g / direct 2g got 4 x 1024 MiB with a 2.6 GiB
   budget, and the start log showed the full-limit budget (`budgetMiB=102`). Each connection now gets at most its
