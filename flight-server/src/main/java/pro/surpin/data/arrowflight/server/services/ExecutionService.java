@@ -342,6 +342,32 @@ public final class ExecutionService {
     }
 
     /**
+     * Counts the files a plain single-table query over a directory table reads once footer
+     * statistics have left out the files its WHERE clause cannot match ({@code fileStatsPruning},
+     * item 39 (c)), when this node can read every kept file itself (item 48: distributed complete
+     * computes a filtered one-row aggregate over few kept files on the planning node).
+     *
+     * @param sql text after the catalog rewrites, table names qualified
+     * @return the kept files, or -1 when the query is not pruned (any other query, pruning off, no
+     *         file left out) or this node cannot read a kept file whole
+     */
+    public int prunedFilesHere(String sql) {
+        CatalogViews.Pruning pruning = catalogViews.pruning(sql);
+        if (pruning == null) {
+            return -1;
+        }
+        DataStore store = parquetAdapter.dataStore();
+        if (store != null && store.wholeFileReadsOnly()) {
+            for (DataFile file : pruning.kept()) {
+                if (!store.readableHere(file)) {
+                    return -1;
+                }
+            }
+        }
+        return pruning.kept().size();
+    }
+
+    /**
      * Replaces the catalog views a client's SQL names by their queries; the complete-answer
      * calls do the same, so a text already expanded stays as it is.
      *

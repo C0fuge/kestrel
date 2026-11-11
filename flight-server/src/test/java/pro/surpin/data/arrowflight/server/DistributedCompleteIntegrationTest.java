@@ -319,6 +319,50 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies item 48: with point lookups local, a filtered one-row aggregate whose footer
+     * statistics keep at most {@code distributedCompleteLocalAggregateMaxFiles} files is answered
+     * exactly by this node alone; more kept files, an unpruned filter, a bound of 0 and grouped
+     * aggregates are still merged, and every answer equals the node's own.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void filteredOneRowAggregatesOverFewPrunedFilesAreComputedHere() throws Exception {
+        // File 3 has no k = 9 (its k max is 8): the filter keeps 3 of the 4 files.
+        String pruned = "SELECT count(*) AS n, sum(v) AS total, min(d) AS lo FROM s.t WHERE k > 8";
+        String averaged = "SELECT avg(v) AS a, count(*) AS n FROM s.t WHERE k >= 9";
+        String unpruned = "SELECT count(*) AS n, sum(v) AS total FROM s.t WHERE k > 2";
+        String grouped = "SELECT k, sum(v) AS total FROM s.t WHERE k > 8 GROUP BY k";
+        String prunedAlone = answer(pruned);
+        String averagedAlone = answer(averaged);
+        String unprunedAlone = answer(unpruned);
+        String groupedAlone = answer(grouped);
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        distributed.pointLookupsLocal(true);
+        try {
+            distributed.localAggregateMaxFiles(3);
+            assertEquals(prunedAlone, answer(pruned));
+            assertEquals(averagedAlone, answer(averaged));
+            assertEquals(2, distributed.localAggregates());
+            assertEquals(0, distributed.mergedAnswers());
+            assertEquals(unprunedAlone, answer(unpruned));
+            assertEquals(groupedAlone, answer(grouped));
+            assertEquals(2, distributed.mergedAnswers());
+            distributed.localAggregateMaxFiles(2);
+            assertEquals(prunedAlone, answer(pruned));
+            distributed.localAggregateMaxFiles(0);
+            assertEquals(prunedAlone, answer(pruned));
+            assertEquals(2, distributed.localAggregates());
+            assertEquals(4, distributed.mergedAnswers());
+            assertEquals(0, distributed.fallbacks());
+            assertThrows(IllegalArgumentException.class, () -> distributed.localAggregateMaxFiles(-1));
+        } finally {
+            distributed.localAggregateMaxFiles(DistributedComplete.DEFAULT_LOCAL_AGGREGATE_MAX_FILES);
+        }
+    }
+
+    /**
      * Verifies a merge started on probation whose answer turns out large takes its room once it
      * has read more than the probation bytes, waits for it while other merges hold it, and still
      * answers exactly (item 43: a wrong guess costs no correctness and keeps the item 35 bound).

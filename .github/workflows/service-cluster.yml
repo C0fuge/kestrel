@@ -9,7 +9,8 @@
 # in the loss cell the NameNodes also fail over nn2 -> nn1 and back under load; the notes count the reads
 # each NameNode answered per failover window, D13 b) and S3 (a MinIO
 # container; moto when no MinIO image can be pulled - the summary names the service). Data: TPC-H
-# SF<sf> as Parquet (lineitem and orders in <files> files), read by the hadoopfs / httpfs DuckDB
+# SF<sf> as Parquet (lineitem and orders in <files> files, one key range each by default so that
+# footer pruning keeps few files of a key-range filter, item 48), read by the hadoopfs / httpfs DuckDB
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
 # maintainer's cluster runs; the HDFS notes have each DataNode's TCP block reads from JMX). Cells per store:
 # balanced, speed (-DresourceProfile=speed), speed-dc
@@ -39,6 +40,10 @@ on:
         description: "Parquet files of lineitem and orders"
         type: string
         default: "6"
+      split:
+        description: "Key split of lineitem / orders files: range (footer min/max tell them apart) or mod"
+        type: string
+        default: "range"
   push:
     branches: [main]
     paths:
@@ -128,7 +133,7 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/py"
           "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0
-          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" "${{ inputs.files || '6' }}"
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" "${{ inputs.files || '6' }}" "${{ inputs.split || 'range' }}"
           du -sh "$RUNNER_TEMP/in/data"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

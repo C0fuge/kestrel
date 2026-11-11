@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Distributed complete mode: a filtered one-row aggregate (count / sum with a WHERE clause, no GROUP BY) whose
+  footer statistics leave at most `distributedCompleteLocalAggregateMaxFiles` files of its table (new setting,
+  `FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES`, default 4, 0 = merge as before), all readable here, is
+  computed on the planning node like a point lookup when `distributedCompletePointLookups=local` (item 48, lane 3:
+  the stand's small-query mix ran at 0.55 of speed under dc). Answers are unchanged. CI: the service-cluster data
+  is split by key range by default (`split` input, `mod` as before) and the point gate adds `agg_range`.
+
 - File pruning by footer statistics is off by default for a local, unshared `dataDir` (maintainer's answer to
   Q-40b-1, lane 4): there it cost ~0.25-0.5 ms per point query at 1 client for page-cache reads it saved. HDFS, S3 /
   lakeFS, plugin stores and `dataDirShared` mounts keep it on (default 1024 files); a given

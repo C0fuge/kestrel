@@ -694,6 +694,30 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteLocalAggregateMaxFiles}
+     * ({@code arrowflight.cluster.distributedCompleteLocalAggregateMaxFiles},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES}): with
+     * {@code distributedCompletePointLookups=local}, a one-row aggregate with a WHERE clause (no
+     * GROUP BY) whose footer statistics leave at most this many files of its table, all readable
+     * on the planning node, is computed there alone instead of merged (item 48); default 4, 0
+     * merges them all.
+     *
+     * @param props configuration source
+     * @return the bound, 0 for off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int distributedCompleteLocalAggregateMaxFiles(ConfigSource props) {
+        int value = getIntWithEnv("distributedCompleteLocalAggregateMaxFiles",
+                "arrowflight.cluster.distributedCompleteLocalAggregateMaxFiles",
+                "FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES", 4, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("distributedCompleteLocalAggregateMaxFiles must be 0 or more: "
+                    + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own

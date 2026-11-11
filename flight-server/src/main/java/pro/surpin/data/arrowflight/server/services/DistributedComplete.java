@@ -71,6 +71,8 @@ public final class DistributedComplete implements AutoCloseable {
     private static final String VIEW_PREFIX = "__kestrel_endpoint_answers_";
     /** Largest LIMIT whose merge starts on probation (item 43). */
     static final long SMALL_LIMIT = 10_000;
+    /** Default of {@code distributedCompleteLocalAggregateMaxFiles} (item 48). */
+    public static final int DEFAULT_LOCAL_AGGREGATE_MAX_FILES = 4;
     /** A string, or a number with an optional sign, fraction and exponent. */
     private static final String PLAIN_LITERAL =
             "(?:'(?:[^']|'')*'|[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?(?![\\w.]))";
@@ -107,8 +109,14 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong failovers = new AtomicLong();
     private final AtomicLong peersLost = new AtomicLong();
     private final AtomicLong localPointLookups = new AtomicLong();
+    private final AtomicLong localAggregates = new AtomicLong();
     /** Point lookups computed on this node alone when it can read the files (item 43). */
     private volatile boolean pointLookupsLocal;
+    /**
+     * Most files a filtered one-row aggregate may read after footer pruning to be computed on
+     * this node alone, with point lookups local (item 48); 0 merges them all.
+     */
+    private volatile int localAggregateMaxFiles = DEFAULT_LOCAL_AGGREGATE_MAX_FILES;
 
     /**
      * Creates the distributed path of complete answers.
@@ -220,6 +228,17 @@ public final class DistributedComplete implements AutoCloseable {
             LOGGER.debug("node={} distributedComplete=local reason='point lookup' query='{}'", LogUtil.node(),
                     LogUtil.oneLine(query));
             return false;
+        }
+        // A filtered one-row aggregate whose filter leaves few files by their footers reads little
+        // and fans out like a point lookup (item 48: the stand's count / sum mix, dc 0.55 of speed).
+        if (pointLookupsLocal && localAggregate(parsed)) {
+            int kept = execution.prunedFilesHere(readQuery);
+            if (kept >= 0 && kept <= localAggregateMaxFiles) {
+                localAggregates.incrementAndGet();
+                LOGGER.debug("node={} distributedComplete=local reason='one-row aggregate over {} pruned files'"
+                        + " query='{}'", LogUtil.node(), kept, LogUtil.oneLine(query));
+                return false;
+            }
         }
         QueryPlan plan;
         try {
@@ -402,6 +421,18 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
+     * Tells whether a part query may be computed on the planning node when footer pruning keeps
+     * few files (item 48): a one-row aggregate (no GROUP BY, no DISTINCT) with a filter.
+     *
+     * @param parsed the part query
+     * @return true for a filtered one-row aggregate
+     */
+    private boolean localAggregate(ParquetQueryParser parsed) {
+        return localAggregateMaxFiles > 0 && oneRow(parsed) && parsed.filter != null
+                && !parsed.filter.isBlank();
+    }
+
+    /**
      * Tells whether a query's filter has an equality of a column and a literal and no OR.
      *
      * @param parsed the query
@@ -535,6 +566,31 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public void pointLookupsLocal(boolean local) {
         this.pointLookupsLocal = local;
+    }
+
+    /**
+     * Sets the most files a filtered one-row aggregate (count / sum with a WHERE clause, no GROUP
+     * BY) may read after footer pruning to be computed on this node alone when point lookups are
+     * local ({@code distributedCompleteLocalAggregateMaxFiles}, item 48); 0 merges them all.
+     *
+     * @param maxFiles the bound, 0 or more
+     * @throws IllegalArgumentException for a negative bound
+     */
+    public void localAggregateMaxFiles(int maxFiles) {
+        if (maxFiles < 0) {
+            throw new IllegalArgumentException("localAggregateMaxFiles must be 0 or more: " + maxFiles);
+        }
+        this.localAggregateMaxFiles = maxFiles;
+    }
+
+    /**
+     * Counts the filtered one-row aggregates over few pruned files computed on this node alone
+     * since start (item 48).
+     *
+     * @return aggregates not merged
+     */
+    public long localAggregates() {
+        return localAggregates.get();
     }
 
     /**

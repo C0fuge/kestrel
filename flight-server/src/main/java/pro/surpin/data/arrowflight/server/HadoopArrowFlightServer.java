@@ -548,8 +548,11 @@ public class HadoopArrowFlightServer {
                 DistributedComplete.clientFactory(component.allocator(), certificates), admission);
         boolean pointLookupsLocal = ConfigAdapter.distributedCompletePointLookupsLocal(ConfigSource.system());
         distributedComplete.pointLookupsLocal(pointLookupsLocal);
+        int aggregateFiles = ConfigAdapter.distributedCompleteLocalAggregateMaxFiles(ConfigSource.system());
+        distributedComplete.localAggregateMaxFiles(aggregateFiles);
         LOGGER.info("distributedComplete point lookups: {}", pointLookupsLocal
-                ? "local (computed on the planning node when it can read the files)"
+                ? "local (computed on the planning node when it can read the files); filtered one-row"
+                        + " aggregates: local when footer pruning keeps <= " + aggregateFiles + " files"
                 : "merge (on probation: no permits until 16 MiB read)");
         component.producer().useDistributedComplete(distributedComplete);
         LOGGER.warn("distributedComplete=true: complete answers are merged from endpoint answers read"

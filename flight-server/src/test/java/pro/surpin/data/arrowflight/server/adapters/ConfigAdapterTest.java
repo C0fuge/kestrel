@@ -388,6 +388,18 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompletePointLookups", "auto"), Map.of())));
     }
 
+    /** Item 48: filtered one-row aggregates over at most 4 pruned files are local by default; 0 turns it off. */
+    @Test
+    void distributedCompleteLocalAggregateMaxFilesDefaultsToFour() throws IOException {
+        assertEquals(4, ConfigAdapter.distributedCompleteLocalAggregateMaxFiles(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.distributedCompleteLocalAggregateMaxFiles(
+                source(Map.of("distributedCompleteLocalAggregateMaxFiles", "0"), Map.of())));
+        assertEquals(9, ConfigAdapter.distributedCompleteLocalAggregateMaxFiles(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES", "9"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteLocalAggregateMaxFiles(
+                source(Map.of("distributedCompleteLocalAggregateMaxFiles", "-1"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));
