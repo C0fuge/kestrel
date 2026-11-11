@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan;
 import pro.surpin.data.arrowflight.server.duckdb.HiddenAttachments;
-import pro.surpin.data.arrowflight.server.duckdb.SecretRedactor;
+import pro.surpin.data.arrowflight.spi.config.SecretRedactor;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
