@@ -162,6 +162,8 @@ public final class CatalogViews {
     private volatile Map<String, TableViews> prunable = Map.of();
     /** Leaves out files by footer statistics (setting fileStatsPruning), or null when off. */
     private volatile FileStatsPruner pruner;
+    /** Whether a local, unshared data directory is pruned too (the setting was given). */
+    private volatile boolean pruneLocalFiles = true;
     /** Point query shapes remembered for {@link #pruning(String)}. */
     private static final int PRUNING_SHAPES = 512;
     /** First stand-in literal of a shape parse: ten digits, never an INTEGER literal. */
@@ -1131,7 +1133,30 @@ public final class CatalogViews {
      * @param maxFiles tables with more files are not pruned; 0 turns pruning off
      */
     public void filePruning(int maxFiles) {
+        filePruning(maxFiles, true);
+    }
+
+    /**
+     * Turns file pruning by footer statistics on or off, for a local data directory too or not
+     * (Q-40b-1: unset, the setting prunes only stores whose file opens are remote).
+     *
+     * @param maxFiles tables with more files are not pruned; 0 turns pruning off
+     * @param localFiles whether a local, unshared data directory is pruned too
+     */
+    public void filePruning(int maxFiles, boolean localFiles) {
+        pruneLocalFiles = localFiles;
         pruner = maxFiles <= 0 ? null : new FileStatsPruner(maxFiles, 100_000);
+    }
+
+    /**
+     * Tells whether a store is a data directory on this node's own file system, not shared
+     * with other nodes: its file opens are cheap page-cache reads.
+     *
+     * @param store the data store
+     * @return true for a local, unshared directory
+     */
+    static boolean localStore(DataStore store) {
+        return store != null && "file".equals(store.kind()) && !store.shared();
     }
 
     /**
@@ -1210,6 +1235,9 @@ public final class CatalogViews {
     Pruning pruning(String sql) {
         FileStatsPruner p = pruner;
         if (p == null || sql == null || !TableReferences.singleSelect(sql)) {
+            return null;
+        }
+        if (!pruneLocalFiles && localStore(parquetAdapter.dataStore())) {
             return null;
         }
         try {

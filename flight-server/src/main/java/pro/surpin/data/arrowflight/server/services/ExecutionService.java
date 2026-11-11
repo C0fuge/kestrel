@@ -132,7 +132,8 @@ public final class ExecutionService {
         this.catalogViews = new CatalogViews(parquetAdapter, duckDbAdapter, widenUnsigned,
                 pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.defaultSchema());
         this.catalogViews.filePruning(
-                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.fileStatsPruningMaxFiles());
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.fileStatsPruningMaxFiles(),
+                pro.surpin.data.arrowflight.server.adapters.ConfigAdapter.fileStatsPruningSet());
     }
 
     /**

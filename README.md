@@ -310,6 +310,9 @@ table reads only the Parquet files whose footer min/max of signed integer and da
 (`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` with literals, under AND / OR), with or without a table alias
 (`FROM s.t x WHERE x.k = 5`); other filters read every file as before.
 Footers are read once per file version through the store; tables with more files than the bound are not pruned.
+Unset, the setting prunes only stores whose file opens are remote (HDFS, S3 / lakeFS, plugin stores, a `dataDirShared`
+mount); a local, unshared `dataDir` is read through its views, where pruning cost more than the page-cache reads it
+saved. Any given value (also `1024`) applies to every store.
 
 `duckDbParquetMetadataCache=true` (default false) lets every DuckDB keep the Parquet footers it read, so repeated
 point queries do not read and parse every file's footer again. DuckDB reads a footer again only when the file system

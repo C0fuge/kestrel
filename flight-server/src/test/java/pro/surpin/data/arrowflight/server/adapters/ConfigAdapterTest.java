@@ -237,6 +237,18 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("fileStatsPruningMaxFiles"), e.getMessage());
     }
 
+    /** Q-40b-1: an unset fileStatsPruningMaxFiles leaves a local data directory unpruned. */
+    @Test
+    void fileStatsPruningSetOnlyWhenGiven() throws IOException {
+        assertFalse(ConfigAdapter.fileStatsPruningSet(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.fileStatsPruningSet(
+                source(Map.of("fileStatsPruningMaxFiles", "1024"), Map.of())));
+        assertTrue(ConfigAdapter.fileStatsPruningSet(
+                source(Map.of("arrowflight.fileStatsPruningMaxFiles", "0"), Map.of())));
+        assertTrue(ConfigAdapter.fileStatsPruningSet(
+                source(Map.of(), Map.of("FLIGHT_FILE_STATS_PRUNING_MAX_FILES", "50"))));
+    }
+
     @Test
     void flightLoadReservationSecondsDefaultsToTenMinutesAndRefusesZero() throws IOException {
         assertEquals(600L, ConfigAdapter.flightLoadReservationSeconds(source(Map.of(), Map.of())));

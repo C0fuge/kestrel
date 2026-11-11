@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- File pruning by footer statistics is off by default for a local, unshared `dataDir` (maintainer's answer to
+  Q-40b-1, lane 4): there it cost ~0.25-0.5 ms per point query at 1 client for page-cache reads it saved. HDFS, S3 /
+  lakeFS, plugin stores and `dataDirShared` mounts keep it on (default 1024 files); a given
+  `fileStatsPruningMaxFiles` (any value) still applies to every store. Answers are unchanged either way.
+
 - Pre-release `server-1.0.0-74464701e372` (2026-11-11): `main` 74464701 with item 46.
 - CI: when the runners cannot resolve `*.ubuntu.com`, apt in Dev CI, the HDFS service server image and the Service hdfs
   KDC container falls back to the `mirrors.kernel.org` Ubuntu mirror (no runtime change).
@@ -206,7 +211,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 |---|---|---|
 | `hdfsSaslDataTransfer` (`arrowflight.hdfs.saslDataTransfer`, `HDFS_SASL_DATA_TRANSFER`) | `auto` | on SASL DataNodes (`dfs.data.transfer.protection`): `auto` = DuckDB reads non-local blocks directly when hadoopfs is 51b7220-afc6+ and `LIBHDFS3_CONF` sets the protection and Kerberos (no copies, files planned to any node), else short-circuit only as before; `on` / `off` force it (item 41) |
 | `hdfsMetadataCacheTtlMs` (`arrowflight.hdfs.metadataCacheTtlMs`, `HDFS_METADATA_CACHE_TTL_MS`) | `30000` with an `hdfs://` data dir, else `0` (off) | hadoopfs (51b7220-afc4+) keeps file statuses and located blocks this long (`hdfs_metadata_cache_ttl_ms`); a rewritten file may show its old status that long |
-| `fileStatsPruningMaxFiles` (`arrowflight.fileStatsPruningMaxFiles`, `FLIGHT_FILE_STATS_PRUNING_MAX_FILES`) | `1024` (0 = off) | complete answers of a plain single-table query over a directory table read only the files whose footer min/max of integer / date columns the WHERE clause can match; answers unchanged (item 39 (c) part 3) |
+| `fileStatsPruningMaxFiles` (`arrowflight.fileStatsPruningMaxFiles`, `FLIGHT_FILE_STATS_PRUNING_MAX_FILES`) | `1024` (0 = off; unset: off for a local unshared `dataDir`) | complete answers of a plain single-table query over a directory table read only the files whose footer min/max of integer / date columns the WHERE clause can match; answers unchanged (item 39 (c) part 3) |
 | `duckDbParquetMetadataCache` (`arrowflight.duckdb.parquetMetadataCache`, `DUCKDB_PARQUET_METADATA_CACHE`) | `false` | every DuckDB keeps the Parquet footers it read (DuckDB `parquet_metadata_cache`); re-read only when the file system reports a newer modification time (item 39 (c)) |
 | `defaultSchema` (`arrowflight.defaultSchema`, `FLIGHT_DEFAULT_SCHEMA`) | unset | schema a table name without a schema reads when several schemas have that table (item 39 (a)) |
 | `resourceProfile` (`arrowflight.resourceProfile`, `FLIGHT_RESOURCE_PROFILE`) | `balanced` (nothing changes) | `speed` supplies faster defaults at a memory/CPU cost (see "Resource profile speed"); `-D` and environment settings win |

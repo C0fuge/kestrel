@@ -753,7 +753,8 @@ public class ConfigAdapter {
      * {@code FLIGHT_FILE_STATS_PRUNING_MAX_FILES}): complete answers of a plain single-table
      * query over a directory table read only the files whose footer min/max of integer and date
      * columns its WHERE clause can match (item 39 (c)), for tables with at most this many files;
-     * default 1024, 0 turns it off.
+     * default 1024, 0 turns it off. Unset, a local data directory is not pruned (see
+     * {@link #fileStatsPruningSet(ConfigSource)}).
      *
      * @param props configuration source
      * @return the bound, 0 for off
@@ -766,6 +767,28 @@ public class ConfigAdapter {
             throw new IllegalArgumentException("fileStatsPruningMaxFiles must be 0 or more: " + value);
         }
         return value;
+    }
+
+    /**
+     * Returns whether fileStatsPruningMaxFiles is set in the system configuration.
+     *
+     * @return true when the setting is given
+     */
+    public static boolean fileStatsPruningSet() {
+        return fileStatsPruningSet(ConfigSource.system());
+    }
+
+    /**
+     * Tells whether {@code fileStatsPruningMaxFiles} is given at all: unset, file pruning stays
+     * off for a local, unshared data directory, where it costs more than the page-cache reads it
+     * saves (Q-40b-1), and on for HDFS, S3 and plugin stores; a given value applies to every store.
+     *
+     * @param props configuration source
+     * @return true when the setting or its environment variable is given
+     */
+    public static boolean fileStatsPruningSet(ConfigSource props) {
+        return getStringWithEnv("fileStatsPruningMaxFiles", "arrowflight.fileStatsPruningMaxFiles",
+                "FLIGHT_FILE_STATS_PRUNING_MAX_FILES", null, props) != null;
     }
 
     /**

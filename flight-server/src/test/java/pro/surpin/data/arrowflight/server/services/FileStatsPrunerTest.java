@@ -240,6 +240,43 @@ class FileStatsPrunerTest {
     }
 
     /**
+     * Q-40b-1: with the setting unset, a local, unshared data directory is not pruned (its file
+     * opens are page-cache reads) while HDFS, S3, shared mounts and plugin stores are; a given
+     * setting prunes every store.
+     */
+    @Test
+    void unsetPruningSkipsOnlyLocalUnsharedDirectories(@TempDir Path dir) throws Exception {
+        List<DataFile> files = writeFiles(dir);
+        String point = "SELECT * FROM s.t WHERE k = 5";
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        try (DuckDbAdapter duck = new DuckDbAdapter(config(), ioPool)) {
+            for (String[] store : new String[][] {
+                {"file", "false", "view"}, {"file", "true", "pruned"}, {"hdfs", "false", "pruned"},
+                {"s3", "true", "pruned"}, {"fixture", "false", "pruned"}}) {
+                ParquetAdapter parquet = adapter(files, new AtomicInteger());
+                DataStore data = parquet.dataStore();
+                when(data.kind()).thenReturn(store[0]);
+                when(data.shared()).thenReturn(Boolean.parseBoolean(store[1]));
+                String what = store[0] + " shared=" + store[1];
+                CatalogViews unset = new CatalogViews(parquet, duck, true);
+                unset.filePruning(1024, false);
+                assertEquals("view".equals(store[2]) ? 4 : 1, filesRead(unset.prunedFiles(point), dir), what);
+                CatalogViews given = new CatalogViews(parquet, duck, true);
+                given.filePruning(1024, true);
+                assertEquals(1, filesRead(given.prunedFiles(point), dir), "given: " + what);
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+        org.apache.hadoop.fs.FileSystem local = org.apache.hadoop.fs.FileSystem.getLocal(
+                new org.apache.hadoop.conf.Configuration());
+        assertTrue(CatalogViews.localStore(new pro.surpin.data.arrowflight.server.storage.HadoopDataStore(
+                local, dir.toString(), null)), "a local dataDir");
+        assertFalse(CatalogViews.localStore(new pro.surpin.data.arrowflight.server.storage.HadoopDataStore(
+                local, dir.toString(), null, true)), "a mount every node reads (dataDirShared)");
+    }
+
+    /**
      * Verifies that point queries differing only in their key are described once (item 40 (b),
      * {@link DescribeKey}), and that a text whose literal is not left out is described itself.
      */
