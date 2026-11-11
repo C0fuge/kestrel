@@ -5,6 +5,13 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-11 18:40 - ITEM 46 (minor, stand on `29f1267b995f`; no wrong answers, package shipped).**
+> (1) balanced in 6 GB / -Xmx3g / direct 2g logs `duckdb=memoryLimitAboveJvmLimits memoryLimit=1024MiB instances=4
+> budgetMiB=102`: the budget still uses the full -Xmx + direct while the floors use the real reservation - make both
+> use the same number (no limits that add up above the container). (2) Every denial WARN carries `qid=null` - pass the
+> query id. (3) Log once at start which data-transfer QOP / cipher the extension negotiated (needs a hadoopfs
+> setting or function from the extension repo - ask there if not available). Merge when green, "ITEM 46 DONE <sha>".
+
 **State 2026-11-11 12:20Z: nothing open in this lane.** Every maintainer note below is DONE (ITEM 44 e75705c9,
 ITEM 42 db35b57a, Q-42 15220a77, 39(b), service matrix); they stay as the record. Waiting on the maintainer only:
 the stand's repeat of `ranger-policy ... off` on `server-1.0.0-29f1267b995f` (ITEM 44 (2)) and the Q-40a gizmo wave
