@@ -362,8 +362,8 @@ public final class ExecutionService {
      * reads, at most once per {@code hdfsAccessRecheckMs} per table (item 44 (2)): the listing,
      * plan and hadoopfs metadata caches let a repeat query run without a storage call, which
      * left a Ranger revoke unseen until they expired. A plain name is checked as the table it
-     * resolves to. Queries whose tables cannot be named (a table function, a parse error) are
-     * not checked here; their own resolution decides.
+     * resolves to. Tables the query reads through a table function or a reference the token
+     * finder misses are not checked here.
      *
      * @param query SQL to run, with its catalog views expanded
      * @throws java.io.UncheckedIOException when the storage denies access to a table
@@ -372,25 +372,33 @@ public final class ExecutionService {
         if (query == null || !parquetAdapter.rechecksAccess()) {
             return;
         }
-        List<ParquetQueryParser.JoinTable> tables;
-        try {
-            tables = QueryTables.of(TimeTravelClause.withoutClauses(query));
-        } catch (RuntimeException e) {
-            return;
-        }
-        for (ParquetQueryParser.JoinTable table : tables) {
-            String schema = table.schema();
-            if (schema == null) {
-                try {
-                    schema = catalogViews.plainOwner(table.table());
-                } catch (IOException e) {
-                    throw new java.io.UncheckedIOException(e);
-                } catch (java.sql.SQLException | RuntimeException e) {
-                    continue;
-                }
+        for (TableReferences.Reference reference : accessTables(query, name -> {
+            try {
+                return catalogViews.plainOwner(name);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            } catch (java.sql.SQLException e) {
+                return null;
             }
-            parquetAdapter.recheckAccess(schema, table.table());
+        })) {
+            parquetAdapter.recheckAccess(reference.schema(), reference.table());
         }
+    }
+
+    /**
+     * Names the tables {@link #recheckAccess(String)} checks: the references after FROM, JOIN
+     * or a comma of a FROM list, plain names as the resolver qualifies them. The token finder,
+     * not DuckDB's parse (one parse connection, a lock per query): a reference it misses is only
+     * checked once the caches expire.
+     *
+     * @param query SQL to run
+     * @param plainOwner takes a plain table name and returns its schema, or null
+     * @return references in text order
+     */
+    static List<TableReferences.Reference> accessTables(String query,
+            java.util.function.Function<String, String> plainOwner) {
+        String qualified = TableReferences.qualifyPlainNames(query, plainOwner);
+        return TableReferences.find(qualified, (schema, table) -> true);
     }
 
     /**

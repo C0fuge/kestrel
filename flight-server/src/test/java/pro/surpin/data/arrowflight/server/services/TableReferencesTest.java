@@ -138,4 +138,20 @@ class TableReferencesTest {
         assertEquals("WITH c AS (SELECT * FROM \"tpch\".orders) SELECT * FROM c, \"tpch\".lineitem",
                 qualify("WITH c AS (SELECT * FROM orders) SELECT * FROM c, lineitem"));
     }
+
+    /**
+     * Item 44 (2): the access recheck names every table a query reads, plain names as their
+     * schema's table, never a CTE, a string literal or a name the resolver does not know.
+     */
+    @Test
+    void accessRecheckNamesEveryTableOfAQuery() {
+        List<String> tables = ExecutionService.accessTables(
+                "WITH c AS (SELECT * FROM orders) SELECT 'FROM tpch.secret' FROM c, tpch.lineitem l"
+                        + " JOIN \"tpch\".\"part\" p ON l.l_partkey = p.p_partkey"
+                        + " WHERE l.l_orderkey IN (SELECT o_orderkey FROM tpch.orders) AND EXISTS"
+                        + " (SELECT 1 FROM unknown_table)",
+                name -> name.equals("orders") ? "tpch" : null).stream()
+                .map(r -> r.schema() + "." + r.table()).toList();
+        assertEquals(List.of("tpch.orders", "tpch.lineitem", "tpch.part", "tpch.orders"), tables);
+    }
 }
