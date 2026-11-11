@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- hadoopfs `51b7220-afc8` is the CI / release default (maintainer, 2026-11-11; `ci-assets`
+  `hadoopfs-v1.5.6-afc8.duckdb_extension`, sha256 `78fdd5d7b9621f6eb1e77cfd9d3f3abd54207bb4d34990c42d0341f6af96dcef`,
+  was afc6). afc7 adds the AES cipher option for `privacy`, afc8 accepts several QOPs such as
+  `authentication,privacy` and picks them in the client's order. The server is unchanged: `hdfsSaslDataTransfer=auto`
+  reads directly with afc6 and later.
+
 - Distributed complete mode: point lookups with typed literals are computed on the planning node too (item 45,
   lane 3). `distributedCompletePointLookups=local` matched only a string or plain number after `=`, so
   `WHERE o_orderdate = DATE '1992-01-01'`, `= CAST('1992-01-01' AS DATE)`, `= TIMESTAMP '...'`, decimals with an

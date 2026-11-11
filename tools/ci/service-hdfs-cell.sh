@@ -32,7 +32,7 @@
 #           the short-circuit-only path with node-local copies, which hadoopfs 51b7220-afc6 no longer needs.
 #   sasl-direct  sasl-cluster with dfs.data.transfer.protection=authentication,privacy (several QOPs, as on
 #           the maintainer's real cluster; SASL_DIRECT_PROTECTION overrides it), hdfsSaslDataTransfer left at auto
-#           (hadoopfs 51b7220-afc6 speaks SASL data transfer: the start line must say direct=true) and
+#           (hadoopfs 51b7220-afc6+ speaks SASL data transfer: the start line must say direct=true) and
 #           hdfsLocalCopyMaxBytes=0 (no node-local copies; item 41 (3)): the same 22/22 and
 #           service-hdfs-sasl-check.py answers, split / chunks read from remote DataNodes directly, no
 #           hdfs=localCopy line; TCP block reads are expected here. No later stages.
@@ -69,7 +69,7 @@ case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;;
 krb=false; [[ $topo == ha-krb* || $topo == sasl-* ]] && krb=true
 sasl=false; [[ $topo == ha-krb-sasl || $topo == sasl-* ]] && sasl=true
 n=1; [[ $topo == sasl-* ]] && n=3
-# Item 41: sasl-direct reads non-local blocks over SASL data transfer (hadoopfs afc6, auto); the
+# Item 41: sasl-direct reads non-local blocks over SASL data transfer (hadoopfs afc6+, auto); the
 # other SASL topologies keep the short-circuit-only path.
 direct=false; [ "$topo" = sasl-direct ] && direct=true
 if $sasl && ! $direct; then opts="$opts -DhdfsSaslDataTransfer=off"; fi
@@ -380,7 +380,7 @@ if [ "$n" -gt 1 ]; then
   cat "$work/sasl-check.log"
   note "sasl check: $(grep -m 1 '^result ' "$work/sasl-check.log" || echo 'no result line') in $(( SECONDS - t0 )) s ($($direct && echo 'direct SASL reads, no copies' || echo 'short-circuit + node-local copies'))"
   if $direct; then
-    # Item 41: every node decided on direct reads (auto, afc6), and none made a node-local copy.
+    # Item 41: every node decided on direct reads (auto, afc6+), and none made a node-local copy.
     directNodes=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1 | grep -m 1 -c 'hdfs=saslDataTransfer mode=auto direct=true' || true; done | awk '{ s += $1 } END { print s + 0 }')
     directCopies=$(for i in $(seq "$n"); do docker logs "srv$i" 2>&1; done | grep -c 'hdfs=localCopy ' || true)
     note "item 41: $directNodes of $n node(s) read SASL DataNodes directly, local copies $directCopies; $(docker logs srv1 2>&1 | grep -m 1 -oE 'hdfs=saslDataTransfer .*' || echo 'no hdfs=saslDataTransfer line')"
