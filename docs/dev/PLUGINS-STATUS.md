@@ -12,6 +12,13 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > query id. (3) Log once at start which data-transfer QOP / cipher the extension negotiated (needs a hadoopfs
 > setting or function from the extension repo - ask there if not available). Merge when green, "ITEM 46 DONE <sha>".
 
+**ITEM 46 in progress (plugins lane, 2026-11-11 15:45Z): all three parts on branch `fix/46` (9c743d11 + CI fix
+5cfbedba), NOT yet merged: Dev CI cannot run while GitHub runners cannot resolve `*.ubuntu.com` (apt-get / curl,
+runs 43047425944, 43048145637, Service hdfs 43047453329 - infrastructure, not the change). TPC-H SF10 run
+43047430684 on the branch is green (see Log). Next step: re-dispatch Dev CI and Service hdfs on `fix/46`; when both
+are green, rebase-merge into `main`, write "ITEM 46 DONE <sha>" here; packaging is left to the core lane's
+`package=true`. Part (3) needs the extension repo: Q-46 below.**
+
 **State 2026-11-11 12:20Z: nothing open in this lane.** Every maintainer note below is DONE (ITEM 44 e75705c9,
 ITEM 42 db35b57a, Q-42 15220a77, 39(b), service matrix); they stay as the record. Waiting on the maintainer only:
 the stand's repeat of `ranger-policy ... off` on `server-1.0.0-29f1267b995f` (ITEM 44 (2)) and the Q-40a gizmo wave
@@ -790,6 +797,14 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- **(Q-46, 2026-11-11, plugins lane) negotiated data-transfer QOP / cipher (item 46 (3)).** The server cannot see
+  what DataNodes negotiate: the hadoopfs extension (afc8) exposes no setting or function for it. `fix/46` logs what
+  the client asks for in the `hdfs=saslDataTransfer` start line (`requestedQop= encryptDataTransfer= cipherSuites=
+  negotiated=unknown`, from LIBHDFS3_CONF). Please ask the extension repo (this lane does not touch other repos) for
+  e.g. a table function `hdfs_data_transfer_security()` or a read-only setting with the QOP and cipher of the last
+  (or first) DataNode connection; the server will then query it once after the first block read and fill
+  `negotiated=`.
+
 - *Q-42 DONE 15220a77 (2026-11-10, plugins lane; see Log 10:30Z).*
 - **Answer Q-42 (maintainer, 2026-11-10 12:05): yes to both.** (a) cap `balanced`'s per-connection floor and the
   shared-database floor at the budget too (floor 128 MiB; a WARN at start when the budget is below the old 1 GiB
@@ -1283,3 +1298,23 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   ITEM 44 (2) `ranger-policy ... off` repeat and the Q-40a gizmo wave. No code change, no CI run, lock not taken.
 - 2026-11-11 12:20Z (plugins lane): nothing open. Added a state line at the top of Next steps (all maintainer notes
   there are DONE; answers the orchestrator's 11:56Z remark). No code change, no CI run, lock not taken.
+- 2026-11-11 15:45Z (plugins lane): **ITEM 46, all three parts on `fix/46`, not merged (CI blocked by the
+  runner-wide `*.ubuntu.com` DNS outage).** (1) `DuckDbSizing.compute`: each connection gets at most its share
+  (budget / connections) of the budget left by the JVM's real reservation, at least 512 MiB
+  (`withinReservedShare`); `reservedBudgetBytes()` is the number in `duckdb=sizing budgetMiB=` (the full-limit one
+  is now `limitsBudgetMiB=`) and in the `memoryLimitAboveJvmLimits` WARN, which now fires only when the 512 MiB
+  floor exceeds the share. Speed's shared limit is unchanged; speed's private fallback follows balanced as before.
+  Stand shape (8 cores, 6 GB, -Xmx3g, direct 2g, 4 connections): 4 x 1024 -> 4 x 665 MiB within 2662 MiB; harness
+  (2 CPU): unchanged 2 x 1024 MiB, no WARN. (2) `FlightSqlProducer.getFlightInfoStatement` binds the handle's qid
+  while `checkQuery` runs; `logDenial` falls back to an id of its own, never `qid=null`. (3) Start line names the
+  requested QOP / encryption / cipher suites, `negotiated=unknown` (Q-46). Tests: `DuckDbSizingTest` 19 (new
+  `connectionLimitsAddUpWithinTheBudgetTheLogShows`, `harnessContainerKeepsOneGibWithinTheReservedBudget`),
+  `FlightSqlProducerTest` 47 (qid asserts in `plainNameRefusedByTheStorageIsDeniedWithoutThePath`),
+  `HdfsSaslDataTransferTest` 7, `ResourceProfileTest` 14, `ConfigAdapterTest` 62, all locally. CI: TPC-H perf
+  **43047430684** green (local SF10, 2 CPU / 6 GB, -Xmx3g / direct 2g, quick, 1 round): default `memoryLimit=1024MiB
+  connections=2 budgetMiB=2662`, 31.97 s, peak 1722 MiB; `-DduckDbMemoryConnections=4` `memoryLimit=665MiB`, 22/22
+  same answers, 31.94 s, peak 1637 MiB. Dev CI 43047425944 (twice) and 43048145637, Service hdfs 43047453329: red
+  before any build/test step, `Could not resolve host: *.ubuntu.com` (curl of the hadoopfs test libs, apt-get
+  krb5-user, apt-get in the service images). 5cfbedba adds `mirrors.edge.kernel.org` as a third mirror for the test
+  libs (that step then passed); apt-get still needs ubuntu.com. CHANGELOG / README lines are on the branch. Lock
+  released.
