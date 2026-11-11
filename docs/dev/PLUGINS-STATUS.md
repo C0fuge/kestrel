@@ -23,20 +23,14 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 > denied: user=flight, access=READ_EXECUTE, inode="/data/parquet/types"...` - should be UNAUTHORIZED, no HDFS path in
 > the client text, a `result=denied` WARN. Branch `fix/44`, merge when green, "ITEM 44 DONE <sha>".
 
-*Item 44 step 1 (2026-11-10 21:15Z, plugins lane): parts (1) and (3) done, `main` 2335ddc6 (see Log). Open: part
-(2).* **Next step for (2):** the staleness comes from three caches that make no NameNode call for a repeat query on the
-direct SASL path: `QueryPlanner.filePlanCache` (30 s, `FILE_PLAN_TTL_NANOS`), the store's listing (`listedFiles`) and
-hadoopfs' `hdfs_metadata_cache_ttl_ms` (30 s, `ConfigAdapter.DEFAULT_HDFS_METADATA_CACHE_TTL_MS`); Ranger's own refresh
-adds ~25 s. Plan: new optional setting `hdfsAccessRecheckMs` (default 10000, 0 = off) and a small `AccessRecheck`
-(table directory -> last-checked nanos); a default method `checkReadable(String relativeDir)` on the server's
-`storage.DataStore` (not the SPI), implemented in `HadoopDataStore` with `fileSystem.access(path, FsAction.READ_EXECUTE)`
-(goes through Ranger's enforcer on the NameNode). Call it for each table directory of a query before planning: in
-`QueryPlanner.validatedPathLocations` (both the cached and the loaded branch) and on the catalog-view path (directory
-views of `CatalogViews` / `ExecutionService.completeSchema`, which complete-mode queries take without the planner).
-An `AccessControlException` then maps through `FlightSqlProducer.denial` to UNAUTHORIZED (part (3) covers the
-resolving paths). Tests: unit test with a fake store (one call per table per interval, denial after revoke within
-N s); CI: `service-hdfs-cell.sh` already revokes in item 37 (a) - add a timed check that a repeat query of a table
-read before is denied within ~Ranger refresh + 10 s on the sasl cells.
+ITEM 44 DONE e75705c9 (2026-11-11, plugins lane; parts (1), (3) in 2335ddc6, part (2) in 8ea12800 + e75705c9; see
+Log 03:40Z). (2): new setting `hdfsAccessRecheckMs` (default 10000 on `hdfs://`, 0 = off) - each query asks the
+NameNode (`FileSystem.access`, READ_EXECUTE on the table directory) once per data-directory table at most every
+interval; a denial is UNAUTHORIZED with the generic text. Limits (no action unless the stand shows them): a revoke on
+files only (directory still readable) is not seen by the recheck, only by the next real NameNode read; tables of
+catalog plugins (hive, iceberg) are not rechecked. **Next for the maintainer's stand:** repeat the `ranger-policy ...
+off` check on the next build - expected denial within Ranger's refresh + 10 s. Nothing else open in this lane besides
+the Q-40a follow-up.
 
 > **Maintainer, 2026-11-10 11:10 - FIRST in this lane: ITEM 42 (two stand bugs (stand check of `894afb9b48c4`, ~500 000 hash-checked answers, none wrong; logs in the maintainer's stand)).**
 > (1) **speed sizes DuckDB above the budget in small cgroups.** 3g container, `-Xmx768m -XX:MaxDirectMemorySize=512m
@@ -1248,4 +1242,23 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   baseline 2ff22144, quick, 1 round): fix/44 balanced **22/22**, 42.1 s, `memoryLimit=1024MiB`, peak 1756 MiB;
   baseline q09/q10/q13 DuckDB Out of Memory at 128 MiB both rounds (the stand's failure reproduced) - the run is red
   only because of the baseline's failures. Part (2) (Ranger staleness) open: plan in Next steps. Lock released.
-
+- 2026-11-11 03:40Z (plugins lane): **ITEM 44 DONE e75705c9** - part (2), Ranger revoke staleness. `fix/44` 8ea12800 +
+  e75705c9, fast-forwarded into `main`. New optional setting `hdfsAccessRecheckMs` (`arrowflight.hdfs.accessRecheckMs`,
+  `HDFS_ACCESS_RECHECK_MS`, default 10000 on `hdfs://`, else 0 = off). `storage.AccessRecheck` remembers each table
+  directory's last positive answer (a denial or a NameNode with no answer is not remembered). The server's
+  `storage.DataStore` gets the defaults `checksAccess()` / `checkReadable(dir)` (not the SPI); `HadoopDataStore` calls
+  `FileSystem.access(dir, READ_EXECUTE)`, which goes through the NameNode permission checker and Ranger's enforcer.
+  Only "Permission denied" fails a query; a missing dir or a NameNode that does not answer does not.
+  `ParquetAdapter.recheckAccess(schema, table)` covers data-directory tables, not catalog schemas.
+  `ExecutionService.recheckAccess(sql)` finds a query's tables with the token finder (`TableReferences`; plain names
+  through `CatalogViews.plainOwner`). It does not use DuckDB's parse, which takes one global lock per query.
+  `FlightSqlProducer.checkQuery` calls it on every query path; a denial goes through `unavailableOrDenied` and comes
+  back as UNAUTHORIZED with `STORAGE_DENIED_MESSAGE` plus a `result=denied` WARN. Tests: `AccessRecheckTest` 4/4,
+  `TableReferencesTest.accessRecheckNamesEveryTableOfAQuery`, `FlightSqlProducerTest.revokeSeenByTheAccessRecheckIsDenied`
+  and `ConfigAdapterTest.hdfsAccessRecheckDefaultsTo10sOnHdfsOnly`, all run locally.
+  Service hdfs, ha-krb cells: a new stage after item 37 (a)'s `restored` does `chmod 700 /data/tpch/nation` while the
+  server runs and has just read the table, then requires the denial within 15 s and the table readable again after
+  `chmod 755`. CI on the branch: Dev CI **42952000343** green; Service hdfs **42952002696** 12/12 green, with the
+  denial after 3.6 s on ha-krb balanced and after 0.0 s on ha-krb-sasl balanced. No baseline run without the
+  recheck. README and CHANGELOG updated. Packaging is left to the core lane's morning `package=true` on `main`; noted
+  in STATUS.md Log. Lock released.

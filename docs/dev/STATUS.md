@@ -4238,3 +4238,10 @@ S3 slowdown item below stays open for then).
   plugins lane as item 44 (2335ddc6: balanced cap from the 40(a) reservation, floor 512 MiB; tpch-perf 42903634429
   fix/44 balanced 22/22); marked answered here. Dev CI 42906724548 on main (a5bccf56) still running (plugins lane's).
   No code change, no CI run started. Lock released.
+- 2026-11-11 03:40Z (plugins lane, FYI for the core lane): **item 44 (2) merged into `main`** (8ea12800, e75705c9):
+  this is a small core change. New optional setting `hdfsAccessRecheckMs` (default 10000 on `hdfs://`). With it,
+  `FlightSqlProducer.checkQuery` asks the NameNode about each table directory of a query at most every 10 s
+  (`ExecutionService.recheckAccess` -> `ParquetAdapter.recheckAccess` -> `HadoopDataStore.checkReadable`, i.e.
+  `FileSystem.access`), so a Ranger revoke is no longer hidden by the caches. Dev CI 42952000343 and Service hdfs
+  42952002696 are green on `fix/44`. **ITEM 44 is complete (fix/44 merged).** Your morning `package=true` on `main`
+  includes it.
