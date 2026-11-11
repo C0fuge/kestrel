@@ -1,19 +1,19 @@
-ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T15:57Z: plugins ITEM 46 open, see below)
+ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T16:57Z: plugins ITEM 46 open, see below)
 
 # Orchestration status
 
-Status as of **2026-11-11T15:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-11T16:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 All conditions met: ITEM 26 / 27 DONE (kestrel core), IMPROVEMENTS DONE (marten, heron), egret FRESH on the newest
 pre-release **`server-1.0.0-29f1267b995f`** (results/FRESH-29f1267b995f.md, run 42965886044) and ACCEPT SHIP.
 
 Points for the maintainer:
-- **Plugins ITEM 46 (your 18:40 stand note) in progress:** all three parts on branch `fix/46` (9c743d11 + CI fix
-  5cfbedba), not merged. TPC-H perf 43047430684 green on the branch; Dev CI 43047425944, 43048145637, 43050095655 and
-  Service hdfs 43047453329 red before any test (`Could not resolve host: *.ubuntu.com`, apt-get krb5-user /
-  service images) - runner-side DNS outage, not the change. Orchestrator re-ran the failed job of 43050095655 once
-  (15:56Z). **Q-46 needs you:** ask the hadoopfs extension repo for a function/setting exposing the negotiated
-  data-transfer QOP / cipher (until then the start line logs `negotiated=unknown`).
+- **Plugins ITEM 46 (your 18:40 stand note) in progress, plugins lane active (lock 16:13Z):** branch `fix/46`
+  (9c743d11 + CI mirror fixes 5cfbedba, c6f08354, bea11172), not merged. **Dev CI 43056505119 (c6f08354) green**,
+  TPC-H perf 43047430684 green; Service hdfs 43056510473 red in all 8 cells at "Run the cell" (runner apt/ubuntu.com
+  outage per the lane; bea11172 adds a kernel.org mirror for the KDC container), rerun as 43060538104 running.
+  **Q-46 needs you:** ask the hadoopfs extension repo for a function/setting exposing the negotiated data-transfer
+  QOP / cipher (until then the start line logs `negotiated=unknown`).
 - **egret FRESH 29f1267b995f:** the `2ff221447b5d` balanced TPC-H OOM is fixed (balanced 22/22 on every TPC-H job,
   RSS 0.76-1.64 GB). **Local small c1 p50 regression by the rule persists and grew: speed/balanced 1.19 JDBC / 1.16
   ADBC in all 3 rounds** (2ff: 1.07 / 1.11; speed unchanged, balanced faster). Speed vs balanced otherwise as before:
@@ -34,18 +34,18 @@ Points for the maintainer:
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
 | core (`STATUS.md`) | no open item | 15:41Z (lock/unlock) | free | main Dev CI 42955017367 red at service gate only (unchanged); pkg Dev CI 42956935228 green |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 46 on `fix/46`, not merged | 15:47Z (status note) | free | fix/46 Dev CI red (ubuntu.com DNS, infra), rerun of 43050095655 running |
-| catalogs (`CATALOGS-STATUS.md`) | none open (40(b) DONE 135e6dac) | 2026-11-10 17:21Z | free | Catalogs CI 42955011409 (29f1267b) green |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 46 on `fix/46`, not merged | 16:39Z (bea11172 on fix/46) | held 16:13Z (fresh) | fix/46 Dev CI 43056505119 green; Service hdfs 43060538104 running (43056510473 red, apt infra) |
+| catalogs (`CATALOGS-STATUS.md`) | none open (40(b) DONE 135e6dac) | 16:21Z (lock/unlock, no open item) | free | Catalogs CI 42955011409 (29f1267b) green |
 | lane 3 (`LANE3-STATUS.md`) | ITEM 45 DONE b8613fc4; nothing open | 2026-11-10 21:19Z | free | Service cluster 42955011424 (29f1267b) green |
 
-No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
+No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (only LOCK-PLUGINS held, 44 min; others and marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 42955011424 | main 29f1267b | pass |
-| service-hdfs.yml | 42955011583 | main 29f1267b | pass |
+| service-hdfs.yml | 42955011583 (main); fix/46: 43056510473 fail (apt infra), 43060538104 running | main 29f1267b | pass |
 | service-security.yml | 42958566480 | pkg/29f1267b | pass |
 | service-stores.yml | 42958570049 | pkg/29f1267b | pass |
 
@@ -57,8 +57,8 @@ No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (al
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 07:41Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 213 (07:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 16:41Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 222 (16:51Z): nothing open.
 
 ## egret
 
@@ -67,6 +67,7 @@ No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (al
 
 ## History
 
+- 2026-11-11T16:57Z: ALL DONE kept; plugins ITEM 46 on fix/46 progressing: Dev CI 43056505119 green after mirror fixes, Service hdfs 43056510473 red (apt infra), lane pushed bea11172 and 43060538104 is running (no orchestrator rerun); main unchanged, no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-11T15:57Z: ALL DONE kept, but plugins ITEM 46 (maintainer stand note 18:40: sizing budget, qid=null in denials, QOP log; Q-46 for the extension repo) on fix/46, unmerged: TPC-H perf 43047430684 green, Dev CI / Service hdfs red on runner ubuntu.com DNS (infra), failed job of 43050095655 re-run once; main unchanged, locks free, no new pre-release; marten/heron/egret idle.
 - 2026-11-11T12:57Z: ALL DONE kept; no change (lanes nothing open, plugins state line 12:20Z; locks free; no new CI runs or pre-releases; marten 12:40Z / heron session 218 / egret 11:29Z README idle).
 - 2026-11-11T09:58Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron idle; egret idle on 29f1267b995f).
@@ -106,4 +107,3 @@ No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (al
 - 2026-11-09 08:56Z: no change: core session 08:42Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (08:41Z)/heron (session 180)/egret (07:30Z README, idle) idle; no stale locks.
 - 2026-11-09 07:57Z: no change: no core session since 05:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (07:41Z)/heron (session 179)/egret (07:30Z README, idle) idle; no stale locks.
 - 2026-11-09 06:58Z: no change: no core session since 05:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (06:41Z)/heron (session 178)/egret (05:27Z README, idle) idle; no stale locks.
-- 2026-11-09 05:57Z: no change: core session 05:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (05:41Z)/heron (session 177)/egret (05:27Z README, idle) idle; no stale locks.
