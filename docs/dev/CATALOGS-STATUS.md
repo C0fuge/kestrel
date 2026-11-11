@@ -4,6 +4,14 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-11 21:10 - answers.** **Q-40b-1: yes** - turn file pruning off by default for a local
+> `dataDir` (keep it on for HDFS / S3 / plugin stores; an explicit setting wins); the performance repo still sees speed
+> c1 p50 1.16-1.32x balanced locally, this is the cost you found. **Q10: keep pruning on** for HDFS/S3 (the stand ran
+> with it on SASL HDFS: ~860k answers exact, NameNode calls per point query 0). **Q8 (security): yes, fix it** - metadata
+> calls (`information_schema`, `duckdb_tables()/columns()`, Flight SQL GetTables) must list only the configured tables
+> of an attached database, never the remote catalog's other names. As ITEM 47 in this lane, merge when green,
+> "ITEM 47 DONE <sha>".
+
 > **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
 > is green (do not hold them for one big merge); the build for the real cluster is the core lane's package right after "ITEM 40(b) DONE" - it waits for 40(b).**
 >

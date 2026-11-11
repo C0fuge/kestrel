@@ -4,6 +4,14 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-11 21:10 - answers + D14.** **Q3: yes** - default `arrowAllocatorLimitBytes` from the JVM's
+> direct memory (e.g. 75 % of MaxDirectMemorySize, at least 256 MiB; an explicit setting wins; start line shows it).
+> **Q4: yes**, keep `distributedCompletePointLookups=local` as the default. **D14 (stand on `29f1267b995f`, DataNodes
+> `authentication,privacy`, direct SASL reads):** 117/117 exact on 3 servers speed+dc; DATE point mix dc 2301 vs speed
+> 2227 q/s (1.03); but the small-query mix at 32 clients is dc 1133 vs speed 2072 q/s - one-row aggregates (count /
+> sum with a filter, no GROUP BY) are still merged across nodes. Treat filtered one-row aggregates over a pruned file
+> set like point lookups (local) when pruning keeps <= N files. As ITEM 48, merge when green, "ITEM 48 DONE <sha>".
+
 ITEM 45 DONE b8613fc4 (2026-11-10, see Log): dc point lookups with typed literals (`= DATE '...'`,
 `= CAST('...' AS DATE)`, `TIMESTAMP '...'`, exponents, parenthesised literals) run on the planning node. Service
 cluster 42901104843 (12/12 green, mix now includes `point_date` with a DATE literal): speed-dc 0 merged / 0 admission
