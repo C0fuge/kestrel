@@ -306,7 +306,13 @@ public final class ServerModule {
     @Provides
     @Singleton
     BufferAllocator allocator(AppConfig config) {
-        return new RootAllocator(config.arrowAllocatorLimitBytes());
+        long limit = config.arrowAllocatorLimitBytes();
+        long direct = pro.surpin.data.arrowflight.server.adapters.OutboundBudget.maxDirectMemory();
+        // Q3: without a setting the limit follows direct memory (75 %, at least 256 MiB).
+        LOGGER.info("arrowAllocator limitMiB={} source={} directMemoryMiB={}", limit >> 20,
+                ConfigAdapter.arrowAllocatorLimitSet(ConfigSource.system()) ? "set" : "directMemory",
+                direct >> 20);
+        return new RootAllocator(limit);
     }
 
     /**

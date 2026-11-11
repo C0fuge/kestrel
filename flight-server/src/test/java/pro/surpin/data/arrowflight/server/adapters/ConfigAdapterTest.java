@@ -61,7 +61,8 @@ class ConfigAdapterTest {
         assertEquals(0, cfg.clientConnectTimeoutMs());
         assertFalse(cfg.duckDbAllowUnsignedExtensions());
         assertTrue(cfg.metricsEnabled());
-        assertEquals(2_147_483_648L, cfg.arrowAllocatorLimitBytes());
+        assertEquals(ConfigAdapter.defaultArrowAllocatorLimitBytes(OutboundBudget.maxDirectMemory()),
+                cfg.arrowAllocatorLimitBytes());
         assertEquals(67_108_864, cfg.grpcMaxInboundMessageSize());
         assertEquals(268435456, cfg.flightBackpressureThresholdBytes());
         assertEquals(300000, cfg.flightListenerReadyTimeoutMillis());
@@ -386,6 +387,26 @@ class ConfigAdapterTest {
                 source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS", "LOCAL"))));
         assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompletePointLookupsLocal(
                 source(Map.of("distributedCompletePointLookups", "auto"), Map.of())));
+    }
+
+    /** Q3: the Arrow allocator limit is 75 % of direct memory (at least 256 MiB) unless it is set. */
+    @Test
+    void arrowAllocatorLimitFollowsDirectMemoryUnlessSet() throws IOException {
+        long gib = 1L << 30;
+        assertEquals(6 * gib, ConfigAdapter.arrowAllocatorLimitBytes(source(Map.of(), Map.of()), 8 * gib));
+        assertEquals(1536L << 20, ConfigAdapter.arrowAllocatorLimitBytes(source(Map.of(), Map.of()), 2 * gib));
+        assertEquals(256L << 20, ConfigAdapter.arrowAllocatorLimitBytes(source(Map.of(), Map.of()), 64L << 20));
+        assertFalse(ConfigAdapter.arrowAllocatorLimitSet(source(Map.of(), Map.of())));
+        assertEquals(2 * gib, ConfigAdapter.arrowAllocatorLimitBytes(
+                source(Map.of("arrowAllocatorLimitBytes", "2147483648"), Map.of()), 8 * gib));
+        assertEquals(gib, ConfigAdapter.arrowAllocatorLimitBytes(
+                source(Map.of("arrowflight.arrow.allocatorLimitBytes", "1073741824"), Map.of()), 8 * gib));
+        assertTrue(ConfigAdapter.arrowAllocatorLimitSet(
+                source(Map.of("arrowAllocatorLimitBytes", "5"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.arrowAllocatorLimitBytes(
+                source(Map.of("arrowAllocatorLimitBytes", "0"), Map.of()), 8 * gib));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.arrowAllocatorLimitBytes(
+                source(Map.of("arrowAllocatorLimitBytes", "2g"), Map.of()), 8 * gib));
     }
 
     /** Item 48: filtered one-row aggregates over at most 4 pruned files are local by default; 0 turns it off. */

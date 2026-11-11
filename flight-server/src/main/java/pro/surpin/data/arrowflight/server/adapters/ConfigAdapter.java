@@ -81,12 +81,7 @@ public class ConfigAdapter {
         String duckDbMemoryLimit = sizing.memoryLimit();
         boolean metricsEnabled = getBooleanWithEnv("metricsEnabled",
                 "arrowflight.metrics.enabled", "FLIGHT_METRICS_ENABLED", false, props);
-        long arrowAllocatorLimitBytes = getLong("arrowAllocatorLimitBytes",
-                "arrowflight.arrow.allocatorLimitBytes", 2_147_483_648L, props);
-        if (arrowAllocatorLimitBytes <= 0) {
-            throw new IllegalArgumentException("arrowAllocatorLimitBytes must be positive: "
-                    + arrowAllocatorLimitBytes);
-        }
+        long arrowAllocatorLimitBytes = arrowAllocatorLimitBytes(props, OutboundBudget.maxDirectMemory());
         int grpcMaxInboundMessageSize = getInt("grpcMaxInboundMessageSize",
                 "arrowflight.grpc.maxInboundMessageSize", 67_108_864, props);
         if (grpcMaxInboundMessageSize <= 0) {
@@ -691,6 +686,60 @@ public class ConfigAdapter {
             return false;
         }
         throw new IllegalArgumentException("distributedCompletePointLookups must be local or merge: " + value);
+    }
+
+    /** Smallest default of {@code arrowAllocatorLimitBytes} (Q3): 256 MiB. */
+    public static final long MIN_DEFAULT_ARROW_ALLOCATOR_LIMIT_BYTES = 256L << 20;
+
+    /**
+     * Resolves {@code arrowAllocatorLimitBytes} ({@code arrowflight.arrow.allocatorLimitBytes}), the
+     * limit of the root Arrow allocator that holds every outgoing answer and every peer stream of a
+     * distributed complete merge. An explicit value wins; without one it is 75 % of the JVM's
+     * direct memory, at least 256 MiB (Q3, maintainer 2026-11-11; it was a fixed 2 GiB), leaving the
+     * rest to Netty / gRPC buffers outside the allocator.
+     *
+     * @param props configuration source
+     * @param directMemory the JVM's direct memory limit in bytes
+     * @return the limit in bytes
+     * @throws IllegalArgumentException for a value that is not a positive number
+     */
+    public static long arrowAllocatorLimitBytes(ConfigSource props, long directMemory) {
+        java.util.Optional<String> raw = props.lookup(
+                names("arrowAllocatorLimitBytes", "arrowflight.arrow.allocatorLimitBytes"), List.of());
+        if (raw.isEmpty()) {
+            return defaultArrowAllocatorLimitBytes(directMemory);
+        }
+        long value;
+        try {
+            value = Long.parseLong(raw.get().trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid long for arrowAllocatorLimitBytes: " + raw.get(), e);
+        }
+        if (value <= 0) {
+            throw new IllegalArgumentException("arrowAllocatorLimitBytes must be positive: " + value);
+        }
+        return value;
+    }
+
+    /**
+     * Tells whether {@code arrowAllocatorLimitBytes} is set rather than derived from direct memory.
+     *
+     * @param props configuration source
+     * @return true when a value is given
+     */
+    public static boolean arrowAllocatorLimitSet(ConfigSource props) {
+        return props.lookup(names("arrowAllocatorLimitBytes", "arrowflight.arrow.allocatorLimitBytes"),
+                List.of()).isPresent();
+    }
+
+    /**
+     * Returns the default Arrow allocator limit for a direct memory limit: 75 %, at least 256 MiB.
+     *
+     * @param directMemory the JVM's direct memory limit in bytes
+     * @return the default limit in bytes
+     */
+    public static long defaultArrowAllocatorLimitBytes(long directMemory) {
+        return Math.max(MIN_DEFAULT_ARROW_ALLOCATOR_LIMIT_BYTES, directMemory / 4 * 3);
     }
 
     /**

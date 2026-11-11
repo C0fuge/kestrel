@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Changed default (Q3, maintainer 2026-11-11): `arrowAllocatorLimitBytes` (`arrowflight.arrow.allocatorLimitBytes`), the
+  root Arrow allocator's limit, is 75 % of the JVM's direct memory (at least 256 MiB) when not set, instead of a fixed
+  2 GiB; an explicit value keeps its meaning. With `-XX:MaxDirectMemorySize=8g` it is 6 GiB, so 8 concurrent dc full
+  scans no longer hit the 2 GiB cap; with less than 2.67 GiB of direct memory it is below 2 GiB. Start line
+  `arrowAllocator limitMiB=... source=directMemory|set directMemoryMiB=...`.
+
 - Distributed complete mode: a filtered one-row aggregate (count / sum with a WHERE clause, no GROUP BY) whose
   footer statistics leave at most `distributedCompleteLocalAggregateMaxFiles` files of its table (new setting,
   `FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES`, default 4, 0 = merge as before), all readable here, is
