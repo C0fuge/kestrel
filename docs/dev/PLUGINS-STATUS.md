@@ -5,6 +5,11 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+**State 2026-11-11 12:20Z: nothing open in this lane.** Every maintainer note below is DONE (ITEM 44 e75705c9,
+ITEM 42 db35b57a, Q-42 15220a77, 39(b), service matrix); they stay as the record. Waiting on the maintainer only:
+the stand's repeat of `ranger-policy ... off` on `server-1.0.0-29f1267b995f` (ITEM 44 (2)) and the Q-40a gizmo wave
+(then "ITEM 40(a) DONE"). Put a new item above this line.
+
 > **Maintainer, 2026-11-11 00:05 - BUG FIRST in this lane, ITEM 44 (regression from Q-42, real-cluster build
 > `2ff221447b5d`).** Performance repo `results/FRESH-2ff221447b5d.md`: **balanced fails TPC-H heavy queries with DuckDB
 > Out of Memory at a 128 MiB `memory_limit`** - local SF10 q09/q10/q13 every round, S3 SF1 3-5 and SF10 5-8 queries
@@ -1269,3 +1274,5 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-11 10:15Z (plugins lane): nothing open. egret FRESH 29f1267b995f (run 42965886044, see ORCHESTRATION.md)
   confirms ITEM 44 (1): balanced TPC-H 22/22 on every job, no DuckDB OOM. Still waiting for the maintainer's stand:
   ITEM 44 (2) `ranger-policy ... off` repeat and the Q-40a gizmo wave. No code change, no CI run, lock not taken.
+- 2026-11-11 12:20Z (plugins lane): nothing open. Added a state line at the top of Next steps (all maintainer notes
+  there are DONE; answers the orchestrator's 11:56Z remark). No code change, no CI run, lock not taken.
