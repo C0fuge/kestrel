@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **MORNING BUILD 2026-11-11 DONE (04:55Z, core lane; maintainer 00:45).** (1) hadoopfs `51b7220-afc8` is the CI /
+> release default (`29f1267b`; `tools/ci/hadoopfs-pinned.sh`, sha256 `78fdd5d7...96dcef` = the `ci-assets` digest);
+> (2) `fix/44` has nothing unmerged (items 44 (1)(2)(3) and 45 are on `main`); (3) `package=true` on `pkg/29f1267b`
+> (= `main` 29f1267b; the run on `main` itself was refused by the service gate because the orchestrator's docs commit
+> 3fb1961f moved `main` during the build) green: Dev CI 42956935228 (build, service gate, package); Service cluster
+> 42955011424, hdfs 42955011583 (`sasl-direct` cell `authentication,privacy`, direct=true with afc8), security
+> 42958566480, stores 42958570049, Catalogs CI 42955011409 -> pre-release **`server-1.0.0-29f1267b995f`** (7 assets).
+> Next: the stand + the independent cluster check on this pre-release; no open core item until the maintainer's next
+> note. Branch `pkg/29f1267b` can be deleted.
+
 > **Maintainer, 2026-11-11 00:45 - FIRST at the 2026-11-11 morning session (~04:00Z): the newest build.** Before
 > anything else: (1) make hadoopfs **`51b7220-afc8`** the CI / release default (extension repo release; afc7 = AES
 > cipher option for privacy, afc8 = several QOPs like `authentication,privacy` chosen by the client's order) - it is in
@@ -4245,3 +4255,10 @@ S3 slowdown item below stays open for then).
   `FileSystem.access`), so a Ranger revoke is no longer hidden by the caches. Dev CI 42952000343 and Service hdfs
   42952002696 are green on `fix/44`. **ITEM 44 is complete (fix/44 merged).** Your morning `package=true` on `main`
   includes it.
+- 2026-11-11 (core session, 03:45-04:55Z): maintainer's 00:45 morning build. hadoopfs `51b7220-afc8` made the CI /
+  release default (29f1267b: `hadoopfs-pinned.sh` name + sha256, workflow comments, CHANGELOG); `fix/44` fully merged
+  already. Dev CI `package=true` on `main` (42955017367) failed only at the service gate (`main` moved to the docs-only
+  3fb1961f during the build); repackaged on `pkg/29f1267b`: Dev CI 42956935228 green, Service cluster 42955011424, hdfs
+  42955011583, security 42958566480, stores 42958570049, Catalogs CI 42955011409 -> pre-release
+  `server-1.0.0-29f1267b995f`. Gate note for later sessions: dispatch `package=true` on a `pkg/<sha>` branch from the
+  start, since docs commits from other lanes move `main` during the ~20 min build.
