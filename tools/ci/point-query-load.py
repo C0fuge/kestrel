@@ -27,7 +27,7 @@ QUERIES = {
     "point_lineitem": "SELECT * FROM tpch.lineitem WHERE l_orderkey = {k}",
     "count_filter": "SELECT count(*) FROM tpch.orders WHERE o_custkey = {c} AND o_totalprice > 1000",
     "point_date": "SELECT count(*) FROM tpch.orders WHERE o_orderdate = DATE '{d}'",
-    "agg_range": "SELECT count(*), sum(o_totalprice) FROM tpch.orders WHERE o_orderkey BETWEEN {k} AND {k} + 2000",
+    "agg_range": "SELECT count(*), sum(o_totalprice) FROM tpch.orders WHERE o_orderkey BETWEEN {k} AND {k2}",
 }
 DEFAULT_CLASSES = "point_orders,point_lineitem,count_filter"
 FIRST_ORDER_DAY = datetime.date(1992, 1, 1)
@@ -49,7 +49,8 @@ def client(server, seconds, keys, seed, out):
     i = seed
     with conn:
         while time.monotonic() < deadline:
-            sql = QUERIES[names[i % len(names)]].format(k=rnd.randint(1, keys) * 4 - 3,
+            k = rnd.randint(1, keys) * 4 - 3
+            sql = QUERIES[names[i % len(names)]].format(k=k, k2=k + 2000,
                                                         c=rnd.randint(1, max(1, keys // 10)),
                                                         d=FIRST_ORDER_DAY + datetime.timedelta(
                                                             days=rnd.randint(0, ORDER_DAYS - 1)))

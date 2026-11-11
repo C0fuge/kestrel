@@ -330,7 +330,7 @@ class DistributedCompleteIntegrationTest {
     void filteredOneRowAggregatesOverFewPrunedFilesAreComputedHere() throws Exception {
         // File 3 has no k = 9 (its k max is 8): the filter keeps 3 of the 4 files.
         String pruned = "SELECT count(*) AS n, sum(v) AS total, min(d) AS lo FROM s.t WHERE k > 8";
-        String averaged = "SELECT avg(v) AS a, count(*) AS n FROM s.t WHERE k >= 9";
+        String averaged = "SELECT avg(v) AS a, count(*) AS n FROM s.t WHERE k BETWEEN 9 AND 20";
         String unpruned = "SELECT count(*) AS n, sum(v) AS total FROM s.t WHERE k > 2";
         String grouped = "SELECT k, sum(v) AS total FROM s.t WHERE k > 8 GROUP BY k";
         String prunedAlone = answer(pruned);
