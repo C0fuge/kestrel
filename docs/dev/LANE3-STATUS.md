@@ -674,3 +674,7 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   unchanged) and a `point_date` class; `service-cluster-point.sh` runs it with `point_date`, so the deterministic
   speed-dc gate (0 merged, 0 waits) covers the DATE form. Dev CI 42901100322 green, Service cluster 42901104843
   12/12 green (numbers above). No `package=true`: the core lane's next pre-release carries it.
+- 2026-11-11 10:03-10:10Z (lane 3 session): no open item (Q3 / Q4 unanswered, D14 waits for the stand's rerun). Guard
+  check only, no code: Service cluster 42955011424 on `main` (29f1267b: item 44 (2) table naming in
+  `ExecutionService`, hadoopfs afc8 default) green, so the dc paths are covered on the morning build
+  `server-1.0.0-29f1267b995f`. Lock not taken (no work). Next: Q3 / Q4 answers, D14 after the stand's rerun.
