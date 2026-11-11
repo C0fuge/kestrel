@@ -686,3 +686,9 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   check only, no code: Service cluster 42955011424 on `main` (29f1267b: item 44 (2) table naming in
   `ExecutionService`, hadoopfs afc8 default) green, so the dc paths are covered on the morning build
   `server-1.0.0-29f1267b995f`. Lock not taken (no work). Next: Q3 / Q4 answers, D14 after the stand's rerun.
+- 2026-11-11 18:03-18:20Z (lane 3 session): no open item (Q3 / Q4 unanswered, D14 waits for the stand's rerun). Guard
+  check only, no code: item 46 (c96a1272, `DuckDbSizing` connection limits) touches the dc merge path; Service cluster
+  43074009015 on `main` (74464701, dispatched by another lane) 13/13 cells + summary green, deterministic speed-dc
+  point gate passed. Ratio warnings only: dc / speed point q/s hdfs 0.71, hdfs-ha 0.79, s3 0.67 - dc 31.9-36.8 q/s is
+  within its earlier range (31-49), speed was high (45-55): cross-runner noise as in D17. Watch: dc point q/s < 30 in
+  later runs. Lock not taken (no work). Next: Q3 / Q4 answers, D14 after the stand's rerun.
