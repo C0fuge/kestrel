@@ -68,6 +68,8 @@ class JdbcFederationIntegrationTest {
     /** TPC-H tables. */
     private static final List<String> TPCH = List.of("customer", "lineitem", "nation", "orders", "part",
             "partsupp", "region", "supplier");
+    /** A remote table in both databases that the server's settings do not name (item 47). */
+    private static final String UNCONFIGURED = "q8_unconfigured";
     /** DuckDB holding the generated TPC-H data (the reference), or null without TPC-H. */
     static Connection tpch;
 
@@ -89,6 +91,9 @@ class JdbcFederationIntegrationTest {
             Files.copy(Path.of(source, "tpch.duckdb_extension"), extensions.resolve("tpch.duckdb_extension"));
             loadTpch(scale.get());
             pgTables += "," + String.join(",", TPCH.stream().map(t -> "public." + t).toList());
+        }
+        for (String type : List.of("postgres", "mysql")) {
+            createUnconfiguredTable(type);
         }
         Path plugins = dir.resolve("plugins");
         Path target = Files.createDirectories(plugins.resolve("jdbc"));
@@ -164,6 +169,33 @@ class JdbcFederationIntegrationTest {
         }
     }
 
+    /**
+     * Creates the remote table {@value #UNCONFIGURED} (and drops the earlier one) through a
+     * writable attachment of the scanner; the server's settings do not name it.
+     *
+     * @param type postgres or mysql
+     * @throws Exception on failure
+     */
+    private static void createUnconfiguredTable(String type) throws Exception {
+        String prefix = "postgres".equals(type) ? "PROBE_PG_" : "PROBE_MYSQL_";
+        Properties props = new Properties();
+        props.setProperty("allow_unsigned_extensions", "true");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:", props);
+                Statement s = conn.createStatement()) {
+            s.execute("LOAD '" + extensions.resolve(type + "_scanner.duckdb_extension") + "'");
+            s.execute("CREATE TEMPORARY SECRET u_secret (TYPE " + type + ", HOST '"
+                    + env(prefix + "HOST").orElseThrow() + "', PORT " + env(prefix + "PORT").orElseThrow()
+                    + ", DATABASE '" + env(prefix + "DATABASE").orElseThrow() + "', USER '"
+                    + env(prefix + "USER").orElseThrow() + "', PASSWORD '"
+                    + env(prefix + "PASSWORD").orElseThrow() + "')");
+            s.execute("ATTACH '' AS u (TYPE " + type + ", SECRET u_secret)");
+            String table = "postgres".equals(type) ? "u.public." + UNCONFIGURED : "u." + UNCONFIGURED;
+            s.execute("DROP TABLE IF EXISTS " + table);
+            s.execute("CREATE TABLE " + table + " (" + UNCONFIGURED + "_col INTEGER)");
+            s.execute("DETACH u");
+        }
+    }
+
     private static Optional<String> env(String name) {
         return Optional.ofNullable(System.getenv(name)).filter(v -> !v.isBlank());
     }
@@ -181,6 +213,47 @@ class JdbcFederationIntegrationTest {
             expected.sort(null);
             assertEquals(expected, column(helper.sqlClient().getTables(null, schema, null,
                     null, false), "table_name").stream().sorted().toList(), schema);
+        }
+    }
+
+    /**
+     * Item 47 (Q8): DuckDB's metadata functions and views list no schema, table or column of the
+     * attached databases (the configured tables show as the server's views), in both modes, and
+     * a qualified call that would pass the hiding is refused.
+     */
+    @Test
+    void metadataQueriesListNoRemoteNames() throws Exception {
+        for (String sql : List.of(
+                "SELECT table_catalog, table_schema, table_name FROM information_schema.tables",
+                "SELECT table_catalog, table_name, column_name FROM information_schema.columns",
+                "SELECT catalog_name, schema_name FROM information_schema.schemata",
+                "SELECT database_name, schema_name, table_name FROM duckdb_tables()",
+                "SELECT database_name, table_name, column_name FROM duckdb_columns()",
+                "SELECT database_name, schema_name FROM duckdb_schemas()",
+                "SELECT database_name, path FROM duckdb_databases()",
+                "SELECT database_name, view_name FROM duckdb_views()",
+                "SELECT relname FROM pg_catalog.pg_class",
+                "SELECT nspname FROM pg_catalog.pg_namespace",
+                "SELECT name FROM sqlite_master")) {
+            for (String mode : List.of("complete", "partial")) {
+                List<String> rows;
+                try {
+                    rows = answer(sql, mode);
+                } catch (FlightRuntimeException e) {
+                    continue;   // refused in this mode: nothing listed either
+                }
+                for (String row : rows) {
+                    assertFalse(row.contains(UNCONFIGURED) || row.contains("jdbc_attached"),
+                            mode + " " + sql + ": " + row);
+                }
+            }
+        }
+        List<String> views = answer("SELECT table_schema || '.' || table_name FROM information_schema.tables",
+                "complete");
+        assertTrue(views.containsAll(List.of("pg.t", "my.t")), views.toString());
+        for (String sql : List.of("SELECT * FROM system.main.duckdb_tables()",
+                "SELECT * FROM system.duckdb_columns()", "SELECT * FROM main.duckdb_databases()")) {
+            assertThrows(FlightRuntimeException.class, () -> answer(sql, "complete"), sql);
         }
     }
 

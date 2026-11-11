@@ -617,6 +617,8 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.redactor = setup.redactor();
         this.declaredSecrets = setup.secrets();
         PluginRefusedFunctions.addAll(setup.extraRefusedFunctions());
+        pro.surpin.data.arrowflight.server.duckdb.HiddenAttachments.addAll(
+                pro.surpin.data.arrowflight.server.duckdb.HiddenAttachments.attachments(setup));
         this.appConfig = appConfig;
         this.hdfsMetadataCacheTtlMs = ConfigAdapter.hdfsMetadataCacheTtlMs(
                 ConfigSource.system(), appConfig.dataDir());
@@ -842,6 +844,9 @@ public final class DuckDbAdapter implements AutoCloseable {
         Connection conn = lent != null ? lent
                 : root.unwrap(org.duckdb.DuckDBConnection.class).duplicate();
         try (Statement s = conn.createStatement()) {
+            if (lent == null) {
+                hideAttachments(s);   // a lent connection was set up with the shared DuckDB
+            }
             s.execute("ATTACH ':memory:' AS " + quoteIdentifier(catalog));
             s.execute("USE " + quoteIdentifier(catalog));
         } catch (java.sql.SQLException e) {
@@ -1127,6 +1132,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 setHdfsMetadataCache(s, hdfsInfo, hdfsMetadataCacheTtlMs, logExtensions);
             }
             runStorageSetup(s);
+            hideAttachments(s);
             if (logExtensions) {
                 logStorageExtensions(s);
             }
@@ -1138,6 +1144,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 try (Statement ss = spare.createStatement()) {
                     ss.execute("SET streaming_buffer_size = "
                             + sqlStringLiteral(appConfig.duckDbStreamingBufferSize()));
+                    hideAttachments(ss);
                 }
             }
             if (appConfig.duckDbLockdown() && !readableRoots.isEmpty()) {
@@ -1383,6 +1390,19 @@ public final class DuckDbAdapter implements AutoCloseable {
         String result = redactor.redact(message);
         result = SETUP_LITERAL.matcher(result).replaceAll("'***'");
         return result.length() > 500 ? result.substring(0, 500) + "..." : result;
+    }
+
+    /**
+     * Creates the temporary macros that leave the databases plugins attached out of DuckDB's
+     * metadata functions and views on a connection (item 47); nothing when none is attached.
+     *
+     * @param s statement of the connection
+     * @throws java.sql.SQLException when a macro cannot be created
+     */
+    static void hideAttachments(Statement s) throws java.sql.SQLException {
+        for (String statement : pro.surpin.data.arrowflight.server.duckdb.HiddenAttachments.macroStatements()) {
+            s.execute(statement);
+        }
     }
 
     /**
@@ -3547,6 +3567,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
         }
         requireAllowedNames(names);
+        pro.surpin.data.arrowflight.server.duckdb.HiddenAttachments.requireUnqualifiedCalls(serialized, names);
         return List.copyOf(names);
     }
 
