@@ -1262,3 +1262,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   denial after 3.6 s on ha-krb balanced and after 0.0 s on ha-krb-sasl balanced. No baseline run without the
   recheck. README and CHANGELOG updated. Packaging is left to the core lane's morning `package=true` on `main`; noted
   in STATUS.md Log. Lock released.
+- 2026-11-11 05:15Z (plugins lane): nothing open. The core lane's pre-release `server-1.0.0-29f1267b995f` contains
+  item 44 (e75705c9) and d295fe36: it is the build for the stand's repeat of `ranger-policy ... off` (expected denial
+  within Ranger's refresh + 10 s) and for the Q-40a gizmo wave. Dev CI 42955017367 on `main` red only at the service
+  gate (explained in STATUS.md Log, repackaged green as 42956935228). No code change, no CI run, lock not taken.
