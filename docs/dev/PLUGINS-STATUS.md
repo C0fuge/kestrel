@@ -1327,3 +1327,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   failed job); TPC-H SF10 43047430684 earlier. Service cluster / security / stores and Catalogs CI also build
   Ubuntu images: if they fail the same way before ubuntu.com resolves again, give them the same kernel.org try
   (not done here: not needed for this item). Lock released.
+- 2026-11-11 17:25Z (plugins session): no open item in this lane (waiting on the maintainer: Q-46, Q-40a follow-up,
+  stand checks of items 44/46). Post-merge CI on `main` 74464701 (item 46) green: Dev CI 43064709644, Service hdfs
+  43064709693, Catalogs CI 43064709784. Lock released.
