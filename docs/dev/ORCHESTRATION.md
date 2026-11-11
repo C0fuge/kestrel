@@ -1,60 +1,63 @@
-ALL DONE 2026-11-10T19:58Z, refreshed 2026-11-11T03:58Z (all conditions met; the balanced TPC-H OOM found by egret FRESH 2ff221447b5d is fixed on main by plugins ITEM 44, DONE e75705c9; the core lane is packaging the next pre-release now)
+ALL DONE suspended 2026-11-11T04:59Z: new pre-release `server-1.0.0-29f1267b995f` has no egret FRESH result yet (all other conditions met: ITEM 26/27 DONE, marten/heron IMPROVEMENTS DONE)
 
 # Orchestration status
 
-Status as of **2026-11-11T03:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-11T04:59Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-**Core session running the maintainer's morning note** (lock 03:46:09Z): (1) hadoopfs `51b7220-afc8` as CI / release
-default - **done** 29f1267b; (2) fix/44 merge - done (2335ddc6, and part (2) 8ea12800 + e75705c9); (3) Dev CI
-`package=true` on `main` - **in progress** (Dev CI 42955017367, workflow_dispatch on 29f1267b). No new pre-release yet.
+**Morning build done** (core lane, 04:55Z): pre-release **`server-1.0.0-29f1267b995f`** (published 04:35Z, 7 assets) =
+`main` 29f1267b: hadoopfs `51b7220-afc8` as CI / release default, plugins items 44 (1)(2)(3), lane 3 item 45. Next per
+STATUS: the maintainer's stand + the independent cluster check on this pre-release; no open core item.
 
 Points for the maintainer:
-- **ITEM 44 DONE e75705c9** (plugins lane, 03:38Z): part (2) bounds Ranger / HDFS revoke staleness with an access
-  recheck (8ea12800) and names a query's tables with the token finder instead of DuckDB's parse lock (e75705c9). The
-  maintainer's bug-first note is still at the top of PLUGINS-STATUS Next steps but the item is marked DONE there.
-- Branches `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
+- **Stand + cluster check on `server-1.0.0-29f1267b995f`** are yours (core lane waits for your next note).
+- main Dev CI 42955017367 (29f1267b) is red **only at `service-gate`**: the orchestrator's 03:57Z docs commit moved
+  `main` during the build, so the gate refused; build job green, the same commit packaged green on `pkg/29f1267b`
+  (42956935228). Not a code bug, no bug-first note, no rerun (the gate would refuse again on the moved `main`).
+  Consider letting the orchestrator skip its commit while a core `package=true` run is in flight.
+- Branches `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
 - Open questions still listed: Q-40b-1 (catalogs, close without a default change - needs OK), Q8 / Q10 / Q11
   (catalogs); lane 3 Q3 / Q4; marten TPC-H q16 SF1 slowdown; `ci-assets` extension set refresh (sha256 in STATUS.md).
+- PLUGINS-STATUS: the maintainer's ITEM 44 bug-first note is still at the top of Next steps though ITEM 44 is DONE.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | maintainer morning note: afc8 default done 29f1267b, package=true running | 03:47Z (29f1267b) | held 03:46:09Z (fresh) | main Dev CI 42955017367 in progress; two earlier Dev CI runs (42955011412, 42954112590) cancelled = superseded, not red |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 44 DONE e75705c9; nothing open | 03:38Z (unlock) | free | covered by main Dev CI above |
+| core (`STATUS.md`) | MORNING BUILD DONE; no open item | 04:41Z (unlock) | free | main Dev CI 42955017367 red at service gate only (see above); pkg Dev CI 42956935228 green |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 44 DONE e75705c9; nothing open | 03:38Z | free | covered by Dev CI above |
 | catalogs (`CATALOGS-STATUS.md`) | none open (40(b) DONE 135e6dac) | 2026-11-10 17:21Z | free | Catalogs CI 42955011409 (29f1267b) green |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 45 DONE b8613fc4; nothing open | 2026-11-10 21:19Z | free | Service cluster 42955011424 (main 29f1267b) green |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 45 DONE b8613fc4; nothing open | 2026-11-10 21:19Z | free | Service cluster 42955011424 (29f1267b) green |
 
-No red Dev CI on main (last completed green: 42906724548). No new bug-first notes. No stale locks (core lock is 12 min
-old; other kestrel locks and marten/heron `docs/LOCK` empty).
+No new bug-first notes. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
 | service-cluster.yml | 42955011424 | main 29f1267b | pass |
-| service-hdfs.yml | 42955011583 | main 29f1267b | running |
-| service-security.yml | 42860284292 | pkg/2ff22144 | pass |
-| service-stores.yml | 42860290386 | pkg/2ff22144 | pass |
+| service-hdfs.yml | 42955011583 | main 29f1267b | pass |
+| service-security.yml | 42958566480 | pkg/29f1267b | pass |
+| service-stores.yml | 42958570049 | pkg/29f1267b | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-2ff221447b5d` (2026-11-10 17:17Z): build for the real cluster; egret ACCEPT SHIP (42865242528, HDFS rerun 42885490049 SHIP); FRESH 42865250390: balanced TPC-H OOM (fixed on main by item 44, next package running).
+- `server-1.0.0-29f1267b995f` (2026-11-11 04:35Z): morning build (hadoopfs afc8, items 44/45); egret ACCEPT/FRESH not yet run.
+- `server-1.0.0-2ff221447b5d` (2026-11-10 17:17Z): egret ACCEPT SHIP (42865242528, HDFS rerun 42885490049); FRESH 42865250390: balanced TPC-H OOM (fixed by item 44).
 - `server-1.0.0-37bf9401d77c` (2026-11-10 08:17Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only), FRESH 42791002963.
-- `server-1.0.0-894afb9b48c4` (2026-11-10 06:34Z): ITEM 39; egret ACCEPT SHIP (42778646542), FRESH 42775953599.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 03:43-03:50Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 209 (03:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 04:41Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 210 (04:51Z): nothing open.
 
 ## egret
 
-- Newest FRESH: **2ff221447b5d** (run 42865250390; upstream native `0ecca4f9b01e`). Speed vs balanced: S3 small p95 0.04-0.06, load +36-44 % at 128 clients (0.94-0.97 of upstream), scans x4/x8 1.31-1.45, slow-link ZSTD 1.02; balanced TPC-H OOM (fixed by item 44); local ADBC c1 speed/balanced 1.11.
-- README 'In progress': idle (03:26Z), newest tracked 2ff221447b5d. A FRESH run on the coming pre-release is expected next.
+- Newest FRESH: **2ff221447b5d** (run 42865250390; upstream native `0ecca4f9b01e`); FRESH-GIZMO 2ff221447b5d (42888240521): balanced OOM confirmed, S3 SF10 speed/gizmo 1.22 / balanced 0.99, local small c1 1.17 / 1.32.
+- README 'In progress' (03:26Z): idle, newest tracked 2ff221447b5d. **No FRESH on `server-1.0.0-29f1267b995f` yet** (expected at egret's next session).
 
 ## History
 
+- 2026-11-11T04:59Z: MORNING BUILD DONE: pre-release `server-1.0.0-29f1267b995f` (hadoopfs afc8 default, items 44+45) from pkg/29f1267b, all package runs green (Dev CI 42956935228, Service cluster/hdfs/security/stores, Catalogs CI); main Dev CI 42955017367 red only at the service gate (main moved by the 03:57Z orchestrator commit during the build; not a test failure, no rerun); ALL DONE suspended until egret FRESH on 29f1267b995f; no stale locks.
 - 2026-11-11T03:58Z: ALL DONE kept; plugins ITEM 44 DONE e75705c9 (part (2) Ranger staleness recheck merged); core lane on the morning note: afc8 default 29f1267b, package=true Dev CI 42955017367 running (two superseded Dev CI runs cancelled); Service cluster 42955011424 green, Service hdfs 42955011583 running, Catalogs CI green; marten/heron idle; no stale locks, no red CI, no new pre-release yet.
 - 2026-11-10T21:58Z: ALL DONE kept; balanced TPC-H OOM (Q-43m) fixed as plugins ITEM 44 (1)(3) on main 2335ddc6 (tpch-perf 42903634429 fix/44 balanced 22/22, red only on the baseline's OOM), part (2) Ranger staleness open; lane 3 ITEM 45 DONE b8613fc4 (Dev CI 42901100322, Service cluster 42901104843 green); main Dev CI 42906724548 green; maintainer's morning note (afc8 default + package=true) waits for the core session; no stale locks, no new pre-release.
 - 2026-11-10 20:58Z: ALL DONE kept; core lane filed Q-43m (balanced OOM = Q-42(a) cap, options A/B/C, needs maintainer); egret HDFS acceptance rerun 42885490049 SHIP; no new CI runs or pre-releases; marten/heron nothing new; no stale locks.
