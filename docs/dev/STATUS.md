@@ -23,6 +23,14 @@
 
 ## Next steps (one per session)
 
+> **ITEM 46 PACKAGED (2026-11-11 18:20Z, core lane).** The plugins lane's item 46 (DuckDB connection limits within one
+> reserved budget, qid on denial WARNs, requested SASL QOP in the start line; merged c96a1272 + CI mirror fixes) changes
+> runtime behaviour, so `package=true` on `pkg/74464701` (= `main` 74464701, last code commit): Dev CI 43071198734
+> (build, service gate, package) green; Service cluster 43074009015, security 43074016951, stores 43074022598 (dispatched
+> by the gate), hdfs 43064709693 and Catalogs CI 43064709784 (push on `main`) green -> pre-release
+> **`server-1.0.0-74464701e372`** (7 assets). Next: the stand check of item 46 on this pre-release; no open core item
+> until the maintainer's next note. Branch `pkg/74464701` can be deleted (also `pkg/29f1267b`).
+
 > **MORNING BUILD 2026-11-11 DONE (04:55Z, core lane; maintainer 00:45).** (1) hadoopfs `51b7220-afc8` is the CI /
 > release default (`29f1267b`; `tools/ci/hadoopfs-pinned.sh`, sha256 `78fdd5d7...96dcef` = the `ci-assets` digest);
 > (2) `fix/44` has nothing unmerged (items 44 (1)(2)(3) and 45 are on `main`); (3) `package=true` on `pkg/29f1267b`
@@ -4267,3 +4275,6 @@ S3 slowdown item below stays open for then).
   `*.ubuntu.com`: Dev CI, `tools/ci/server-image.sh` and the Service hdfs KDC container now fall back to
   `mirrors.kernel.org` (03cc8190, 74464701). Dev CI 43056505119, Service hdfs 43060538104 green on `fix/46`.
   Not packaged: the next `package=true` is the core lane's call.
+- 2026-11-11 (core session, 17:44-18:25Z): no open core item; item 46 (plugins lane) was merged unpackaged, so
+  `package=true` on `pkg/74464701`: Dev CI 43071198734, Service cluster 43074009015, security 43074016951, stores
+  43074022598, hdfs 43064709693, Catalogs CI 43064709784 all green -> pre-release `server-1.0.0-74464701e372`.

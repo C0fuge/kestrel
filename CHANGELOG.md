@@ -9,6 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Pre-release `server-1.0.0-74464701e372` (2026-11-11): `main` 74464701 with item 46.
 - CI: when the runners cannot resolve `*.ubuntu.com`, apt in Dev CI, the HDFS service server image and the Service hdfs
   KDC container falls back to the `mirrors.kernel.org` Ubuntu mirror (no runtime change).
 - Item 46, fix: `balanced` gave each expected DuckDB connection at least 1 GiB within the budget left by the JVM's
