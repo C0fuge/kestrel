@@ -433,7 +433,7 @@ holds its parts' streams open, and every open stream holds batches in direct mem
 share `distributedCompletePeerStreams` streams (`FLIGHT_DISTRIBUTED_COMPLETE_PEER_STREAMS`, default one per
 128 MiB of the smaller of direct memory and the Arrow allocator limit `arrowAllocatorLimitBytes`, at least 2; that limit, `arrowflight.arrow.allocatorLimitBytes`, defaults
 to 75 % of the JVM's direct memory, at least 256 MiB, and the start line `arrowAllocator limitMiB=... source=directMemory|set`
-shows it; it was a fixed 2 GiB before item 48's release). A
+shows it; it was a fixed 2 GiB before 2026-11-11). A
 merge takes room for all its parts before it opens them, and waits in arrival order while other merges hold the
 room; one-row merges (aggregates without GROUP BY and DISTINCT) take none and never wait. Point lookups (a
 filter with `column = literal` and no OR, without aggregation or with a one-row aggregate such as a filtered
