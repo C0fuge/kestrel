@@ -206,6 +206,23 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("hdfsMetadataCacheTtlMs"), e.getMessage());
     }
 
+    /** Item 44 (2): the storage access recheck is on every 10 s on HDFS only, 0 turns it off. */
+    @Test
+    void hdfsAccessRecheckDefaultsTo10sOnHdfsOnly() throws IOException {
+        String hdfs = "hdfs://nn:8020/data";
+        assertEquals(10_000, ConfigAdapter.hdfsAccessRecheckMs(source(Map.of(), Map.of()), hdfs));
+        assertEquals(0, ConfigAdapter.hdfsAccessRecheckMs(source(Map.of(), Map.of()), "/data/parquet"));
+        assertEquals(0, ConfigAdapter.hdfsAccessRecheckMs(source(Map.of(), Map.of()), null));
+        assertEquals(5000, ConfigAdapter.hdfsAccessRecheckMs(
+                source(Map.of("arrowflight.hdfs.accessRecheckMs", "5000"), Map.of()), hdfs));
+        assertEquals(0, ConfigAdapter.hdfsAccessRecheckMs(
+                source(Map.of(), Map.of("HDFS_ACCESS_RECHECK_MS", "0")), hdfs));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.hdfsAccessRecheckMs(
+                        source(Map.of("hdfsAccessRecheckMs", "-1"), Map.of()), hdfs));
+        assertTrue(e.getMessage().contains("hdfsAccessRecheckMs"), e.getMessage());
+    }
+
     /** Item 39 (c): file pruning by footer statistics is on for tables of up to 1024 files. */
     @Test
     void fileStatsPruningMaxFilesDefaultsTo1024() throws IOException {

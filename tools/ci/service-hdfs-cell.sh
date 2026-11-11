@@ -758,7 +758,7 @@ pointPruning() {
 # denied query answered as an internal error or a missing table, or the table not answering
 # again (without a restart) once its files are readable.
 denyAndStop() {
-  local rcl rcd rcr stopLog bad
+  local rcl rcd rcr rcv rcr2 stopLog bad
   "$py" -I tools/ci/service-hdfs-deny-stop-check.py load "$(dnIp 1):32010" 40 > "$work/stop-load.log" 2>&1 &
   local loader=$!
   sleep 10
@@ -782,10 +782,21 @@ denyAndStop() {
   docker exec "${kenv[@]}" "$admin" hdfs dfs -chmod 644 '/data/tpch/nation/*' || finish fail "item 37 (a): chmod back failed"
   "$py" -I tools/ci/service-hdfs-deny-stop-check.py restored "$(dnIp 1):32010" > "$work/restored.log" 2>&1; rcr=$?
   cat "$work/restored.log"
+  # Item 44 (2): revoke the directory of a table the server just read; the caches would answer
+  # it for 30 s, the access recheck (hdfsAccessRecheckMs, 10 s) must deny it within 15 s.
+  docker exec "${kenv[@]}" "$admin" hdfs dfs -chmod 700 /data/tpch/nation || finish fail "item 44 (2): chmod failed"
+  "$py" -I tools/ci/service-hdfs-deny-stop-check.py revoked "$(dnIp 1):32010" 15 > "$work/revoked.log" 2>&1; rcv=$?
+  cat "$work/revoked.log"
+  docker exec "${kenv[@]}" "$admin" hdfs dfs -chmod 755 /data/tpch/nation || finish fail "item 44 (2): chmod back failed"
+  "$py" -I tools/ci/service-hdfs-deny-stop-check.py restored "$(dnIp 1):32010" > "$work/restored2.log" 2>&1; rcr2=$?
+  cat "$work/restored2.log"
+  note "item 44 (2): $(grep -m 1 '^revoked: denied after' "$work/revoked.log" || echo 'no denial'), $(grep -m 1 '^result ' "$work/revoked.log" || echo '?'); granted again $(grep -m 1 '^result ' "$work/restored2.log" || echo '?')"
   docker stop -t 25 srvp > /dev/null; docker logs srvp > "$work/srvp.log" 2>&1 || true
   note "item 37 (a): denied $(grep -m 1 '^result ' "$work/deny.log" || echo '?'), restored $(grep -m 1 '^result ' "$work/restored.log" || echo '?'); views=createFailed $(grep -c 'views=createFailed' "$work/srvp.log"), views=created $(grep -c 'views=created ' "$work/srvp.log"), denied lines $(grep -cE 'query=denied|result=denied' "$work/srvp.log"); $(grep -m 1 -oE '(query|result)=denied.{0,200}' "$work/srvp.log" || echo 'no denied line')"
   [ "$rcd" -eq 0 ] || finish fail "item 37 (a): $(grep -m 1 '^result fail' "$work/deny.log" | cut -c13- || echo 'denied client failed')"
   [ "$rcr" -eq 0 ] || finish fail "item 37 (a): $(grep -m 1 '^result fail' "$work/restored.log" | cut -c13- || echo 'restored client failed')"
+  [ "$rcv" -eq 0 ] || finish fail "item 44 (2): $(grep -m 1 '^result fail' "$work/revoked.log" | cut -c13- || echo 'revoked client failed')"
+  [ "$rcr2" -eq 0 ] || finish fail "item 44 (2): $(grep -m 1 '^result fail' "$work/restored2.log" | cut -c13- || echo 'granted-again client failed')"
   grep -E ' ERROR ' "$work/srvp.log" | grep -qi 'nation' && finish fail "item 37 (a): an ERROR line names the denied table: $(grep -E ' ERROR ' "$work/srvp.log" | grep -i -m 1 nation | cut -c1-250)"
   return 0
 }

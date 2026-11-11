@@ -23,6 +23,7 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -53,6 +54,8 @@ public class ParquetAdapter {
     private final Map<String, CachedParquetMetadata> parquetMetadataCache =
             new ConcurrentHashMap<>();
     private final Map<TableKey, CachedSampleFile> sampleFileCache = new ConcurrentHashMap<>();
+    /** Re-asks the storage about a table's access (item 44 (2)), or null when off. */
+    private volatile pro.surpin.data.arrowflight.server.storage.AccessRecheck accessRecheck;
 
     /**
      * Identifies one table in the Arrow schema cache.
@@ -146,6 +149,12 @@ public class ParquetAdapter {
         this.dataDirectory = store.root();
         this.localhost = localhost;
         this.catalogTables = Objects.requireNonNull(catalogTables, "catalogTables");
+        int recheckMs = store.checksAccess()
+                ? ConfigAdapter.hdfsAccessRecheckMs(ConfigSource.system(),
+                        appConfig == null ? null : appConfig.dataDir()) : 0;
+        this.accessRecheck = recheckMs > 0
+                ? new pro.surpin.data.arrowflight.server.storage.AccessRecheck(recheckMs, store::checkReadable)
+                : null;
 
         refreshCatalog();
     }
@@ -364,6 +373,52 @@ public class ParquetAdapter {
      */
     public void forgetSampleFile(String schema, String table) {
         sampleFileCache.remove(new TableKey(schema, table));
+    }
+
+    /**
+     * Replaces the access recheck of the data directory's tables (tests; null turns it off).
+     *
+     * @param recheck the recheck, or null
+     */
+    public void setAccessRecheck(pro.surpin.data.arrowflight.server.storage.AccessRecheck recheck) {
+        this.accessRecheck = recheck;
+    }
+
+    /**
+     * Tells whether queries re-ask the storage about their tables' access (item 44 (2)).
+     *
+     * @return true when {@code hdfsAccessRecheckMs} is on for this store
+     */
+    public boolean rechecksAccess() {
+        return accessRecheck != null;
+    }
+
+    /**
+     * Asks the storage whether the server may still read a table of the data directory, at most
+     * once per {@code hdfsAccessRecheckMs} for a table it allowed (item 44 (2)); tables of other
+     * catalogs and names without a schema are not checked here.
+     *
+     * @param schema schema name, may be null
+     * @param table table name
+     * @throws UncheckedIOException when the storage denies access
+     */
+    public void recheckAccess(String schema, String table) {
+        pro.surpin.data.arrowflight.server.storage.AccessRecheck recheck = accessRecheck;
+        if (recheck == null || schema == null || schema.isEmpty() || table == null
+                || isCatalogSchema(schema)) {
+            return;
+        }
+        try {
+            validateName(schema);
+            validateName(table);
+        } catch (IllegalArgumentException e) {
+            return;   // the query's own resolution refuses the name
+        }
+        try {
+            recheck.require(tablePath(schema, table));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /**

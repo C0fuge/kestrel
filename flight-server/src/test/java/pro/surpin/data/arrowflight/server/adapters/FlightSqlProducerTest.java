@@ -257,6 +257,30 @@ class FlightSqlProducerTest {
                 .status().code());
     }
 
+    /**
+     * Regression for item 44 (2): a table the caches still hold but the storage now refuses
+     * (Ranger revoke, seen by the access recheck) is UNAUTHORIZED with the generic denial text.
+     */
+    @Test
+    void revokeSeenByTheAccessRecheckIsDenied() throws Exception {
+        BufferAllocator allocator = mock(BufferAllocator.class);
+        ExecutionService executionService = mock(ExecutionService.class);
+        String query = "SELECT count(*) FROM tpch.orders";
+        doThrow(new java.io.UncheckedIOException(new org.apache.hadoop.security.AccessControlException(
+                "Permission denied: user=flight, access=READ_EXECUTE, inode=\"/data/parquet/tpch/orders\"")))
+                .when(executionService).recheckAccess(query);
+        FlightSqlProducer producer = new FlightSqlProducer(
+                Location.forGrpcInsecure("localhost", 32010), allocator,
+                mock(MetadataService.class), mock(QueryPlanner.class), executionService,
+                mock(ClusterService.class), "complete");
+        FlightRuntimeException error = org.junit.jupiter.api.Assertions.assertThrows(
+                FlightRuntimeException.class, () -> producer.getFlightInfoStatement(
+                        FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build(),
+                        mock(FlightProducer.CallContext.class), FlightDescriptor.command(new byte[]{1})));
+        assertEquals(FlightStatusCode.UNAUTHORIZED, error.status().code(), error.getMessage());
+        assertEquals(FlightSqlProducer.STORAGE_DENIED_MESSAGE, error.status().description());
+    }
+
     /** Lists catalog views as VIEW when the caller may read them and every table they read. */
     @Test
     @SuppressWarnings("unchecked")

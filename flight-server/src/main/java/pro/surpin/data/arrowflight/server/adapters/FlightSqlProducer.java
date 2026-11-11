@@ -1119,6 +1119,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             throw unavailableOrDenied(e, query);
         }
         if (expanded == null || expanded.sources().isEmpty()) {
+            recheckStorageAccess(query);
             return QueryRestrictions.apply(principal, query, authorization, this::tableColumns);
         }
         for (TableName source : expanded.sources()) {
@@ -1129,7 +1130,23 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         .toRuntimeException();
             }
         }
+        recheckStorageAccess(expanded.sql());
         return QueryRestrictions.apply(principal, expanded.sql(), authorization, this::tableColumns);
+    }
+
+    /**
+     * Asks the storage again, at most every {@code hdfsAccessRecheckMs} per table, whether the
+     * server may read the query's tables (item 44 (2)), so a revoke is not hidden by caches.
+     *
+     * @param sql SQL to run, with its catalog views expanded
+     * @throws FlightRuntimeException UNAUTHORIZED when the storage denies a table
+     */
+    private void recheckStorageAccess(String sql) {
+        try {
+            executionService.recheckAccess(sql);
+        } catch (java.io.UncheckedIOException e) {
+            throw unavailableOrDenied(e, sql);
+        }
     }
 
     /**

@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
+| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `hdfsAccessRecheckMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -332,6 +332,12 @@ otherwise asked the DataNode for the short-circuit file descriptors again (~5-6 
 place is read again. `hdfsMetadataCacheTtlMs` (`HDFS_METADATA_CACHE_TTL_MS`, default 30000 on `hdfs://`, else 0 =
 off) sets how long that build keeps file statuses and located blocks (`hdfs_metadata_cache_ttl_ms`) before asking
 the NameNode again; a rewritten file may be seen with its old status for up to that long.
+`hdfsAccessRecheckMs` (`arrowflight.hdfs.accessRecheckMs`, `HDFS_ACCESS_RECHECK_MS`, default 10000 on `hdfs://`,
+else 0 = off) bounds how long a revoked permission (Ranger, HDFS ACLs) stays unseen: with the listing, plan and
+metadata caches a repeat query makes no NameNode call, so each query asks the NameNode (`access`, READ_EXECUTE on the
+table directory) for every data-directory table it reads that was not allowed within that interval. A denial is
+answered UNAUTHORIZED (`Schema or table access denied: ...`), without the HDFS path; a NameNode that does not answer
+does not fail the query. A revoke is then seen after Ranger's own policy refresh plus at most this interval.
 
 `duckDbThreadsUnderLoad` (`DUCKDB_THREADS_UNDER_LOAD`, default 0 = off) gives every Flight worker a
 second DuckDB connection with that many threads (opened on first use, so up to one more DuckDB per

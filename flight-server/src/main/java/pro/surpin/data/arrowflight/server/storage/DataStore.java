@@ -109,4 +109,28 @@ public interface DataStore extends pro.surpin.data.arrowflight.spi.storage.DataS
     default FileLocality locality(String relativePath) {
         return null;
     }
+
+    /**
+     * Tells whether {@link #checkReadable(String)} asks the storage anything (item 44 (2)).
+     *
+     * @return true when this store checks access to a directory
+     */
+    default boolean checksAccess() {
+        return false;
+    }
+
+    /**
+     * Asks the storage whether the server may still read a table's directory, with one cheap
+     * call that goes through the storage's authorization (HDFS: the NameNode's permission
+     * checker, Ranger's enforcer included), so a revoke is seen although every cache still
+     * holds the table (item 44 (2)).
+     *
+     * @param relativeDirectory table directory below the data directory
+     * @return true when the storage answered that the directory is readable, false when it
+     *         could not be asked (the directory is missing, the storage did not answer)
+     * @throws IOException when the storage denies access
+     */
+    default boolean checkReadable(String relativeDirectory) throws IOException {
+        return false;
+    }
 }

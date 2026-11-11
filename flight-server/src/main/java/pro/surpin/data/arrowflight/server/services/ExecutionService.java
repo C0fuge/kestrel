@@ -358,6 +358,42 @@ public final class ExecutionService {
     }
 
     /**
+     * Asks the storage whether the server may still read every data-directory table a query
+     * reads, at most once per {@code hdfsAccessRecheckMs} per table (item 44 (2)): the listing,
+     * plan and hadoopfs metadata caches let a repeat query run without a storage call, which
+     * left a Ranger revoke unseen until they expired. A plain name is checked as the table it
+     * resolves to. Queries whose tables cannot be named (a table function, a parse error) are
+     * not checked here; their own resolution decides.
+     *
+     * @param query SQL to run, with its catalog views expanded
+     * @throws java.io.UncheckedIOException when the storage denies access to a table
+     */
+    public void recheckAccess(String query) {
+        if (query == null || !parquetAdapter.rechecksAccess()) {
+            return;
+        }
+        List<ParquetQueryParser.JoinTable> tables;
+        try {
+            tables = QueryTables.of(TimeTravelClause.withoutClauses(query));
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (ParquetQueryParser.JoinTable table : tables) {
+            String schema = table.schema();
+            if (schema == null) {
+                try {
+                    schema = catalogViews.plainOwner(table.table());
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    continue;
+                }
+            }
+            parquetAdapter.recheckAccess(schema, table.table());
+        }
+    }
+
+    /**
      * Writes the schema in front of the table names a query gives without one, on HDFS read
      * short-circuit only (SASL DataNodes, item 31): there every step that decides where a file
      * is read and what is copied (planning, the readable-here check, local copies, join views)

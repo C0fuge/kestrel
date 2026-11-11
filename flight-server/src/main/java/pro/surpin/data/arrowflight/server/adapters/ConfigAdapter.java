@@ -823,6 +823,32 @@ public class ConfigAdapter {
         return value;
     }
 
+    /** Default {@code hdfsAccessRecheckMs} for an {@code hdfs://} data dir: 10 s. */
+    public static final int DEFAULT_HDFS_ACCESS_RECHECK_MS = 10_000;
+
+    /**
+     * Resolves {@code hdfsAccessRecheckMs} ({@code arrowflight.hdfs.accessRecheckMs},
+     * {@code HDFS_ACCESS_RECHECK_MS}): how often at most a query asks the NameNode whether the
+     * server may still read a table's directory (one {@code access} call per table, item 44
+     * (2)). The listing, plan and hadoopfs metadata caches make no NameNode call for a repeat
+     * query, so without it a Ranger / HDFS revoke reached those tables only when the caches
+     * expired. Default {@value #DEFAULT_HDFS_ACCESS_RECHECK_MS} when the data dir is
+     * {@code hdfs://}, else 0; 0 turns the check off.
+     *
+     * @param props   configuration source
+     * @param dataDir the server's data dir, null when unknown
+     * @return interval in ms, 0 for off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int hdfsAccessRecheckMs(ConfigSource props, String dataDir) {
+        int value = getIntWithEnv("hdfsAccessRecheckMs", "arrowflight.hdfs.accessRecheckMs",
+                "HDFS_ACCESS_RECHECK_MS", isHdfs(dataDir) ? DEFAULT_HDFS_ACCESS_RECHECK_MS : 0, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("hdfsAccessRecheckMs must be 0 or more: " + value);
+        }
+        return value;
+    }
+
     /**
      * Returns flightZeroCopyWrites from the system configuration.
      *

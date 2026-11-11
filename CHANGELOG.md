@@ -15,6 +15,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   exponent and parenthesised literals were still merged over every node. Ranges, column comparisons and ORs are
   merged as before. CI: the service-cluster point load adds `point_date` (a DATE literal) to its gate.
 
+- Item 44 (2), fix: a Ranger / HDFS revoke reached repeat queries of a table only after 45-70 s on the direct SASL
+  path: the plan, listing and hadoopfs metadata caches answered them without a NameNode call. New setting
+  `hdfsAccessRecheckMs` (default 10000 on `hdfs://`, 0 = off): each query asks the NameNode once per table directory
+  at most every interval (`FileSystem.access`, READ_EXECUTE); a denial is UNAUTHORIZED with the generic text.
+
 - Item 44 (1), fix: `balanced` failed TPC-H SF10 q09/q10/q13 with DuckDB Out of Memory in a 6 GB container with
   -Xmx3g / direct 2g, where Q-42 had capped each connection's 1 GiB floor at the ~100 MiB budget left by the full
   -Xmx + direct (128 MiB). The per-connection default and the shared DuckDB without `speed` are now capped at the

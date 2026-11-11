@@ -16,6 +16,10 @@ Phases (the cell changes the HDFS permissions and stops the server between them)
              missing table; the server keeps answering other tables.
 ``restored`` the cell gave the files back: the next queries of tpch.nation (no restart) answer
              25 rows.
+``revoked``  (item 44 (2)) the cell made tpch.nation's directory unreadable while the server runs
+             and its caches still hold the table (``restored`` just read it): a repeat query must
+             be denied within the access recheck interval (``hdfsAccessRecheckMs``, 10 s) plus a
+             margin, before the 30 s plan / metadata caches expire; argument: seconds allowed.
 ``load``     runs queries from several threads until the server stops; every failure must be
              UNAVAILABLE (the stopping message while the server drains, a transport error once it
              is gone), never INTERNAL.
@@ -103,6 +107,30 @@ def restored():
         check(len(got) == 25, f"restored: {NATION_QUERIES[1]} has {len(got)} rows (want 25)")
 
 
+def revoked():
+    """A table read before is denied soon after its directory became unreadable."""
+    server, allowed = sys.argv[2], float(sys.argv[3])
+    start = time.time()
+    text = None
+    while time.time() - start < allowed + 20:
+        text = error_of(server, NATION_QUERIES[0])
+        if text is not None:
+            break
+        time.sleep(0.5)
+    elapsed = time.time() - start
+    if text is None:
+        check(False, f"revoked: {NATION_QUERIES[0]} still answers {elapsed:.0f} s after the revoke")
+        return
+    upper = text.upper()
+    line = " ".join(text.split())[:300]
+    print(f"revoked: denied after {elapsed:.1f} s", flush=True)
+    check(("UNAUTHORIZED" in upper or "PERMISSION" in upper) and "INTERNAL" not in upper
+          and "/DATA/" not in upper, f"revoked: {NATION_QUERIES[0]} -> {line}")
+    check(elapsed <= allowed, f"revoked: denied after {elapsed:.1f} s (allowed {allowed:.0f} s)")
+    n = rows(server, OTHER_QUERY)[0]["n"]
+    check(n == 5, f"revoked: {OTHER_QUERY} = {n} (want 5)")
+
+
 def load():
     """Queries from several threads until the server is gone; no failure may be INTERNAL."""
     server, seconds = sys.argv[2], float(sys.argv[3])
@@ -143,7 +171,7 @@ def load():
 
 def main():
     phase = sys.argv[1]
-    {"denied": denied, "restored": restored, "load": load}[phase]()
+    {"denied": denied, "restored": restored, "revoked": revoked, "load": load}[phase]()
     if failures:
         print(f"result fail {failures[0]}")
         sys.exit(1)

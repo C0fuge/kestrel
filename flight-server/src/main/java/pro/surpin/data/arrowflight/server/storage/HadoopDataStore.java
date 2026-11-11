@@ -237,6 +237,31 @@ public final class HadoopDataStore implements DataStore {
     }
 
     @Override
+    public boolean checksAccess() {
+        return true;
+    }
+
+    @Override
+    public boolean checkReadable(String relativeDirectory) throws IOException {
+        Path directory = resolve(relativeDirectory);
+        try {
+            fileSystem.access(directory, org.apache.hadoop.fs.permission.FsAction.READ_EXECUTE);
+            return true;
+        } catch (java.io.FileNotFoundException e) {
+            return false;   // the query's own listing reports a missing table
+        } catch (IOException e) {
+            if (String.valueOf(e.getMessage()).contains("Permission denied")) {
+                throw e;
+            }
+            // Not a denial (a failed Kerberos login, a NameNode that does not answer): a server
+            // fault, which must not fail queries the caches can answer.
+            LOGGER.debug("node={} storage=accessCheckFailed dir={} error='{}'", LogUtil.node(),
+                    relativeDirectory, LogUtil.oneLine(String.valueOf(e.getMessage())));
+            return false;
+        }
+    }
+
+    @Override
     public DataFile file(String relativePath) throws IOException {
         Path path = resolve(relativePath);
         FileStatus status = fileSystem.getFileStatus(path);
