@@ -9,15 +9,17 @@ import java.util.regex.Pattern;
  * Every worker connection is a DuckDB instance of its own, so the node's DuckDB memory budget
  * (memory minus heap, direct memory and 15 % headroom) is split between the connections
  * expected to run at once. Threads are a quarter of the cores, at least 4; above 4 they are
- * capped at one per GiB of that share. A connection gets at least 1 GiB, but never more than the
- * budget left by the JVM's real reservation (item 44: the heap and direct memory the JVM can
- * really use, as under {@code speed}), and never less than 512 MiB. Explicit settings always win.
+ * capped at one per GiB of that share. A connection gets at least 1 GiB, but never more than its
+ * share of the budget left by the JVM's real reservation (item 44: the heap and direct memory the
+ * JVM can really use, as under {@code speed}; item 46: the connections' limits together stay
+ * within that budget), and never less than 512 MiB. Explicit settings always win.
  *
  * @param threads             DuckDB threads per connection
  * @param memoryLimit         DuckDB {@code memory_limit} per connection, null = DuckDB's default
  * @param coreThreads         threads the cores alone would give
  * @param connections         connections expected to run at once
- * @param budgetBytes         node's DuckDB memory budget, may be negative or 0 when unknown
+ * @param budgetBytes         DuckDB budget from the full -Xmx and direct memory, may be negative or 0 when
+ *                            unknown; the defaults are sized from {@link #reservedBudgetBytes()}
  * @param host                host limits used
  */
 public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int connections,
@@ -113,9 +115,10 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         } else {
             long perConnection = Math.max(MIN_CONNECTION_BYTES, budget / connections);
             perConnection = Math.min(perConnection, memory / 100 * MAX_CONNECTION_PERCENT);
-            // Never above what the JVM's real reservation leaves (item 44), at least 512 MiB: the
-            // full -Xmx3g + direct 2g left ~100 MiB in 6 GB and the Q-42 cap at that failed TPC-H.
-            perConnection = withinReservedBudget(perConnection, host);
+            // Never above this connection's share of what the JVM's real reservation leaves (items
+            // 44, 46), at least 512 MiB: the full -Xmx3g + direct 2g left ~100 MiB in 6 GB and the
+            // Q-42 cap at that failed TPC-H; 4 x 1 GiB in a 2.6 GiB reserved budget added up above it.
+            perConnection = withinReservedShare(perConnection, reservedBudget(host), connections);
             long mib = Math.max(1, perConnection >> 20);
             memoryLimit = mib + "MiB";
             limitBytes = mib << 20;
@@ -311,14 +314,39 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     }
 
     /**
+     * Caps a default memory limit of one of several DuckDB connections at its share of the budget
+     * left by the JVM's real reservation, never below {@link #MIN_USABLE_BYTES} (item 46: the
+     * limits of the connections expected at once must not add up above that budget).
+     *
+     * @param bytes       limit before the cap
+     * @param budget      budget left by the JVM's real reservation, may be negative
+     * @param connections connections expected at once
+     * @return the limit, at most the share unless the share is below the usable floor
+     */
+    static long withinReservedShare(long bytes, long budget, int connections) {
+        return Math.min(bytes, Math.max(MIN_USABLE_BYTES, budget / Math.max(1, connections)));
+    }
+
+    /**
+     * Returns the DuckDB budget the default limits are sized from: memory minus the JVM's real
+     * reservation of item 40(a) and the headroom (item 46: the same number for the cap, the
+     * start log and the WARN).
+     *
+     * @return budget in bytes, 0 when the memory is unknown, may be negative
+     */
+    public long reservedBudgetBytes() {
+        return host.memoryBytes() <= 0 ? 0 : reservedBudget(host);
+    }
+
+    /**
      * Describes default DuckDB memory limits that together exceed the DuckDB budget left by the
-     * configured -Xmx and direct memory (item 44), for a WARN at start: the server then relies
-     * on the JVM using less than its limits. An operator's {@code duckDbMemoryLimit} is never
-     * warned about.
+     * JVM's real reservation (items 44, 46), for a WARN at start: only the 512 MiB floor lets
+     * that happen, and the server then relies on the JVM using even less. An operator's
+     * {@code duckDbMemoryLimit} is never warned about.
      *
      * @param appliedLimit memory limit of one DuckDB, null = DuckDB's default
      * @param instances    DuckDB instances expected at once (connections, 1 for a shared DuckDB)
-     * @param budgetBytes  DuckDB budget from the configured -Xmx and direct memory
+     * @param budgetBytes  DuckDB budget left by the JVM's real reservation ({@link #reservedBudgetBytes()})
      * @param operatorSet  whether the operator set {@code duckDbMemoryLimit}
      * @return key=value pairs with a hint, or null when there is nothing to warn about
      */
@@ -330,9 +358,9 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
         }
         return "memoryLimit=" + appliedLimit + " instances=" + Math.max(1, instances)
                 + " budgetMiB=" + (budgetBytes >> 20)
-                + " hint=-Xmx + -XX:MaxDirectMemorySize leave less than these limits; the JVM must use less"
-                + " than its limits or the container may be OOM-killed: give it more memory, lower -Xmx /"
-                + " -XX:MaxDirectMemorySize or set duckDbMemoryLimit";
+                + " hint=the JVM's reservation (heap in use x 2, at least 1 GiB; direct 1 GiB + 25 %) leaves"
+                + " less than these limits at the 512 MiB floor; the container may be OOM-killed: give it more"
+                + " memory, lower duckDbMemoryConnections, -Xmx / -XX:MaxDirectMemorySize or set duckDbMemoryLimit";
     }
 
     /**
@@ -417,7 +445,8 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     public String describe() {
         return "threads=" + threads + " memoryLimit=" + (memoryLimit == null ? "duckdbDefault" : memoryLimit)
                 + " coreThreads=" + coreThreads + " connections=" + connections
-                + " budgetMiB=" + (budgetBytes >> 20) + " cores=" + host.cores()
+                + " budgetMiB=" + (reservedBudgetBytes() >> 20) + " limitsBudgetMiB=" + (budgetBytes >> 20)
+                + " cores=" + host.cores()
                 + " memoryMiB=" + (host.memoryBytes() >> 20) + " heapMiB=" + (host.maxHeapBytes() >> 20)
                 + " directMiB=" + (host.maxDirectBytes() >> 20);
     }

@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 46, fix: `balanced` gave each expected DuckDB connection at least 1 GiB within the budget left by the JVM's
+  real reservation, so 4 connections in a 6 GB container with -Xmx3g / direct 2g got 4 x 1024 MiB with a 2.6 GiB
+  budget, and the start log showed the full-limit budget (`budgetMiB=102`). Each connection now gets at most its
+  share of that one budget (here 665 MiB, still at least 512 MiB); `duckdb=sizing` shows it as `budgetMiB` (the
+  full-limit one as `limitsBudgetMiB`) and the WARN compares with it. Hosts where 1 GiB per connection fits keep it
+  (the 2 CPU harness keeps 2 x 1024 MiB). Access-denial WARNs logged while a query is planned now carry its query id
+  instead of `qid=null`. The `hdfs=saslDataTransfer` start line names the requested QOP, `dfs.encrypt.data.transfer`
+  and cipher suites (`negotiated=unknown`: the hadoopfs extension does not report what DataNodes negotiated).
+
 - hadoopfs `51b7220-afc8` is the CI / release default (maintainer, 2026-11-11; `ci-assets`
   `hadoopfs-v1.5.6-afc8.duckdb_extension`, sha256 `78fdd5d7b9621f6eb1e77cfd9d3f3abd54207bb4d34990c42d0341f6af96dcef`,
   was afc6). afc7 adds the AES cipher option for `privacy`, afc8 accepts several QOPs such as

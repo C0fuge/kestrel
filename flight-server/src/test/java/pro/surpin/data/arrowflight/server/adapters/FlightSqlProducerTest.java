@@ -252,6 +252,19 @@ class FlightSqlProducerTest {
         assertTrue(!error.status().description().contains("/data/parquet"), error.status().description());
         String text = log.toString(java.nio.charset.StandardCharsets.UTF_8);
         assertEquals(1, text.lines().filter(l -> l.contains("result=denied") && l.contains("WARN")).count(), text);
+        // item 46 (2): the WARN carries the query's id, never qid=null, and the thread's id is restored
+        assertTrue(text.lines().anyMatch(l -> l.contains("result=denied") && l.matches(".*qid=[0-9a-f-]{8} .*")), text);
+        assertTrue(!text.contains("qid=null"), text);
+        assertNull(pro.surpin.data.arrowflight.server.LogUtil.qid());
+        System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+        log.reset();
+        try {
+            FlightSqlProducer.logDenial(CallStatus.UNAUTHENTICATED.withDescription("no").toRuntimeException(), query);
+        } finally {
+            System.setErr(err);
+        }
+        String own = log.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(own.contains("result=denied") && !own.contains("qid=null"), own);
         assertEquals(FlightStatusCode.UNAVAILABLE, FlightSqlProducer.unavailableOrDenied(
                 new java.io.UncheckedIOException(new java.io.IOException("Connection refused")), query)
                 .status().code());

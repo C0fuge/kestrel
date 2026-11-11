@@ -164,9 +164,10 @@ class DuckDbSizingTest {
             long shared = DuckDbSizing.parseBytes(DuckDbSizing.shared(host, 0, null).memoryLimit());
             assertTrue(shared <= cap && shared >= DuckDbSizing.MIN_USABLE_BYTES, mib + " MiB: " + shared);
         }
-        // 2 GiB: budget 2048 - 768 - 307 = 972 MiB, so both get it instead of 1024 MiB
+        // 2 GiB: budget 2048 - 768 - 307 = 972 MiB, so the shared DuckDB gets it instead of 1024 MiB
+        // and each of the 2 connections its share, here the 512 MiB floor (item 46)
         HostLimits two = new HostLimits(4, 2 * GIB, 512L << 20, 256L << 20);
-        assertEquals("972MiB", DuckDbSizing.compute(two, false, 0, null, 0).memoryLimit());
+        assertEquals("512MiB", DuckDbSizing.compute(two, false, 0, null, 0).memoryLimit());
         assertEquals("972MiB", DuckDbSizing.shared(two, 0, null).memoryLimit());
         String warning = DuckDbSizing.belowFloorWarning("972MiB", false);
         assertTrue(warning.startsWith("memoryLimit=972MiB floorMiB=1024 "), warning);
@@ -182,26 +183,64 @@ class DuckDbSizingTest {
 
     /**
      * Regression for item 44 (stand build 2ff221447b5d): in the harness container (2 CPUs, 6 GB,
-     * -Xmx3g, direct 2g) balanced and the shared DuckDB get the 1 GiB they had before Q-42, and
-     * the start warns that these limits exceed what the configured -Xmx and direct memory leave;
-     * hosts with room and an operator's limit are not warned about.
+     * -Xmx3g, direct 2g) balanced and the shared DuckDB get the 1 GiB they had before Q-42; the
+     * two connections' 2 GiB fit the budget left by the JVM's real reservation, so the start no
+     * longer warns (item 46); an operator's limit is never warned about.
      */
     @Test
-    void harnessContainerKeepsOneGibAndWarnsAboutTheJvmLimits() {
+    void harnessContainerKeepsOneGibWithinTheReservedBudget() {
         HostLimits harness = new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB);
         DuckDbSizing s = DuckDbSizing.compute(harness, false, 0, null, 0);
         assertEquals("1024MiB", s.memoryLimit());
         assertEquals("1024MiB", DuckDbSizing.shared(harness, 0, null).memoryLimit());
-        String warning = DuckDbSizing.aboveJvmLimitsWarning(s.memoryLimit(), s.connections(), s.budgetBytes(), false);
-        assertTrue(warning.startsWith("memoryLimit=1024MiB instances=2 budgetMiB="), warning);
-        assertTrue(warning.contains("duckDbMemoryLimit"), warning);
-        assertNull(DuckDbSizing.aboveJvmLimitsWarning(s.memoryLimit(), s.connections(), s.budgetBytes(), true));
-        assertNull(DuckDbSizing.aboveJvmLimitsWarning(null, 2, s.budgetBytes(), false));
+        assertEquals(2662, s.reservedBudgetBytes() >> 20, s.describe());
+        assertNull(DuckDbSizing.aboveJvmLimitsWarning(s.memoryLimit(), s.connections(), s.reservedBudgetBytes(),
+                false), s.describe());
+        assertNull(DuckDbSizing.aboveJvmLimitsWarning(null, 2, s.reservedBudgetBytes(), false));
         DuckDbSizing roomy = DuckDbSizing.compute(new HostLimits(16, 64 * GIB, 8 * GIB, 4 * GIB), false, 0, null, 0);
         assertNull(DuckDbSizing.aboveJvmLimitsWarning(roomy.memoryLimit(), roomy.connections(),
-                roomy.budgetBytes(), false), roomy.describe());
+                roomy.reservedBudgetBytes(), false), roomy.describe());
         assertNull(DuckDbSizing.aboveJvmLimitsWarning("8806MiB", 1, 8806L << 20, false));
         assertTrue(DuckDbSizing.aboveJvmLimitsWarning("8807MiB", 1, 8806L << 20, false) != null);
+    }
+
+    /**
+     * Regression for item 46 (stand build 29f1267b995f): balanced in 6 GB with -Xmx3g / direct 2g
+     * and 4 expected connections logged {@code memoryLimit=1024MiB instances=4 budgetMiB=102}: the
+     * floors used the JVM's real reservation (2.6 GiB) but 4 x 1 GiB added up above it, and the
+     * log showed the full-limit budget. Now each connection gets its share of the one budget, the
+     * start log shows that budget, and only the 512 MiB floor can still exceed it (then a WARN).
+     */
+    @Test
+    void connectionLimitsAddUpWithinTheBudgetTheLogShows() {
+        DuckDbSizing stand = DuckDbSizing.compute(new HostLimits(8, 6 * GIB, 3 * GIB, 2 * GIB), false, 0, null, 0);
+        assertEquals(4, stand.connections());
+        assertEquals("665MiB", stand.memoryLimit());
+        assertTrue(limitBytes(stand) * stand.connections() <= stand.reservedBudgetBytes(), stand.describe());
+        assertTrue(stand.describe().contains(" budgetMiB=2662 limitsBudgetMiB=102 "), stand.describe());
+        assertNull(DuckDbSizing.aboveJvmLimitsWarning(stand.memoryLimit(), stand.connections(),
+                stand.reservedBudgetBytes(), false));
+        for (int cores = 1; cores <= 64; cores *= 2) {
+            for (long gib = 2; gib <= 64; gib *= 2) {
+                DuckDbSizing s = DuckDbSizing.compute(new HostLimits(cores, gib * GIB, gib * GIB / 2, gib * GIB / 4),
+                        false, 0, null, 0);
+                long sum = limitBytes(s) * s.connections();
+                boolean atFloor = limitBytes(s) == DuckDbSizing.MIN_USABLE_BYTES;
+                assertTrue(sum <= Math.max(s.reservedBudgetBytes(), s.connections() * DuckDbSizing.MIN_USABLE_BYTES),
+                        s.describe());
+                assertEquals(sum > s.reservedBudgetBytes() && atFloor, DuckDbSizing.aboveJvmLimitsWarning(
+                        s.memoryLimit(), s.connections(), s.reservedBudgetBytes(), false) != null, s.describe());
+            }
+        }
+        // 16 cores, 4 GiB, -Xmx1g, direct 512m: 1945 MiB for 4 connections, the 512 MiB floor exceeds it
+        DuckDbSizing tight = DuckDbSizing.compute(new HostLimits(16, 4 * GIB, GIB, GIB / 2), false, 0, null, 0);
+        assertEquals("512MiB", tight.memoryLimit());
+        String warning = DuckDbSizing.aboveJvmLimitsWarning(tight.memoryLimit(), tight.connections(),
+                tight.reservedBudgetBytes(), false);
+        assertTrue(warning.startsWith("memoryLimit=512MiB instances=4 budgetMiB=1945 "), warning);
+        assertTrue(warning.contains("duckDbMemoryConnections"), warning);
+        assertNull(DuckDbSizing.aboveJvmLimitsWarning(tight.memoryLimit(), tight.connections(),
+                tight.reservedBudgetBytes(), true));
     }
 
     @Test

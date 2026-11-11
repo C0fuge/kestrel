@@ -296,9 +296,11 @@ Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThre
 `memory.max`) or machine minus `-Xmx`, the direct memory limit and 15 % headroom; each connection
 gets budget / `duckDbMemoryConnections` (`DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at
 least 2, where threads here count as cores / 4 between 2 and 16) as `memory_limit`, at least
-1 GiB and at most 80 % of the memory, but never more than the budget left by what the JVM really uses (heap
-min(-Xmx, max(1 GiB, 2 x heap in use)), direct min(limit, 1 GiB + 25 %)), and never less than 512 MiB (item 44;
-a WARN `duckdb=memoryLimitAboveJvmLimits` when these defaults exceed what `-Xmx` and the direct limit leave); threads are cores / 4 between 4 and 16, and above 4 at most
+1 GiB and at most 80 % of the memory, but never more than its share (budget / connections) of the budget left by
+what the JVM really uses (heap min(-Xmx, max(1 GiB, 2 x heap in use)), direct min(limit, 1 GiB + 25 %)), and never
+less than 512 MiB (items 44, 46: the connections' limits add up within that budget; only the 512 MiB floor can
+exceed it, then a WARN `duckdb=memoryLimitAboveJvmLimits`; `duckdb=sizing` shows that budget as `budgetMiB` and
+the one left by the full `-Xmx` and direct limit as `limitsBudgetMiB`); threads are cores / 4 between 4 and 16, and above 4 at most
 one per GiB of that limit (fewer than 4 made TPC-H SF10 1.35-1.7x slower on 4-16 core hosts). `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
