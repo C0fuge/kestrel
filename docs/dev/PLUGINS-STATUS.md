@@ -1313,7 +1313,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   `HdfsSaslDataTransferTest` 7, `ResourceProfileTest` 14, `ConfigAdapterTest` 62, all locally. CI: TPC-H perf
   **43047430684** green (local SF10, 2 CPU / 6 GB, -Xmx3g / direct 2g, quick, 1 round): default `memoryLimit=1024MiB
   connections=2 budgetMiB=2662`, 31.97 s, peak 1722 MiB; `-DduckDbMemoryConnections=4` `memoryLimit=665MiB`, 22/22
-  same answers, 31.94 s, peak 1637 MiB. Dev CI 43047425944 (twice) and 43048145637, Service hdfs 43047453329: red
+  same answers, 31.94 s, peak 1637 MiB. Dev CI 43047425944 (twice), 43048145637 and 43050095655 (15:47Z), Service hdfs 43047453329: red
   before any build/test step, `Could not resolve host: *.ubuntu.com` (curl of the hadoopfs test libs, apt-get
   krb5-user, apt-get in the service images). 5cfbedba adds `mirrors.edge.kernel.org` as a third mirror for the test
   libs (that step then passed); apt-get still needs ubuntu.com. CHANGELOG / README lines are on the branch. Lock
