@@ -1266,3 +1266,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   item 44 (e75705c9) and d295fe36: it is the build for the stand's repeat of `ranger-policy ... off` (expected denial
   within Ranger's refresh + 10 s) and for the Q-40a gizmo wave. Dev CI 42955017367 on `main` red only at the service
   gate (explained in STATUS.md Log, repackaged green as 42956935228). No code change, no CI run, lock not taken.
+- 2026-11-11 10:15Z (plugins lane): nothing open. egret FRESH 29f1267b995f (run 42965886044, see ORCHESTRATION.md)
+  confirms ITEM 44 (1): balanced TPC-H 22/22 on every job, no DuckDB OOM. Still waiting for the maintainer's stand:
+  ITEM 44 (2) `ranger-policy ... off` repeat and the Q-40a gizmo wave. No code change, no CI run, lock not taken.
