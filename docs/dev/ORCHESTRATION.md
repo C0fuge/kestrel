@@ -1,13 +1,19 @@
-ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T14:57Z: no change)
+ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T15:57Z: plugins ITEM 46 open, see below)
 
 # Orchestration status
 
-Status as of **2026-11-11T12:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-11T15:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 All conditions met: ITEM 26 / 27 DONE (kestrel core), IMPROVEMENTS DONE (marten, heron), egret FRESH on the newest
 pre-release **`server-1.0.0-29f1267b995f`** (results/FRESH-29f1267b995f.md, run 42965886044) and ACCEPT SHIP.
 
 Points for the maintainer:
+- **Plugins ITEM 46 (your 18:40 stand note) in progress:** all three parts on branch `fix/46` (9c743d11 + CI fix
+  5cfbedba), not merged. TPC-H perf 43047430684 green on the branch; Dev CI 43047425944, 43048145637, 43050095655 and
+  Service hdfs 43047453329 red before any test (`Could not resolve host: *.ubuntu.com`, apt-get krb5-user /
+  service images) - runner-side DNS outage, not the change. Orchestrator re-ran the failed job of 43050095655 once
+  (15:56Z). **Q-46 needs you:** ask the hadoopfs extension repo for a function/setting exposing the negotiated
+  data-transfer QOP / cipher (until then the start line logs `negotiated=unknown`).
 - **egret FRESH 29f1267b995f:** the `2ff221447b5d` balanced TPC-H OOM is fixed (balanced 22/22 on every TPC-H job,
   RSS 0.76-1.64 GB). **Local small c1 p50 regression by the rule persists and grew: speed/balanced 1.19 JDBC / 1.16
   ADBC in all 3 rounds** (2ff: 1.07 / 1.11; speed unchanged, balanced faster). Speed vs balanced otherwise as before:
@@ -22,18 +28,17 @@ Points for the maintainer:
 - Branches `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
 - Open questions still listed: Q-40b-1 (catalogs, close without a default change - needs OK), Q8 / Q10 / Q11
   (catalogs); lane 3 Q3 / Q4; marten TPC-H q16 SF1 slowdown; `ci-assets` extension set refresh (sha256 in STATUS.md).
-- PLUGINS-STATUS: state line 12:20Z says nothing open (ITEM 44 note kept as record); waits on your stand (ranger-policy off repeat, Q-40a gizmo wave).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | MORNING BUILD DONE; no open item | 04:41Z (unlock, 3h15m) | free | main Dev CI 42955017367 red at service gate only; pkg Dev CI 42956935228 green |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 44 DONE e75705c9; nothing open | 05:11Z (status note) | free | covered by Dev CI above |
+| core (`STATUS.md`) | no open item | 15:41Z (lock/unlock) | free | main Dev CI 42955017367 red at service gate only (unchanged); pkg Dev CI 42956935228 green |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 46 on `fix/46`, not merged | 15:47Z (status note) | free | fix/46 Dev CI red (ubuntu.com DNS, infra), rerun of 43050095655 running |
 | catalogs (`CATALOGS-STATUS.md`) | none open (40(b) DONE 135e6dac) | 2026-11-10 17:21Z | free | Catalogs CI 42955011409 (29f1267b) green |
 | lane 3 (`LANE3-STATUS.md`) | ITEM 45 DONE b8613fc4; nothing open | 2026-11-10 21:19Z | free | Service cluster 42955011424 (29f1267b) green |
 
-No new bug-first notes. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
+No new bug-first notes (item 46 is a maintainer note, minor). No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
@@ -62,6 +67,7 @@ No new bug-first notes. No stale locks (all kestrel locks and marten/heron `docs
 
 ## History
 
+- 2026-11-11T15:57Z: ALL DONE kept, but plugins ITEM 46 (maintainer stand note 18:40: sizing budget, qid=null in denials, QOP log; Q-46 for the extension repo) on fix/46, unmerged: TPC-H perf 43047430684 green, Dev CI / Service hdfs red on runner ubuntu.com DNS (infra), failed job of 43050095655 re-run once; main unchanged, locks free, no new pre-release; marten/heron/egret idle.
 - 2026-11-11T12:57Z: ALL DONE kept; no change (lanes nothing open, plugins state line 12:20Z; locks free; no new CI runs or pre-releases; marten 12:40Z / heron session 218 / egret 11:29Z README idle).
 - 2026-11-11T09:58Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron idle; egret idle on 29f1267b995f).
 - 2026-11-11T07:57Z: **ALL DONE** again: egret FRESH 29f1267b995f DONE (run 42965886044, balanced TPC-H OOM fixed, 22/22 everywhere; local small c1 speed/balanced 1.19 JDBC / 1.16 ADBC regression by the rule) and ACCEPT 29f1267b995f SHIP (42965889054 + rerun 42972471705); lanes nothing open, locks free, no new kestrel CI runs or pre-releases; marten/heron idle.
@@ -101,5 +107,3 @@ No new bug-first notes. No stale locks (all kestrel locks and marten/heron `docs
 - 2026-11-09 07:57Z: no change: no core session since 05:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (07:41Z)/heron (session 179)/egret (07:30Z README, idle) idle; no stale locks.
 - 2026-11-09 06:58Z: no change: no core session since 05:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (06:41Z)/heron (session 178)/egret (05:27Z README, idle) idle; no stale locks.
 - 2026-11-09 05:57Z: no change: core session 05:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (05:41Z)/heron (session 177)/egret (05:27Z README, idle) idle; no stale locks.
-- 2026-11-09 04:57Z: no change: core session 04:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (04:41Z)/heron (session 176)/egret (03:27Z README, idle) idle; no stale locks.
-- 2026-11-09 03:56Z: no change: core session 03:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (03:41Z)/heron (session 175)/egret (03:27Z README, idle) idle; no stale locks; no orchestrator status 22:56Z-02:56Z (no runs).
