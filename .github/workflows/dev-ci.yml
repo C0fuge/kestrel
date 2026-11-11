@@ -94,7 +94,9 @@ jobs:
               libx/libxml2/libxml2_2.9.10+dfsg-5ubuntu0.20.04.10_amd64.deb \
               i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb; do
             got=false
-            for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
+            # 2026-11-11: runners could not resolve either ubuntu.com host; kernel.org mirrors the pool.
+            for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu \
+                https://mirrors.edge.kernel.org/ubuntu; do
               if curl -fsSL --retry 3 --retry-all-errors --max-time 120 -o "$RUNNER_TEMP/lib.deb" "$mirror/pool/main/$deb"; then
                 got=true; break
               fi
