@@ -712,3 +712,8 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   unaffected. Dev CI 43145794759 and Service cluster 43145797836 (13/13 + summary) green on the branch;
   fast-forwarded into `main` = ITEM 48 DONE 97ad4f22, Q3 DONE. `package=true` Dev CI dispatched on `main` (Q3 changes
   a default). Lock released. Next: the stand's rerun of the dc small-query mix on that pre-release.
+- 2026-11-12 04:03-04:15Z (lane 3 session): no open item (waiting for the stand's rerun on the item 48 / Q3 build).
+  Lock not taken (no code). Correction to the line above: its `package=true` Dev CI 43147654545 on 97ad4f22 was red
+  only at the service gate (main moved, service hdfs/security/stores not dispatched; build + tests green), so no
+  pre-release from it; the core lane is packaging items 47 / 48 / Q3 as Dev CI 43150534816 on `pkg/2c169a53`
+  (contains 97ad4f22; service gate running). Next: confirm that pre-release exists, then the stand's rerun.
