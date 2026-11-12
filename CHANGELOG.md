@@ -19,7 +19,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   footer statistics leave at most `distributedCompleteLocalAggregateMaxFiles` files of its table (new setting,
   `FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES`, default 4, 0 = merge as before), all readable here, is
   computed on the planning node like a point lookup when `distributedCompletePointLookups=local` (item 48, lane 3:
-  the stand's small-query mix ran at 0.55 of speed under dc). Answers are unchanged. CI: the service-cluster data
+  the stand's small-query mix ran at 0.55 of speed under dc). Answers are unchanged. It needs footer pruning, so it does not apply to a local,
+  unshared `dataDir` unless `fileStatsPruningMaxFiles` is set (Q-40b-1). CI: the service-cluster data
   is split by key range by default (`split` input, `mod` as before) and the point gate adds `agg_range`.
 
 - File pruning by footer statistics is off by default for a local, unshared `dataDir` (maintainer's answer to

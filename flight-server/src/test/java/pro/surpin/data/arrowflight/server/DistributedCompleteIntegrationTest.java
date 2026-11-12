@@ -71,6 +71,8 @@ class DistributedCompleteIntegrationTest {
             }
         }
         System.setProperty("endpointsPerServer", String.valueOf(FILES));
+        // A local, unshared dataDir is pruned only when the setting is given (Q-40b-1); item 48 needs it.
+        System.setProperty("fileStatsPruningMaxFiles", "1024");
         helper = TestFlightServerHelper.builder().dataDir(dataDir.toString()).resultMode("complete")
                 .start();
         peerAllocator = helper.allocator.newChildAllocator("peers", 0, Long.MAX_VALUE);
@@ -89,6 +91,7 @@ class DistributedCompleteIntegrationTest {
             helper.close();
         } finally {
             System.clearProperty("endpointsPerServer");
+            System.clearProperty("fileStatsPruningMaxFiles");
             try (var files = Files.walk(dataDir)) {
                 files.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
             }
