@@ -12,6 +12,20 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 > of an attached database, never the remote catalog's other names. As ITEM 47 in this lane, merge when green,
 > "ITEM 47 DONE <sha>".
 
+ITEM 47 DONE 2c169a53 (2026-11-12, session 12; merged with the Q8 fix of session 11's branch). Q-40b-1 DONE
+2f31c071 (session 11, Dev CI on main 43077861504 green). Item 47: every DuckDB connection gets temporary macros of
+DuckDB's metadata functions (`duckdb_databases/schemas/tables/columns/views/constraints/indexes/sequences/types()`,
+`pragma_database_size()`) that leave the plugin-attached databases out, so `information_schema`, `pg_catalog`,
+`sqlite_master`, `SHOW ALL TABLES` list only the server's views; while a database is attached, a qualified call
+(`system.main.duckdb_tables()`) and the name-string functions `pragma_table_info` / `pragma_storage_info` /
+`pragma_show` / `pragma_metadata_info` are refused in client queries (session 12 added `pragma_database_size` and the
+name-string refusal: a guessed `pragma_table_info('jdbc_attached_pg.public.x')` passed the qualifier check). Flight SQL
+GetTables already listed only configured tables. Tests: `HiddenAttachmentsTest` (3), `JdbcFederationIntegrationTest
+.metadataQueriesListNoRemoteNames` against real PostgreSQL / MySQL with an unconfigured remote table. CI on
+`fix/47-attached-metadata-2`: Dev CI 43147991919, Catalogs CI 43147994336 green. Next: no open item in this lane
+(C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 open). A `package=true` pre-release is
+for the core lane's next package (item 47 changes runtime behaviour only for setups with a jdbc attachment).
+
 > **Maintainer, 2026-11-10 11:10 - 40(b) is the priority: merge each finished improvement into `main` as soon as its CI
 > is green (do not hold them for one big merge); the build for the real cluster is the core lane's package right after "ITEM 40(b) DONE" - it waits for 40(b).**
 >
@@ -647,7 +661,7 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
-- Q-40b-1 (2026-11-10, item 40 (b)): the speed (and balanced) c1 point-query regression on local data is file pruning
+- **Closed (Q-40b-1 done 2f31c071, maintainer yes 2026-11-11).** Q-40b-1 (2026-11-10, item 40 (b)): the speed (and balanced) c1 point-query regression on local data is file pruning
   by footer statistics (on by default since item 39 (c)): +0.3..0.5 ms p50 / +0.3 ms CPU per point query at c1 on a
   local `dataDir`, gone with `-DfileStatsPruningMaxFiles=0` (run 42811208123). Turn pruning off by default for a local
   `dataDir` and keep it on for HDFS / S3 / plugin stores (an explicit setting wins)? Same answers either way; it is a
@@ -667,7 +681,7 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   that to 0-0.2 and q/s +10..15% (run 42689843600: balanced c32 65.6 -> 75.9 and 52.8 -> 60.6). Make the external
   file cache the balanced default on HDFS (it is a default change, so not done without you), after checking that
   hadoopfs reports real modification times (stale cached bytes otherwise; afc4 promises correct mtimes)?
-- Q10 (2026-11-09, item 39 (c) part 3): file pruning by footer statistics is **on by default**
+- **Closed (maintainer 2026-11-11: keep pruning on for HDFS/S3).** Q10 (2026-11-09, item 39 (c) part 3): file pruning by footer statistics is **on by default**
   (`fileStatsPruningMaxFiles=1024`). Answers are unchanged by design (40-query equality test), but it changes which
   files a complete answer reads. Keep it on, or make it opt-in (`0` default) until the stand has run with it?
 - **Answer Q9 (maintainer, 2026-11-09 18:20): yes.** The hadoopfs side is now its own item in the extension's repo
@@ -697,7 +711,7 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   - Q7: route (a) for Paimon and Hudi on local + S3 through the extensions with refused functions (as Q5); HDFS via
     (b) only later if asked. After Q6 (a).
 
-- Q8 (2026-10-29, C2, security): an attached database is a DuckDB catalog, so client queries of
+- **Closed (maintainer 2026-11-11: fix it -> item 47, done 2c169a53).** Q8 (2026-10-29, C2, security): an attached database is a DuckDB catalog, so client queries of
   `information_schema.tables` / `information_schema.columns` / `duckdb_tables()` / `duckdb_columns()` probably list
   every table and column of the remote database the plugin's user can see, also the ones not configured in
   `<s>.tables` (names only - their rows stay unreachable: the attachment's name is refused as a qualifier and the
@@ -1012,3 +1026,8 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   HDFS point perf main 42843864824 vs 894afb9b 42843869104 (+2..6 % on the comparable runner, 0 errors); Dev CI on
   main 42837979902 (34e24d3b) green; JFR confirms one parse per shape for `count` texts. No code change. Lock released.
 - 2026-11-10 17:25Z (session 10): no open item (40(b) DONE, C3 step 2 / C4 (b) / (d) stay backlog per the 2026-10-29 finish-mode note, Q-40b-1 / Q8 / Q10 / Q11 unanswered); no code change, stopped early. Lock released.
+- 2026-11-12 03:20-03:50Z (session 12): stale lock of session 11 (18:07Z) taken over. **ITEM 47 DONE 2c169a53**:
+  rebased session 11's `fix/47-attached-metadata` (Catalogs CI 43079733256 green) onto main as
+  `fix/47-attached-metadata-2` (force-push refused), added `pragma_database_size` hiding and the refusal of name-string
+  metadata functions while attached (+ tests), Dev CI 43147991919 / Catalogs CI 43147994336 green, rebase-merged.
+  Q-40b-1 (2f31c071, Dev CI 43077861504), Q10 and Q8 closed. `STATUS.md` Log line for the core lane. Lock released.

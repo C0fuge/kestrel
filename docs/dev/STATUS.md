@@ -4285,4 +4285,8 @@ S3 slowdown item below stays open for then).
   computed locally, new setting `distributedCompleteLocalAggregateMaxFiles`) and Q3 (default `arrowAllocatorLimitBytes`
   = 75 % of direct memory, at least 256 MiB). Touches `ConfigAdapter`, `ServerModule`, `ExecutionService.prunedFilesHere`,
   `DistributedComplete`. Branch CI: Dev CI 43145794759, Service cluster 43145797836 green. `package=true` dispatched.
-
+- 2026-11-12 (lane 4, item 47 = Q8, 2c169a53): core change for the core lane to know - new
+  `server.duckdb.HiddenAttachments`; `DuckDbAdapter` creates its temp macros on every connection (shared, session,
+  private) and `requireAllowedFunctions` refuses qualified metadata calls and `pragma_table_info` / `pragma_storage_info`
+  / `pragma_show` / `pragma_metadata_info` - only while a plugin has attached a database (jdbc plugin); other setups
+  unchanged. Dev CI 43147991919, Catalogs CI 43147994336 green. Unpackaged: for the next core package.
