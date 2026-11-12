@@ -234,7 +234,8 @@ class JdbcFederationIntegrationTest {
                 "SELECT database_name, view_name FROM duckdb_views()",
                 "SELECT relname FROM pg_catalog.pg_class",
                 "SELECT nspname FROM pg_catalog.pg_namespace",
-                "SELECT name FROM sqlite_master")) {
+                "SELECT name FROM sqlite_master",
+                "SELECT database_name FROM pragma_database_size()")) {
             for (String mode : List.of("complete", "partial")) {
                 List<String> rows;
                 try {
@@ -252,7 +253,12 @@ class JdbcFederationIntegrationTest {
                 "complete");
         assertTrue(views.containsAll(List.of("pg.t", "my.t")), views.toString());
         for (String sql : List.of("SELECT * FROM system.main.duckdb_tables()",
-                "SELECT * FROM system.duckdb_columns()", "SELECT * FROM main.duckdb_databases()")) {
+                "SELECT * FROM system.duckdb_columns()", "SELECT * FROM main.duckdb_databases()",
+                "SELECT * FROM pragma_table_info('jdbc_attached_pg.public." + UNCONFIGURED + "')",
+                "SELECT * FROM pragma_table_info('jdbc_attached_my." + UNCONFIGURED + "')",
+                "SELECT * FROM pragma_storage_info('jdbc_attached_pg.public." + UNCONFIGURED + "')",
+                "DESCRIBE jdbc_attached_pg.public." + UNCONFIGURED,
+                "SUMMARIZE jdbc_attached_my." + UNCONFIGURED)) {
             assertThrows(FlightRuntimeException.class, () -> answer(sql, "complete"), sql);
         }
     }
