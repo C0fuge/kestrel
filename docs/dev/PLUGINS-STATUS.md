@@ -1330,3 +1330,5 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-11 17:25Z (plugins session): no open item in this lane (waiting on the maintainer: Q-46, Q-40a follow-up,
   stand checks of items 44/46). Post-merge CI on `main` 74464701 (item 46) green: Dev CI 43064709644, Service hdfs
   43064709693, Catalogs CI 43064709784. Lock released.
+- 2026-11-12 15:15Z (plugins session): no open item (no new maintainer note since 2026-11-11 18:40; waiting on the
+  maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run, lock not taken.
