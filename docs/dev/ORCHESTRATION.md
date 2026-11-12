@@ -1,10 +1,10 @@
 # Orchestration status
 
-Status as of **2026-11-12T06:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-12T07:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 **ALL DONE suspended:** ITEM 26 / 27 DONE (kestrel core) and IMPROVEMENTS DONE (marten, heron) still hold, but the newest
 pre-release **`server-1.0.0-2c169a53db3b`** (2026-11-12, Q-40b-1 + items 47 / 48 + Q3) has no egret FRESH result yet;
-egret finished FRESH 74464701e372 at 05:44Z (run 43148390757) and has not started on 2c169a53db3b yet (no egret commit since; checked 06:58Z).
+egret started on it at 07:28Z: FRESH compare 43175544843 + ACCEPT 43175547634 running (checked 07:58Z).
 
 Points for the maintainer:
 - **New pre-release `server-1.0.0-2c169a53db3b`** (7 assets) with your 2026-11-11 21:10 answers: Q-40b-1 (file pruning
@@ -23,7 +23,7 @@ Points for the maintainer:
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | nothing open (MAIN PACKAGED 04:28Z -> `server-1.0.0-2c169a53db3b`) | 04:41Z (unlock) | free | main Dev CI 43149903188 (00da2257) green; pkg 43150534816 green |
+| core (`STATUS.md`) | nothing open (MAIN PACKAGED 04:28Z -> `server-1.0.0-2c169a53db3b`) | 04:41Z (unlock; >3 h, idle) | free | main Dev CI 43149903188 (00da2257) green; pkg 43150534816 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open (ITEM 46 DONE c96a1272; Q-46) | 03:11Z | free | - |
 | catalogs (`CATALOGS-STATUS.md`) | nothing open (ITEM 47 DONE 2c169a53) | 03:41Z | free | Dev CI 43147991919, Catalogs CI 43147994336 green |
 | lane 3 (`LANE3-STATUS.md`) | nothing open (ITEM 48 DONE 97ad4f22, Q3; 05:05Z note: pre-release confirmed, stand rerun next) | 05:03Z | free | Service cluster 43152195437 (pkg/2c169a53) green |
@@ -42,14 +42,14 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-2c169a53db3b` (2026-11-12): Q-40b-1, items 47 / 48, Q3; egret not started yet.
+- `server-1.0.0-2c169a53db3b` (2026-11-12): Q-40b-1, items 47 / 48, Q3; egret FRESH 43175544843 + ACCEPT 43175547634 running.
 - `server-1.0.0-74464701e372` (2026-11-11): plugins item 46; egret ACCEPT SHIP (43148393964), FRESH DONE 43148390757.
 - `server-1.0.0-29f1267b995f` (2026-11-11): morning build (hadoopfs afc8, items 44/45); egret ACCEPT SHIP, FRESH 42965886044.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 06:42Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 226 (06:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 07:41Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 227 (07:51Z): nothing open.
 
 ## egret
 
@@ -57,11 +57,12 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
   0 errors for speed and balanced); item 46 leaves balanced unchanged at harness size; regression by the rule carried
   over: local small c1 p50 speed/balanced 1.12 JDBC / 1.23 ADBC (Q-40b-1 in 2c169a53db3b targets it); speed S3 TPC-H
   0.09-0.19 of balanced, load +44-47 % at 128 clients (0.95-0.96 of upstream native). Upstream: same gate failures.
-- README 'In progress': FRESH 74464701e372 DONE; nothing running; next FRESH/ACCEPT on the next pre-release
-  (2c169a53db3b not started).
+- README 'In progress': EGRET 2c169a53db3b RUNNING (07:28Z): FRESH 43175544843 + ACCEPT 43175547634 in progress;
+  next `results/FRESH-2c169a53db3b.md`.
 
 ## History
 
+- 2026-11-12 07:58Z: egret started FRESH 43175544843 + ACCEPT 43175547634 on `server-1.0.0-2c169a53db3b` (07:28Z); ALL DONE still suspended; no kestrel lane commit since 05:03Z; marten/heron idle; all CI green, no stale locks.
 - 2026-11-12 06:58Z: no change: no kestrel lane commit since 05:03Z; egret has not started FRESH/ACCEPT on `server-1.0.0-2c169a53db3b`; marten (06:42Z)/heron (session 226) idle; all CI green, no stale locks.
 - 2026-11-12T05:57Z: egret FRESH 74464701e372 DONE (43148390757; 22/22, local small c1 speed/balanced 1.12 JDBC / 1.23 ADBC carried over); egret not yet on newest pre-release 2c169a53db3b, so ALL DONE still suspended; lanes nothing open, locks free, no new CI runs or pre-releases, no red CI.
 - 2026-11-12T04:57Z: pre-release **server-1.0.0-2c169a53db3b** published (Q-40b-1, items 47/48, Q3; pkg Dev CI 43150534816 + 4 service runs green); egret ACCEPT 74464701e372 SHIP (43148393964), FRESH 43148390757 still running; ALL DONE suspended (no FRESH on 2c169a53db3b); lanes nothing open, locks free, no red CI.
