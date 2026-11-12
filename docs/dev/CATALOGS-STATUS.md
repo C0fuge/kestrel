@@ -1031,3 +1031,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
   `fix/47-attached-metadata-2` (force-push refused), added `pragma_database_size` hiding and the refusal of name-string
   metadata functions while attached (+ tests), Dev CI 43147991919 / Catalogs CI 43147994336 green, rebase-merged.
   Q-40b-1 (2f31c071, Dev CI 43077861504), Q10 and Q8 closed. `STATUS.md` Log line for the core lane. Lock released.
+- 2026-11-12 08:25Z (session 13): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered). Confirmed Dev CI on main 43149903188 (00da2257, includes item 47) green. No code change, lock not taken.
