@@ -1,10 +1,10 @@
 # Orchestration status
 
-Status as of **2026-11-12T05:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-12T06:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 **ALL DONE suspended:** ITEM 26 / 27 DONE (kestrel core) and IMPROVEMENTS DONE (marten, heron) still hold, but the newest
 pre-release **`server-1.0.0-2c169a53db3b`** (2026-11-12, Q-40b-1 + items 47 / 48 + Q3) has no egret FRESH result yet;
-egret finished FRESH 74464701e372 at 05:44Z (run 43148390757) and has not started on 2c169a53db3b yet.
+egret finished FRESH 74464701e372 at 05:44Z (run 43148390757) and has not started on 2c169a53db3b yet (no egret commit since; checked 06:58Z).
 
 Points for the maintainer:
 - **New pre-release `server-1.0.0-2c169a53db3b`** (7 assets) with your 2026-11-11 21:10 answers: Q-40b-1 (file pruning
@@ -48,8 +48,8 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 05:41Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 225 (05:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 06:42Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 226 (06:51Z): nothing open.
 
 ## egret
 
@@ -62,6 +62,7 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
 
 ## History
 
+- 2026-11-12 06:58Z: no change: no kestrel lane commit since 05:03Z; egret has not started FRESH/ACCEPT on `server-1.0.0-2c169a53db3b`; marten (06:42Z)/heron (session 226) idle; all CI green, no stale locks.
 - 2026-11-12T05:57Z: egret FRESH 74464701e372 DONE (43148390757; 22/22, local small c1 speed/balanced 1.12 JDBC / 1.23 ADBC carried over); egret not yet on newest pre-release 2c169a53db3b, so ALL DONE still suspended; lanes nothing open, locks free, no new CI runs or pre-releases, no red CI.
 - 2026-11-12T04:57Z: pre-release **server-1.0.0-2c169a53db3b** published (Q-40b-1, items 47/48, Q3; pkg Dev CI 43150534816 + 4 service runs green); egret ACCEPT 74464701e372 SHIP (43148393964), FRESH 43148390757 still running; ALL DONE suspended (no FRESH on 2c169a53db3b); lanes nothing open, locks free, no red CI.
 - 2026-11-12T03:58Z: ALL DONE suspended (egret FRESH on newest pre-release 74464701e372 running: 43148390757 / ACCEPT 43148393964); maintainer's 21:10 answers implemented: Q-40b-1 2f31c071, ITEM 47 DONE 2c169a53 (catalogs), ITEM 48 DONE 97ad4f22 + Q3 (lane 3); core lane (lock 03:46Z) packaging on pkg/2c169a53 (Dev CI 43150534816 running); main Dev CI 43147654545 red only at the service gate (main moved), no rerun; no stale locks.
@@ -99,6 +100,3 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
 - 2026-11-09 18:58Z: released stale LOCK-CATALOGS (15:23:58Z); ITEM 39 waits only for 39(c) (parts 1+2 on main, 42641096583 green; next pruning by footer stats, Q9 answered); lane 3 D16 DONE 97a2b7bb (hdfs-ha fix confirmed, 3 green runs); egret GizmoSQL wave 42632367579 aggregated (SF10 S3 speed 1.51x slower than gizmo; gizmo fails scan/small gates), report file pending; no red CI; no orchestrator status 15:56Z-17:56Z (no runs).
 - 2026-11-09 14:59Z: ITEM 39(a) DONE (Dev CI 42630578494); 39(c) part 1 merged to main (42635429611 green), part 2 b08fdb19 in CI on fix/39c-point; lane 3 D15 DONE 7c54dfde, found intermittent hdfs-ha NameNode failover bug (42632461815 red), core fix 2429782f with Dev CI 42638389703 + Service cluster 42638482163 running; egret GizmoSQL wave 42632367579 running; no red CI on main, no stale locks.
 - 2026-11-09 13:59Z: ITEM 39(b) DONE 39f84617 and 39(d) DONE a952f415 on main; core 39(a) part 2 53647b1a pushed, main Dev CI 42628870401 running (42624035293 green); catalogs 39(c) part 1 green on fix/39c-point (42627268633, 42627272084), not merged; egret compare run 42629228261 (GizmoSQL fourth server) running; no red CI on main, no stale locks.
-- 2026-11-09 12:58Z: ITEM 39 (real-cluster bugs, maintainer 2026-11-09) split across all four lanes; all four locks held (12:44-12:54Z); 39(a) ffe0b1d2 and 39(b) 39f84617 pushed to main by the core lane, main Dev CI 42620776092 running; lane3 Dev CI 42621419498 queued; catalogs hdfs-point-perf 42621322306 running on fix/39c-point; no red CI, no stale locks.
-- 2026-11-09 11:56Z: no change: no core session since 10:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (11:41Z)/heron (session 183)/egret (11:26Z README, idle) idle; no stale locks.
-- 2026-11-09 10:56Z: no change: core session 10:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (10:40Z)/heron (session 182)/egret (09:26Z README, idle) idle; no stale locks.
