@@ -1,35 +1,35 @@
 # Orchestration status
 
-Status as of **2026-11-12T07:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-12T08:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 **ALL DONE suspended:** ITEM 26 / 27 DONE (kestrel core) and IMPROVEMENTS DONE (marten, heron) still hold, but the newest
-pre-release **`server-1.0.0-2c169a53db3b`** (2026-11-12, Q-40b-1 + items 47 / 48 + Q3) has no egret FRESH result yet;
-egret started on it at 07:28Z: FRESH compare 43175544843 + ACCEPT 43175547634 running (checked 07:58Z).
+pre-release **`server-1.0.0-2c169a53db3b`** (2026-11-12, Q-40b-1 + items 47 / 48 + Q3) has no egret FRESH result yet:
+FRESH compare 43175544843 still running (checked 08:57Z). ACCEPT on it is done: **SHIP** (43175547634).
 
 Points for the maintainer:
-- **New pre-release `server-1.0.0-2c169a53db3b`** (7 assets) with your 2026-11-11 21:10 answers: Q-40b-1 (file pruning
+- **Pre-release `server-1.0.0-2c169a53db3b`** (7 assets) with your 2026-11-11 21:10 answers: Q-40b-1 (file pruning
   off for a local, unshared `dataDir`), item 47 (attached databases hidden from DuckDB metadata functions), item 48 + Q3
   (dc local one-row aggregates over <= 4 pruned files; default `arrowAllocatorLimitBytes` = 75 % of direct memory).
   Package Dev CI 43150534816 + Service cluster 43152195437 / hdfs 43152198658 / security 43152201884 / stores
-  43152204958 all green. **Stand check is yours** (lane 3 notes: small-query mix at 32 clients under dc; start line
+  43152204958 all green; **egret HDFS ACCEPT: SHIP** (run 43175547634, all 6 checks in all 4 profile x servers cells).
+  **Stand check is yours** (lane 3 notes: small-query mix at 32 clients under dc; start line
   `arrowAllocator limitMiB=... source=directMemory`). No open core item until your next note.
-- egret ACCEPT on `server-1.0.0-74464701e372` (item 46): **SHIP** (run 43148393964, all 6 checks in 4 cells).
 - **Q-46** (ask the hadoopfs extension repo for the negotiated QOP / cipher) still open.
 - Branches `pkg/2c169a53`, `pkg/74464701`, `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not).
-- Open questions still listed: Q-40a follow-up (plugins), Q-46; marten TPC-H q16 SF1 slowdown, `_iceberg` schema
-  listing; heron speed-profile SF10 peak memory, endpoint splits; `ci-assets` extension set refresh (sha256 in STATUS.md).
+- Open questions still listed: Q-40a follow-up (plugins), Q-46, catalogs Q11; marten TPC-H q16 SF1 slowdown, `_iceberg`
+  schema listing; heron speed-profile SF10 peak memory, endpoint splits; `ci-assets` extension set refresh (sha256 in STATUS.md).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | nothing open (MAIN PACKAGED 04:28Z -> `server-1.0.0-2c169a53db3b`) | 04:41Z (unlock; >3 h, idle) | free | main Dev CI 43149903188 (00da2257) green; pkg 43150534816 green |
+| core (`STATUS.md`) | nothing open (MAIN PACKAGED 04:28Z -> `server-1.0.0-2c169a53db3b`) | 04:41Z (unlock; >4 h, idle) | free | main Dev CI 43149903188 (00da2257) green; pkg 43150534816 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open (ITEM 46 DONE c96a1272; Q-46) | 03:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (ITEM 47 DONE 2c169a53) | 03:41Z | free | Dev CI 43147991919, Catalogs CI 43147994336 green |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (session 13 at 08:25Z: item 47 DONE, C3/C4 backlog per finish mode, Q11 unanswered) | 08:21Z | free (not taken) | Dev CI 43147991919, Catalogs CI 43147994336 green |
 | lane 3 (`LANE3-STATUS.md`) | nothing open (ITEM 48 DONE 97ad4f22, Q3; 05:05Z note: pre-release confirmed, stand rerun next) | 05:03Z | free | Service cluster 43152195437 (pkg/2c169a53) green |
 
 No bug-first notes in any lane. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty). Newest Dev CI
-on main (43149903188, 00da2257) green; the older red 43147654545 was the service gate only (main moved), superseded.
+on main (43149903188, 00da2257) green; no newer runs on main (only `[skip ci]` commits since).
 
 ## Service matrix (newest run per workflow)
 
@@ -42,26 +42,27 @@ on main (43149903188, 00da2257) green; the older red 43147654545 was the service
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-2c169a53db3b` (2026-11-12): Q-40b-1, items 47 / 48, Q3; egret FRESH 43175544843 + ACCEPT 43175547634 running.
+- `server-1.0.0-2c169a53db3b` (2026-11-12): Q-40b-1, items 47 / 48, Q3; egret ACCEPT SHIP (43175547634), FRESH 43175544843 running.
 - `server-1.0.0-74464701e372` (2026-11-11): plugins item 46; egret ACCEPT SHIP (43148393964), FRESH DONE 43148390757.
 - `server-1.0.0-29f1267b995f` (2026-11-11): morning build (hadoopfs afc8, items 44/45); egret ACCEPT SHIP, FRESH 42965886044.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 07:41Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 227 (07:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 08:40Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 228 (08:51Z): nothing open.
 
 ## egret
 
 - Newest FRESH result: **74464701e372** (run 43148390757, upstream native `cfaa929746cb`): no wrong answers (22/22,
-  0 errors for speed and balanced); item 46 leaves balanced unchanged at harness size; regression by the rule carried
-  over: local small c1 p50 speed/balanced 1.12 JDBC / 1.23 ADBC (Q-40b-1 in 2c169a53db3b targets it); speed S3 TPC-H
-  0.09-0.19 of balanced, load +44-47 % at 128 clients (0.95-0.96 of upstream native). Upstream: same gate failures.
-- README 'In progress': EGRET 2c169a53db3b RUNNING (07:28Z): FRESH 43175544843 + ACCEPT 43175547634 in progress;
-  next `results/FRESH-2c169a53db3b.md`.
+  0 errors for speed and balanced); regression by the rule carried over: local small c1 p50 speed/balanced 1.12 JDBC /
+  1.23 ADBC (Q-40b-1 in 2c169a53db3b targets it); speed S3 TPC-H 0.09-0.19 of balanced, load +44-47 % at 128 clients
+  (0.95-0.96 of upstream native). Upstream: same gate failures.
+- README 'In progress': EGRET ACCEPT 2c169a53db3b DONE (SHIP, 08:35Z); EGRET FRESH 2c169a53db3b RUNNING (compare
+  43175544843, upstream `cfaa929746cb`); next `results/FRESH-2c169a53db3b.md` (watch local TPC-H / scans for Q-40b-1).
 
 ## History
 
+- 2026-11-12 08:57Z: egret ACCEPT 2c169a53db3b **SHIP** (43175547634, all 6 checks, 4 cells); FRESH 43175544843 still running, so ALL DONE still suspended; catalogs session 13 (08:25Z) no open item; marten/heron idle; all CI green, no stale locks.
 - 2026-11-12 07:58Z: egret started FRESH 43175544843 + ACCEPT 43175547634 on `server-1.0.0-2c169a53db3b` (07:28Z); ALL DONE still suspended; no kestrel lane commit since 05:03Z; marten/heron idle; all CI green, no stale locks.
 - 2026-11-12 06:58Z: no change: no kestrel lane commit since 05:03Z; egret has not started FRESH/ACCEPT on `server-1.0.0-2c169a53db3b`; marten (06:42Z)/heron (session 226) idle; all CI green, no stale locks.
 - 2026-11-12T05:57Z: egret FRESH 74464701e372 DONE (43148390757; 22/22, local small c1 speed/balanced 1.12 JDBC / 1.23 ADBC carried over); egret not yet on newest pre-release 2c169a53db3b, so ALL DONE still suspended; lanes nothing open, locks free, no new CI runs or pre-releases, no red CI.
