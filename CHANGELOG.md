@@ -27,10 +27,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   columns of a database a plugin attaches (the jdbc plugin's PostgreSQL / MySQL attachments): `information_schema`,
   `pg_catalog`, `sqlite_master`, `SHOW ALL TABLES` / `SHOW DATABASES` and `duckdb_databases()` / `duckdb_schemas()` /
   `duckdb_tables()` / `duckdb_columns()` / `duckdb_views()` / `duckdb_constraints()` / `duckdb_indexes()` /
-  `duckdb_sequences()` / `duckdb_types()` show only the server's views of the configured tables. Each DuckDB
+  `duckdb_sequences()` / `duckdb_types()` / `pragma_database_size()` show only the server's views of the configured tables. Each DuckDB
   connection gets temporary macros of these names that leave the attached databases' rows out; a qualified call of
   one of them (`system.main.duckdb_tables()`, `main.duckdb_columns()`) is refused in client queries while a database
-  is attached. Setups without attachments are unchanged. Flight SQL GetTables already listed only configured tables.
+  is attached, and so are `pragma_table_info` / `pragma_storage_info` / `pragma_show` / `pragma_metadata_info`
+  (they take the name as a string, past the qualifier check; `information_schema.columns` lists the configured
+  tables' columns). Setups without attachments are unchanged. Flight SQL GetTables already listed only configured tables.
 
 - File pruning by footer statistics is off by default for a local, unshared `dataDir` (maintainer's answer to
   Q-40b-1, lane 4): there it cost ~0.25-0.5 ms per point query at 1 client for page-cache reads it saved. HDFS, S3 /

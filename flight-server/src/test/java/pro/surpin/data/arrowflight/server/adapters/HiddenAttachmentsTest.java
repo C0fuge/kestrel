@@ -74,9 +74,12 @@ class HiddenAttachmentsTest {
             s.execute("CREATE SCHEMA pg");
             s.execute("CREATE VIEW pg.cfg AS SELECT * FROM " + HIDDEN + ".remote_schema.cfg");
             assertTrue(leaks(s), "the attachment's names are listed without the macros");
+            String sizes = "SELECT lower(database_name) FROM pragma_database_size()";
+            assertTrue(rows(s, sizes).contains(HIDDEN), "pragma_database_size lists it without the macros");
 
             DuckDbAdapter.hideAttachments(s);
             assertFalse(leaks(s), "listed with the macros");
+            assertFalse(rows(s, sizes).contains(HIDDEN), "pragma_database_size lists it with the macros");
             assertEquals(List.of("memory|pg|cfg"), rows(s, "SELECT table_catalog || '|' || table_schema || '|'"
                     + " || table_name FROM information_schema.tables"));
             assertEquals(List.of("7"), rows(s, "SELECT a FROM pg.cfg"));
@@ -123,7 +126,16 @@ class HiddenAttachmentsTest {
                         () -> DuckDbAdapter.requireAllowedFunctions(serialized(conn, sql)), sql);
                 assertTrue(e.getMessage().contains("may not be qualified"), e.getMessage());
             }
+            // Names as strings pass the qualifier refusal, so these functions are refused outright.
+            for (String sql : List.of("SELECT * FROM pragma_table_info('" + HIDDEN + ".remote_schema.t')",
+                    "SELECT * FROM PRAGMA_STORAGE_INFO('" + HIDDEN + "' || '.remote_schema.t')",
+                    "SELECT * FROM pragma_show('t')", "SELECT * FROM pragma_metadata_info('" + HIDDEN + "')",
+                    "SELECT * FROM system.main.pragma_database_size()")) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> DuckDbAdapter.requireAllowedFunctions(serialized(conn, sql)), sql);
+            }
             for (String sql : List.of("SELECT * FROM duckdb_tables()", "SELECT * FROM information_schema.tables",
+                    "SELECT * FROM pragma_database_size()",
                     "SELECT * FROM system.main.duckdb_tables", "SELECT system.main.lower('a')",
                     "SELECT * FROM duckdb_columns() c JOIN duckdb_tables() t USING (table_oid)")) {
                 assertDoesNotThrow(() -> DuckDbAdapter.requireAllowedFunctions(serialized(conn, sql)), sql);

@@ -24,7 +24,15 @@ public final class HiddenAttachments {
      */
     public static final List<String> FUNCTIONS = List.of("duckdb_databases", "duckdb_schemas",
             "duckdb_tables", "duckdb_columns", "duckdb_views", "duckdb_constraints",
-            "duckdb_indexes", "duckdb_sequences", "duckdb_types");
+            "duckdb_indexes", "duckdb_sequences", "duckdb_types", "pragma_database_size");
+
+    /**
+     * DuckDB's table functions that take a table or database name as a string, which the parse
+     * check's qualifier refusal never sees: refused in client queries while a database is hidden
+     * ({@code information_schema.columns} lists the configured tables' columns instead).
+     */
+    public static final List<String> NAME_ARGUMENT_FUNCTIONS = List.of("pragma_table_info",
+            "pragma_storage_info", "pragma_show", "pragma_metadata_info");
 
     private static final Set<String> NAMES = new TreeSet<>();
 
@@ -96,7 +104,8 @@ public final class HiddenAttachments {
 
     /**
      * Refuses a client statement that calls a hidden metadata function with a qualifier, which
-     * would bypass the connection's macro, while a database is hidden.
+     * would bypass the connection's macro, or a function of {@link #NAME_ARGUMENT_FUNCTIONS},
+     * while a database is hidden.
      *
      * @param serialized DuckDB's JSON form of the statement
      * @param names lower-case function and table names it uses
@@ -105,6 +114,12 @@ public final class HiddenAttachments {
     public static void requireUnqualifiedCalls(String serialized, List<String> names) {
         if (!any()) {
             return;
+        }
+        for (String function : NAME_ARGUMENT_FUNCTIONS) {
+            if (names.contains(function)) {
+                throw new IllegalArgumentException("Function " + function
+                        + " is not allowed while a database is attached: use information_schema.columns");
+            }
         }
         String lower = null;
         for (String function : FUNCTIONS) {
