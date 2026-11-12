@@ -12,6 +12,18 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 > sum with a filter, no GROUP BY) are still merged across nodes. Treat filtered one-row aggregates over a pruned file
 > set like point lookups (local) when pruning keeps <= N files. As ITEM 48, merge when green, "ITEM 48 DONE <sha>".
 
+ITEM 48 DONE 97ad4f22 + Q3 DONE (2026-11-12, see Log; branch commits 5bacb483..97ad4f22, fast-forwarded into
+`main`). Item 48: under dc with `distributedCompletePointLookups=local`, a filtered one-row aggregate (count / sum /
+min / avg with a WHERE clause, no GROUP BY) whose footer statistics keep at most
+`distributedCompleteLocalAggregateMaxFiles` (default 4, 0 = merge) files, all readable here, is computed on the
+planning node. It needs footer pruning, so with a local, unshared `dataDir` it applies only when
+`fileStatsPruningMaxFiles` is set (Q-40b-1); HDFS / S3 / shared stores prune by default. Q3:
+`arrowAllocatorLimitBytes` unset = 75 % of direct memory, at least 256 MiB; start line `arrowAllocator limitMiB=...
+source=directMemory|set`. Service cluster 43145797836 13/13 + summary green on the branch (point gate with `agg_range`;
+dc / speed point q/s hdfs 1.22, hdfs-ha 1.29, s3 0.81). For the stand (on the `package=true` pre-release of 97ad4f22):
+rerun the small-query mix at 32 clients under dc; expect count / sum with a selective filter not `merged`, and with
+`-XX:MaxDirectMemorySize=8g` the start line `limitMiB=6144 source=directMemory`, 48 peer streams.
+
 ITEM 45 DONE b8613fc4 (2026-11-10, see Log): dc point lookups with typed literals (`= DATE '...'`,
 `= CAST('...' AS DATE)`, `TIMESTAMP '...'`, exponents, parenthesised literals) run on the planning node. Service
 cluster 42901104843 (12/12 green, mix now includes `point_date` with a DATE literal): speed-dc 0 merged / 0 admission
@@ -204,7 +216,7 @@ Q2. (2026-10-29, lane 3, D8; **answered by the maintainer 2026-10-29: (a) defaul
     restarts). Proposal: default 20 s (below Kubernetes' 30 s grace period; `docker stop` waits 10 s unless `-t`).
     Changes stop behaviour (stops take up to the longest running answer), hence a question: (a) default 20, (b) keep 0.
 
-Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowflight.arrow.allocatorLimitBytes`,
+Q3. (2026-11-10, lane 3, D14; **answered by the maintainer 2026-11-11: yes, 75 %, at least 256 MiB; done 2026-11-12**) **Default of `arrowAllocatorLimitBytes`** (`arrowflight.arrow.allocatorLimitBytes`,
     today a fixed 2 GiB). The root Arrow allocator holds every outgoing answer and, under `distributedComplete`, every
     peer stream of a merge. On the stand (`-XX:MaxDirectMemorySize=8g`) 8 concurrent dc full scans hit `Unable to
     allocate buffer ... Current allocation: 2147231193`: 6 GiB of direct memory were unusable. 39(d) (a952f415) now
@@ -217,7 +229,7 @@ Q3. (2026-11-10, lane 3, D14) **Default of `arrowAllocatorLimitBytes`** (`arrowf
     `OutOfDirectMemoryError` instead of the allocator's clear `OutOfMemoryException` if Netty needs the remaining 25 %).
     Changes a default, hence a question: (a) derive as proposed, (b) another share, (c) keep 2 GiB (stand sets it).
     No code until answered.
-Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `local`** (`FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS`,
+Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep `local`**) **`distributedCompletePointLookups` default `local`** (`FLIGHT_DISTRIBUTED_COMPLETE_POINT_LOOKUPS`,
     new). Under `distributedComplete=true`, a query with `column = literal` (no OR) and no aggregate or a one-row
     aggregate (point_orders, point_lineitem, count_filter) is now computed by the planning node alone when it can read
     the files, as without dc; `merge` restores merging (on probation, without permits until 16 MiB read). Reason: with
@@ -692,3 +704,11 @@ Q4. (2026-11-10, lane 3, item 43) **`distributedCompletePointLookups` default `l
   point gate passed. Ratio warnings only: dc / speed point q/s hdfs 0.71, hdfs-ha 0.79, s3 0.67 - dc 31.9-36.8 q/s is
   within its earlier range (31-49), speed was high (45-55): cross-runner noise as in D17. Watch: dc point q/s < 30 in
   later runs. Lock not taken (no work). Next: Q3 / Q4 answers, D14 after the stand's rerun.
+- 2026-11-12 03:03-04:10Z (lane 3 session): lock 03:03Z. The 2026-11-11 18:07Z session had implemented item 48 and Q3
+  on `lane/distributed` (CI green: Dev CI 43079501100, Service cluster 43077850882) but ended before merging and
+  logging; its lock had expired. Rebased the branch on `main` (CHANGELOG conflict with Q-40b-1, kept both). Q-40b-1
+  (2f31c071) turns footer pruning off for a local, unshared `dataDir` unless set, which item 48 relies on: the
+  in-process test now sets `fileStatsPruningMaxFiles` (97ad4f22), CHANGELOG notes it; the cluster stores are
+  unaffected. Dev CI 43145794759 and Service cluster 43145797836 (13/13 + summary) green on the branch;
+  fast-forwarded into `main` = ITEM 48 DONE 97ad4f22, Q3 DONE. `package=true` Dev CI dispatched on `main` (Q3 changes
+  a default). Lock released. Next: the stand's rerun of the dc small-query mix on that pre-release.

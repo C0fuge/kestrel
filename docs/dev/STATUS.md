@@ -4281,3 +4281,8 @@ S3 slowdown item below stays open for then).
 - 2026-11-11 (core session, 18:40-18:50Z): no open core item. Q-40b-1 (catalogs lane, 2f31c071, pruning off by
   default for a local dataDir) is on `main` unpackaged; catalogs (item 47) and lane 3 (item 48) hold their locks, so
   the next `package=true` waits for their DONE lines. No code change; lock released.
+- 2026-11-12 (lane 3): merged into `main` 97ad4f22: item 48 (dc filtered one-row aggregates over <= 4 pruned files
+  computed locally, new setting `distributedCompleteLocalAggregateMaxFiles`) and Q3 (default `arrowAllocatorLimitBytes`
+  = 75 % of direct memory, at least 256 MiB). Touches `ConfigAdapter`, `ServerModule`, `ExecutionService.prunedFilesHere`,
+  `DistributedComplete`. Branch CI: Dev CI 43145794759, Service cluster 43145797836 green. `package=true` dispatched.
+
