@@ -1,72 +1,71 @@
-ALL DONE 2026-11-11T11:56Z (refreshed 2026-11-11T17:57Z: plugins ITEM 46 DONE, core lane packaging it)
-
 # Orchestration status
 
-Status as of **2026-11-11T17:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-12T03:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
-All conditions met: ITEM 26 / 27 DONE (kestrel core), IMPROVEMENTS DONE (marten, heron), egret FRESH on the newest
-pre-release **`server-1.0.0-29f1267b995f`** (results/FRESH-29f1267b995f.md, run 42965886044) and ACCEPT SHIP.
+**ALL DONE suspended:** ITEM 26 / 27 DONE (kestrel core) and IMPROVEMENTS DONE (marten, heron) still hold, but the newest
+pre-release **`server-1.0.0-74464701e372`** (2026-11-11 18:18Z, item 46) has no egret FRESH result yet (compare run
+43148390757 and ACCEPT 43148393964 running since 03:28Z). A newer package (items 47 / 48, Q3, Q-40b-1) is being built.
 
 Points for the maintainer:
-- **Plugins ITEM 46 DONE c96a1272** (17:05Z; `fix/46` rebase-merged, tip 74464701 incl. kernel.org apt mirror
-  fallbacks for the ubuntu.com DNS outage on runners). Post-merge on `main` green: Dev CI 43064709644, Service hdfs
-  43064709693, Catalogs CI 43064709784. **Core lane (lock 17:44Z) is packaging it:** Dev CI 43071198734 on
-  `pkg/74464701` (`package=true`) in progress; no new pre-release yet. Plugins lane notes: Service cluster / security
-  / stores may need the same kernel.org fallback if ubuntu.com is still unresolvable.
-  **Q-46 needs you:** ask the hadoopfs extension repo for a function/setting exposing the negotiated data-transfer
-  QOP / cipher (the start line logs the requested QOP). Stand checks of items 44/46 are yours.
-- **egret FRESH 29f1267b995f:** the `2ff221447b5d` balanced TPC-H OOM is fixed (balanced 22/22 on every TPC-H job,
-  RSS 0.76-1.64 GB). **Local small c1 p50 regression by the rule persists and grew: speed/balanced 1.19 JDBC / 1.16
-  ADBC in all 3 rounds** (2ff: 1.07 / 1.11; speed unchanged, balanced faster). Speed vs balanced otherwise as before:
-  S3 TPC-H 0.12-0.16, S3 small p95 0.05-0.07, load +41-48 % at 128 clients (0.94-0.96 of upstream native), scans
-  x4/x8 1.29-1.46. Open point again: balanced `load.md` q/s above the client count. Upstream native `46d565e93c19`:
-  same gate failures (TPC-H 0-1/22, small errors, x8 scan stream errors).
-- **egret ACCEPT 29f1267b995f: SHIP** (all 6 checks, 4 cells; run 42965889054 + `only` rerun 42972471705).
-- **Stand + cluster check on `server-1.0.0-29f1267b995f`** are yours (also the build for the `ranger-policy ... off`
-  repeat and the Q-40a gizmo wave).
-- main Dev CI 43064709644 (74464701) green.
-- Branches `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not delete them).
-- Open questions still listed: Q-40b-1 (catalogs, close without a default change - needs OK), Q8 / Q10 / Q11
-  (catalogs); lane 3 Q3 / Q4; marten TPC-H q16 SF1 slowdown; `ci-assets` extension set refresh (sha256 in STATUS.md).
+- **Your 2026-11-11 21:10 answers are all implemented on `main`:** Q-40b-1 DONE 2f31c071 (file pruning off by
+  default for a local, unshared `dataDir`; Dev CI 43077861504 green); **ITEM 47 DONE 2c169a53** (catalogs, Q8: attached
+  databases hidden from DuckDB metadata functions / views, qualified metadata calls refused while attached; Dev CI
+  43147991919, Catalogs CI 43147994336 green; small core change in `DuckDbAdapter`, logged in STATUS.md); **ITEM 48
+  DONE 97ad4f22** + **Q3 DONE** (lane 3: dc computes filtered one-row aggregates over <= 4 pruned files locally,
+  `distributedCompleteLocalAggregateMaxFiles`; default `arrowAllocatorLimitBytes` = 75 % of direct memory, >= 256 MiB;
+  lane/distributed Dev CI 43145794759 + Service cluster 43145797836 green, Service cluster on main 43147624267 green).
+- **Core lane (lock 03:46Z) is packaging them:** Dev CI 43150534816 on `pkg/2c169a53` (`package=true`) running; main
+  Dev CI 43149903188 (00da2257) running. Main Dev CI 43147654545 (97ad4f22) was red **only at the service gate** (main
+  moved during the build, service hdfs/security/stores not dispatched); build and tests green; not a test failure, no
+  rerun, no bug note.
+- **Stand checks yours:** item 46 on `server-1.0.0-74464701e372` (`duckdb=sizing` line in the 6 GB / -Xmx3g / direct 2g
+  shape, `qid=` on denial WARNs); later the items 47 / 48 / Q3 build. **Q-46** (ask the hadoopfs extension repo for the
+  negotiated QOP / cipher) still open.
+- Branches `pkg/74464701`, `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions could not).
+- Open questions still listed: Q-40a follow-up (plugins), Q-46; marten TPC-H q16 SF1 slowdown, `_iceberg` schema
+  listing; heron speed-profile SF10 peak memory, endpoint splits; `ci-assets` extension set refresh (sha256 in STATUS.md).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | packaging item 46 (`pkg/74464701`) | 17:44Z (lock) | held 17:44Z (fresh) | main Dev CI 43064709644 green; pkg Dev CI 43071198734 running |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 46 DONE c96a1272; nothing open | 17:25Z (unlock) | free | Dev CI 43064709644, Service hdfs 43064709693 green |
-| catalogs (`CATALOGS-STATUS.md`) | none open (40(b) DONE 135e6dac) | 16:21Z (lock/unlock, no open item) | free | Catalogs CI 43064709784 (74464701) green |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 45 DONE b8613fc4; nothing open | 2026-11-10 21:19Z | free | Service cluster 42955011424 (29f1267b) green |
+| core (`STATUS.md`) | packaging items 47 / 48 / Q3 (`pkg/2c169a53`) | 03:46Z (lock) | held 03:46Z (fresh) | pkg Dev CI 43150534816 + main Dev CI 43149903188 running; 43147654545 red at service gate only |
+| plugins (`PLUGINS-STATUS.md`) | nothing open (ITEM 46 DONE c96a1272; Q-46) | 03:11Z (lock/unlock) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 47 DONE 2c169a53; nothing open | 03:41Z (unlock) | free | Dev CI 43147991919, Catalogs CI 43147994336 green |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 48 DONE 97ad4f22, Q3 done; nothing open | 03:21Z (unlock) | free | Service cluster 43147624267 (main 97ad4f22) green |
 
-No new bug-first notes. No stale locks (only LOCK held, core 13 min; others and marten/heron `docs/LOCK` empty).
+No bug-first notes in any lane. No stale locks (only LOCK held, core 10 min; others and marten/heron `docs/LOCK` empty).
 
 ## Service matrix (newest run per workflow)
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 42955011424 | main 29f1267b | pass |
+| service-cluster.yml | 43147624267 | main 97ad4f22 | pass |
 | service-hdfs.yml | 43064709693 | main 74464701 | pass |
-| service-security.yml | 42958566480 | pkg/29f1267b | pass |
-| service-stores.yml | 42958570049 | pkg/29f1267b | pass |
+| service-security.yml | 43074016951 | pkg/74464701 | pass |
+| service-stores.yml | 43074022598 | pkg/74464701 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-29f1267b995f` (2026-11-11 04:35Z): morning build (hadoopfs afc8, items 44/45); egret ACCEPT SHIP, FRESH 42965886044 done (OOM fixed, c1 regression flag).
-- `server-1.0.0-2ff221447b5d` (2026-11-10 17:17Z): egret ACCEPT SHIP (42865242528, HDFS rerun 42885490049); FRESH 42865250390: balanced TPC-H OOM (fixed by item 44).
-- `server-1.0.0-37bf9401d77c` (2026-11-10 08:17Z): ITEM 41; egret ACCEPT DO NOT SHIP (check 6 only), FRESH 42791002963.
+- `server-1.0.0-74464701e372` (2026-11-11 18:18Z): plugins item 46; egret FRESH 43148390757 + ACCEPT 43148393964 running.
+- `server-1.0.0-29f1267b995f` (2026-11-11 04:35Z): morning build (hadoopfs afc8, items 44/45); egret ACCEPT SHIP, FRESH 42965886044 (OOM fixed, c1 regression flag).
+- `server-1.0.0-2ff221447b5d` (2026-11-10 17:17Z): egret ACCEPT SHIP; FRESH 42865250390: balanced TPC-H OOM (fixed by item 44).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: **IMPROVEMENTS DONE** (2026-11-03); session 16:41Z "finish mode, nothing new".
-- heron: **IMPROVEMENTS DONE**; session 222 (16:51Z): nothing open.
+- marten: **IMPROVEMENTS DONE** (2026-11-03); session 03:43Z "finish mode, nothing new".
+- heron: **IMPROVEMENTS DONE**; session 223 (03:51Z): nothing open.
 
 ## egret
 
-- Newest FRESH: **29f1267b995f** (run 42965886044, rereport 42981472897; upstream native `46d565e93c19`), see points above.
-- README 'In progress': FRESH 29f1267b995f DONE, ACCEPT 29f1267b995f DONE (SHIP); nothing running.
+- Newest FRESH: **29f1267b995f** (run 42965886044): balanced TPC-H OOM fixed; local small c1 p50 speed/balanced 1.19 JDBC
+  / 1.16 ADBC (regression by the rule; Q-40b-1 turns local pruning off, which addresses it from the next build).
+- README 'In progress': **74464701e372 RUNNING** - compare 43148390757 (upstream native head `cfaa929746cb`) + ACCEPT
+  43148393964, dispatched 03:28Z.
 
 ## History
 
+- 2026-11-12T03:58Z: ALL DONE suspended (egret FRESH on newest pre-release 74464701e372 running: 43148390757 / ACCEPT 43148393964); maintainer's 21:10 answers implemented: Q-40b-1 2f31c071, ITEM 47 DONE 2c169a53 (catalogs), ITEM 48 DONE 97ad4f22 + Q3 (lane 3); core lane (lock 03:46Z) packaging on pkg/2c169a53 (Dev CI 43150534816 running); main Dev CI 43147654545 red only at the service gate (main moved), no rerun; no stale locks.
 - 2026-11-11T17:57Z: ALL DONE kept; plugins ITEM 46 DONE c96a1272 (main 74464701; Dev CI 43064709644, Service hdfs 43064709693, Catalogs CI 43064709784 green); core lane (lock 17:44Z) packaging on pkg/74464701 (Dev CI 43071198734 running); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-11T16:57Z: ALL DONE kept; plugins ITEM 46 on fix/46 progressing: Dev CI 43056505119 green after mirror fixes, Service hdfs 43056510473 red (apt infra), lane pushed bea11172 and 43060538104 is running (no orchestrator rerun); main unchanged, no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-11T15:57Z: ALL DONE kept, but plugins ITEM 46 (maintainer stand note 18:40: sizing budget, qid=null in denials, QOP log; Q-46 for the extension repo) on fix/46, unmerged: TPC-H perf 43047430684 green, Dev CI / Service hdfs red on runner ubuntu.com DNS (infra), failed job of 43050095655 re-run once; main unchanged, locks free, no new pre-release; marten/heron/egret idle.
@@ -106,4 +105,3 @@ No new bug-first notes. No stale locks (only LOCK held, core 13 min; others and 
 - 2026-11-09 10:56Z: no change: core session 10:41Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (10:40Z)/heron (session 182)/egret (09:26Z README, idle) idle; no stale locks.
 - 2026-11-09 09:56Z: no change: no core session since 08:42Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (09:40Z)/heron (session 181)/egret (09:26Z README, idle) idle; no stale locks.
 - 2026-11-09 08:56Z: no change: core session 08:42Z lock/unlock only (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (08:41Z)/heron (session 180)/egret (07:30Z README, idle) idle; no stale locks.
-- 2026-11-09 07:57Z: no change: no core session since 05:41Z (item 38 waits for the stand on `server-1.0.0-b69660b9260a`); no new CI runs or pre-releases since 2026-11-07; marten (07:41Z)/heron (session 179)/egret (07:30Z README, idle) idle; no stale locks.
