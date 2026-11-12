@@ -23,6 +23,18 @@
 
 ## Next steps (one per session)
 
+> **MAIN PACKAGED (2026-11-12 04:28Z, core lane).** `main` held unpackaged runtime changes: Q-40b-1 (2f31c071, file
+> pruning off by default for a local, unshared `dataDir`), item 48 + Q3 (lane 3, 97ad4f22: dc filtered one-row
+> aggregates over <= 4 pruned files computed locally; default `arrowAllocatorLimitBytes` = 75 % of direct memory) and
+> item 47 (lane 4, 2c169a53: attached databases hidden from DuckDB metadata functions). The `package=true` runs on
+> `main` itself (43147654545 on 97ad4f22, 43149903188 on 00da2257) were refused by the service gate because `main`
+> moved during the build, so `package=true` on `pkg/2c169a53` (= `main` 2c169a53, last code commit): Dev CI 43150534816
+> (build, service gate, package) green; Service cluster 43152195437, hdfs 43152198658, security 43152201884, stores
+> 43152204958 (dispatched by the gate) green -> pre-release **`server-1.0.0-2c169a53db3b`** (7 assets). Next: the stand
+> check of items 47 / 48 / Q3 on this pre-release (lane 3's notes: small-query mix at 32 clients under dc; start line
+> `arrowAllocator limitMiB=... source=directMemory`); no open core item until the maintainer's next note. Branch
+> `pkg/2c169a53` can be deleted (also `pkg/74464701`, `pkg/29f1267b`).
+
 > **ITEM 46 PACKAGED (2026-11-11 18:20Z, core lane).** The plugins lane's item 46 (DuckDB connection limits within one
 > reserved budget, qid on denial WARNs, requested SASL QOP in the start line; merged c96a1272 + CI mirror fixes) changes
 > runtime behaviour, so `package=true` on `pkg/74464701` (= `main` 74464701, last code commit): Dev CI 43071198734
@@ -4290,3 +4302,7 @@ S3 slowdown item below stays open for then).
   private) and `requireAllowedFunctions` refuses qualified metadata calls and `pragma_table_info` / `pragma_storage_info`
   / `pragma_show` / `pragma_metadata_info` - only while a plugin has attached a database (jdbc plugin); other setups
   unchanged. Dev CI 43147991919, Catalogs CI 43147994336 green. Unpackaged: for the next core package.
+- 2026-11-12 (core session, 03:46-04:30Z): packaged `main` 2c169a53 (Q-40b-1, items 47, 48, Q3) on `pkg/2c169a53`:
+  Dev CI 43150534816, Service cluster 43152195437, hdfs 43152198658, security 43152201884, stores 43152204958 green ->
+  pre-release `server-1.0.0-2c169a53db3b`. Package runs on `main` (43147654545, 43149903188) refused by the gate
+  (`main` moved). No code change; lock released.
