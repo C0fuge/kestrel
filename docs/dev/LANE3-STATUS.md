@@ -20,7 +20,7 @@ planning node. It needs footer pruning, so with a local, unshared `dataDir` it a
 `fileStatsPruningMaxFiles` is set (Q-40b-1); HDFS / S3 / shared stores prune by default. Q3:
 `arrowAllocatorLimitBytes` unset = 75 % of direct memory, at least 256 MiB; start line `arrowAllocator limitMiB=...
 source=directMemory|set`. Service cluster 43145797836 13/13 + summary green on the branch (point gate with `agg_range`;
-dc / speed point q/s hdfs 1.22, hdfs-ha 1.29, s3 0.81). For the stand (on the `package=true` pre-release of 97ad4f22):
+dc / speed point q/s hdfs 1.22, hdfs-ha 1.29, s3 0.81). For the stand (on pre-release `server-1.0.0-2c169a53db3b`, which carries 97ad4f22):
 rerun the small-query mix at 32 clients under dc; expect count / sum with a selective filter not `merged`, and with
 `-XX:MaxDirectMemorySize=8g` the start line `limitMiB=6144 source=directMemory`, 48 peer streams.
 
@@ -717,3 +717,6 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   only at the service gate (main moved, service hdfs/security/stores not dispatched; build + tests green), so no
   pre-release from it; the core lane is packaging items 47 / 48 / Q3 as Dev CI 43150534816 on `pkg/2c169a53`
   (contains 97ad4f22; service gate running). Next: confirm that pre-release exists, then the stand's rerun.
+- 2026-11-12 05:05Z (lane 3 session): no open item. Confirmed: pre-release `server-1.0.0-2c169a53db3b` exists and
+  contains item 48 / Q3 (97ad4f22 is an ancestor of 2c169a53). Lock not taken (no code). Next: the stand's rerun of
+  the dc small-query mix at 32 clients on that pre-release (see item 48 note in Next steps).
