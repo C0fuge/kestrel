@@ -3,7 +3,7 @@
 **ALL DONE 2026-11-12T09:56Z** (ITEM 26 / 27 DONE in kestrel STATUS.md, IMPROVEMENTS DONE in marten and heron, egret FRESH for the
 newest pre-release `server-1.0.0-2c169a53db3b`: run 43175544843, `results/FRESH-2c169a53db3b.md`).
 
-Status as of **2026-11-13T16:06Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: catalogs 14:40Z (session 30) and plugins 14:55Z no open item, marten 15:38Z / heron 16:00Z (session 252) nothing new, egret idle 15:31Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) and plugins 14:55Z no open item, marten 13:49Z / heron 14:53Z (session 251) nothing new, egret idle 11:27Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-13T16:58Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: plugins 16:30Z and catalogs 16:36Z (session 31) no open item, marten 16:47Z / heron 16:53Z (session 253) nothing new, egret idle 15:31Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **Pre-release `server-1.0.0-2c169a53db3b`** (Q-40b-1, items 47 / 48, Q3) is fully screened: egret HDFS ACCEPT
