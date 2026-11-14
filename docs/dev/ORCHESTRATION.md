@@ -3,7 +3,7 @@
 **ALL DONE 2026-11-12T09:56Z** (ITEM 26 / 27 DONE in kestrel STATUS.md, IMPROVEMENTS DONE in marten and heron, egret FRESH for the
 newest pre-release `server-1.0.0-2c169a53db3b`: run 43175544843, `results/FRESH-2c169a53db3b.md`).
 
-Status as of **2026-11-14T09:56Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: core/lane 3 no commits, plugins 08:11Z no open item, catalogs 09:21Z (session 40) no open item, marten 09:41Z / heron 09:51Z (session 265) nothing new, egret idle 09:27Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-14T10:57Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: core/lane 3 no commits, plugins 10:11Z no open item, catalogs 10:21Z (session 41) no open item, marten 10:41Z / heron 10:51Z (session 266) nothing new, egret idle 09:27Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **Pre-release `server-1.0.0-2c169a53db3b`** (Q-40b-1, items 47 / 48, Q3) is fully screened: egret HDFS ACCEPT
@@ -25,7 +25,7 @@ Points for the maintainer:
 |---|---|---|---|---|
 | core (`STATUS.md`) | nothing open (session 09:41Z: "no open core item") | 09:42Z (unlock) | free | main Dev CI 43149903188 (00da2257) green; pkg 43150534816 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open (ITEM 46 DONE c96a1272; Q-46) | 2026-11-12 03:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (session 13: item 47 DONE, Q11 unanswered) | 09:21Z | free | Dev CI 43147991919, Catalogs CI 43147994336 green |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (session 41; item 47 DONE, Q11 unanswered) | 10:21Z | free | Dev CI 43147991919, Catalogs CI 43147994336 green |
 | lane 3 (`LANE3-STATUS.md`) | nothing open (ITEM 48 DONE 97ad4f22, Q3; stand rerun is the maintainer's) | 05:03Z | free | Service cluster 43152195437 (pkg/2c169a53) green |
 
 No bug-first notes in any lane. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty). Newest Dev CI
@@ -61,6 +61,7 @@ on main (43149903188, 00da2257) green; no newer runs on main (only `[skip ci]` c
 
 ## History
 
+- 2026-11-14T10:57Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-12T09:56Z: **ALL DONE** again: egret FRESH 2c169a53db3b DONE (43175544843; 22/22, 0 errors; local small c1 speed/balanced 1.09 JDBC / 1.14 ADBC carried over; speed local SF10 +5 %); core 09:41Z / marten 09:41Z / heron 229 nothing open; all CI green, no stale locks.
 - 2026-11-12 08:57Z: egret ACCEPT 2c169a53db3b **SHIP** (43175547634, all 6 checks, 4 cells); FRESH 43175544843 still running, so ALL DONE still suspended; catalogs session 13 (08:25Z) no open item; marten/heron idle; all CI green, no stale locks.
 - 2026-11-12 07:58Z: egret started FRESH 43175544843 + ACCEPT 43175547634 on `server-1.0.0-2c169a53db3b` (07:28Z); ALL DONE still suspended; no kestrel lane commit since 05:03Z; marten/heron idle; all CI green, no stale locks.
@@ -100,4 +101,3 @@ on main (43149903188, 00da2257) green; no newer runs on main (only `[skip ci]` c
 - 2026-11-09 20:58Z: ITEM 39(c) DONE bf72114c (catalogs, parts 1-4 on main, lock released); main Dev CI 42695876926 on bf72114c running (32ebda26: 42690037660 green); core lane next packages (`package=true`, ITEM 39 DONE); lane 3 D13 (b) DONE (42689843545, 42691698496 green); egret EGRET GIZMO DONE (S3 SF10 speed ~1.5x slower than gizmo, local small c1 p50 regression 1.16-1.18); no red CI on main, no stale locks.
 - 2026-11-09 19:57Z: catalogs lane active again (lock 19:22Z): 39(c) file pruning 9f4f901f on fix/39c-point, Dev CI 42684272737 + HDFS point perf 42684276829 green, not merged; lane 3 D13 (c) merged (Service cluster 42680042903/42681427105 green); egret gizmo scan rerun 42684180966 running after harness login fix, draft report written; no red CI, no stale locks.
 - 2026-11-09 18:58Z: released stale LOCK-CATALOGS (15:23:58Z); ITEM 39 waits only for 39(c) (parts 1+2 on main, 42641096583 green; next pruning by footer stats, Q9 answered); lane 3 D16 DONE 97a2b7bb (hdfs-ha fix confirmed, 3 green runs); egret GizmoSQL wave 42632367579 aggregated (SF10 S3 speed 1.51x slower than gizmo; gizmo fails scan/small gates), report file pending; no red CI; no orchestrator status 15:56Z-17:56Z (no runs).
-- 2026-11-09 14:59Z: ITEM 39(a) DONE (Dev CI 42630578494); 39(c) part 1 merged to main (42635429611 green), part 2 b08fdb19 in CI on fix/39c-point; lane 3 D15 DONE 7c54dfde, found intermittent hdfs-ha NameNode failover bug (42632461815 red), core fix 2429782f with Dev CI 42638389703 + Service cluster 42638482163 running; egret GizmoSQL wave 42632367579 running; no red CI on main, no stale locks.
