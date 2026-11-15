@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Upstream item 49(a), core lane: (1) SqlInfo no longer advertises DDL: `SQL_DDL_SCHEMA` and `SQL_DDL_TABLE` are
+  false (were true) like `SQL_DDL_CATALOG`; the server is read-only (`FLIGHT_SQL_SERVER_READ_ONLY` true) and refuses
+  CREATE / DROP (upstream 245281c). (2) New setting `streamTimingLog` (`arrowflight.log.streamTiming`,
+  `STREAM_TIMING_LOG`, default false): one `streamTiming` INFO line per finished DuckDB result stream with the epoch
+  start and execute / first-batch / total / DuckDB / send / back-pressure milliseconds, rows, batches and the first 80
+  characters of the SQL (secrets redacted) - upstream 1f3551f logs it always; here it is opt-in so the per-query path
+  stays without an INFO line. (3) Upstream 3bb34ba (httpfs connection caching) is already in kestrel as the S3
+  plugin's `arrowflight.s3.connectionCaching` (default true, per store and lakeFS). Answers unchanged.
+
 - Changed default (Q3, maintainer 2026-11-11): `arrowAllocatorLimitBytes` (`arrowflight.arrow.allocatorLimitBytes`), the
   root Arrow allocator's limit, is 75 % of the JVM's direct memory (at least 256 MiB) when not set, instead of a fixed
   2 GiB; an explicit value keeps its meaning. With `-XX:MaxDirectMemorySize=8g` it is 6 GiB, so 8 concurrent dc full

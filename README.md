@@ -286,7 +286,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
-| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
+| Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `streamTimingLog`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
 | Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
@@ -464,6 +464,12 @@ result batches as they are instead of copying each batch into its own buffers fi
 batch into new buffers, which gRPC keeps until it has written them; other streams - metadata, SqlInfo -
 always copy). It saves one copy of every byte sent; a batch waiting for its client then stays in DuckDB's
 native memory instead of Netty's direct buffers, still bounded by the outbound budget above.
+
+`streamTimingLog` (`arrowflight.log.streamTiming`, `STREAM_TIMING_LOG`, default false) writes one INFO line per
+finished DuckDB result stream, so the slow endpoints of a query can be placed on a timeline:
+`qid=... node=... streamTiming startMs=<epoch ms> executeMs= firstBatchMs= totalMs= duckMs= sendMs= backpressureMs=
+rows= batches= sql='<first 80 characters>'` (`executeMs` = gate wait, execute and Arrow export; `firstBatchMs` -1
+without rows; declared secret values redacted). Off by default, as it adds a line per query.
 
 Result streams can be sent with Arrow IPC body compression (Zstandard or LZ4 frames) for slow links. It is
 off unless asked: a client sends the call header `arrow-compression: zstd` or `lz4` (or `none`) on its DoGet

@@ -266,6 +266,19 @@ class ConfigAdapterTest {
     }
 
     @Test
+    void streamTimingLogIsOffByDefaultAndRefusesOtherValues() throws IOException {
+        assertFalse(ConfigAdapter.streamTimingLog(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.streamTimingLog(source(Map.of("streamTimingLog", "true"), Map.of())));
+        assertTrue(ConfigAdapter.streamTimingLog(
+                source(Map.of("arrowflight.log.streamTiming", "TRUE"), Map.of())));
+        assertTrue(ConfigAdapter.streamTimingLog(source(Map.of(), Map.of("STREAM_TIMING_LOG", "true"))));
+        assertFalse(ConfigAdapter.streamTimingLog(source(Map.of("streamTimingLog", "false"), Map.of())));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.streamTimingLog(source(Map.of("streamTimingLog", "1"), Map.of())));
+        assertTrue(e.getMessage().contains("streamTimingLog"), e.getMessage());
+    }
+
+    @Test
     void flightZeroCopyWritesIsOffByDefaultAndRefusesOtherValues() throws IOException {
         assertFalse(ConfigAdapter.flightZeroCopyWrites(source(Map.of(), Map.of())));
         assertTrue(ConfigAdapter.flightZeroCopyWrites(
