@@ -4,6 +4,12 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+ITEM 49(d) DONE 64d566cb (2026-11-15, see Log; test fix 7ab48cd6, fast-forwarded into `main`). `0419ac23` adopted:
+nodes list their files again every `fileInventoryRefreshSeconds` (default 30, 0 = start only) and publish the
+inventory when it changed; unlike upstream, a dead / stopped node's inventory stays published. `ea2f83f1` NOT NEEDED
+(kestrel has no runtime IN-filters). For the stand (on the core lane's 49 package): a file copied into a node's
+local `dataDir` (or HDFS) after the start is planned within ~60 s; start line `inventory refresh every 30 s`.
+
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(d) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `0419ac23bc0c` (refresh of the distributed Parquet file inventory) and `ea2f83f1a77d` (long runtime IN-filters sent to DuckDB as a range). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
 > **Maintainer, 2026-11-11 21:10 - answers + D14.** **Q3: yes** - default `arrowAllocatorLimitBytes` from the JVM's
@@ -731,3 +737,16 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   `main`. Lock not taken. Next: the stand's rerun of the dc small-query mix (item 48 note in Next steps).
 - 2026-11-15 20:03-20:08Z (lane 3 session): no open item; no code on `main` since 2c169a53, branch already in
   `main`, no new maintainer note. Lock not taken. Next: the stand's rerun of the dc small-query mix (item 48 note).
+- 2026-11-15 22:37-23:55Z (lane 3 session): ITEM 49(d). Read upstream `0419ac23` and `ea2f83f1`. `ea2f83f1` NOT
+  NEEDED: it bounds runtime IN-filters (StarRocks), which kestrel does not have (UPSTREAM-SYNC S8). `0419ac23` adopted
+  on branch `fix/49d` (64d566cb + 7ab48cd6): `ClusterService.refreshInventory` (own daemon thread, publish only on a
+  change against the node's own copy, failed listing keeps the published inventory, stops at deregister),
+  `ConfigAdapter.fileInventoryRefreshSeconds` (default 30), wired in `ServerModule`; upstream's removal of a dead
+  node's inventory not taken (would turn a lost node's files into a short answer on local disks). Tests:
+  ClusterServiceTest (3 new), ConfigAdapterTest, `FileInventoryRefreshIntegrationTest` (2 nodes, separate local
+  dirs; fails without the refresh). First Dev CI 43770894340 red on the new test: it executed endpoints across two
+  nodes of one host, and the planner compares hosts only (`HostUtils.normalize`), so the file went to either node
+  (pre-existing, error not wrong answer, noted in STATUS); the test now checks the plan's files. Dev CI 43772386973
+  green, Service cluster 43770896293 green (13 cells). Rebased on `main` (49(b)/(c) in; CHANGELOG both sides kept),
+  fast-forwarded. No package here: the core lane packages once 49(a)-(d) are in. Next: none open in this lane;
+  the stand's dc small-query rerun (item 48) and the 49 package. Lock released.

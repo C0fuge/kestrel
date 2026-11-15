@@ -40,6 +40,17 @@
 > `arrowflight.s3.connectionCaching` (default true, per named store and lakeFS, covered by S3PluginTest). Dev CI
 > 43770907427 green on `fix/49a`. Packaging waits for 49(b)-(d).
 
+> **ITEM 49(d) DONE 64d566cb (2026-11-15, lane 3; test fix 7ab48cd6).** `0419ac23bc0c` adopted, kestrel form: new
+> setting `fileInventoryRefreshSeconds` (`FLIGHT_FILE_INVENTORY_REFRESH_SECONDS`, default 30, 0 = start only); each node
+> lists its data directory again on a thread of its own (`flight-inventory`) and publishes its inventory only when it
+> changed (compared with its own copy, no map read). Not adopted from upstream: removing a stopped / heartbeat-dead
+> node's inventory (kestrel keeps it so that on local disks the lost node's files fail the plan instead of leaving the
+> answer). Regression test `FileInventoryRefreshIntegrationTest` (fails without the refresh). `ea2f83f1a77d` NOT NEEDED:
+> kestrel has no runtime IN-filters (UPSTREAM-SYNC S8, open wire change), nothing to bound. Dev CI 43772386973 green,
+> Service cluster 43770896293 green on `fix/49d`. Runtime change: counts toward the 49(a)-(d) package. Found on the way
+> (pre-existing, not changed): the planner tells nodes apart by host (`HostUtils.normalize`), so two nodes of one host
+> on local, unshared directories may get each other's files planned (a "No files found" error, not a wrong answer).
+
 > **ITEM 49(c) DONE df3dae71 (2026-11-15, lane 4).** `b85c78487f4f` + `9e8bcf5cd51d` adopted, improved: cold footers of
 > `ParquetAdapter.estimateRowCount` and the statistics action are read on a shared `parquet-footer` pool
 > (`-DparquetFooterThreads`, default 16; new class `adapters/ParquetFooterReads`), the caller reading the first file;
@@ -4343,3 +4354,6 @@ S3 slowdown item below stays open for then).
   `duckDbMaxConcurrentStreams`) NOT NEEDED: kestrel's handles are stateless and `ProducingStreamGate` + the DuckDB cancel
   watch already do more (reasons in `PLUGINS-STATUS.md`). Dev CI 43770929566 green on `fix/49b`. Runtime change:
   counts toward the 49(a)-(d) package.
+- 2026-11-15 23:55Z (lane 3): ITEM 49(d) DONE 64d566cb - core change by the maintainer's exception: inventory
+  refresh in `ClusterService` / `ServerModule`, new setting `fileInventoryRefreshSeconds` (see the note at the top).
+  Dev CI 43772386973, Service cluster 43770896293 green on `fix/49d`. Runtime change: counts toward the 49 package.
