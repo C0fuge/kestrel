@@ -6,6 +6,18 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
+ITEM 49(c) DONE df3dae71 (2026-11-15, session 71). `b85c78487f4f` (estimateRowCount footers in parallel) and
+`9e8bcf5cd51d` (statistics footers in parallel, shared pool): kestrel read both serially, so adopted, with
+improvements over upstream: fresh cached footers are summed in the caller without a pool hand-off (upstream submits
+every file, cached or not, on each GetFlightInfo), a single cold file is read inline, the caller reads the first file
+itself, nested calls from a footer thread run inline (no pool deadlock), and failures keep their exception type
+(upstream wraps everything into IOException; the action's NOT_FOUND / INVALID_ARGUMENT / INTERNAL mapping stays as
+before). Pool `-DparquetFooterThreads` (default 16, as upstream). Measured in `ParquetFooterReadsTest.readsInParallel`:
+16 reads with a simulated 50 ms store round trip take well under 400 ms (serial: 800 ms); answers checked against
+DuckDB over 24 files (`TableStatisticsServiceTest.manyFilesMatchDuckDb`). Dev CI 43770947562 green on `fix/49c`, push
+Dev CI on main 43772589502. Not done (own feature, not part of 49(c)): `FileStatsPruner` still reads its footers one
+after another - a candidate for the same helper if HDFS point cells show cold-footer time.
+
 > **Maintainer, 2026-11-11 21:10 - answers.** **Q-40b-1: yes** - turn file pruning off by default for a local
 > `dataDir` (keep it on for HDFS / S3 / plugin stores; an explicit setting wins); the performance repo still sees speed
 > c1 p50 1.16-1.32x balanced locally, this is the cost you found. **Q10: keep pruning on** for HDFS/S3 (the stand ran
@@ -1091,3 +1103,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-15 19:21Z (session 68): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 67). No code change, lock not taken.
 - 2026-11-15 20:21Z (session 69): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 68). No code change, lock not taken.
 - 2026-11-15 21:21Z (session 70): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 69). No code change, lock not taken.
+- 2026-11-15 22:37Z (session 71): ITEM 49(c) DONE df3dae71 - parallel cold Parquet footer reads for row estimates and table statistics (`ParquetFooterReads`, `-DparquetFooterThreads`); Dev CI 43770947562 green on `fix/49c`, push Dev CI on main 43772589502. Next: no open item in this lane (C3 step 2 / C4 (b) / (d) backlog; Q11 open); packaging is the core lane's once 49(b) / 49(d) are done.

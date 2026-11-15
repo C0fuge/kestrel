@@ -40,6 +40,14 @@
 > `arrowflight.s3.connectionCaching` (default true, per named store and lakeFS, covered by S3PluginTest). Dev CI
 > 43770907427 green on `fix/49a`. Packaging waits for 49(b)-(d).
 
+> **ITEM 49(c) DONE df3dae71 (2026-11-15, lane 4).** `b85c78487f4f` + `9e8bcf5cd51d` adopted, improved: cold footers of
+> `ParquetAdapter.estimateRowCount` and the statistics action are read on a shared `parquet-footer` pool
+> (`-DparquetFooterThreads`, default 16; new class `adapters/ParquetFooterReads`), the caller reading the first file;
+> unlike upstream, fresh cached footers are summed without any pool hand-off and a single file is read inline (the warm
+> planning path of point queries is unchanged), nested calls run inline, exception types are kept (action status
+> mapping unchanged). Core files touched: `ParquetAdapter`, `TableStatisticsService` (maintainer exception). Dev CI
+> 43770947562 green on `fix/49c`; push Dev CI on main 43772589502.
+
 > **MAIN PACKAGED (2026-11-12 04:28Z, core lane).** `main` held unpackaged runtime changes: Q-40b-1 (2f31c071, file
 > pruning off by default for a local, unshared `dataDir`), item 48 + Q3 (lane 3, 97ad4f22: dc filtered one-row
 > aggregates over <= 4 pruned files computed locally; default `arrowAllocatorLimitBytes` = 75 % of direct memory) and
