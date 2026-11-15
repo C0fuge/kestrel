@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 49(b) (upstream fd3c76a1): the node's metadata caches have entry caps - Parquet footers 50 000, table
+  schemas and sample files 4 096 each, file plans 1 024, table statistics 4 096 (`CacheLimits`). A cache over its cap
+  drops its expired entries, then arbitrary live ones down to 90 % of the cap; an evicted entry is read from storage
+  again, answers are unchanged. Before, entries never read again (dropped tables, rewritten files) stayed for good.
+
 - Upstream item 49(a), core lane: (1) SqlInfo no longer advertises DDL: `SQL_DDL_SCHEMA` and `SQL_DDL_TABLE` are
   false (were true) like `SQL_DDL_CATALOG`; the server is read-only (`FLIGHT_SQL_SERVER_READ_ONLY` true) and refuses
   CREATE / DROP (upstream 245281c). (2) New setting `streamTimingLog` (`arrowflight.log.streamTiming`,
