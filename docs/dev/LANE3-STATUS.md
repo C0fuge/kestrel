@@ -727,3 +727,5 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   `main`. Lock not taken. Next: the stand's rerun of the dc small-query mix (item 48 note in Next steps).
 - 2026-11-15 18:03-18:06Z (lane 3 session): no open item; no code on `main` since 2c169a53, branch already in
   `main`. Lock not taken. Next: the stand's rerun of the dc small-query mix (item 48 note in Next steps).
+- 2026-11-15 20:03-20:08Z (lane 3 session): no open item; no code on `main` since 2c169a53, branch already in
+  `main`, no new maintainer note. Lock not taken. Next: the stand's rerun of the dc small-query mix (item 48 note).
