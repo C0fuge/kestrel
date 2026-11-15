@@ -1401,5 +1401,5 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-15 23:35Z (plugins session): item 49(b) - fd3c76a1 cache caps DONE (`CacheLimits`, 6 unit tests), its
   prepared-statement part and a5d6a43 NOT NEEDED (reasons in Next steps). Core-module change by the maintainer's
   exception; `STATUS.md` Log line written. CI: Dev CI 43770929566 on `fix/49b` (a8271c2d) green; rebased onto 49(a) and
-  49(c), targeted tests green locally, merged as f0adaf52 (push CI on `main`). Runtime change: the core lane packages
+  49(c), targeted tests green locally, merged as f0adaf52 (push CI on `main`: 43772674958 cancelled by lane 3's push, Dev CI 43774021600 on a69848c9, which contains it, green). Runtime change: the core lane packages
   once 49(a)-(d) are done.
