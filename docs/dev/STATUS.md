@@ -33,6 +33,13 @@
 > DuckDB as a range. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there. **The core lane packages (`package=true`) once 49(a)-(d) are each DONE or NOT NEEDED** (runtime
 > changes only); the lang package of 2c169a53db3b is not waiting for this.
 
+> **ITEM 49(a) DONE 376c7ded (2026-11-15, core lane).** `245281cee230` adopted (SqlInfo `SQL_DDL_SCHEMA` /
+> `SQL_DDL_TABLE` false; regression test `sqlInfoReportsReadOnlyCapabilities`). `1f3551f3b25a` adopted as opt-in setting
+> `streamTimingLog` (default false; upstream logs it always - kept off so the per-query path gains no INFO line, item 15;
+> SQL redacted before the 80-character cut; also qid). `3bb34baecbf4` NOT NEEDED: kestrel already has
+> `arrowflight.s3.connectionCaching` (default true, per named store and lakeFS, covered by S3PluginTest). Dev CI
+> 43770907427 green on `fix/49a`. Packaging waits for 49(b)-(d).
+
 > **MAIN PACKAGED (2026-11-12 04:28Z, core lane).** `main` held unpackaged runtime changes: Q-40b-1 (2f31c071, file
 > pruning off by default for a local, unshared `dataDir`), item 48 + Q3 (lane 3, 97ad4f22: dc filtered one-row
 > aggregates over <= 4 pruned files computed locally; default `arrowAllocatorLimitBytes` = 75 % of direct memory) and
@@ -4316,3 +4323,9 @@ S3 slowdown item below stays open for then).
   Dev CI 43150534816, Service cluster 43152195437, hdfs 43152198658, security 43152201884, stores 43152204958 green ->
   pre-release `server-1.0.0-2c169a53db3b`. Lane 3's package run on `main` (43147654545) was refused by the gate
   (`main` moved). No code change; lock released.
+- 2026-11-15 (core session, 22:37-23:15Z): item 49(a) on `fix/49a`, merged into `main` (376c7ded): read-only SqlInfo
+  DDL values (upstream 245281c), opt-in `streamTimingLog` line (upstream 1f3551f; additive setting, default off),
+  upstream 3bb34ba not needed (S3 `connectionCaching` exists). Dev CI 43770907427 green. Wire note: SqlInfo
+  `SQL_DDL_SCHEMA` / `SQL_DDL_TABLE` now false - a correction of advertised capabilities the maintainer's item asked
+  for; no command changes. Next: none for the core lane; package once 49(b)-(d) are DONE / NOT NEEDED. Branch
+  `fix/49a` can be deleted. Lock released.
