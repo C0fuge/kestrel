@@ -294,8 +294,12 @@ public final class ServerModule {
     @Singleton
     QueryPlanner queryPlanner(ParquetAdapter parquetAdapter, ClusterService clusterService,
             AppConfig config) {
-        return new QueryPlanner(parquetAdapter, clusterService, config.endpointBackupLocations(),
-                config.endpointsPerServer());
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService,
+                config.endpointBackupLocations(), config.endpointsPerServer());
+        // Files written or removed after the start reach the other nodes' plans (item 49 (d)).
+        clusterService.refreshInventory(parquetAdapter::localFileInventory,
+                ConfigAdapter.fileInventoryRefreshSeconds(ConfigSource.system()));
+        return planner;
     }
 
     /**

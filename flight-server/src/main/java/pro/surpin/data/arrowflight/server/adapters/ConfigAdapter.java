@@ -743,6 +743,25 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code fileInventoryRefreshSeconds} ({@code arrowflight.cluster.fileInventoryRefreshSeconds},
+     * {@code FLIGHT_FILE_INVENTORY_REFRESH_SECONDS}): how often a node lists its data directory again and
+     * publishes its Parquet file inventory when it changed (item 49 (d)), so that files written or removed
+     * after the start reach the other nodes' plans; default 30, 0 publishes it only at start.
+     *
+     * @param props configuration source
+     * @return the interval in seconds, 0 for off
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int fileInventoryRefreshSeconds(ConfigSource props) {
+        int value = getIntWithEnv("fileInventoryRefreshSeconds", "arrowflight.cluster.fileInventoryRefreshSeconds",
+                "FLIGHT_FILE_INVENTORY_REFRESH_SECONDS", 30, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("fileInventoryRefreshSeconds must be 0 or more: " + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteLocalAggregateMaxFiles}
      * ({@code arrowflight.cluster.distributedCompleteLocalAggregateMaxFiles},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES}): with

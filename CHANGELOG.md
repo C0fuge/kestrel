@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Cluster: nodes list their data directory again every `fileInventoryRefreshSeconds` (new setting,
+  `FLIGHT_FILE_INVENTORY_REFRESH_SECONDS`, default 30, 0 = only at start as before) and publish their Parquet file
+  inventory when it changed (item 49 (d), lane 3, after upstream `0419ac23`). On local, unshared data directories a
+  file written after a node's start was left out of every plan until a restart (a short answer); now it is planned
+  within about a minute (the refresh plus the 30 s plan cache). Unlike upstream, a stopped node's inventory stays
+  published (its files must fail plans on local disks). Upstream `ea2f83f1` (long runtime IN-filters as a range) is
+  not ported: kestrel has no runtime IN-filters (UPSTREAM-SYNC S8, open).
+
 - Changed default (Q3, maintainer 2026-11-11): `arrowAllocatorLimitBytes` (`arrowflight.arrow.allocatorLimitBytes`), the
   root Arrow allocator's limit, is 75 % of the JVM's direct memory (at least 256 MiB) when not set, instead of a fixed
   2 GiB; an explicit value keeps its meaning. With `-XX:MaxDirectMemorySize=8g` it is 6 GiB, so 8 concurrent dc full

@@ -831,6 +831,60 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    // ── refreshInventory (item 49 (d)) ────────────────────────────────────
+
+    /** Verifies files written or removed after the start are published, and only on a change. */
+    @Test
+    void refreshFileInventoryPublishesOnlyChanges() {
+        AtomicReference<Map<String, Long>> source = new AtomicReference<>(Map.of("s/t/a.parquet", 10L));
+        ClusterService cs = createService("s1");
+        cs.registerLocalFiles(source.get());
+        cs.refreshInventory(source::get, 3600);
+        assertFalse(cs.refreshFileInventory(), "unchanged inventory is not published again");
+        verify(serverFiles, times(1)).put(eq("s1"), anyMap());
+
+        source.set(Map.of("s/t/a.parquet", 10L, "s/t/b.parquet", 20L));
+        assertTrue(cs.refreshFileInventory());
+        ArgumentCaptor<Map<String, Long>> published = ArgumentCaptor.forClass(Map.class);
+        verify(serverFiles, times(2)).put(eq("s1"), published.capture());
+        assertEquals(source.get(), published.getValue());
+
+        source.set(Map.of("s/t/b.parquet", 20L));
+        assertTrue(cs.refreshFileInventory(), "a removed file is published too");
+        verify(serverFiles, times(3)).put(eq("s1"), published.capture());
+        assertEquals(Map.of("s/t/b.parquet", 20L), published.getValue());
+        cs.close();
+        // Kestrel keeps a stopped node's inventory: on local disks its files must fail plans.
+        verify(serverFiles, never()).remove("s1");
+    }
+
+    /** Verifies a failed listing keeps the published inventory instead of emptying it. */
+    @Test
+    void refreshFileInventoryKeepsInventoryWhenListingFails() {
+        ClusterService cs = createService("s1");
+        cs.registerLocalFiles(Map.of("s/t/a.parquet", 10L));
+        cs.refreshInventory(() -> {
+            throw new java.io.IOException("listing failed");
+        }, 3600);
+        assertFalse(cs.refreshFileInventory());
+        verify(serverFiles, times(1)).put(eq("s1"), anyMap());
+        cs.close();
+    }
+
+    /** Verifies the refresh is off with 0 seconds and stops once the server deregistered. */
+    @Test
+    void refreshFileInventoryOffAtZeroAndAfterDeregister() {
+        AtomicReference<Map<String, Long>> source = new AtomicReference<>(Map.of("s/t/a.parquet", 10L));
+        ClusterService cs = createService("s1");
+        cs.refreshInventory(source::get, 0);
+        assertFalse(cs.refreshFileInventory(), "0 seconds sets up no refresh");
+        cs.refreshInventory(source::get, 3600);
+        cs.deregister();
+        assertFalse(cs.refreshFileInventory(), "a stopping server publishes nothing");
+        verify(serverFiles, never()).put(eq("s1"), anyMap());
+        cs.close();
+    }
+
     // ── serverUri ─────────────────────────────────────────────────────────
 
     @Test
