@@ -1368,3 +1368,5 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run; lock not taken.
 - 2026-11-15 05:15Z (plugins session): no open item (no new maintainer note since 2026-11-11 18:40; waiting on the
   maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run; lock not taken.
+- 2026-11-15 09:15Z (plugins session): no open item (no new maintainer note since 2026-11-11 18:40; waiting on the
+  maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run; lock not taken.
