@@ -198,6 +198,48 @@ class ParquetAdapterTest {
         }
     }
 
+    /** Sums the footer row counts of many cold files read in parallel, then from the cache (item 49 (c)). */
+    @Test
+    void estimateRowCountReadsManyColdFooters(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        Map<String, FileAssignment> assignment = new java.util.HashMap<>();
+        long expected = 0;
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                java.sql.Statement s = conn.createStatement()) {
+            for (int i = 0; i < 20; i++) {
+                java.nio.file.Path file = dir.resolve("f" + i + ".parquet");
+                s.execute("COPY (SELECT range AS id FROM range(" + (3 + i) + ")) TO '" + file
+                        + "' (FORMAT parquet)");
+                expected += 3 + i;
+                long size = java.nio.file.Files.size(file);
+                DataFile dataFile = new DataFile("s/t/" + file.getFileName(), file.toUri().toString(),
+                        size, 1L, Set.of());
+                when(store.file(dataFile.relativePath())).thenReturn(dataFile);
+                assignment.put(dataFile.relativePath(), new FileAssignment(size, Set.of("local")));
+            }
+        }
+        when(store.inputFile(any(DataFile.class))).thenAnswer(call -> {
+            DataFile file = call.getArgument(0);
+            return org.apache.parquet.hadoop.util.HadoopInputFile.fromPath(
+                    new Path(file.location()), new org.apache.hadoop.conf.Configuration());
+        });
+        AppConfig config = new AppConfig(
+                3, 4096, 4, 65536, 2, 2, 2, null, false,
+                null, null, null, null, null, false, 2_147_483_648L, 67108864, 67108864, 30000L,
+                "/data", null, 31001, 5701, 120, 3, 500, 0, true, false, 64, null, null, "complete", true, true);
+        ParquetAdapter adapter = new ParquetAdapter(config, store);
+
+        assertEquals(expected, adapter.estimateRowCount(assignment));
+        assertEquals(expected, adapter.estimateRowCount(assignment));
+        verify(store, times(20)).inputFile(any(DataFile.class));
+
+        assignment.put("s/t/missing.parquet", new FileAssignment(1L, Set.of("local")));
+        when(store.file("s/t/missing.parquet")).thenThrow(new FileNotFoundException("gone"));
+        assertEquals(-1L, adapter.estimateRowCount(assignment));
+    }
+
     /** Verifies the sample file of a table is listed once per TTL and again after it is forgotten. */
     @Test
     void sampleFileIsRememberedUntilForgotten() throws IOException {

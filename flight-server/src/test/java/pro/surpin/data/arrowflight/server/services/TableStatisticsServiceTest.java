@@ -144,6 +144,56 @@ class TableStatisticsServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.statistics("", "t", null));
     }
 
+    /** Reads the footers of many files in parallel and still matches DuckDB (item 49 (c)). */
+    @Test
+    void manyFilesMatchDuckDb() throws Exception {
+        List<DataFile> files = new java.util.ArrayList<>();
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            for (int i = 0; i < 24; i++) {
+                Path file = dir.resolve("many-" + i + ".parquet");
+                s.execute("COPY (" + SELECT + " FROM range(" + (i * 37) + ", " + (i * 37 + 5 + i)
+                        + ")) TO '" + file + "' (FORMAT parquet, ROW_GROUP_SIZE 4)");
+                files.add(dataFile(file));
+            }
+        }
+        TableStatisticsService service = new TableStatisticsService(
+                directoryAdapter(files, true), mock(ClusterService.class));
+
+        TableStatisticsService.TableStatistics stats = service.statistics("s", "t", null);
+
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement();
+                ResultSet r = s.executeQuery("SELECT count(*), min(id), max(id),"
+                        + " min(score), max(score), count(*) - count(score)"
+                        + " FROM read_parquet('" + dir + "/many-*.parquet')")) {
+            r.next();
+            assertEquals(r.getLong(1), stats.rows());
+            assertEquals(24, stats.files());
+            assertEquals(files.stream().mapToLong(DataFile::size).sum(), stats.bytes());
+            assertBounds(stats, "id", r.getDouble(2), r.getDouble(3));
+            assertBounds(stats, "score", r.getDouble(4), r.getDouble(5));
+            assertEquals(r.getLong(6), stats.columns().get("score").nulls());
+        }
+    }
+
+    /** Reports a file that is not Parquet among several as a read failure, not as statistics. */
+    @Test
+    void corruptFooterFailsTheRequest() throws Exception {
+        List<DataFile> files = new java.util.ArrayList<>(writeFiles());
+        Path bad = dir.resolve("part-2.parquet");
+        Files.writeString(bad, "not parquet");
+        files.add(dataFile(bad));
+        TableStatisticsService service = new TableStatisticsService(
+                directoryAdapter(files, true), mock(ClusterService.class));
+
+        // Same exception as with serial reads (Parquet reports a short file as a RuntimeException);
+        // the action maps it to INTERNAL either way.
+        RuntimeException e = assertThrows(RuntimeException.class, () -> service.statistics("s", "t", null));
+        assertTrue(e.getMessage().contains("part-2.parquet"), e.getMessage());
+        assertEquals(0, service.cachedTables());
+    }
+
     /** Marks the row count of a catalog snapshot with delete files as an upper bound. */
     @Test
     void catalogTableWithDeletesIsAnUpperBound() throws Exception {

@@ -18,6 +18,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stays without an INFO line. (3) Upstream 3bb34ba (httpfs connection caching) is already in kestrel as the S3
   plugin's `arrowflight.s3.connectionCaching` (default true, per store and lakeFS). Answers unchanged.
 
+- Planning and the table statistics action read cold Parquet footers in parallel (item 49 (c), after upstream
+  `b85c78487f4f` / `9e8bcf5cd51d`): `estimateRowCount` (row count of `GetFlightInfo`) and the statistics footers go
+  through a shared pool of `-DparquetFooterThreads` threads (new optional system property, default 16), the caller
+  reading one file itself; footers still cached are summed without a hand-off and a single file is read inline, so
+  point queries pay nothing extra. Answers and error types are unchanged.
+
 - Changed default (Q3, maintainer 2026-11-11): `arrowAllocatorLimitBytes` (`arrowflight.arrow.allocatorLimitBytes`), the
   root Arrow allocator's limit, is 75 % of the JVM's direct memory (at least 256 MiB) when not set, instead of a fixed
   2 GiB; an explicit value keeps its meaning. With `-XX:MaxDirectMemorySize=8g` it is 6 GiB, so 8 concurrent dc full

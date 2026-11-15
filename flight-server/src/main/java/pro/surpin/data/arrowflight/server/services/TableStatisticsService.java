@@ -21,6 +21,7 @@ import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.PrimitiveType;
 import pro.surpin.data.arrowflight.server.LogUtil;
 import pro.surpin.data.arrowflight.server.adapters.ParquetAdapter;
+import pro.surpin.data.arrowflight.server.adapters.ParquetFooterReads;
 import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
 import pro.surpin.data.arrowflight.spi.catalog.ReadSpec;
@@ -262,18 +263,22 @@ public final class TableStatisticsService {
         Map<String, ColumnAggregate> columns = new LinkedHashMap<>();
         long rows = 0;
         long bytes = 0;
-        for (DataFile file : files) {
-            bytes += file.size();
+        // The footers are read in parallel (item 49 (c)) and merged in file order, as before.
+        List<List<BlockMetaData>> footers = ParquetFooterReads.readAll(files, file -> {
             try (ParquetFileReader reader = ParquetFileReader.open(store.inputFile(file))) {
-                for (BlockMetaData block : reader.getFooter().getBlocks()) {
-                    rows += block.getRowCount();
-                    for (ColumnChunkMetaData chunk : block.getColumns()) {
-                        if (chunk.getPath().size() != 1) {
-                            continue;   // nested fields: no bounds a client can use
-                        }
-                        merge(columns.computeIfAbsent(chunk.getPath().toDotString(),
-                                name -> new ColumnAggregate()), chunk);
+                return reader.getFooter().getBlocks();
+            }
+        });
+        for (int i = 0; i < files.size(); i++) {
+            bytes += files.get(i).size();
+            for (BlockMetaData block : footers.get(i)) {
+                rows += block.getRowCount();
+                for (ColumnChunkMetaData chunk : block.getColumns()) {
+                    if (chunk.getPath().size() != 1) {
+                        continue;   // nested fields: no bounds a client can use
                     }
+                    merge(columns.computeIfAbsent(chunk.getPath().toDotString(),
+                            name -> new ColumnAggregate()), chunk);
                 }
             }
         }

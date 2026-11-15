@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -281,9 +282,20 @@ public class ParquetAdapter {
     public long estimateRowCount(Map<String, FileAssignment> files) {
         long result = 0L;
         try {
+            long now = System.nanoTime();
+            List<Map.Entry<String, FileAssignment>> missing = new ArrayList<>();
             for (Map.Entry<String, FileAssignment> file : files.entrySet()) {
-                CachedParquetMetadata metadata =
-                        parquetMetadata(file.getKey(), file.getValue().size());
+                CachedParquetMetadata cached =
+                        freshParquetMetadata(file.getKey(), file.getValue().size(), now);
+                if (cached == null) {
+                    missing.add(file);
+                } else {
+                    result = Math.addExact(result, cached.rowCount());
+                }
+            }
+            // Cold footers are read in parallel (item 49 (c)); cached ones cost no hand-off.
+            for (CachedParquetMetadata metadata : ParquetFooterReads.readAll(missing,
+                    file -> parquetMetadata(file.getKey(), file.getValue().size()))) {
                 result = Math.addExact(result, metadata.rowCount());
             }
             return result;
@@ -514,9 +526,8 @@ public class ParquetAdapter {
     private CachedParquetMetadata parquetMetadata(
             String relativePath, long expectedLength) throws IOException {
         long now = System.nanoTime();
-        CachedParquetMetadata current = parquetMetadataCache.get(relativePath);
-        if (current != null && current.expiresAtNanos() > now
-                && current.length() == expectedLength) {
+        CachedParquetMetadata current = freshParquetMetadata(relativePath, expectedLength, now);
+        if (current != null) {
             return current;
         }
         DataFile file = store.file(relativePath);
@@ -524,6 +535,24 @@ public class ParquetAdapter {
             throw new IOException("Parquet inventory size changed for " + relativePath);
         }
         return readParquetMetadata(file, now);
+    }
+
+    /**
+     * Returns the cached footer metadata of a file while it is fresh, without any store call.
+     *
+     * @param relativePath file path below the data directory
+     * @param expectedLength file length from the inventory
+     * @param now current monotonic time
+     * @return fresh cached metadata, or null when the footer has to be read
+     */
+    private CachedParquetMetadata freshParquetMetadata(
+            String relativePath, long expectedLength, long now) {
+        CachedParquetMetadata current = parquetMetadataCache.get(relativePath);
+        if (current != null && current.expiresAtNanos() > now
+                && current.length() == expectedLength) {
+            return current;
+        }
+        return null;
     }
 
     /**
