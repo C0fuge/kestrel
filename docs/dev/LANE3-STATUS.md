@@ -749,4 +749,5 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   (pre-existing, error not wrong answer, noted in STATUS); the test now checks the plan's files. Dev CI 43772386973
   green, Service cluster 43770896293 green (13 cells). Rebased on `main` (49(b)/(c) in; CHANGELOG both sides kept),
   fast-forwarded. No package here: the core lane packages once 49(a)-(d) are in. Next: none open in this lane;
-  the stand's dc small-query rerun (item 48) and the 49 package. Lock released.
+  the stand's dc small-query rerun (item 48) and the 49 package. Lock released. Dev CI on `main` a69848c9:
+  43774021600 green (dispatched; the push ended in a `[skip ci]` commit).
