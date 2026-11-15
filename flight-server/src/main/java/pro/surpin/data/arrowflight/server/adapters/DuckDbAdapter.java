@@ -272,6 +272,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final ProducingStreamGate producingGate;
     /** Whether every DuckDB keeps the Parquet footers it read (duckDbParquetMetadataCache). */
     private final boolean parquetMetadataCache = ConfigAdapter.duckDbParquetMetadataCache();
+    /** Whether every finished result stream logs one {@code streamTiming} INFO line (streamTimingLog). */
+    private final boolean streamTimingLog = ConfigAdapter.streamTimingLog();
     /**
      * Lets gRPC send DuckDB's batch buffers without a copy (flightZeroCopyWrites); safe because
      * each batch DuckDB exports lives in new buffers that gRPC keeps until it has written them.
@@ -1984,6 +1986,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         String qid = LogUtil.qid();
         long t = LogUtil.mark();
         long streamStartNanos = System.nanoTime();
+        long streamStartMillis = streamTimingLog ? System.currentTimeMillis() : 0L;
         // Arguments of the debug lines below are formatted only when they are written.
         boolean debug = LOGGER.isDebugEnabled();
         if (debug) {
@@ -2002,6 +2005,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         try (ProducingStreamGate.Pass pass = enterGate(listener);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
+            // Gate wait, executeQuery and arrowExportStream.
+            long executeNanos = System.nanoTime() - streamStartNanos;
+            long duckNanos = 0;
+            long sendNanos = 0;
             VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
             started = true;
             if (zeroCopyWrites) {
@@ -2010,9 +2017,12 @@ public final class DuckDbAdapter implements AutoCloseable {
 
             int batchesSent = 0;
             long rowsSent = 0;
+            long tNext = System.nanoTime();
             while (loadNextBatch(reader, pass)) {
+                duckNanos += System.nanoTime() - tNext;
                 int rows = duckRoot.getRowCount();
                 if (rows == 0) {
+                    tNext = System.nanoTime();
                     continue;
                 }
                 if (firstBatchNanos < 0) {
@@ -2031,8 +2041,11 @@ public final class DuckDbAdapter implements AutoCloseable {
                 sent = true;
                 long bpStart = System.nanoTime();
                 listenerReadiness.await();
-                backpressureNanos += System.nanoTime() - bpStart;
+                long tSend = System.nanoTime();
+                backpressureNanos += tSend - bpStart;
                 listener.putNext();
+                tNext = System.nanoTime();
+                sendNanos += tNext - tSend;
                 batchesSent++;
                 rowsSent += rows;
                 if (debug && batchesSent % 10 == 0) {
@@ -2043,11 +2056,17 @@ public final class DuckDbAdapter implements AutoCloseable {
                                     / Math.max(1, System.nanoTime() - streamStartNanos));
                 }
             }
+            duckNanos += System.nanoTime() - tNext;
             if (!sent && startListener) {
                 listener.start(duckRoot);
             }
             sent = true;
 
+            if (streamTimingLog) {
+                logStreamTiming(new StreamTiming(streamStartMillis, executeNanos, firstBatchNanos,
+                        System.nanoTime() - streamStartNanos, duckNanos, sendNanos, backpressureNanos,
+                        rowsSent, batchesSent), duckSql);
+            }
             if (t >= 0) {
                 LogUtil.logTiming(t, "duckdb.streamSql",
                         "batches=" + batchesSent + " rows=" + rowsSent
@@ -2108,6 +2127,69 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @return whether a batch was loaded
      * @throws Exception on query failure, interruption or cancellation while waiting
      */
+    /**
+     * Times of one finished result stream for its {@code streamTiming} line.
+     *
+     * @param startMillis       epoch milliseconds when the stream started
+     * @param executeNanos      gate wait, executeQuery and Arrow export until the reader was open
+     * @param firstBatchNanos   start to the first non-empty batch, or -1 without one
+     * @param totalNanos        start to the end of the last batch
+     * @param duckNanos         time spent in DuckDB loading batches
+     * @param sendNanos         time spent handing batches to gRPC
+     * @param backpressureNanos time spent waiting for the client to take batches
+     * @param rows              rows sent
+     * @param batches           batches sent
+     */
+    record StreamTiming(long startMillis, long executeNanos, long firstBatchNanos, long totalNanos,
+            long duckNanos, long sendNanos, long backpressureNanos, long rows, int batches) {
+
+        /**
+         * Formats the line's fields after {@code streamTiming}, without the SQL.
+         *
+         * @return space-separated key=value pairs, times in milliseconds
+         */
+        String fields() {
+            return "startMs=" + startMillis + " executeMs=" + executeNanos / 1_000_000
+                    + " firstBatchMs=" + (firstBatchNanos >= 0 ? firstBatchNanos / 1_000_000 : -1)
+                    + " totalMs=" + totalNanos / 1_000_000 + " duckMs=" + duckNanos / 1_000_000
+                    + " sendMs=" + sendNanos / 1_000_000 + " backpressureMs=" + backpressureNanos / 1_000_000
+                    + " rows=" + rows + " batches=" + batches;
+        }
+    }
+
+    /** Characters of the DuckDB SQL a streamTiming line keeps. */
+    static final int STREAM_TIMING_SQL_CHARS = 80;
+
+    /**
+     * Logs the {@code streamTiming} INFO line of a finished stream (streamTimingLog): one line per
+     * stream, with the epoch start, so slow endpoints of a query can be placed on a timeline.
+     * The SQL is cut to {@value #STREAM_TIMING_SQL_CHARS} characters, put on one line and has
+     * declared secret values redacted.
+     *
+     * @param timing  times of the stream
+     * @param duckSql DuckDB SQL of the stream
+     */
+    private void logStreamTiming(StreamTiming timing, String duckSql) {
+        LOGGER.info("qid={} node={} streamTiming {} sql='{}'", LogUtil.qid(), LogUtil.node(),
+                timing.fields(), streamTimingSql(redactor, duckSql));
+    }
+
+    /**
+     * Returns the SQL of a streamTiming line: secrets redacted first (so a cut cannot leave part
+     * of one), then cut to {@value #STREAM_TIMING_SQL_CHARS} characters and put on one line.
+     *
+     * @param redactor declared secret values
+     * @param duckSql  DuckDB SQL of the stream
+     * @return SQL text for the line
+     */
+    static String streamTimingSql(SecretRedactor redactor, String duckSql) {
+        String sql = redactor.redact(duckSql);
+        if (sql.length() > STREAM_TIMING_SQL_CHARS) {
+            sql = sql.substring(0, STREAM_TIMING_SQL_CHARS);
+        }
+        return LogUtil.oneLine(sql);
+    }
+
     private static boolean loadNextBatch(ArrowReader reader, ProducingStreamGate.Pass pass)
             throws Exception {
         pass.enter();

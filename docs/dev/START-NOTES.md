@@ -331,6 +331,7 @@ settings are `arrowflight.<plugin>.<key>` properties; the auth providers read en
 | `flightCompressionMinBytes` (`arrowflight.flight.compressionMinBytes`) | 65536 | smaller batches go plain |
 | `flightCompressionThreads` (`arrowflight.flight.compressionThreads`) | 0 = one per core, at most 8 | compress a batch's columns side by side; 1 = serial |
 | `flightZeroCopyWrites` (`arrowflight.flight.zeroCopyWrites`, `FLIGHT_ZERO_COPY_WRITES`) | false | gRPC sends DuckDB's exported buffers without a copy |
+| `streamTimingLog` (`arrowflight.log.streamTiming`, `STREAM_TIMING_LOG`) | false | one `streamTiming` INFO line per finished DuckDB result stream |
 | `flightSessionIdleSeconds` (`arrowflight.flight.sessionIdleSeconds`) | 3600 | Flight SQL session (SetSessionOptions) idle expiry |
 | `flightSessionMax` (`arrowflight.flight.sessionMax`) | 10000 | sessions per node |
 | `plainFlightCommands` (`arrowflight.plainFlightCommands`, `FLIGHT_PLAIN_COMMANDS`) | false | plain Arrow Flight clients (SQL command / `schema.table` path descriptors, e.g. ClickHouse) |

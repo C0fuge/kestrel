@@ -972,6 +972,33 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns {@code streamTimingLog} from the system configuration.
+     *
+     * @return whether every finished DuckDB result stream logs one streamTiming INFO line
+     */
+    public static boolean streamTimingLog() {
+        return streamTimingLog(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code streamTimingLog} ({@code arrowflight.log.streamTiming},
+     * {@code STREAM_TIMING_LOG}): whether every finished DuckDB result stream logs one
+     * {@code streamTiming} INFO line with its epoch start and times; default false.
+     *
+     * @param props configuration source
+     * @return true when on
+     * @throws IllegalArgumentException for a value other than true or false
+     */
+    public static boolean streamTimingLog(ConfigSource props) {
+        String value = getStringWithEnv("streamTimingLog", "arrowflight.log.streamTiming",
+                "STREAM_TIMING_LOG", "false", props).trim();
+        if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("streamTimingLog must be true or false: " + value);
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    /**
      * Returns the node-wide DuckDB sizing of duckDbSharedDatabase from the system configuration,
      * with the private DuckDB of a query run again after running out of memory sized as the
      * DuckDB-per-connection mode without a resource profile.

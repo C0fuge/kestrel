@@ -1145,6 +1145,49 @@ class FlightSqlProducerTest {
         verify(unknownOnly, never()).error(any());
     }
 
+    /** Verifies SqlInfo does not advertise DDL the read-only server refuses (upstream 245281c). */
+    @Test
+    void sqlInfoReportsReadOnlyCapabilities() throws Exception {
+        try (org.apache.arrow.memory.RootAllocator allocator = new org.apache.arrow.memory.RootAllocator()) {
+            FlightSqlProducer producer = new FlightSqlProducer(
+                    Location.forGrpcInsecure("localhost", 32010), allocator,
+                    mock(MetadataService.class), mock(QueryPlanner.class),
+                    mock(ExecutionService.class), mock(ClusterService.class));
+            FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+            java.util.concurrent.atomic.AtomicReference<VectorSchemaRoot> rootRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Map<Integer, Object> values = new java.util.HashMap<>();
+            org.mockito.Mockito.doAnswer(invocation -> {
+                rootRef.set(invocation.getArgument(0));
+                return null;
+            }).when(listener).start(any(VectorSchemaRoot.class));
+            org.mockito.Mockito.doAnswer(invocation -> {
+                VectorSchemaRoot root = rootRef.get();
+                org.apache.arrow.vector.UInt4Vector names =
+                        (org.apache.arrow.vector.UInt4Vector) root.getVector("info_name");
+                org.apache.arrow.vector.complex.DenseUnionVector data =
+                        (org.apache.arrow.vector.complex.DenseUnionVector) root.getVector("value");
+                for (int i = 0; i < root.getRowCount(); i++) {
+                    values.put(names.get(i), data.getObject(i));
+                }
+                return null;
+            }).when(listener).putNext();
+
+            producer.getStreamSqlInfo(FlightSql.CommandGetSqlInfo.newBuilder()
+                    .addInfo(FlightSql.SqlInfo.FLIGHT_SQL_SERVER_READ_ONLY_VALUE)
+                    .addInfo(FlightSql.SqlInfo.SQL_DDL_CATALOG_VALUE)
+                    .addInfo(FlightSql.SqlInfo.SQL_DDL_SCHEMA_VALUE)
+                    .addInfo(FlightSql.SqlInfo.SQL_DDL_TABLE_VALUE)
+                    .build(), mock(FlightProducer.CallContext.class), listener);
+
+            assertEquals(4, values.size(), values.toString());
+            assertEquals(true, values.get(FlightSql.SqlInfo.FLIGHT_SQL_SERVER_READ_ONLY_VALUE));
+            assertEquals(false, values.get(FlightSql.SqlInfo.SQL_DDL_CATALOG_VALUE));
+            assertEquals(false, values.get(FlightSql.SqlInfo.SQL_DDL_SCHEMA_VALUE));
+            assertEquals(false, values.get(FlightSql.SqlInfo.SQL_DDL_TABLE_VALUE));
+        }
+    }
+
     /** Verifies BeginTransaction is refused as UNIMPLEMENTED with a description. */
     @Test
     void beginTransactionIsRefusedWithADescription() {

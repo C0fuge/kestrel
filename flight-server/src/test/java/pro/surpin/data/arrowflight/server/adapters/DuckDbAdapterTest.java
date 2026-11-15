@@ -233,6 +233,71 @@ class DuckDbAdapterTest {
         }
     }
 
+    /** Verifies the fields of a streamTiming line are milliseconds and -1 without a first batch. */
+    @Test
+    void streamTimingFieldsAreMilliseconds() {
+        DuckDbAdapter.StreamTiming timing = new DuckDbAdapter.StreamTiming(1_700_000_000_000L,
+                3_500_000L, -1L, 12_900_000L, 7_000_000L, 2_000_000L, 1_999_999L, 250L, 3);
+        assertEquals("startMs=1700000000000 executeMs=3 firstBatchMs=-1 totalMs=12 duckMs=7 sendMs=2"
+                + " backpressureMs=1 rows=250 batches=3", timing.fields());
+    }
+
+    /** Verifies the SQL of a streamTiming line is redacted before it is cut, and on one line. */
+    @Test
+    void streamTimingSqlRedactsBeforeCutting() {
+        pro.surpin.data.arrowflight.spi.config.SecretRedactor redactor =
+                new pro.surpin.data.arrowflight.spi.config.SecretRedactor();
+        String secret = "s3cr3tValueThatCrossesTheCut";
+        redactor.add(secret);
+        String prefix = "SELECT *\nFROM t WHERE ";
+        String filler = "x".repeat(DuckDbAdapter.STREAM_TIMING_SQL_CHARS - prefix.length() - 10);
+        String sql = prefix + filler + " = '" + secret + "' AND y = 1";
+        String line = DuckDbAdapter.streamTimingSql(redactor, sql);
+        assertFalse(line.contains("s3cr3t"), line);
+        assertFalse(line.contains("\n"), line);
+        assertTrue(line.startsWith("SELECT *\\nFROM t"), line);
+        assertTrue(line.length() <= DuckDbAdapter.STREAM_TIMING_SQL_CHARS + 1, line);
+        assertEquals("SELECT 1", DuckDbAdapter.streamTimingSql(redactor, "SELECT 1"));
+    }
+
+    /**
+     * Verifies streamTimingLog=true writes one streamTiming line per finished stream with its row
+     * and batch counts, and that the answer is unchanged.
+     */
+    @Test
+    void streamTimingLogWritesOneLinePerStream() throws Exception {
+        String previous = System.getProperty("streamTimingLog");
+        java.io.PrintStream err = System.err;
+        java.io.ByteArrayOutputStream log = new java.io.ByteArrayOutputStream();
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        FlightProducer.ServerStreamListener listener = mock(FlightProducer.ServerStreamListener.class);
+        when(listener.isReady()).thenReturn(true);
+        try {
+            System.setProperty("streamTimingLog", "true");
+            System.setErr(new java.io.PrintStream(log, true, java.nio.charset.StandardCharsets.UTF_8));
+            try (RootAllocator allocator = new RootAllocator();
+                    DuckDbAdapter adapter = new DuckDbAdapter(completeConfig(), ioPool)) {
+                adapter.streamSql(allocator, "SELECT range AS id FROM range(0, 250) -- streamTimingProbe",
+                        listener, true);
+            }
+        } finally {
+            System.setErr(err);
+            if (previous == null) {
+                System.clearProperty("streamTimingLog");
+            } else {
+                System.setProperty("streamTimingLog", previous);
+            }
+            ioPool.shutdownNow();
+        }
+        List<String> lines = log.toString(java.nio.charset.StandardCharsets.UTF_8).lines()
+                .filter(l -> l.contains(" streamTiming ") && l.contains("streamTimingProbe")).toList();
+        assertEquals(1, lines.size(), log.toString(java.nio.charset.StandardCharsets.UTF_8));
+        String line = lines.get(0);
+        assertTrue(line.matches(".*startMs=\\d{13} executeMs=\\d+ firstBatchMs=\\d+ totalMs=\\d+ duckMs=\\d+"
+                + " sendMs=\\d+ backpressureMs=\\d+ rows=250 batches=\\d+ sql='SELECT range.*"), line);
+        verify(listener, org.mockito.Mockito.atLeastOnce()).putNext();
+    }
+
     @Test
     void sqlStringLiteralNormal() {
         assertEquals("'hello'", DuckDbAdapter.sqlStringLiteral("hello"));

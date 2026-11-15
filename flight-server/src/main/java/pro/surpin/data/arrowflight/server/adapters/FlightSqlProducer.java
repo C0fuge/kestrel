@@ -216,9 +216,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 .withFlightSqlServerSubstrait(false)
                 .withFlightSqlServerTransaction(
                         FlightSql.SqlSupportedTransaction.SQL_SUPPORTED_TRANSACTION_NONE)
+                // Read-only server: no CREATE / DROP of catalogs, schemas or tables over Flight SQL.
                 .withSqlDdlCatalog(false)
-                .withSqlDdlSchema(true)
-                .withSqlDdlTable(true)
+                .withSqlDdlSchema(false)
+                .withSqlDdlTable(false)
                 .withSqlIdentifierCase(
                         FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_LOWERCASE)
                 .withSqlQuotedIdentifierCase(
