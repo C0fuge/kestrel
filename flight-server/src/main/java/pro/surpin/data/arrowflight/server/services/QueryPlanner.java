@@ -680,6 +680,8 @@ public final class QueryPlanner {
         if (!immutable.isEmpty()) {
             filePlanCache.put(cacheKey, new CachedFilePlan(
                     immutable, now + FILE_PLAN_TTL_NANOS));
+            CacheLimits.prune(filePlanCache, value -> value.expiresAtNanos() <= System.nanoTime(),
+                    CacheLimits.MAX_CACHED_FILE_PLANS);
         }
         return immutable;
     }

@@ -25,6 +25,7 @@ import pro.surpin.data.arrowflight.server.catalog.CatalogTables;
 import pro.surpin.data.arrowflight.server.model.AppConfig;
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
+import pro.surpin.data.arrowflight.server.services.CacheLimits;
 import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 import pro.surpin.data.arrowflight.server.storage.DataStore;
@@ -257,6 +258,8 @@ public class ParquetAdapter {
         TableKey key = new TableKey(schema, table);
         CachedTableSchema cached = arrowSchemaCache.compute(key,
                 (ignored, current) -> refreshTableSchema(key, current));
+        CacheLimits.prune(arrowSchemaCache, value -> value.expiresAtNanos() <= System.nanoTime(),
+                CacheLimits.MAX_CACHED_TABLE_SCHEMAS);
         Schema fullSchema = cached.schema();
         if (columns == null || columns.isEmpty()) {
             LogUtil.logTiming(t, "schema.cache",
@@ -374,6 +377,8 @@ public class ParquetAdapter {
         DataFile first = files.stream().filter(store::readableHere).findFirst()
                 .orElse(files.get(0));
         sampleFileCache.put(key, new CachedSampleFile(first, now + METADATA_TTL_NANOS));
+        CacheLimits.prune(sampleFileCache, value -> value.expiresAtNanos() <= System.nanoTime(),
+                CacheLimits.MAX_CACHED_TABLE_SCHEMAS);
         return java.util.Optional.of(first);
     }
 
@@ -586,6 +591,9 @@ public class ParquetAdapter {
                     parquetSchema, rowCount, length, modificationTime,
                     now + METADATA_TTL_NANOS);
             parquetMetadataCache.put(relativePath, metadata);
+            CacheLimits.prune(parquetMetadataCache,
+                    value -> value.expiresAtNanos() <= System.nanoTime(),
+                    CacheLimits.MAX_CACHED_FOOTERS);
             return metadata;
         }
     }

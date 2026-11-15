@@ -223,6 +223,7 @@ public final class TableStatisticsService {
             long t = LogUtil.mark();
             cached = readFooters(store, files, fingerprint);
             footers.put(key, cached);
+            CacheLimits.prune(footers, ignored -> false, CacheLimits.MAX_CACHED_TABLE_STATISTICS);
             LogUtil.logTiming(t, "statistics.footers", "table=" + key + " files=" + files.size());
         }
         Map<String, ColumnStatistics> result = new LinkedHashMap<>();
