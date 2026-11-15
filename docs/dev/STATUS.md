@@ -57,7 +57,7 @@
 > unlike upstream, fresh cached footers are summed without any pool hand-off and a single file is read inline (the warm
 > planning path of point queries is unchanged), nested calls run inline, exception types are kept (action status
 > mapping unchanged). Core files touched: `ParquetAdapter`, `TableStatisticsService` (maintainer exception). Dev CI
-> 43770947562 green on `fix/49c`; push Dev CI on main 43772589502.
+> 43770947562 green on `fix/49c`; push Dev CI on main 43774021600 green (a69848c9).
 
 > **MAIN PACKAGED (2026-11-12 04:28Z, core lane).** `main` held unpackaged runtime changes: Q-40b-1 (2f31c071, file
 > pruning off by default for a local, unshared `dataDir`), item 48 + Q3 (lane 3, 97ad4f22: dc filtered one-row

@@ -15,7 +15,7 @@ itself, nested calls from a footer thread run inline (no pool deadlock), and fai
 before). Pool `-DparquetFooterThreads` (default 16, as upstream). Measured in `ParquetFooterReadsTest.readsInParallel`:
 16 reads with a simulated 50 ms store round trip take well under 400 ms (serial: 800 ms); answers checked against
 DuckDB over 24 files (`TableStatisticsServiceTest.manyFilesMatchDuckDb`). Dev CI 43770947562 green on `fix/49c`, push
-Dev CI on main 43772589502. Not done (own feature, not part of 49(c)): `FileStatsPruner` still reads its footers one
+Dev CI on main 43774021600 green (a69848c9). Not done (own feature, not part of 49(c)): `FileStatsPruner` still reads its footers one
 after another - a candidate for the same helper if HDFS point cells show cold-footer time.
 
 > **Maintainer, 2026-11-11 21:10 - answers.** **Q-40b-1: yes** - turn file pruning off by default for a local
@@ -1103,4 +1103,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-15 19:21Z (session 68): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 67). No code change, lock not taken.
 - 2026-11-15 20:21Z (session 69): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 68). No code change, lock not taken.
 - 2026-11-15 21:21Z (session 70): no open item (item 47 DONE; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note since session 69). No code change, lock not taken.
-- 2026-11-15 22:37Z (session 71): ITEM 49(c) DONE df3dae71 - parallel cold Parquet footer reads for row estimates and table statistics (`ParquetFooterReads`, `-DparquetFooterThreads`); Dev CI 43770947562 green on `fix/49c`, push Dev CI on main 43772589502. Next: no open item in this lane (C3 step 2 / C4 (b) / (d) backlog; Q11 open); packaging is the core lane's once 49(b) / 49(d) are done.
+- 2026-11-15 22:37Z (session 71): ITEM 49(c) DONE df3dae71 - parallel cold Parquet footer reads for row estimates and table statistics (`ParquetFooterReads`, `-DparquetFooterThreads`); Dev CI 43770947562 green on `fix/49c`, push Dev CI on main 43774021600 green (a69848c9; 43772589502 was cancelled by a later push). Next: no open item in this lane (C3 step 2 / C4 (b) / (d) backlog; Q11 open); packaging is the core lane's once 49(b) / 49(d) are done.
