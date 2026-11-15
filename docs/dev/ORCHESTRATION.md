@@ -3,7 +3,7 @@
 **ALL DONE 2026-11-12T09:56Z** (ITEM 26 / 27 DONE in kestrel STATUS.md, IMPROVEMENTS DONE in marten and heron, egret FRESH for the
 newest pre-release `server-1.0.0-2c169a53db3b`: run 43175544843, `results/FRESH-2c169a53db3b.md`).
 
-Status as of **2026-11-15T20:56Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: core no open item, plugins 20:11Z / catalogs 20:21Z (session 69) / lane 3 20:04Z no open item, marten 20:41Z / heron 20:51Z (session 295) nothing new, egret idle 19:27Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) / lane 3 18:03Z no open item, marten 19:41Z / heron 19:51Z (session 294) nothing new, egret idle 19:27Z, no new pre-release, no new CI runs, Dev CI on main green, all locks empty) (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-15T21:56Z UTC** (refresh only; ALL DONE, nothing changed since 2026-11-12T09:56Z: core no open item, catalogs 21:21Z (session 70) / plugins / lane 3 no open item, marten 21:41Z / heron 21:51Z (session 296) nothing new, egret idle 21:26Z, no new pre-release, no new CI runs, Dev CI on main green, all locks on main empty; stale-looking `LOCK-LANE3` 2026-11-12T03:03Z only on the old `lane/distributed` branch, lane 3 now uses main) (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **Pre-release `server-1.0.0-2c169a53db3b`** (Q-40b-1, items 47 / 48, Q3) is fully screened: egret HDFS ACCEPT
@@ -61,6 +61,7 @@ on main (43149903188, 00da2257) green; no newer runs on main (only `[skip ci]` c
 
 ## History
 
+- 2026-11-15T21:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T20:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T14:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T13:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
@@ -100,4 +101,3 @@ on main (43149903188, 00da2257) green; no newer runs on main (only `[skip ci]` c
 - 2026-11-10T13:58Z: refresh (ALL DONE). Catalogs 40(b) cut 5 (3a01265e, one pruning per DoGet) on main, Dev CI 42822143053 green, c1 p50 back at baseline without a default change, so Q-40b-1 is now optional; next cut 4228c733 (one jOOQ parse per point-query shape) on main, Dev CI 42828677361 running; lock catalogs 13:24Z active; no stale locks, no red CI.
 - 2026-11-10T12:58Z: catalogs lane bisected the local c1 regression to footer-stats file pruning (b0f82a47) and asked **Q-40b-1** (default change: prune only for remote stores); 40(b) cut 5 on fix/40b-small-5 (Dev CI 42818682745 + Small query perf 42818686506 running); main Dev CI 42812785328 (33d4d2dc) green, Service cluster 42812785652 green; lock catalogs 12:24Z active; no stale locks, no red CI.
 - 2026-11-10T11:58Z: ALL DONE conditions met (egret FRESH 37bf9401d77c done, run 42791002963); egret ACCEPT 37bf9401d77c DO NOT SHIP on check 6 only (maintainer decision); catalogs 40(b) cuts a4e14e03 + ac2055c8 on main, Dev CI 42811292025 running; lock catalogs 11:20Z active; no stale locks, no red CI.
-- 2026-11-10T10:58Z: Service cluster red resolved (D17 DONE: lane 3 point gate fix ed81bfc8/f567baa4, runs 42796003792 main + 42796297705 branch green); item 41 follow-up (2) DONE (hdfs=reads lines on direct SASL, Dev CI 42794847349 + Service hdfs 42794862424 green); 40(b) 3rd improvement 388b81f5 on main, Dev CI 42802352922 running; egret ACCEPT 37bf9401d77c PARTIAL (check 6: no hdfs=reads lines, added after that build), rerun + FRESH running; lock catalogs 10:21Z active; no stale locks.
