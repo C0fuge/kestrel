@@ -4,6 +4,8 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(d) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `0419ac23bc0c` (refresh of the distributed Parquet file inventory) and `ea2f83f1a77d` (long runtime IN-filters sent to DuckDB as a range). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
+
 > **Maintainer, 2026-11-11 21:10 - answers + D14.** **Q3: yes** - default `arrowAllocatorLimitBytes` from the JVM's
 > direct memory (e.g. 75 % of MaxDirectMemorySize, at least 256 MiB; an explicit setting wins; start line shows it).
 > **Q4: yes**, keep `distributedCompletePointLookups=local` as the default. **D14 (stand on `29f1267b995f`, DataNodes

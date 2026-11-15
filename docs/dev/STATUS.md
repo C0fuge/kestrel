@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-16 01:40 - ITEM 49: upstream server changes since `cec626bbb54a` (09.11) - split over the four lanes.**
+> upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` is at `28d6ea713b8e` (15.11), 49 commits ahead of `cec626b`; most are findings docs and connector patches, the server
+> commits are split: **49(a) core (this file):** `3bb34baecbf4` httpfs connection caching (`duckDbHttpConnectionCaching`, S3),
+> `1f3551f3b25a` one `streamTiming` log line per stream, `245281cee230` accurate read-only Flight SQL capabilities.
+> **49(b) plugins:** `a5d6a43e9dbe` scan cancellation propagation + optional scan admission limit, `fd3c76a1d092` bounded
+> retained Flight / metadata state. **49(c) catalogs:** `b85c78487f4f` + `9e8bcf5cd51d` table-statistics footers read in parallel.
+> **49(d) lane 3:** `0419ac23bc0c` refresh of the distributed Parquet file inventory, `ea2f83f1a77d` long runtime IN-filters sent to
+> DuckDB as a range. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there. **The core lane packages (`package=true`) once 49(a)-(d) are each DONE or NOT NEEDED** (runtime
+> changes only); the lang package of 2c169a53db3b is not waiting for this.
+
 > **MAIN PACKAGED (2026-11-12 04:28Z, core lane).** `main` held unpackaged runtime changes: Q-40b-1 (2f31c071, file
 > pruning off by default for a local, unshared `dataDir`), item 48 + Q3 (lane 3, 97ad4f22: dc filtered one-row
 > aggregates over <= 4 pruned files computed locally; default `arrowAllocatorLimitBytes` = 75 % of direct memory) and

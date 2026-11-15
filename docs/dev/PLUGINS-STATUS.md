@@ -5,6 +5,8 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 ## Next steps (one per session, in this order)
 
+> **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(b) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `a5d6a43e9dbe` (scan cancellation propagation + optional scan admission limit) and `fd3c76a1d092` (bounded retained Flight / metadata state). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
+
 > **Maintainer, 2026-11-11 18:40 - ITEM 46 (minor, stand on `29f1267b995f`; no wrong answers, package shipped).**
 > (1) balanced in 6 GB / -Xmx3g / direct 2g logs `duckdb=memoryLimitAboveJvmLimits memoryLimit=1024MiB instances=4
 > budgetMiB=102`: the budget still uses the full -Xmx + direct while the floors use the real reservation - make both

@@ -4,6 +4,8 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 ## Next steps
 
+> **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
+
 > **Maintainer, 2026-11-11 21:10 - answers.** **Q-40b-1: yes** - turn file pruning off by default for a local
 > `dataDir` (keep it on for HDFS / S3 / plugin stores; an explicit setting wins); the performance repo still sees speed
 > c1 p50 1.16-1.32x balanced locally, this is the cost you found. **Q10: keep pruning on** for HDFS/S3 (the stand ran
