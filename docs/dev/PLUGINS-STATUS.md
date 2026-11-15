@@ -7,6 +7,20 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(b) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `a5d6a43e9dbe` (scan cancellation propagation + optional scan admission limit) and `fd3c76a1d092` (bounded retained Flight / metadata state). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
+ITEM 49(b) DONE f0adaf52 (2026-11-15, plugins lane; `fix/49b` rebase-merged into `main`, see Log 23:35Z).
+- `fd3c76a1d092` (bounded retained state): DONE - the metadata caches (Parquet footers 50 000, table schemas and sample
+  files 4 096, file plans 1 024, table statistics 4 096) get entry caps via `services/CacheLimits` (expired entries first,
+  then live ones down to 90 % of the cap, so a full cache is not rescanned on every insert - upstream prunes one entry per
+  insert, a full scan each time). Its prepared-statement part is NOT NEEDED: kestrel's prepared handles carry the SQL
+  (stateless, `QueryParameters`), there is no server-side map to bound, and parameter values already expire after 30 min
+  in Hazelcast; upstream's 10-minute TTL / 1024-statement RESOURCE_EXHAUSTED would also break long-lived BI statements.
+- `a5d6a43e9dbe` (scan cancellation + optional admission limit): NOT NEEDED - kestrel already refuses to execute for a
+  cancelled call (`executeQuery`), interrupts DuckDB while it computes (`ListenerReadiness` cancel watch, every 50 ms;
+  upstream only checks between batches and on the readiness timeout) and answers CANCELLED; its admission control is
+  `duckDbProducingStreams` (`ProducingStreamGate`: fair, cancel-aware, holds the permit only while DuckDB produces, never
+  while the client reads). Upstream's `duckDbMaxConcurrentStreams` holds a permit for the whole stream, so streams one
+  client reads in turn can block each other - the case our gate was built to avoid.
+
 > **Maintainer, 2026-11-11 18:40 - ITEM 46 (minor, stand on `29f1267b995f`; no wrong answers, package shipped).**
 > (1) balanced in 6 GB / -Xmx3g / direct 2g logs `duckdb=memoryLimitAboveJvmLimits memoryLimit=1024MiB instances=4
 > budgetMiB=102`: the budget still uses the full -Xmx + direct while the floors use the real reservation - make both
@@ -1384,3 +1398,8 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run; lock not taken.
 - 2026-11-15 20:12Z (plugins session): no open item (no new maintainer note since 2026-11-11 18:40; waiting on the
   maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46). No code change, no CI run; lock not taken.
+- 2026-11-15 23:35Z (plugins session): item 49(b) - fd3c76a1 cache caps DONE (`CacheLimits`, 6 unit tests), its
+  prepared-statement part and a5d6a43 NOT NEEDED (reasons in Next steps). Core-module change by the maintainer's
+  exception; `STATUS.md` Log line written. CI: Dev CI 43770929566 on `fix/49b` (a8271c2d) green; rebased onto 49(a) and
+  49(c), targeted tests green locally, merged as f0adaf52 (push CI on `main`). Runtime change: the core lane packages
+  once 49(a)-(d) are done.

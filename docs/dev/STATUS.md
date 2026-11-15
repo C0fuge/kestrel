@@ -4337,3 +4337,9 @@ S3 slowdown item below stays open for then).
   `SQL_DDL_SCHEMA` / `SQL_DDL_TABLE` now false - a correction of advertised capabilities the maintainer's item asked
   for; no command changes. Next: none for the core lane; package once 49(b)-(d) are DONE / NOT NEEDED. Branch
   `fix/49a` can be deleted. Lock released.
+- 2026-11-15 23:35Z (plugins lane): ITEM 49(b) DONE f0adaf52 - core change by the maintainer's exception:
+  `services/CacheLimits` caps the metadata caches (footers 50 000, table schemas / sample files 4 096, file plans 1 024,
+  table statistics 4 096; upstream fd3c76a1). Upstream's prepared-statement map and a5d6a43 (scan cancellation,
+  `duckDbMaxConcurrentStreams`) NOT NEEDED: kestrel's handles are stateless and `ProducingStreamGate` + the DuckDB cancel
+  watch already do more (reasons in `PLUGINS-STATUS.md`). Dev CI 43770929566 green on `fix/49b`. Runtime change:
+  counts toward the 49(a)-(d) package.
