@@ -1,14 +1,13 @@
 package pro.surpin.data.arrowflight.server;
 
 import org.apache.arrow.flight.FlightEndpoint;
-import org.apache.arrow.flight.FlightInfo;
-import org.apache.arrow.flight.FlightStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import pro.surpin.data.arrowflight.server.model.FileAssignment;
+import pro.surpin.data.arrowflight.server.model.HandleState;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,15 +15,17 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Item 49 (d): two nodes, each with its own local data directory. A file written on the second
@@ -84,12 +85,12 @@ class FileInventoryRefreshIntegrationTest {
     }
 
     /**
-     * A file written on the second node after the start is planned and read by the first.
+     * A file written on the second node after the start is in the first node's plans.
      *
      * @throws Exception on failure
      */
     @Test
-    void fileWrittenAfterStartIsPlannedOnItsNode() throws Exception {
+    void fileWrittenAfterStartIsPlanned() throws Exception {
         assertFalse(NODE.get(0).clusterService.fileLocations(false).containsKey(NEW_FILE));
         // Written aside and moved in, as a writer should, so no listing sees half a file.
         Path aside = DIRS.get(1).resolve("part-1-later.tmp");
@@ -99,28 +100,21 @@ class FileInventoryRefreshIntegrationTest {
         await(locations -> locations.containsKey(NEW_FILE) && locations.get(NEW_FILE).hosts().contains(second),
                 "the file written later on the second node");
 
-        FlightInfo info = NODE.get(0).sqlClient().execute("SELECT v FROM s.t");
-        long rows = 0;
-        long sum = 0;
-        boolean secondPlanned = false;
-        for (FlightEndpoint endpoint : info.getEndpoints()) {
-            String uri = endpoint.getLocations().get(0).getUri().toString();
-            TestFlightServerHelper node = uri.equals(second) ? NODE.get(1) : NODE.get(0);
-            secondPlanned |= uri.equals(second);
-            try (FlightStream stream = node.sqlClient().getStream(endpoint.getTicket())) {
-                while (stream.next()) {
-                    var vector = (org.apache.arrow.vector.BigIntVector) stream.getRoot().getVector("v");
-                    for (int r = 0; r < stream.getRoot().getRowCount(); r++) {
-                        sum += vector.get(r);
-                        rows++;
-                    }
-                }
-            }
+        // The plan is checked, not run: both nodes share one host, and the planner tells nodes
+        // apart by host, so on local disks it may send a file to the other node of the host.
+        TestFlightServerHelper first = NODE.get(0);
+        Set<String> planned = new TreeSet<>();
+        for (FlightEndpoint endpoint : first.queryPlanner.plan("SELECT v FROM s.t").endpoints()) {
+            byte[] handle = com.google.protobuf.Any.parseFrom(endpoint.getTicket().getBytes())
+                    .unpack(org.apache.arrow.flight.sql.impl.FlightSql.TicketStatementQuery.class)
+                    .getStatementHandle().toByteArray();
+            HandleState state = first.clusterService.resolveEndpointHandle(handle);
+            planned.addAll(Arrays.asList(state.filePaths()));
+            // Planning reserved the endpoint's load; nothing reads it.
+            first.clusterService.releaseEndpointLoad(handle, state);
         }
-        long total = ROWS_FIRST + ROWS_LATER;
-        assertTrue(secondPlanned, "no endpoint on the second node");
-        assertEquals(total, rows, "rows of both files");
-        assertEquals(total * (total - 1) / 2, sum, "values 0.." + (total - 1));
+        assertEquals(new TreeSet<>(Set.of("s/t/part-0.parquet", NEW_FILE)), planned,
+                "the plan names the file written later");
     }
 
     /**
