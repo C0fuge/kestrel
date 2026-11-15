@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `streamTimingLog`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `fileInventoryRefreshSeconds`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -447,6 +447,14 @@ default 4, 0 merges them all), all readable on that node. Probation merges run w
 merges per stream, at least 32, at once; more wait as usual). After `distributedCompleteAdmissionWaitMillis` (default 300000)
 it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
 `RESOURCE_EXHAUSTED`.
+
+`fileInventoryRefreshSeconds` (`FLIGHT_FILE_INVENTORY_REFRESH_SECONDS`, default 30, 0 = only at start; added 2026-11-15)
+is how often a node lists its data directory again and publishes its Parquet file inventory to the cluster when it
+changed. Plans on local, unshared data directories take their files from these inventories, so a file written on a
+node after its start is now planned (it was left out until the node restarted) and a removed one no longer is. On
+shared storage the plan's files always come from the store's listing; the inventory gives the reading node. Write
+files aside and rename them into place, so a listing never sees half a file. A stopped node's inventory stays
+published, so its files fail plans instead of leaving answers.
 
 `shutdownDrainSeconds` (`FLIGHT_SHUTDOWN_DRAIN_SECONDS`, default 20, was 0 before 2026-10-29) drains a node that is stopped (SIGTERM,
 `docker stop`, a rolling restart): it first leaves the cluster's pool (other nodes stop planning on it), then answers

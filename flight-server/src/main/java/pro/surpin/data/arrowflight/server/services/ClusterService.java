@@ -19,7 +19,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -78,6 +80,10 @@ public final class ClusterService implements AutoCloseable {
     // Writes whose key lives on a member that stopped answering run here, one after the other,
     // so that neither a query nor the heartbeat waits for that member (item D3).
     private final ExecutorService deferredWriteExecutor;
+    /** Lists the data directory again now and then (item 49 (d)); started by {@link #refreshInventory}. */
+    private ScheduledExecutorService inventoryExecutor;
+    /** Lists this node's files for {@link #refreshFileInventory()}; null until a refresh is set up. */
+    private volatile Callable<Map<String, Long>> inventorySource;
     /** Keys with deferred writes not done yet, and how many: later writes of them queue too. */
     private final Map<String, Integer> deferredKeys = new ConcurrentHashMap<>();
     /** Load deltas of deferred writes not done yet, by server URI, counted in plans at once. */
@@ -465,6 +471,80 @@ public final class ClusterService implements AutoCloseable {
         writeOrDefer(this.serverUri, HazelcastAdapter.ALL_MEMBERS_BACKUP_COUNT, "publish inventory",
                 () -> hazelcast.serverFiles().put(this.serverUri, published));
         LOGGER.info("Registered {} local Parquet file(s) for {}", files.size(), this.serverUri);
+    }
+
+    /**
+     * Lists this node's files again every {@code intervalSeconds} and publishes the inventory when
+     * it changed (item 49 (d), after upstream {@code 0419ac23}): a node published it only at
+     * start, so plans on local disks left out the files written later and still named the files
+     * removed since. A dead node's inventory stays published, as before: on local disks its files
+     * must fail the plan, not leave the answer. Later calls do nothing.
+     *
+     * @param source lists this node's files, relative path to byte size
+     * @param intervalSeconds seconds between listings; 0 or less sets up nothing
+     */
+    public synchronized void refreshInventory(Callable<Map<String, Long>> source, long intervalSeconds) {
+        if (intervalSeconds <= 0 || inventoryExecutor != null || deregistered) {
+            return;
+        }
+        inventorySource = Objects.requireNonNull(source, "source");
+        inventoryExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "flight-inventory");
+            t.setDaemon(true);
+            return t;
+        });
+        // Its own thread: a listing of a large HDFS directory must not hold the heartbeat.
+        inventoryExecutor.scheduleWithFixedDelay(this::refreshFileInventory,
+                intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        LOGGER.info("node={} inventory refresh every {} s (fileInventoryRefreshSeconds)", LogUtil.node(),
+                intervalSeconds);
+    }
+
+    /**
+     * Lists this node's files and publishes the inventory when it differs from the one last
+     * published; a failed listing keeps the published one.
+     *
+     * @return true when a changed inventory was published
+     */
+    boolean refreshFileInventory() {
+        Callable<Map<String, Long>> source = inventorySource;
+        if (source == null || deregistered) {
+            return false;
+        }
+        Map<String, Long> files;
+        try {
+            files = source.call();
+        } catch (Exception e) {
+            LOGGER.warn("node={} inventory=refreshFailed keeping {} published file(s): {}", LogUtil.node(),
+                    localInventory == null ? 0 : localInventory.size(), e.toString());
+            return false;
+        }
+        Map<String, Long> previous = localInventory;
+        if (files == null || files.equals(previous)) {
+            return false;
+        }
+        int added = 0;
+        int changed = 0;
+        for (Map.Entry<String, Long> file : files.entrySet()) {
+            Long size = previous == null ? null : previous.get(file.getKey());
+            if (size == null) {
+                added++;
+            } else if (!size.equals(file.getValue())) {
+                changed++;
+            }
+        }
+        int removed = 0;
+        if (previous != null) {
+            for (String path : previous.keySet()) {
+                if (!files.containsKey(path)) {
+                    removed++;
+                }
+            }
+        }
+        LOGGER.info("node={} inventory=changed added={} removed={} resized={}", LogUtil.node(),
+                added, removed, changed);
+        registerLocalFiles(files);
+        return true;
     }
 
     /**
@@ -1185,6 +1265,9 @@ public final class ClusterService implements AutoCloseable {
         deregistered = true;
         // First the heartbeat: a beat after the removal would put the server back.
         heartbeatExecutor.shutdownNow();
+        if (inventoryExecutor != null) {
+            inventoryExecutor.shutdownNow();
+        }
         try {
             heartbeatExecutor.awaitTermination(HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
         } catch (InterruptedException e) {

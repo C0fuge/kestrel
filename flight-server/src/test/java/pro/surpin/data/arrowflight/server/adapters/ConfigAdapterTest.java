@@ -422,6 +422,18 @@ class ConfigAdapterTest {
                 source(Map.of("arrowAllocatorLimitBytes", "2g"), Map.of()), 8 * gib));
     }
 
+    /** Item 49 (d): nodes list their files again every 30 s by default; 0 lists them only at start. */
+    @Test
+    void fileInventoryRefreshSecondsDefaultsToThirty() throws IOException {
+        assertEquals(30, ConfigAdapter.fileInventoryRefreshSeconds(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.fileInventoryRefreshSeconds(
+                source(Map.of("fileInventoryRefreshSeconds", "0"), Map.of())));
+        assertEquals(5, ConfigAdapter.fileInventoryRefreshSeconds(
+                source(Map.of(), Map.of("FLIGHT_FILE_INVENTORY_REFRESH_SECONDS", "5"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.fileInventoryRefreshSeconds(
+                source(Map.of("fileInventoryRefreshSeconds", "-1"), Map.of())));
+    }
+
     /** Item 48: filtered one-row aggregates over at most 4 pruned files are local by default; 0 turns it off. */
     @Test
     void distributedCompleteLocalAggregateMaxFilesDefaultsToFour() throws IOException {
