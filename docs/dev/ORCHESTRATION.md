@@ -1,25 +1,20 @@
 # Orchestration status
 
 ALL DONE (2026-11-12T09:56Z) **withdrawn** since 2026-11-15 22:00Z. Remaining for ALL DONE: kestrel `ITEM 51 DONE`
-(packaged, waits for marten's SF10 `ours,ours_rf` numbers), marten ITEM 51 re-measure (item (2), blocked: pre-release
-not in `m4-assets`), heron's patched-Trino item (measured, waits for the maintainer's freeze/remove answer). egret FRESH
-on the newest pre-release `server-1.0.0-6f0aa5a026fa` is now DONE.
+(packaged, waits for marten's SF10 `ours,ours_rf` numbers) and marten ITEM 51 re-measure (item (2): compare runs on
+6f0aa5a026fa now running). heron UPSTREAM 2026-11 DONE a11a36c (patched series frozen). egret FRESH on the newest
+pre-release `server-1.0.0-6f0aa5a026fa` is DONE.
 
-Status as of **2026-11-16T14:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-16T15:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- **Still blocking marten (and so ITEM 51 DONE):** pre-release `server-1.0.0-6f0aa5a026fa` (ITEM 51) is not in marten's
-  `m4-assets` (checked 14:57Z: no 6f0aa5a026fa asset; newest d2e27119fda4). marten's 12:41Z finish-mode session stopped
-  again (no marten session since). Please upload it (jar, flight-plugins, flight-server-libs, flight-auth, SHA256SUMS).
-- **heron Open question: freeze or remove the patched-Trino series** (proposal: freeze). Session 304 A/B (43852765801):
-  d2e27119fda4 = deafc861cce3 within noise, 22/22 exact; session 305 (43870753170, ABA 5 rounds) closed the q01 watch
-  (8.95 vs 8.91/8.83 s). Session 306 (13:52Z) idle: everything waits on this answer.
-- egret FRESH 6f0aa5a026fa: **regression by the rule, carried over and larger:** local small ADBC c1 p50 speed/balanced
-  **1.26** (1.22 1.16 1.26; d2e27119fda4 had 1.15); JDBC 1.11 not in all rounds. S3 SF10 JDBC speed +19 % vs
-  d2e27119fda4, read as runner variance (unchanged upstream binary +22 % on the same job). No wrong answers, 0 errors,
-  no visible item 51 cost (harness sends no ARF1 block).
+- marten is unblocked: 6f0aa5a026fa is available to it; session 15:40Z (lock active) ran the asset check and dispatched
+  compare sf=10 ours vs ours_rf both orders (43899589063, 43899594632, running). Their numbers then give kestrel `ITEM 51 DONE`.
+- heron: freeze answer taken; session 307 wrote UPSTREAM 2026-11 DONE a11a36c and returned to finish mode.
+- egret FRESH 6f0aa5a026fa: local small ADBC c1 p50 speed/balanced **1.26** (regression by the rule, carried over and
+  larger; d2e27119fda4 had 1.15). No wrong answers, 0 errors.
 - Still open: Q-51a (does marten's connector read in partial mode), Q-46 (hadoopfs negotiated QOP / cipher), catalogs
-  Q11; stand checks of items 50 / 51.
+  Q11; plugins Q-40a follow-up; stand checks of items 44 (2) / 46 / 50 / 51.
 - Branches `pkg/6f0aa5a0`, `pkg/d2e27119`, `pkg/7ab48cd6`, `pkg/2c169a53`, `pkg/74464701`, `pkg/29f1267b`, `pkg/2ff22144`,
   `pkg/37bf9401` can be deleted.
 
@@ -28,12 +23,12 @@ Points for the maintainer:
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 51 PACKAGED (waits for numbers); items 26 / 27 DONE 2026-11-03 | 09:27Z | free | main Dev CI 43831943883 green (6f0aa5a0); pkg 43834254344 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 13:18Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | session 83 nothing open | 14:25Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d), ITEM 50 DONE; nothing open | 14:04Z | free | lane/distributed Dev CI 43782908034 green |
+| plugins (`PLUGINS-STATUS.md`) | nothing open | 15:16Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | session 84 nothing open | 15:23Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d), ITEM 50 DONE; nothing open | 15:04Z | free | lane/distributed Dev CI 43782908034 green |
 
-No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 12:42Z);
-heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; no new pre-releases.
+No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` 15:40Z (active session);
+heron `docs/LOCK` empty (released 15:52Z). No new kestrel CI runs since 09:05Z; no new pre-releases.
 
 ## Service matrix (newest run per workflow)
 
@@ -46,26 +41,28 @@ heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; 
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-6f0aa5a026fa` (2026-11-16): item 51 (ticket runtime filters ARF1 in partial mode); egret FRESH DONE (43840086547); not in marten m4-assets.
+- `server-1.0.0-6f0aa5a026fa` (2026-11-16): item 51 (ticket runtime filters ARF1 in partial mode); egret FRESH DONE (43840086547); marten compare running.
 - `server-1.0.0-d2e27119fda4` (2026-11-16): item 50 + item 49; egret ACCEPT SHIP (43790722012), FRESH DONE (43798340706); marten m4 default.
-- `server-1.0.0-7ab48cd6675c` (2026-11-16): item 49; egret ACCEPT SHIP (43786698707); FRESH skipped (contained in d2e27119fda4).
+- `server-1.0.0-7ab48cd6675c` (2026-11-15): item 49; egret ACCEPT SHIP (43786698707); FRESH skipped (contained in d2e27119fda4).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03); UPSTREAM 2026-11 DONE `flbcef73`. Maintainer 11:15 MSK items: (1) DONE 09:50Z
-  (m4 default d2e27119fda4); (2) waits for 6f0aa5a026fa in `m4-assets` (finish-mode sessions 10:40Z, 11:42Z, 12:41Z stopped early).
-- heron: IMPROVEMENTS DONE (session 98). Patched-Trino item: sessions 302/303 measured: patched not faster, verdict stock
-  Trino; Open question freeze/remove. Sessions 304/305 server A/B: no regression (q01 watch closed); session 306 idle, waits on the answer.
+- marten: IMPROVEMENTS DONE (2026-11-03); UPSTREAM 2026-11 DONE `flbcef73`. Maintainer 11:15 items: (1) DONE 09:50Z
+  (m4 default d2e27119fda4); (2) in progress: 413e2aa (15:43Z) asset check + compare sf=10 ours/ours_rf both orders on
+  6f0aa5a026fa (43899589063, 43899594632 running).
+- heron: IMPROVEMENTS DONE (session 98). UPSTREAM 2026-11 DONE a11a36c (session 307, 15:52Z): maintainer froze the
+  patched-Trino series (no measured gain); back to finish mode.
 
 ## egret
 
 - Newest FRESH: **6f0aa5a026fa** (`results/FRESH-6f0aa5a026fa.md`, run 43840086547 + rereport 43861228344; upstream
   `28d6ea713b8e`, unchanged): speed/balanced 22/22, 0 errors; local small ADBC c1 p50 speed/balanced 1.26 (regression by
   the rule, carried over, larger); load +34-41 % at 128 clients (0.95-0.96 of upstream native); scans x4/x8 1.24-1.62 of
-  balanced. Upstream native still fails TPC-H answers. README 'In progress': EGRET FRESH 6f0aa5a026fa DONE; 13:31Z idle, newest tracked 6f0aa5a026fa.
+  balanced. Upstream native still fails TPC-H answers. README 'In progress': 15:27Z idle, newest tracked 6f0aa5a026fa.
 
 ## History
 
+- 2026-11-16T15:58Z: marten unblocked: compare sf=10 ours/ours_rf both orders on 6f0aa5a026fa running (43899589063/43899594632, lock 15:40Z); heron UPSTREAM 2026-11 DONE a11a36c (patched series frozen by the maintainer); kestrel lanes nothing open, no new CI runs or pre-releases; egret idle; no stale locks.
 - 2026-11-16T14:57Z: no change: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron idle on the patched-Trino question; lane 3 / catalogs (session 83) nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T13:58Z: no change in blockers: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron session 305 closed the q01 watch (43870753170, no regression), 306 idle on the patched-Trino question; plugins/catalogs nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T12:58Z: egret FRESH 6f0aa5a026fa DONE (43840086547 + rereport 43861228344; 22/22, 0 errors, no item 51 cost; local small ADBC c1 speed/balanced 1.26 carried over, larger); marten finish-mode session 12:41Z stopped again (6f0aa5a026fa still not in m4-assets); heron session 304 A/B: d2e27119fda4 = deafc861cce3, new session lock 12:53Z, connector-compare 43870753170 running; kestrel no code/CI change; no stale locks.
@@ -105,4 +102,3 @@ heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; 
 - 2026-11-11T07:57Z: **ALL DONE** again: egret FRESH 29f1267b995f DONE (run 42965886044, balanced TPC-H OOM fixed, 22/22 everywhere; local small c1 speed/balanced 1.19 JDBC / 1.16 ADBC regression by the rule) and ACCEPT 29f1267b995f SHIP (42965889054 + rerun 42972471705); lanes nothing open, locks free, no new kestrel CI runs or pre-releases; marten/heron idle.
 - 2026-11-11T06:57Z: no change in lanes (all nothing open, locks free, no new kestrel CI runs or pre-releases); egret ACCEPT 42965889054 on 29f1267b995f hit apt mirror failures in 4 cells (infra, harness retry 95395a4), rerun 42972471705 + FRESH 42965886044 running; ALL DONE still suspended.
 - 2026-11-11T05:58Z: no change in lanes (core/plugins/catalogs/lane 3 nothing open; plugins 05:15Z note: 29f1267b995f is the stand build for item 44 / Q-40a); egret FRESH 42965886044 + ACCEPT 42965889054 on 29f1267b995f running (upstream head `46d565e93c19`); ALL DONE still suspended; no new CI runs, no stale locks, no red code CI.
-- 2026-11-11T04:59Z: MORNING BUILD DONE: pre-release `server-1.0.0-29f1267b995f` (hadoopfs afc8 default, items 44+45) from pkg/29f1267b, all package runs green (Dev CI 42956935228, Service cluster/hdfs/security/stores, Catalogs CI); main Dev CI 42955017367 red only at the service gate (main moved by the 03:57Z orchestrator commit during the build; not a test failure, no rerun); ALL DONE suspended until egret FRESH on 29f1267b995f; no stale locks.
