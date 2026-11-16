@@ -18,6 +18,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   aggregates were computed here even when another node's inventory held files of the table (its rows were left out);
   they now need every inventory file of the table on this node. Answers unchanged otherwise.
 
+- Pre-release `server-1.0.0-d2e27119fda4` (2026-11-16): `main` d2e27119 with item 50.
 - Pre-release `server-1.0.0-7ab48cd6675c` (2026-11-16): `main` 7ab48cd6 with item 49(a)-(d).
 - Item 49(b) (upstream fd3c76a1): the node's metadata caches have entry caps - Parquet footers 50 000, table
   schemas and sample files 4 096 each, file plans 1 024, table statistics 4 096 (`CacheLimits`). A cache over its cap

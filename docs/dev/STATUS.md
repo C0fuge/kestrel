@@ -23,6 +23,12 @@
 
 ## Next steps (one per session)
 
+> **ITEM 50 PACKAGED (2026-11-16 02:05Z, core lane; maintainer 04:50).** `package=true` on `pkg/d2e27119` (= `main`
+> d2e27119, newest code commit: item 50) green: Dev CI 43786741509 (build, service gate, package); Service cluster
+> 43788205329, hdfs 43788208920, security 43788212571, stores 43788216221 -> pre-release **`server-1.0.0-d2e27119fda4`**
+> (7 assets). Next: the stand check of item 50 on this pre-release; no open core item until the maintainer's next note.
+> Branch `pkg/d2e27119` can be deleted (also `pkg/7ab48cd6`).
+
 > **Maintainer, 2026-11-16 04:50 - package `main` now (ITEM 50 from lane 3, d2e27119 / 7648bc7a, is a runtime change not in `server-1.0.0-7ab48cd6675c`).** `package=true` on a `pkg/<sha>` branch at the newest code commit of `main` as last time (main's own push run 43784755805 was refused by the service gate only because `main` moved during the build). This is the build for the real cluster this morning if it is green; no other change in this session.
 
 > **Maintainer, 2026-11-16 01:40 - ITEM 49: upstream server changes since `cec626bbb54a` (09.11) - split over the four lanes.**
@@ -4373,3 +4379,6 @@ S3 slowdown item below stays open for then).
   <= `distributedCompleteLocalScanMaxBytes` (new, default 256 MiB) and unfiltered `count(*)` computed on the planning
   node; local dc paths on unshared dataDirs now require every inventory file held here. Touches `QueryPlanner`,
   `ExecutionService`, `DistributedComplete`, `dev-ci.yml` (item 35 step: point lookups `merge`). Details in LANE3-STATUS.md.
+- 2026-11-16 (core session, 01:30-02:05Z): packaged `main` d2e27119 (item 50) on `pkg/d2e27119`: Dev CI 43786741509,
+  Service cluster 43788205329, hdfs 43788208920, security 43788212571, stores 43788216221 green -> pre-release
+  `server-1.0.0-d2e27119fda4`. No code change; lock released.
