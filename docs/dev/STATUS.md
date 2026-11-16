@@ -38,7 +38,7 @@
 > on `pkg/7ab48cd6` (= `main` 7ab48cd6, last code commit): Dev CI 43779798629 (build, service gate, package), Service
 > cluster 43779843821, hdfs 43779846125, security 43779848053, stores 43779850715 green -> pre-release
 > **`server-1.0.0-7ab48cd6675c`** (7 assets). Next: the stand check of item 49 on this pre-release; no open core item
-> until the maintainer's next note. Branch `pkg/7ab48cd6` deleted.
+> until the maintainer's next note. Branch `pkg/7ab48cd6` can be deleted (session push could not delete it).
 
 > **ITEM 49(a) DONE 376c7ded (2026-11-15, core lane).** `245281cee230` adopted (SqlInfo `SQL_DDL_SCHEMA` /
 > `SQL_DDL_TABLE` false; regression test `sqlInfoReportsReadOnlyCapabilities`). `1f3551f3b25a` adopted as opt-in setting
@@ -4366,4 +4366,4 @@ S3 slowdown item below stays open for then).
   Dev CI 43772386973, Service cluster 43770896293 green on `fix/49d`. Runtime change: counts toward the 49 package.
 - 2026-11-16 (core session, 00:19-00:45Z): packaged `main` 7ab48cd6 (item 49(a)-(d)) on `pkg/7ab48cd6`: Dev CI
   43779798629, Service cluster 43779843821, hdfs 43779846125, security 43779848053, stores 43779850715 green ->
-  pre-release `server-1.0.0-7ab48cd6675c`. No code change; branch `pkg/7ab48cd6` deleted; lock released.
+  pre-release `server-1.0.0-7ab48cd6675c`. No code change; branch `pkg/7ab48cd6` can be deleted (delete refused with 403 in the session); lock released.
