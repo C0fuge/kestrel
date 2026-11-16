@@ -9,6 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Pre-release `server-1.0.0-7ab48cd6675c` (2026-11-16): `main` 7ab48cd6 with item 49(a)-(d).
 - Item 49(b) (upstream fd3c76a1): the node's metadata caches have entry caps - Parquet footers 50 000, table
   schemas and sample files 4 096 each, file plans 1 024, table statistics 4 096 (`CacheLimits`). A cache over its cap
   drops its expired entries, then arbitrary live ones down to 90 % of the cap; an evicted entry is read from storage

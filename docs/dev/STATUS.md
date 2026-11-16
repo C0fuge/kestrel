@@ -33,6 +33,13 @@
 > DuckDB as a range. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there. **The core lane packages (`package=true`) once 49(a)-(d) are each DONE or NOT NEEDED** (runtime
 > changes only); the lang package of 2c169a53db3b is not waiting for this.
 
+> **ITEM 49 PACKAGED (2026-11-16 00:42Z, core lane).** 49(a)-(d) are each DONE (runtime changes: read-only SqlInfo DDL,
+> opt-in `streamTimingLog`, metadata cache caps, parallel cold footers, `fileInventoryRefreshSeconds`), so `package=true`
+> on `pkg/7ab48cd6` (= `main` 7ab48cd6, last code commit): Dev CI 43779798629 (build, service gate, package), Service
+> cluster 43779843821, hdfs 43779846125, security 43779848053, stores 43779850715 green -> pre-release
+> **`server-1.0.0-7ab48cd6675c`** (7 assets). Next: the stand check of item 49 on this pre-release; no open core item
+> until the maintainer's next note. Branch `pkg/7ab48cd6` deleted.
+
 > **ITEM 49(a) DONE 376c7ded (2026-11-15, core lane).** `245281cee230` adopted (SqlInfo `SQL_DDL_SCHEMA` /
 > `SQL_DDL_TABLE` false; regression test `sqlInfoReportsReadOnlyCapabilities`). `1f3551f3b25a` adopted as opt-in setting
 > `streamTimingLog` (default false; upstream logs it always - kept off so the per-query path gains no INFO line, item 15;
@@ -4357,3 +4364,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-15 23:55Z (lane 3): ITEM 49(d) DONE 64d566cb - core change by the maintainer's exception: inventory
   refresh in `ClusterService` / `ServerModule`, new setting `fileInventoryRefreshSeconds` (see the note at the top).
   Dev CI 43772386973, Service cluster 43770896293 green on `fix/49d`. Runtime change: counts toward the 49 package.
+- 2026-11-16 (core session, 00:19-00:45Z): packaged `main` 7ab48cd6 (item 49(a)-(d)) on `pkg/7ab48cd6`: Dev CI
+  43779798629, Service cluster 43779843821, hdfs 43779846125, security 43779848053, stores 43779850715 green ->
+  pre-release `server-1.0.0-7ab48cd6675c`. No code change; branch `pkg/7ab48cd6` deleted; lock released.
