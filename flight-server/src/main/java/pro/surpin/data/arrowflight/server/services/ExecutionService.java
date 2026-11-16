@@ -1052,8 +1052,33 @@ public final class ExecutionService {
     public void readParquet(BufferAllocator allocator, String query, String[] fileUris,
             FlightProducer.ServerStreamListener listener, boolean startListener,
             ExecutionPathTracker pathTracker) throws Exception {
+        readParquet(allocator, query, fileUris, listener, startListener, pathTracker,
+                RuntimeFilters.NONE);
+    }
+
+    /**
+     * Reads Parquet files, narrowed by the join runtime filters the client sent with the ticket
+     * (item 51). Only a plain scan (no join, aggregate, ORDER BY, LIMIT, DISTINCT or expression)
+     * applies them, on integer output columns that are plain table columns: the condition goes
+     * into the scan's WHERE clause, so DuckDB prunes row groups and files by their statistics.
+     * Every other query ignores them; a filter only removes rows the client's join drops.
+     *
+     * @param allocator      Arrow buffer allocator
+     * @param query          SQL query
+     * @param fileUris       relative file paths
+     * @param listener       Flight stream listener
+     * @param startListener  whether to call listener.start()
+     * @param pathTracker    runtime execution-path tracker
+     * @param runtimeFilters the client's runtime filters, or {@link RuntimeFilters#NONE}
+     * @throws Exception on execution failure
+     */
+    @SuppressWarnings({"java:S107", "checkstyle:ParameterNumber"})
+    public void readParquet(BufferAllocator allocator, String query, String[] fileUris,
+            FlightProducer.ServerStreamListener listener, boolean startListener,
+            ExecutionPathTracker pathTracker, RuntimeFilters runtimeFilters) throws Exception {
         long tParse = LogUtil.mark();
-        ParquetQueryParser parsedQuery = ParquetQueryParser.parse(query);
+        ParquetQueryParser parsedQuery = narrowed(allocator, query,
+                ParquetQueryParser.parse(query), runtimeFilters);
         LogUtil.logTiming(tParse, "parseQuery");
 
         if (parsedQuery.isJoin) {
@@ -1117,6 +1142,31 @@ public final class ExecutionService {
             readParquetFiles(allocator, query, parsedQuery, parquetFiles,
                     resolveUris(fileUris, copies), listener, startListener, pathTracker);
         }
+    }
+
+    /**
+     * Applies a client's runtime filters to a plain scan.
+     *
+     * @param allocator Arrow buffer allocator
+     * @param query SQL query
+     * @param parsed the parsed query
+     * @param filters the client's runtime filters
+     * @return the query narrowed by the filters that apply, or {@code parsed}
+     */
+    private ParquetQueryParser narrowed(BufferAllocator allocator, String query,
+            ParquetQueryParser parsed, RuntimeFilters filters) {
+        if (filters == null || filters.isEmpty()) {
+            return parsed;
+        }
+        if (!concatenatable(parsed) || parsed.distinct) {
+            LOGGER.debug("qid={} node={} runtimeFilters=ignored reason=notPlainScan filters={}",
+                    LogUtil.qid(), LogUtil.node(), filters.in().size());
+            return parsed;
+        }
+        String condition = filters.condition(resultSchema(allocator, query), parsed::sourceColumnOf);
+        LOGGER.debug("qid={} node={} runtimeFilters={} keys={} applied={}", LogUtil.qid(),
+                LogUtil.node(), filters.in().size(), filters.keyCount(), condition != null);
+        return condition == null ? parsed : parsed.withExtraCondition(condition);
     }
 
     /**

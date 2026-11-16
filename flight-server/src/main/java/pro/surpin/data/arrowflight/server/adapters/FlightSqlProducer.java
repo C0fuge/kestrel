@@ -54,6 +54,7 @@ import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import pro.surpin.data.arrowflight.server.metrics.ExecutionPathRecorder;
 import pro.surpin.data.arrowflight.server.metrics.MetricsService;
 import pro.surpin.data.arrowflight.server.services.CatalogViews;
+import pro.surpin.data.arrowflight.server.services.RuntimeFilters;
 import pro.surpin.data.arrowflight.server.services.QueryRestrictions;
 import pro.surpin.data.arrowflight.server.services.ClusterService;
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
@@ -490,7 +491,53 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         StreamCompression compression = context.getMiddleware(StreamCompression.KEY);
         FlightProducer.ServerStreamListener sending =
                 compression == null ? listener : compression.wrap(listener, sessionCodec(context));
-        super.getStream(context, ticket, EmptyListOffsets.guard(sending));
+        FlightProducer.ServerStreamListener guarded = EmptyListOffsets.guard(sending);
+        Any withFilters = runtimeFilterTicket(ticket);
+        if (withFilters != null) {
+            RuntimeFilters filters;
+            FlightSql.TicketStatementQuery statement;
+            try {
+                List<ByteString> blocks = withFilters.getUnknownFields()
+                        .getField(RuntimeFilters.TICKET_FIELD).getLengthDelimitedList();
+                if (blocks.size() != 1) {
+                    throw new IllegalArgumentException(blocks.size() + " blocks in one ticket");
+                }
+                filters = RuntimeFilters.decode(blocks.get(0).toByteArray());
+                statement = withFilters.unpack(FlightSql.TicketStatementQuery.class);
+            } catch (IllegalArgumentException | com.google.protobuf.InvalidProtocolBufferException e) {
+                LOGGER.info("node={} runtimeFilters=refused error='{}'", LogUtil.node(), e.getMessage());
+                guarded.error(CallStatus.INVALID_ARGUMENT
+                        .withDescription("Invalid runtime filter block: " + e.getMessage())
+                        .toRuntimeException());
+                return;
+            }
+            getStreamStatement(statement, context, guarded, filters);
+            return;
+        }
+        super.getStream(context, ticket, guarded);
+    }
+
+    /**
+     * Finds a statement ticket that carries a join runtime filter block (protobuf field
+     * {@link RuntimeFilters#TICKET_FIELD} of the ticket's {@code Any}, item 51). The signed
+     * statement handle inside is untouched: the block only narrows what the ticket returns.
+     *
+     * @param ticket ticket to read
+     * @return the ticket's message, or null for a ticket without a block (or not a statement)
+     */
+    static Any runtimeFilterTicket(Ticket ticket) {
+        try {
+            Any any = Any.parseFrom(ticket.getBytes());
+            if (!any.getUnknownFields().hasField(RuntimeFilters.TICKET_FIELD)
+                    || !any.is(FlightSql.TicketStatementQuery.class)) {
+                return null;
+            }
+            return any.getUnknownFields().getField(RuntimeFilters.TICKET_FIELD)
+                    .getLengthDelimitedList().isEmpty() ? null : any;
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            // Not a protobuf ticket: the default handling reports it.
+            return null;
+        }
     }
 
     /**
@@ -697,6 +744,20 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     public void getStreamStatement(FlightSql.TicketStatementQuery ticket,
             FlightProducer.CallContext context,
             FlightProducer.ServerStreamListener listener) {
+        getStreamStatement(ticket, context, listener, RuntimeFilters.NONE);
+    }
+
+    /**
+     * Streams a statement ticket, narrowed by the client's join runtime filters.
+     *
+     * @param ticket statement ticket
+     * @param context call context
+     * @param listener stream listener
+     * @param runtimeFilters the filters sent with the ticket, or {@link RuntimeFilters#NONE}
+     */
+    private void getStreamStatement(FlightSql.TicketStatementQuery ticket,
+            FlightProducer.CallContext context,
+            FlightProducer.ServerStreamListener listener, RuntimeFilters runtimeFilters) {
         final ByteString handle = ticket.getStatementHandle();
         // Equal queries have equal tickets; the sequence number tells their executions apart.
         String qid = qid(handle) + "-" + Long.toString(EXECUTIONS.incrementAndGet(), 36);
@@ -766,7 +827,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 }
             } else {
                 executionService.readParquet(
-                        allocator, query, filePaths, listener, true, pathTracker);
+                        allocator, query, filePaths, listener, true, pathTracker, runtimeFilters);
             }
             listener.completed();
             success = true;

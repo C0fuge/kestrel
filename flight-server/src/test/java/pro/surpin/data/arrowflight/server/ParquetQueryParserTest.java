@@ -170,4 +170,27 @@ class ParquetQueryParserTest {
         assertFalse(reason.toLowerCase(java.util.Locale.ROOT).contains("count("), reason);
         assertFalse(reason.contains("lineitem"), reason);
     }
+
+    @Test
+    void namesTheSourceColumnOfPlainOutputColumns() {
+        ParquetQueryParser aliased = ParquetQueryParser.parse(
+                "SELECT l_orderkey AS k, l_suppkey FROM tpch.lineitem");
+        assertEquals("\"l_orderkey\"", aliased.sourceColumnOf("k"));
+        assertEquals("\"l_suppkey\"", aliased.sourceColumnOf("l_suppkey"));
+        assertNull(aliased.sourceColumnOf("l_orderkey"));
+        ParquetQueryParser star = ParquetQueryParser.parse("SELECT * FROM tpch.lineitem");
+        assertEquals("\"l_orderkey\"", star.sourceColumnOf("l_orderkey"));
+    }
+
+    @Test
+    void addsAConditionToTheWhereClause() {
+        ParquetQueryParser pq = ParquetQueryParser.parse(
+                "SELECT l_orderkey FROM tpch.lineitem WHERE l_quantity > 1 OR l_quantity < 0");
+        ParquetQueryParser narrowed = pq.withExtraCondition("\"l_orderkey\" = 4");
+        assertEquals("(" + pq.filter + ") AND (\"l_orderkey\" = 4)", narrowed.filter);
+        assertSame(pq.where, narrowed.where);
+        assertEquals(pq.columns, narrowed.columns);
+        ParquetQueryParser plain = ParquetQueryParser.parse("SELECT l_orderkey FROM tpch.lineitem");
+        assertTrue(plain.withExtraCondition("FALSE").filter.contains("FALSE"));
+    }
 }

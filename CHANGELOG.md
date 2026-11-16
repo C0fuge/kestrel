@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
+  `flight.runtime_filters.max_keys`) may append a block to a statement ticket (protobuf field 15 of its `Any`; `ARF1`
+  IN-filters, also upstream's `ARF2` form, whose bloom filters are checked and skipped). Plain scans in partial mode
+  apply the IN-filters on integer output columns: up to 4096 keys as `BETWEEN min AND max AND IN (...)`, more as the
+  range only, ANDed to the scan's WHERE so DuckDB prunes row groups and files. Other queries, columns and types ignore
+  the block; a malformed block is refused (`INVALID_ARGUMENT`). Tickets without the block are unchanged. Format:
+  `docs/integrations/starrocks.md`.
+
 - Item 50 (lane 3): with `distributedCompletePointLookups=local` (default), distributed complete now also computes on the
   planning node any one-row aggregate (filter or not) and any LIMIT of at most 10 000 rows without aggregate whose
   table's files, after footer pruning, total at most the new setting `distributedCompleteLocalScanMaxBytes`

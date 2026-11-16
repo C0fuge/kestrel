@@ -251,6 +251,51 @@ public class ParquetQueryParser {
     }
 
     /**
+     * Returns this query with one more condition ANDed to its WHERE clause, as a client's join
+     * runtime filters narrow a plain scan ({@link RuntimeFilters}). File pruning keeps reading
+     * the original condition ({@link #where}), which accepts every row the new one does.
+     *
+     * @param condition executable SQL condition over the table's columns
+     * @return the narrowed query
+     */
+    public ParquetQueryParser withExtraCondition(String condition) {
+        String narrowed = filter == null || filter.isBlank()
+                ? condition : "(" + filter + ") AND (" + condition + ")";
+        return new ParquetQueryParser(schema, table, columns, narrowed, hasAggregation,
+                groupByColumnNames, selectExprs, isJoin, joinTables, duckDbSql, orderBy, limit,
+                offset, distinct, having, completeAnswerReason, where);
+    }
+
+    /**
+     * Names the table column a plain output column of this query reads.
+     *
+     * @param outputName output column name as the result schema names it
+     * @return the quoted source column, or null when the output is not one plain column
+     */
+    public String sourceColumnOf(String outputName) {
+        if (selectExprs.isEmpty()) {
+            return quoted(outputName);
+        }
+        String found = null;
+        for (SelectExpr expr : selectExprs) {
+            String name = expr.outputName != null && !expr.outputName.isBlank()
+                    ? expr.outputName : expr.inputColumn;
+            if (outputName.equals(name)) {
+                if (found != null || expr.func != SelectExpr.AggFunc.COLUMN
+                        || expr.inputColumn == null) {
+                    return null;
+                }
+                found = quoted(expr.inputColumn);
+            }
+        }
+        return found;
+    }
+
+    private static String quoted(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
+    /**
      * Returns whether the query restricts or orders its result rows.
      *
      * @return true when ORDER BY, LIMIT or OFFSET is present
