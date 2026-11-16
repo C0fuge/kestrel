@@ -11,7 +11,7 @@ any LIMIT <= 10 000 without aggregate whose table's files after footer pruning t
 on local unshared dataDirs these local paths (and item 43 point lookups) did not check that this node holds every
 inventory file of the table. CI (cross-runner, q/s only relative): dc / speed hdfs 30.0 / 52.7, hdfs-ha 26.6 / 31.7,
 s3 37.4 / 42.6 with the new classes `sum_date`, `avg_date`, `count_all`, `limob` in the point load; srv1 merged 0 /
-admission waits 0 in all three dc cells. For the stand (on the next pre-release that carries d2e27119): rerun the small
+admission waits 0 in all three dc cells. For the stand (on pre-release `server-1.0.0-d2e27119fda4`, which carries d2e27119): rerun the small
 mix at c32 under dc; expect `sumq` / `avgp` / unfiltered `count(*)` / `limob` not `merged` (debug line
 `distributedComplete=local reason='one-row aggregate over ... KiB'` / `'small LIMIT ...'` / `'count(*) from footer
 row counts'`) as long as the table's files are <= 256 MiB; for a larger lineitem raise the setting (e.g. `1GiB`) and
@@ -776,3 +776,6 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   `origin/main` first (its 13 item-48 commits were already in `main` under other ids). Package dispatched from `main`
   (Dev CI `package=true` 43784755805 on `main` cf60940e; its service gate runs the service-*.yml). Next: none open;
   the stand's item 50 rerun. Lock released.
+- 2026-11-16 04:03-04:08Z (lane 3 session): no open item. Item 50 is packaged by the core lane as pre-release
+  `server-1.0.0-d2e27119fda4` (Dev CI 43786741509 green); item 50 note in Next steps now names it. Lock not taken
+  (no code). Next: the stand's item 50 rerun of the dc small-query mix at c32 on that pre-release.
