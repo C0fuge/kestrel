@@ -1417,3 +1417,5 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   run; lock not taken.
 - 2026-11-16 13:20Z (plugins session): no open item (no new note for this lane since 12:15Z). Waiting on the
   maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46. No code change, no CI run; lock not taken.
+- 2026-11-16 15:20Z (plugins session): no open item (no new note for this lane since 13:20Z). Waiting on the
+  maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46. No code change, no CI run; lock not taken.
