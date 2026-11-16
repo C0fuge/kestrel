@@ -779,3 +779,6 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
 - 2026-11-16 04:03-04:08Z (lane 3 session): no open item. Item 50 is packaged by the core lane as pre-release
   `server-1.0.0-d2e27119fda4` (Dev CI 43786741509 green); item 50 note in Next steps now names it. Lock not taken
   (no code). Next: the stand's item 50 rerun of the dc small-query mix at c32 on that pre-release.
+- 2026-11-16 12:04-12:08Z (lane 3 session): no open item; no lane-3 maintainer note since item 50 (item 51, runtime
+  join filters, is the core lane's and packaged as `server-1.0.0-6f0aa5a026fa`). Lock not taken (no code). Next: the
+  stand's item 50 rerun of the dc small-query mix at c32.
