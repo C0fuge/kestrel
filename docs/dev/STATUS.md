@@ -23,6 +23,14 @@
 
 ## Next steps (one per session)
 
+> **ITEM 51 DONE 6f0aa5a0 (2026-11-16 20:50Z, core lane).** marten's SF10 compare on `server-1.0.0-6f0aa5a026fa`
+> (marten `docs/CONNECTOR-COMPARE.md` a576386, as recorded by the orchestrator 19:58Z): 22/22 correct; `ours_rf`
+> (`flight.runtime_filters.max_keys=4096`) faster in both run orders - warm sum ratio 0.937 (ours first, 43899589063,
+> Intel) and 0.995 (ours_rf first, 43899594632, AMD), ~3 % order-corrected on the TPC-H sum; q21 -16/-17 %, q11
+> -20/-30 %; no query systematically slower. On d2e27119fda4 (block ignored) there was no such gain. Q-51a stays open
+> (the gain implies marten reads in partial mode; ARF2 bloom filters still skipped - decision for the maintainer). No
+> open core item until the maintainer's next note.
+
 > **ITEM 51 PACKAGED (2026-11-16 09:27Z, core lane) - waits for the stand numbers before `ITEM 51 DONE`.** `main`
 > e2a3838f + 6f0aa5a0: the ticket's runtime filter block (field 15, `ARF1`; `ARF2` accepted, its bloom filters checked
 > and skipped) narrows plain scans in **partial** mode on integer output columns (range + IN up to 4096 keys, range
@@ -4408,3 +4416,6 @@ S3 slowdown item below stays open for then).
   refused), `ParquetQueryParserTest`, `FlightSqlProducerTest`. Dev CI 43830148409 failed (FlightSqlProducerTest stubs
   on the old overload; fixed 6f0aa5a0), Dev CI 43831943883 green; packaged on `pkg/6f0aa5a0` (43834254344, service runs
   43836555978 / 43836560693 / 43836564596 / 43836569443) -> `server-1.0.0-6f0aa5a026fa`. Q-51a added. Lock released.
+- 2026-11-16 20:50Z (core lane): ITEM 51 DONE - marten SF10 ours vs ours_rf numbers on 6f0aa5a026fa written into
+  Next steps (runs 43899589063 / 43899594632, 22/22, ~3 % order-corrected gain; q21 / q11 best). No code change, no CI
+  run. Q-51a open. Lock released.
