@@ -1406,3 +1406,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-16 03:12Z (plugins session): no open item (49(b) DONE f0adaf52 and packaged by the core lane in
   `server-1.0.0-7ab48cd6675c` / `server-1.0.0-d2e27119fda4`; waiting on the maintainer: Q-46, Q-40a follow-up, stand
   checks of items 44 (2) / 46). No code change, no CI run; lock released.
+- 2026-11-16 09:15Z (plugins session): no open item (no new note for this lane since 49(b); the new maintainer item 51,
+  runtime join filters from the ticket, is the core lane's). Waiting on the maintainer: Q-46, Q-40a follow-up, stand
+  checks of items 44 (2) / 46. No code change, no CI run; lock not taken.
