@@ -4,6 +4,19 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+ITEM 50 DONE d2e27119 (2026-11-16, see Log; commits 7648bc7a, d2e27119, fast-forwarded into `main`). With
+`distributedCompletePointLookups=local`, dc now computes on the planning node: any one-row aggregate (filter or not) and
+any LIMIT <= 10 000 without aggregate whose table's files after footer pruning total <= `distributedCompleteLocalScanMaxBytes`
+(new, default 256 MiB, 0 = off), and an unfiltered `count(*)` at any size; item 48's file bound stays. Fixed on the way:
+on local unshared dataDirs these local paths (and item 43 point lookups) did not check that this node holds every
+inventory file of the table. CI (cross-runner, q/s only relative): dc / speed hdfs 30.0 / 52.7, hdfs-ha 26.6 / 31.7,
+s3 37.4 / 42.6 with the new classes `sum_date`, `avg_date`, `count_all`, `limob` in the point load; srv1 merged 0 /
+admission waits 0 in all three dc cells. For the stand (on the next pre-release that carries d2e27119): rerun the small
+mix at c32 under dc; expect `sumq` / `avgp` / unfiltered `count(*)` / `limob` not `merged` (debug line
+`distributedComplete=local reason='one-row aggregate over ... KiB'` / `'small LIMIT ...'` / `'count(*) from footer
+row counts'`) as long as the table's files are <= 256 MiB; for a larger lineitem raise the setting (e.g. `1GiB`) and
+compare big aggregates. Start line ends `...; unfiltered count(*): local`.
+
 > **Maintainer, 2026-11-16 04:00 - ITEM 50 (after item 49 is packaged): the rest of D14.** Stand on `2c169a53db3b` (3 servers, DataNodes `authentication,privacy`, power-saver so q/s only relative): item 48 works where footer pruning keeps <= 4 files (orderkey-range one-row aggregates now local, p50 0.044 s vs 0.26 s on 29f1, mix +10 %), but the small-query mix at c32 is unchanged: dc 434 vs speed 914 q/s (29f1 428 / 884). Still merged across nodes: one-row aggregates whose filter prunes nothing (`sumq`, `avgp`: date filters, 8 of 8 files kept), unfiltered `count(*)` and ORDER BY ... LIMIT (`limob`). Goal: dc small mix at c32 >= 0.9 of speed without making big aggregates slower. Suggested: decide by the size of the files left after pruning (bytes / row counts already in the inventory and footer cache), not by their number - below a threshold (e.g. 256 MiB or the speed profile's local-scan budget, a setting) answer on the planning node when every file is readable from it (shared stores: HDFS / S3 / shared dataDir); `count(*)` without a filter from footer row counts; ORDER BY ... LIMIT small: local. Equality tests + the CI dc small-mix cell; write `ITEM 50 DONE <sha>` with numbers.
 
 ITEM 49(d) DONE 64d566cb (2026-11-15, see Log; test fix 7ab48cd6, fast-forwarded into `main`). `0419ac23` adopted:
@@ -753,3 +766,12 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   fast-forwarded. No package here: the core lane packages once 49(a)-(d) are in. Next: none open in this lane;
   the stand's dc small-query rerun (item 48) and the 49 package. Lock released. Dev CI on `main` a69848c9:
   43774021600 green (dispatched; the push ended in a `[skip ci]` commit).
+- 2026-11-16 (lane 3 session): ITEM 50 done (d2e27119). `QueryPlanner.answerableHere` / `localScanBytes`,
+  `ExecutionService.prunedHere` (kept files + bytes), `DistributedComplete.localReason`; setting
+  `distributedCompleteLocalScanMaxBytes`. Tests: `DistributedCompleteIntegrationTest.smallScansAndUnfilteredCountsAreComputedHere`,
+  `QueryPlannerTest` (unshared inventory held elsewhere -> not local; shared bytes / SASL), `ConfigAdapterTest`;
+  `DistributedTwoProcessTlsTest` runs with the size rule off and the Dev CI item 35 step with point lookups `merge`
+  (both check merges; first Dev CI 43781706494 red on that test). Branch CI on 6fe4bc58: Dev CI 43782908034, Service
+  cluster 43781708602 (on 6cdd4ba4, code identical), Service hdfs 43782910144 green. `lane/distributed` was reset to
+  `origin/main` first (its 13 item-48 commits were already in `main` under other ids). Package dispatched from `main`
+  (see Next steps / STATUS Log). Next: none open; the stand's item 50 rerun. Lock released.

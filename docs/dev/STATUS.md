@@ -4367,3 +4367,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-16 (core session, 00:19-00:45Z): packaged `main` 7ab48cd6 (item 49(a)-(d)) on `pkg/7ab48cd6`: Dev CI
   43779798629, Service cluster 43779843821, hdfs 43779846125, security 43779848053, stores 43779850715 green ->
   pre-release `server-1.0.0-7ab48cd6675c`. No code change; branch `pkg/7ab48cd6` can be deleted (delete refused with 403 in the session); lock released.
+- 2026-11-16 (lane 3): ITEM 50 merged into `main` (7648bc7a, d2e27119): dc one-row aggregates / LIMIT <= 10 000 over
+  <= `distributedCompleteLocalScanMaxBytes` (new, default 256 MiB) and unfiltered `count(*)` computed on the planning
+  node; local dc paths on unshared dataDirs now require every inventory file held here. Touches `QueryPlanner`,
+  `ExecutionService`, `DistributedComplete`, `dev-ci.yml` (item 35 step: point lookups `merge`). Details in LANE3-STATUS.md.
