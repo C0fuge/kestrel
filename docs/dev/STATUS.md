@@ -23,6 +23,16 @@
 
 ## Next steps (one per session)
 
+> **ITEM 51 PACKAGED (2026-11-16 09:27Z, core lane) - waits for the stand numbers before `ITEM 51 DONE`.** `main`
+> e2a3838f + 6f0aa5a0: the ticket's runtime filter block (field 15, `ARF1`; `ARF2` accepted, its bloom filters checked
+> and skipped) narrows plain scans in **partial** mode on integer output columns (range + IN up to 4096 keys, range
+> above, ANDed into the scan's WHERE: DuckDB prunes row groups / files); other queries, complete mode, other columns /
+> types ignore it; malformed block -> `INVALID_ARGUMENT`; tickets without it unchanged. Format in
+> `docs/integrations/starrocks.md`. Dev CI 43831943883 (main), packaging on `pkg/6f0aa5a0`: Dev CI 43834254344 (build,
+> service gate, package), Service cluster 43836555978, hdfs 43836560693, security 43836564596, stores 43836569443 green
+> -> pre-release **`server-1.0.0-6f0aa5a026fa`**. Next: marten's compare `paths=ours,ours_rf` (and reversed) at SF10 on
+> this pre-release; check that marten's connector reads in partial mode (Q-51a). Branch `pkg/6f0aa5a0` can be deleted.
+
 > **Maintainer, 2026-11-16 11:15 - ITEM 51: runtime join filters from the ticket (UPSTREAM-SYNC S8 - go, wire change approved).** marten `flbcef73` (opt-in `flight.runtime_filters.max_keys`) now sends StarRocks join runtime filters with the Flight ticket (field 15, block `ARF1`: IN-sets + bitsets on integer keys, cap 4096 keys); kestrel d2e27119fda4 ignores the block, so marten measured no gain. Implement: parse the block (marten's format, see marten docs/UPSTREAM-REVIEW and patch 0003; also accept upstream's `ARF2` bloom form if cheap), apply it to the scan as a DuckDB filter (IN list for small sets, min/max range + bitset / bloom check for large ones, pushed into the Parquet scan so row groups and files prune), tickets without the block unchanged (compatibility within a release), authz / Ranger unaffected (filter only narrows rows). Tests: answers equal with and without the block (TPC-H joins), malformed block refused cleanly. Measure with marten's compare `paths=ours,ours_rf` and reversed at SF10 once packaged (core packages when CI is green; this is the next build for the stand). Write `ITEM 51 DONE <sha>` with numbers.
 
 > **ITEM 50 PACKAGED (2026-11-16 02:05Z, core lane; maintainer 04:50).** `package=true` on `pkg/d2e27119` (= `main`
@@ -2049,6 +2059,13 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **(Q-51a, 2026-11-16, core lane) Runtime filters in complete mode and bloom filters.** Item 51 applies the block only
+  to partial-mode tickets (a complete ticket runs the whole query on one node, distributed complete included; wrapping
+  it is possible but untested). If marten's StarRocks connector reads with `x-flight-result-mode: complete` it will see
+  no gain - check its mode first. `ARF2` bloom filters are parsed and skipped; applying them needs upstream's per-row
+  Java check (794ae7c, `BloomRowFilter`) after DuckDB, worth it only if the stand shows IN-sets capped at 4096 keys
+  leave much to cut. Decision for the maintainer after the SF10 numbers.
 
 - **(Q-43m, 2026-11-10 20:45Z, core lane; ANSWERED 2026-11-11 00:05 -> plugins-lane ITEM 44, parts (1)(3) merged 2335ddc6) balanced fails heavy TPC-H on small hosts since Q-42(a) - change the budget
   rule?** egret FRESH 42865250390 on `server-1.0.0-2ff221447b5d` (orchestrator 19:58Z): `balanced` runs with DuckDB
@@ -4384,3 +4401,10 @@ S3 slowdown item below stays open for then).
 - 2026-11-16 (core session, 01:30-02:05Z): packaged `main` d2e27119 (item 50) on `pkg/d2e27119`: Dev CI 43786741509,
   Service cluster 43788205329, hdfs 43788208920, security 43788212571, stores 43788216221 green -> pre-release
   `server-1.0.0-d2e27119fda4`. No code change; lock released.
+- 2026-11-16 (core session, 08:08-09:30Z): ITEM 51 (runtime join filters from the ticket, UPSTREAM-SYNC S8 ported):
+  `RuntimeFilters` (decode ARF1/ARF2, condition), `ParquetQueryParser.withExtraCondition` / `sourceColumnOf`,
+  `ExecutionService.readParquet(..., RuntimeFilters)`, `FlightSqlProducer.getStream` reads field 15. Tests
+  `RuntimeFiltersTest`, `RuntimeFilterIntegrationTest` (TPC-H-shaped joins equal with and without the block, malformed
+  refused), `ParquetQueryParserTest`, `FlightSqlProducerTest`. Dev CI 43830148409 failed (FlightSqlProducerTest stubs
+  on the old overload; fixed 6f0aa5a0), Dev CI 43831943883 green; packaged on `pkg/6f0aa5a0` (43834254344, service runs
+  43836555978 / 43836560693 / 43836564596 / 43836569443) -> `server-1.0.0-6f0aa5a026fa`. Q-51a added. Lock released.

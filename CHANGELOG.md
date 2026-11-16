@@ -9,6 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Pre-release `server-1.0.0-6f0aa5a026fa` (2026-11-16): `main` 6f0aa5a0 with item 51.
 - Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
   `flight.runtime_filters.max_keys`) may append a block to a statement ticket (protobuf field 15 of its `Any`; `ARF1`
   IN-filters, also upstream's `ARF2` form, whose bloom filters are checked and skipped). Plain scans in partial mode
