@@ -23,6 +23,8 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-16 04:50 - package `main` now (ITEM 50 from lane 3, d2e27119 / 7648bc7a, is a runtime change not in `server-1.0.0-7ab48cd6675c`).** `package=true` on a `pkg/<sha>` branch at the newest code commit of `main` as last time (main's own push run 43784755805 was refused by the service gate only because `main` moved during the build). This is the build for the real cluster this morning if it is green; no other change in this session.
+
 > **Maintainer, 2026-11-16 01:40 - ITEM 49: upstream server changes since `cec626bbb54a` (09.11) - split over the four lanes.**
 > upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` is at `28d6ea713b8e` (15.11), 49 commits ahead of `cec626b`; most are findings docs and connector patches, the server
 > commits are split: **49(a) core (this file):** `3bb34baecbf4` httpfs connection caching (`duckDbHttpConnectionCaching`, S3),
