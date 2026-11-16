@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 50 (lane 3): with `distributedCompletePointLookups=local` (default), distributed complete now also computes on the
+  planning node any one-row aggregate (filter or not) and any LIMIT of at most 10 000 rows without aggregate whose
+  table's files, after footer pruning, total at most the new setting `distributedCompleteLocalScanMaxBytes`
+  (`FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES`, default 256 MiB, 0 = off), and an unfiltered `count(*)` at any size
+  (answered from footer row counts). Before, a `sum` / `avg` with a date filter that prunes nothing, `count(*)` and
+  `ORDER BY ... LIMIT` were merged across nodes. Fix: on local, unshared data directories, point lookups and item 48's
+  aggregates were computed here even when another node's inventory held files of the table (its rows were left out);
+  they now need every inventory file of the table on this node. Answers unchanged otherwise.
+
 - Pre-release `server-1.0.0-7ab48cd6675c` (2026-11-16): `main` 7ab48cd6 with item 49(a)-(d).
 - Item 49(b) (upstream fd3c76a1): the node's metadata caches have entry caps - Parquet footers 50 000, table
   schemas and sample files 4 096 each, file plans 1 024, table statistics 4 096 (`CacheLimits`). A cache over its cap

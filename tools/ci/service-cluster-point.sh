@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # Item 43 (lane 3): 32 clients of point queries (point-query-load.py: point_orders, point_lineitem,
 # count_filter, point_date with a DATE literal as in the real cluster's mix, item 45, and agg_range, a filtered
-# count / sum over few key-range files, item 48) on node 1 of a service-cluster.yml cell (speed or speed-dc).
+# count / sum over few key-range files, item 48, and item 50's sum_date / avg_date (date filters that prune nothing),
+# count_all (unfiltered count(*)) and limob (ORDER BY ... LIMIT 10) over the small CI tables) on node 1 of a service-cluster.yml cell (speed or speed-dc).
 #
 # Usage: tools/ci/service-cluster-point.sh <python> <keys> <cell> <out dir>
 #
 # Prints note lines; writes <out dir>/point.txt (the load's result line) and <out dir>/point.log.
 # Exits 1 with the failure as its last line when the load gave no result, or when under speed-dc a
-# point lookup or agg_range query on srv1 was merged or waited for peer-stream admission: with the default
+# point lookup, agg_range or item 50 query on srv1 was merged or waited for peer-stream admission: with the default
 # distributedCompletePointLookups=local they run on srv1 alone (agg_range needs the range split, the
-# default). This check is deterministic; the
+# default; item 50's need files of at most distributedCompleteLocalScanMaxBytes, default 256 MiB). This check is deterministic; the
 # q/s of the speed and speed-dc cells (different runners) are compared in the workflow summary.
 set -u
 py=$1 keys=$2 cell=$3 out=$4
 seconds=${POINT_SECONDS:-30}
-export POINT_QUERY_CLASSES=${POINT_QUERY_CLASSES:-point_orders,point_lineitem,count_filter,point_date,agg_range}
+export POINT_QUERY_CLASSES=${POINT_QUERY_CLASSES:-point_orders,point_lineitem,count_filter,point_date,agg_range,sum_date,avg_date,count_all,limob}
 l0=$(docker logs srv1 2>&1)
 waits0=$(grep -c 'distributedComplete=admissionWait' <<< "$l0")
 merged0=$(grep -c 'distributedComplete=merged ' <<< "$l0")

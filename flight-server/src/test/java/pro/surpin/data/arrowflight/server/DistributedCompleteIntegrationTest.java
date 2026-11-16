@@ -343,6 +343,7 @@ class DistributedCompleteIntegrationTest {
         PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
         useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
         distributed.pointLookupsLocal(true);
+        distributed.localScanMaxBytes(0);   // the file bound alone (item 50's size rule off)
         try {
             distributed.localAggregateMaxFiles(3);
             assertEquals(prunedAlone, answer(pruned));
@@ -363,6 +364,63 @@ class DistributedCompleteIntegrationTest {
         } finally {
             distributed.localAggregateMaxFiles(DistributedComplete.DEFAULT_LOCAL_AGGREGATE_MAX_FILES);
         }
+    }
+
+    /**
+     * Verifies item 50: with point lookups local, one-row aggregates whose filter prunes nothing
+     * and small LIMIT queries over files of at most {@code distributedCompleteLocalScanMaxBytes}
+     * are answered exactly by this node alone, an unfiltered {@code count(*)} at any size; larger
+     * files, a bound of 0 and grouped aggregates are merged, and every answer equals the node's own.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void smallScansAndUnfilteredCountsAreComputedHere() throws Exception {
+        String unpruned = "SELECT count(*) AS n, sum(v) AS total, min(d) AS lo FROM s.t WHERE k > 2";
+        String averaged = "SELECT avg(v) AS a, count(*) AS n FROM s.t WHERE d > 10";
+        String unfiltered = "SELECT sum(v) AS total FROM s.t";
+        String topN = "SELECT v, name, amount FROM s.t WHERE k < 5 ORDER BY v DESC LIMIT 7";
+        String count = "SELECT count(*) AS n FROM s.t";
+        String grouped = "SELECT k, sum(v) AS total FROM s.t GROUP BY k ORDER BY k";
+        String bigLimit = "SELECT v FROM s.t ORDER BY v LIMIT 20000";
+        List<String> local = List.of(unpruned, averaged, unfiltered, topN);
+        List<String> alone = new ArrayList<>();
+        for (String query : local) {
+            alone.add(answer(query));
+        }
+        String countAlone = answer(count);
+        String groupedAlone = answer(grouped);
+        String bigLimitAlone = answer(bigLimit);
+        PeerStreamAdmission admission = new PeerStreamAdmission(FILES, 200);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null), admission);
+        distributed.pointLookupsLocal(true);
+        distributed.localAggregateMaxFiles(0);   // the size rule alone (item 48's file bound off)
+        for (int i = 0; i < local.size(); i++) {
+            assertEquals(alone.get(i), answer(local.get(i)), local.get(i));
+        }
+        assertEquals(countAlone, answer(count));
+        assertEquals(4, distributed.localAggregates());
+        assertEquals(1, distributed.localScans());
+        assertEquals(0, distributed.mergedAnswers());
+        assertEquals(groupedAlone, answer(grouped));
+        assertEquals(bigLimitAlone, answer(bigLimit));
+        assertEquals(2, distributed.mergedAnswers());
+        // The table's files are larger than 1 KiB: merged, except the row count.
+        distributed.localScanMaxBytes(1024);
+        for (int i = 0; i < local.size(); i++) {
+            assertEquals(alone.get(i), answer(local.get(i)), local.get(i));
+        }
+        assertEquals(countAlone, answer(count));
+        assertEquals(2 + local.size(), distributed.mergedAnswers());
+        distributed.localScanMaxBytes(0);
+        assertEquals(alone.get(0), answer(unpruned));
+        assertEquals(countAlone, answer(count));
+        assertEquals(3 + local.size(), distributed.mergedAnswers());
+        assertEquals(6, distributed.localAggregates());
+        assertEquals(1, distributed.localScans());
+        assertEquals(0, distributed.fallbacks());
+        assertEquals(0, admission.waited());
+        assertThrows(IllegalArgumentException.class, () -> distributed.localScanMaxBytes(-1));
     }
 
     /**

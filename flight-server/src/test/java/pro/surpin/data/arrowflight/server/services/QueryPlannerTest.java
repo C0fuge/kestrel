@@ -610,6 +610,73 @@ class QueryPlannerTest {
         assertEquals(List.of(), planner.filesNotReadableHere("not sql at all"));
     }
 
+    /**
+     * Verifies item 50's local check on local, unshared data directories: this node must hold
+     * every file the node inventories name for the query's tables (a point lookup computed here
+     * would otherwise leave out another node's files), and the scan bytes come from its listing.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void answerableHereOnUnsharedDisksNeedsEveryInventoryFileHere() throws Exception {
+        when(parquetAdapter.sharedStorage()).thenReturn(false);
+        lenient().when(parquetAdapter.wholeFileReadsOnly()).thenReturn(false);
+        when(clusterService.serverUri()).thenReturn(P1);
+        storageLists(List.of("s/t/a.parquet", "s/u/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of()),
+                "s/u/c.parquet", new FileAssignment(7L, Set.of())));
+        Map<String, FileAssignment> inventories = new HashMap<>(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P1)),
+                "s/u/c.parquet", new FileAssignment(7L, Set.of(P1, P2))));
+        when(clusterService.fileLocations(false)).thenAnswer(call -> inventories);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        assertTrue(planner.answerableHere("SELECT count(*) FROM s.t WHERE x = 1"));
+        assertEquals(100L, planner.localScanBytes("SELECT sum(x) FROM s.t"));
+        assertEquals(7L, planner.localScanBytes("SELECT x FROM s.u ORDER BY x LIMIT 3"));
+        // Another node holds a file of s.t: this node's answer would leave it out.
+        inventories.put("s/t/b.parquet", new FileAssignment(50L, Set.of(P2)));
+        assertFalse(planner.answerableHere("SELECT count(*) FROM s.t WHERE x = 1"));
+        assertEquals(-1L, planner.localScanBytes("SELECT sum(x) FROM s.t"));
+        assertEquals(7L, planner.localScanBytes("SELECT sum(x) FROM s.u"));
+        // Joins and texts the parser does not take are not local scans.
+        assertEquals(-1L, planner.localScanBytes("SELECT * FROM s.u JOIN s.u v ON u.x = v.x"));
+        assertFalse(planner.answerableHere("not sql at all"));
+        assertEquals(-1L, planner.localScanBytes("not sql at all"));
+    }
+
+    /**
+     * Verifies item 50's scan bytes on shared storage: the sizes of the table's listed files,
+     * -1 when this node cannot read one (SASL DataNodes) or the table has no listed file.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void localScanBytesOnSharedStorageSumsReadableListedFiles() throws Exception {
+        pro.surpin.data.arrowflight.server.storage.DataStore store =
+                mock(pro.surpin.data.arrowflight.server.storage.DataStore.class);
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageLists(List.of("s/t/a.parquet", "s/t/b.parquet", "s/u/c.parquet"), Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of()),
+                "s/t/b.parquet", new FileAssignment(20L, Set.of()),
+                "s/u/c.parquet", new FileAssignment(3L, Set.of())));
+        lenient().when(parquetAdapter.dataStore()).thenReturn(store);
+        lenient().when(store.readableHere(any())).thenAnswer(call -> !((pro.surpin.data.arrowflight.spi.storage.DataFile)
+                call.getArgument(0)).relativePath().endsWith("b.parquet"));
+        lenient().when(parquetAdapter.getTables(eq("s"), isNull())).thenReturn(
+                new TreeMap<>(Map.of("t", "/s/t", "u", "/s/u", "empty", "/s/empty")));
+        lenient().when(parquetAdapter.tableFiles("s", "empty")).thenReturn(List.of());
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(false);
+        assertEquals(120L, planner.localScanBytes("SELECT count(*) FROM s.t WHERE x > 1"));
+        assertEquals(-1L, planner.localScanBytes("SELECT count(*) FROM s.empty"));
+        when(parquetAdapter.wholeFileReadsOnly()).thenReturn(true);
+        assertEquals(-1L, planner.localScanBytes("SELECT count(*) FROM s.t WHERE x > 1"));
+        assertEquals(3L, planner.localScanBytes("SELECT count(*) FROM s.u"));
+        verify(clusterService, never()).fileLocations(anyBoolean());
+    }
+
     /** Verifies 0 backup locations gives the planned node only. */
     @Test
     void zeroBackupLocationsKeepOneLocation() throws Exception {

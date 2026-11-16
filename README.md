@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `streamTimingLog`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `fileInventoryRefreshSeconds`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `distributedCompleteLocalScanMaxBytes`, `fileInventoryRefreshSeconds`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -443,7 +443,13 @@ merged on probation, as are queries with a LIMIT of at most 10 000 rows and no a
 aggregate with any other WHERE clause (e.g. `count(*)` / `sum(...)` over a key or date range, no GROUP BY) is computed
 by the planning node too when footer pruning (`fileStatsPruningMaxFiles`) leaves at most
 `distributedCompleteLocalAggregateMaxFiles` files of its table (`FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_AGGREGATE_MAX_FILES`,
-default 4, 0 merges them all), all readable on that node. Probation merges run without room until they have read more than 16 MiB of part answers (at most eight such
+default 4, 0 merges them all), all readable on that node. Also with `local` (2026-11-16), any one-row aggregate (with or
+without WHERE, e.g. a `sum` over a date range that prunes nothing) and any LIMIT of at most 10 000 rows without aggregate
+(e.g. `ORDER BY ... LIMIT 10`) is computed by the planning node when its table's files, after footer pruning, add up to
+at most `distributedCompleteLocalScanMaxBytes` (`FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES`, default 256 MiB,
+DuckDB units such as `1GiB` or bytes, 0 turns this rule off), and an unfiltered `count(*)` at any size (DuckDB answers
+it from the footers' row counts). All of these need every file readable on that node and, on local unshared data
+directories, held by it (the node inventories name no file of the table on another node). Probation merges run without room until they have read more than 16 MiB of part answers (at most eight such
 merges per stream, at least 32, at once; more wait as usual). After `distributedCompleteAdmissionWaitMillis` (default 300000)
 it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
 `RESOURCE_EXHAUSTED`.

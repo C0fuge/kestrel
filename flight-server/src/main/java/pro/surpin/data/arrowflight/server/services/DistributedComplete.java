@@ -73,6 +73,8 @@ public final class DistributedComplete implements AutoCloseable {
     static final long SMALL_LIMIT = 10_000;
     /** Default of {@code distributedCompleteLocalAggregateMaxFiles} (item 48). */
     public static final int DEFAULT_LOCAL_AGGREGATE_MAX_FILES = 4;
+    /** Default of {@code distributedCompleteLocalScanMaxBytes} (item 50): 256 MiB. */
+    public static final long DEFAULT_LOCAL_SCAN_MAX_BYTES = 256L << 20;
     /** A string, or a number with an optional sign, fraction and exponent. */
     private static final String PLAIN_LITERAL =
             "(?:'(?:[^']|'')*'|[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?(?![\\w.]))";
@@ -110,6 +112,7 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong peersLost = new AtomicLong();
     private final AtomicLong localPointLookups = new AtomicLong();
     private final AtomicLong localAggregates = new AtomicLong();
+    private final AtomicLong localScans = new AtomicLong();
     /** Point lookups computed on this node alone when it can read the files (item 43). */
     private volatile boolean pointLookupsLocal;
     /**
@@ -117,6 +120,11 @@ public final class DistributedComplete implements AutoCloseable {
      * this node alone, with point lookups local (item 48); 0 merges them all.
      */
     private volatile int localAggregateMaxFiles = DEFAULT_LOCAL_AGGREGATE_MAX_FILES;
+    /**
+     * Most bytes the files of a one-row aggregate or small LIMIT query may have after footer
+     * pruning to be computed on this node alone, with point lookups local (item 50); 0 merges.
+     */
+    private volatile long localScanMaxBytes = DEFAULT_LOCAL_SCAN_MAX_BYTES;
 
     /**
      * Creates the distributed path of complete answers.
@@ -222,21 +230,18 @@ public final class DistributedComplete implements AutoCloseable {
         }
         // A point lookup reads little but fans out to every endpoint: one node computes it faster
         // (item 43: dc point lookups 0.27-0.57 of speed's q/s on 3 nodes even without queueing).
-        if (pointLookupsLocal && pointLookup(parsed)
-                && planner.filesNotReadableHere(partQuery).isEmpty()) {
+        // On local, unshared data directories this node must also hold every file (item 50).
+        if (pointLookupsLocal && pointLookup(parsed) && planner.answerableHere(partQuery)) {
             localPointLookups.incrementAndGet();
             LOGGER.debug("node={} distributedComplete=local reason='point lookup' query='{}'", LogUtil.node(),
                     LogUtil.oneLine(query));
             return false;
         }
-        // A filtered one-row aggregate whose filter leaves few files by their footers reads little
-        // and fans out like a point lookup (item 48: the stand's count / sum mix, dc 0.55 of speed).
-        if (pointLookupsLocal && localAggregate(parsed)) {
-            int kept = execution.prunedFilesHere(readQuery);
-            if (kept >= 0 && kept <= localAggregateMaxFiles) {
-                localAggregates.incrementAndGet();
-                LOGGER.debug("node={} distributedComplete=local reason='one-row aggregate over {} pruned files'"
-                        + " query='{}'", LogUtil.node(), kept, LogUtil.oneLine(query));
+        if (pointLookupsLocal) {
+            String reason = localReason(parsed, readQuery, partQuery);
+            if (reason != null) {
+                LOGGER.debug("node={} distributedComplete=local reason='{}' query='{}'", LogUtil.node(), reason,
+                        LogUtil.oneLine(query));
                 return false;
             }
         }
@@ -433,6 +438,85 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
+     * Tells why a query that is no point lookup is computed on this node alone, if it is, and
+     * counts it. A filtered one-row aggregate whose footer pruning keeps few files reads little
+     * and fans out like a point lookup (item 48). Item 50: so does any one-row aggregate or small
+     * LIMIT query whose files, after pruning, add up to at most
+     * {@code distributedCompleteLocalScanMaxBytes}; an unfiltered {@code count(*)} DuckDB answers
+     * from the footers' row counts at any size. Every file must be readable and held here.
+     *
+     * @param parsed the part query
+     * @param readQuery the query with its tables qualified
+     * @param partQuery the query the endpoints would answer
+     * @return the reason for the log line, or null when the query is merged
+     */
+    private String localReason(ParquetQueryParser parsed, String readQuery, String partQuery) {
+        boolean aggregate = oneRow(parsed);
+        boolean smallLimit = smallLimit(parsed);
+        boolean filesBound = localAggregate(parsed);
+        boolean countOnly = aggregate && unfilteredCount(parsed);
+        long maxBytes = localScanMaxBytes;
+        if (!filesBound && !countOnly && !(maxBytes > 0 && (aggregate || smallLimit))) {
+            return null;
+        }
+        long tableBytes = planner.localScanBytes(partQuery);
+        if (tableBytes < 0) {
+            return null;
+        }
+        if (countOnly) {
+            localAggregates.incrementAndGet();
+            return "count(*) from footer row counts";
+        }
+        ExecutionService.PrunedFiles pruned = parsed.filter == null || parsed.filter.isBlank() ? null
+                : execution.prunedHere(readQuery);
+        if (filesBound && pruned != null && pruned.files() <= localAggregateMaxFiles) {
+            localAggregates.incrementAndGet();
+            return "one-row aggregate over " + pruned.files() + " pruned files";
+        }
+        long bytes = pruned != null ? Math.min(pruned.bytes(), tableBytes) : tableBytes;
+        if (maxBytes > 0 && (aggregate || smallLimit) && bytes <= maxBytes) {
+            if (aggregate) {
+                localAggregates.incrementAndGet();
+            } else {
+                localScans.incrementAndGet();
+            }
+            return (aggregate ? "one-row aggregate" : "small LIMIT") + " over " + (bytes >> 10) + " KiB"
+                    + (pruned != null ? " in " + pruned.files() + " pruned files" : "");
+        }
+        return null;
+    }
+
+    /**
+     * Tells whether a part query is a LIMIT of at most {@link #SMALL_LIMIT} rows without
+     * aggregation, with or without ORDER BY (item 50).
+     *
+     * @param parsed the part query
+     * @return true for such a query
+     */
+    static boolean smallLimit(ParquetQueryParser parsed) {
+        return !parsed.hasAggregation && parsed.limit != null && parsed.limit <= SMALL_LIMIT;
+    }
+
+    /**
+     * Tells whether a one-row part query counts rows only, without a filter: {@code count(*)}
+     * (or {@code count(1)}) and nothing else (item 50).
+     *
+     * @param parsed the part query
+     * @return true for an unfiltered row count
+     */
+    static boolean unfilteredCount(ParquetQueryParser parsed) {
+        if (parsed.filter != null && !parsed.filter.isBlank() || parsed.selectExprs.isEmpty()) {
+            return false;
+        }
+        for (ParquetQueryParser.SelectExpr expr : parsed.selectExprs) {
+            if (expr.func != ParquetQueryParser.SelectExpr.AggFunc.COUNT_STAR || expr.distinct) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Tells whether a query's filter has an equality of a column and a literal and no OR.
      *
      * @param parsed the query
@@ -584,8 +668,33 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
-     * Counts the filtered one-row aggregates over few pruned files computed on this node alone
-     * since start (item 48).
+     * Sets the most bytes the files of a one-row aggregate or a LIMIT query of at most 10 000 rows
+     * without aggregation may have, after footer pruning, to be computed on this node alone when
+     * point lookups are local ({@code distributedCompleteLocalScanMaxBytes}, item 50); 0 merges
+     * them unless item 48's file bound applies.
+     *
+     * @param maxBytes the bound, 0 or more
+     * @throws IllegalArgumentException for a negative bound
+     */
+    public void localScanMaxBytes(long maxBytes) {
+        if (maxBytes < 0) {
+            throw new IllegalArgumentException("localScanMaxBytes must be 0 or more: " + maxBytes);
+        }
+        this.localScanMaxBytes = maxBytes;
+    }
+
+    /**
+     * Counts the small LIMIT queries computed on this node alone since start (item 50).
+     *
+     * @return LIMIT queries not merged
+     */
+    public long localScans() {
+        return localScans.get();
+    }
+
+    /**
+     * Counts the one-row aggregates computed on this node alone since start: over few pruned
+     * files (item 48), over few bytes or an unfiltered count (item 50).
      *
      * @return aggregates not merged
      */

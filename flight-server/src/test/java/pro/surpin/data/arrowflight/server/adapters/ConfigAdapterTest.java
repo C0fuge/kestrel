@@ -446,6 +446,22 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteLocalAggregateMaxFiles", "-1"), Map.of())));
     }
 
+    /** Item 50: one-row aggregates and small LIMIT queries over at most 256 MiB are local by default. */
+    @Test
+    void distributedCompleteLocalScanMaxBytesDefaultsTo256MiB() throws IOException {
+        assertEquals(256L << 20, ConfigAdapter.distributedCompleteLocalScanMaxBytes(source(Map.of(), Map.of())));
+        assertEquals(0L, ConfigAdapter.distributedCompleteLocalScanMaxBytes(
+                source(Map.of("distributedCompleteLocalScanMaxBytes", "0"), Map.of())));
+        assertEquals(1L << 30, ConfigAdapter.distributedCompleteLocalScanMaxBytes(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES", "1GiB"))));
+        assertEquals(1234L, ConfigAdapter.distributedCompleteLocalScanMaxBytes(
+                source(Map.of("distributedCompleteLocalScanMaxBytes", "1234"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteLocalScanMaxBytes(
+                source(Map.of("distributedCompleteLocalScanMaxBytes", "-1"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteLocalScanMaxBytes(
+                source(Map.of("distributedCompleteLocalScanMaxBytes", "lots"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));

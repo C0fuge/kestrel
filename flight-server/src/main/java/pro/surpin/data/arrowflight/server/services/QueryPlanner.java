@@ -531,6 +531,63 @@ public final class QueryPlanner {
     }
 
     /**
+     * Tells whether this node alone can compute a query over its Parquet tables: it can read
+     * every file ({@link #filesNotReadableHere}) and, on local, unshared data directories, it
+     * holds every file the node inventories name for the query's tables (another node's files
+     * are not in this node's directory, so its answer would leave them out).
+     *
+     * @param query client SQL
+     * @return true when the query's files are all readable here; false also for a query the
+     *         parser does not take on an unshared store
+     */
+    public boolean answerableHere(String query) {
+        if (!parquetAdapter.sharedStorage()) {
+            try {
+                ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+                String self = clusterService.serverUri();
+                for (FileAssignment file : filterForQuery(clusterService.fileLocations(false), parsed).values()) {
+                    if (!file.hosts().contains(self)) {
+                        return false;
+                    }
+                }
+            } catch (RuntimeException e) {
+                LOGGER.debug("node={} planning=heldHereSkipped reason='{}'", LogUtil.node(), e.toString());
+                return false;
+            }
+        }
+        return filesNotReadableHere(query).isEmpty();
+    }
+
+    /**
+     * Sums the sizes of the files a single-table query over a directory table reads when this
+     * node alone computes it ({@link #answerableHere}), from this node's listing (item 50:
+     * distributed complete answers small scans on the planning node).
+     *
+     * @param query client SQL
+     * @return bytes of the table's files, or -1 for a join, a table without listed files (a
+     *         catalog table, an empty table), a query the parser does not take, or files this
+     *         node cannot read or does not hold
+     */
+    public long localScanBytes(String query) {
+        try {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            if (parsed.isJoin || parsed.table == null || !answerableHere(query)) {
+                return -1;
+            }
+            long total = 0;
+            int files = 0;
+            for (pro.surpin.data.arrowflight.spi.storage.DataFile file : tableFiles(parsed.schema, parsed.table)) {
+                total += Math.max(0L, file.size());
+                files++;
+            }
+            return files == 0 ? -1 : total;
+        } catch (IOException | RuntimeException e) {
+            LOGGER.debug("node={} planning=localScanSkipped reason='{}'", LogUtil.node(), e.toString());
+            return -1;
+        }
+    }
+
+    /**
      * Lists the files of a query's Parquet tables this node cannot read: on HDFS read
      * short-circuit only, those without every block on this node's DataNode. Catalog tables and
      * queries the parser does not understand are not checked (DuckDB reports what it cannot

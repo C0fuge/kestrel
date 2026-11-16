@@ -786,6 +786,37 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteLocalScanMaxBytes}
+     * ({@code arrowflight.cluster.distributedCompleteLocalScanMaxBytes},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES}): with
+     * {@code distributedCompletePointLookups=local}, a one-row aggregate (no GROUP BY) or a LIMIT
+     * query of at most 10 000 rows without aggregation whose files, after footer pruning, add up
+     * to at most this size, all readable and held on the planning node, is computed there alone
+     * instead of merged (item 50). Sizes take DuckDB's units ({@code 256MiB}) or plain bytes;
+     * default 256 MiB; 0 turns the size rule off.
+     *
+     * @param props configuration source
+     * @return bytes, 0 for off
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long distributedCompleteLocalScanMaxBytes(ConfigSource props) {
+        String value = getStringWithEnv("distributedCompleteLocalScanMaxBytes",
+                "arrowflight.cluster.distributedCompleteLocalScanMaxBytes",
+                "FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES", String.valueOf(256L << 20), props).trim();
+        Long bytes;
+        try {
+            bytes = value.matches("\\d+") ? Long.valueOf(value) : DuckDbSizing.parseBytes(value);
+        } catch (RuntimeException e) {
+            bytes = null;
+        }
+        if (bytes == null || bytes < 0) {
+            throw new IllegalArgumentException("distributedCompleteLocalScanMaxBytes must be a size such as"
+                    + " 256MiB or 0: " + value);
+        }
+        return bytes;
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own

@@ -352,19 +352,42 @@ public final class ExecutionService {
      *         file left out) or this node cannot read a kept file whole
      */
     public int prunedFilesHere(String sql) {
+        PrunedFiles pruned = prunedHere(sql);
+        return pruned == null ? -1 : pruned.files();
+    }
+
+    /**
+     * Picks the files a plain single-table query over a directory table reads once footer
+     * statistics have left out the files its WHERE clause cannot match, as
+     * {@link #prunedFilesHere(String)} counts them, with their total size (item 50).
+     *
+     * @param sql text after the catalog rewrites, table names qualified
+     * @return the kept files and their bytes, or null when the query is not pruned or this node
+     *         cannot read a kept file whole
+     */
+    public PrunedFiles prunedHere(String sql) {
         CatalogViews.Pruning pruning = catalogViews.pruning(sql);
         if (pruning == null) {
-            return -1;
+            return null;
         }
         DataStore store = parquetAdapter.dataStore();
-        if (store != null && store.wholeFileReadsOnly()) {
-            for (DataFile file : pruning.kept()) {
-                if (!store.readableHere(file)) {
-                    return -1;
-                }
+        long bytes = 0;
+        for (DataFile file : pruning.kept()) {
+            if (store != null && store.wholeFileReadsOnly() && !store.readableHere(file)) {
+                return null;
             }
+            bytes += Math.max(0L, file.size());
         }
-        return pruning.kept().size();
+        return new PrunedFiles(pruning.kept().size(), bytes);
+    }
+
+    /**
+     * Files a query reads after footer pruning.
+     *
+     * @param files kept files
+     * @param bytes their total size
+     */
+    public record PrunedFiles(int files, long bytes) {
     }
 
     /**
