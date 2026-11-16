@@ -4,6 +4,8 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-16 04:00 - ITEM 50 (after item 49 is packaged): the rest of D14.** Stand on `2c169a53db3b` (3 servers, DataNodes `authentication,privacy`, power-saver so q/s only relative): item 48 works where footer pruning keeps <= 4 files (orderkey-range one-row aggregates now local, p50 0.044 s vs 0.26 s on 29f1, mix +10 %), but the small-query mix at c32 is unchanged: dc 434 vs speed 914 q/s (29f1 428 / 884). Still merged across nodes: one-row aggregates whose filter prunes nothing (`sumq`, `avgp`: date filters, 8 of 8 files kept), unfiltered `count(*)` and ORDER BY ... LIMIT (`limob`). Goal: dc small mix at c32 >= 0.9 of speed without making big aggregates slower. Suggested: decide by the size of the files left after pruning (bytes / row counts already in the inventory and footer cache), not by their number - below a threshold (e.g. 256 MiB or the speed profile's local-scan budget, a setting) answer on the planning node when every file is readable from it (shared stores: HDFS / S3 / shared dataDir); `count(*)` without a filter from footer row counts; ORDER BY ... LIMIT small: local. Equality tests + the CI dc small-mix cell; write `ITEM 50 DONE <sha>` with numbers.
+
 ITEM 49(d) DONE 64d566cb (2026-11-15, see Log; test fix 7ab48cd6, fast-forwarded into `main`). `0419ac23` adopted:
 nodes list their files again every `fileInventoryRefreshSeconds` (default 30, 0 = start only) and publish the
 inventory when it changed; unlike upstream, a dead / stopped node's inventory stays published. `ea2f83f1` NOT NEEDED
