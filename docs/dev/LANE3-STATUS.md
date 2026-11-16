@@ -774,4 +774,5 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   (both check merges; first Dev CI 43781706494 red on that test). Branch CI on 6fe4bc58: Dev CI 43782908034, Service
   cluster 43781708602 (on 6cdd4ba4, code identical), Service hdfs 43782910144 green. `lane/distributed` was reset to
   `origin/main` first (its 13 item-48 commits were already in `main` under other ids). Package dispatched from `main`
-  (see Next steps / STATUS Log). Next: none open; the stand's item 50 rerun. Lock released.
+  (Dev CI `package=true` 43784755805 on `main` cf60940e; its service gate runs the service-*.yml). Next: none open;
+  the stand's item 50 rerun. Lock released.
