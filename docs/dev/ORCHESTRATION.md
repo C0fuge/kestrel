@@ -1,34 +1,34 @@
 # Orchestration status
 
-ALL DONE (2026-11-12T09:56Z) **withdrawn**: new work since 2026-11-15 22:00Z (kestrel items 49 / 50, two new pre-releases,
-new upstream items in marten and heron); egret FRESH for the newest pre-release is still running.
+ALL DONE (2026-11-12T09:56Z) **withdrawn**: new work since 2026-11-15 22:00Z (kestrel items 49 / 50, new upstream items
+in marten and heron). Remaining for ALL DONE: the marten and heron before/after measurements on `server-1.0.0-d2e27119fda4`.
 
-Status as of **2026-11-16T04:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-16T05:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- **marten and heron are blocked on you:** your 2026-11-16 01:45 notes need server `server-1.0.0-2c169a53db3b` for the
-  before/after times, but it is not in marten's `m4-assets` (newest there: deafc861cce3) nor in heron's `e2e-assets`.
-  Upload it (or name the newest pre-release `server-1.0.0-d2e27119fda4` instead). heron also asks (Open questions):
-  move production to a self-built Trino 455 with upstream's partial-aggregation engine patch, or close the item as
-  not applicable to stock Trino; and what the unfilled `{rule}` placeholder in your 2026-11-16 note meant.
-- **Pre-release `server-1.0.0-d2e27119fda4`** (items 49 + 50) is packaged and green; egret ACCEPT **SHIP** for both
-  7ab48cd6675c and d2e27119fda4 (runs 43786698707, 43790722012). The stand check of item 50 on the real cluster is yours.
-- Main's own Dev CI 43784755805 (cf60940e) is red **only in the service gate** (main moved during the build; build job
-  green; the same code d2e27119 is green on `pkg/d2e27119`, 43786741509). Not a test failure, no bug-first note; not
-  rerun because the gate would wait for service runs that do not exist for that commit. The next code push on main re-runs it.
-- Q-46 (hadoopfs negotiated QOP / cipher) still open; catalogs Q11 still open.
+- **egret FRESH d2e27119fda4 DONE** (`results/FRESH-d2e27119fda4.md`, run 43798340706, 10/10 jobs green): speed and
+  balanced 22/22 everywhere, 0 errors; upstream native `28d6ea713b8e` still 0/22 ADBC, 1/22 JDBC and errors on small
+  queries / x8 scans. Local small c1 p50 speed/balanced **1.15 ADBC / 1.12 JDBC** (known regression, carried over);
+  load at 128 clients +42-43 % speed vs balanced, speed/upstream 0.96. Together with ACCEPT SHIP (43790722012),
+  `server-1.0.0-d2e27119fda4` is checked; the real-cluster stand check of item 50 is yours.
+- marten and heron are **unblocked** by your 2026-11-16 06:40 note and are measuring on d2e27119fda4 (see below).
+- Main's own Dev CI 43784755805 (cf60940e) is still red **only in the service gate** (main moved during the build; the
+  same code d2e27119 is green on `pkg/d2e27119`, 43786741509). No bug-first note, no rerun; the next code push on main re-runs it.
+- Q-46 (hadoopfs negotiated QOP / cipher) still open; catalogs Q11 still open; plugins wait on Q-46, Q-40a follow-up and
+  the stand checks of items 44 (2) / 46.
 - Branches `pkg/d2e27119`, `pkg/7ab48cd6`, `pkg/2c169a53`, `pkg/74464701`, `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted.
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 50 PACKAGED (02:05Z); no open core item until your next note | 02:05Z (~3 h) | free | main Dev CI 43784755805 red (gate only); pkg 43786741509 green |
+| core (`STATUS.md`) | ITEM 50 PACKAGED (02:05Z); no open core item until your next note | 02:05Z (~4 h) | free | main Dev CI 43784755805 red (gate only); pkg 43786741509 green |
 | plugins (`PLUGINS-STATUS.md`) | ITEM 49(b) DONE f0adaf52; nothing open | 03:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 49(c) DONE df3dae71; session 73 nothing open | 04:21Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d) DONE 64d566cb, ITEM 50 DONE d2e27119; nothing open (04:03Z status) | 04:03Z | free | Dev CI main 43774021600 (a69848c9) green |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 49(c) DONE df3dae71; session 74 (05:21Z) nothing open | 05:21Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d) DONE 64d566cb, ITEM 50 DONE d2e27119; nothing open | 04:03Z | free | Dev CI main 43774021600 (a69848c9) green |
 
-No bug-first notes in any lane. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
+No new bug-first notes in any lane (the plugins ITEM 44 bug-first of 2026-11-11 is done). No stale locks: kestrel locks
+empty; marten and heron `docs/LOCK` taken 05:13Z (active sessions).
 
 ## Service matrix (newest run per workflow)
 
@@ -41,27 +41,29 @@ No bug-first notes in any lane. No stale locks (all kestrel locks and marten/her
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-d2e27119fda4` (2026-11-16): item 50 (dc small scans / count(*) on the planning node) + item 49; egret ACCEPT SHIP (43790722012), FRESH running (43798340706).
-- `server-1.0.0-7ab48cd6675c` (2026-11-15): item 49 (upstream server changes since cec626bbb54a); egret ACCEPT SHIP (43786698707); FRESH skipped (contained in d2e27119fda4).
+- `server-1.0.0-d2e27119fda4` (2026-11-16): item 50 + item 49; egret ACCEPT SHIP (43790722012), FRESH DONE (43798340706).
+- `server-1.0.0-7ab48cd6675c` (2026-11-15): item 49; egret ACCEPT SHIP (43786698707); FRESH skipped (contained in d2e27119fda4).
 - `server-1.0.0-2c169a53db3b` (2026-11-12): Q-40b-1, items 47 / 48; egret ACCEPT SHIP, FRESH DONE 43175544843.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). New maintainer item (2026-11-16 01:45, upstream StarRocks connector changes):
-  join runtime filters adopted (series `4a9848e-flbcef73`; FE 43771325687 52/52, BE 43771314584, be-ut 43771314581 24/24
-  green); measurement blocked (still at 04:41Z: 2c169a53db3b not in `m4-assets`).
-- heron: IMPROVEMENTS DONE. New maintainer item (upstream Trino partial aggregation pushdown): reviewed (session 297),
-  blocked on maintainer input (session 299, 03:51Z).
+- marten: IMPROVEMENTS DONE (2026-11-03). Upstream StarRocks connector item (2026-11-16 01:45): join runtime filters
+  adopted (FE 43771325687, BE 43771314584, be-ut 43771314581 green); unblocked 06:40 -> session (lock 05:13Z) put
+  d2e27119fda4 in m4 assets and dispatched `compare sf=1,10 ours vs ours_rf` (43809296573 / 43809299659, running).
+- heron: IMPROVEMENTS DONE. Upstream partial-aggregation item: session 300 (lock 05:13Z) verdict NOT APPLICABLE on stock
+  Trino (correctness notes kept as b6d92bf / cd043ad), d2e27119fda4 pinned (e2e 43808937358 / 43808940518 green);
+  before/after SF1 default 59.2 -> 53.6 s, speed 52.1 -> 51.8 s, 22/22; SF10 pending (connector-compare 43808943657 running).
 
 ## egret
 
-- Newest FRESH result: still **2c169a53db3b** (`results/FRESH-2c169a53db3b.md`, run 43175544843; upstream `cfaa929746cb`):
-  22/22 speed and balanced, 0 errors; small c1 p50 speed/balanced 1.09 JDBC / 1.14 ADBC; S3 TPC-H 0.13-0.16; load +39-42 %.
-- README 'In progress': EGRET ACCEPT 7ab48cd6675c / d2e27119fda4 DONE (SHIP); **EGRET FRESH d2e27119fda4 RUNNING**
-  (run 43798340706 since 03:27Z, still in progress at 04:56Z; upstream now `28d6ea713b8e`).
+- Newest FRESH: **d2e27119fda4** (`results/FRESH-d2e27119fda4.md`, run 43798340706 + rereport 43811945061; upstream
+  `28d6ea713b8e`): speed/balanced local TPC-H SF10 0.96 / 0.98, S3 SF10 0.13-0.14, small S3 p95 0.05-0.09, scans x8
+  1.42 local / 1.51 S3, load +42-43 % at 128 clients; speed/upstream load 0.94-0.96, scans 1.07-1.09.
+- README 'In progress': EGRET ACCEPT 7ab48cd6675c / d2e27119fda4 DONE (SHIP); EGRET FRESH d2e27119fda4 DONE. Nothing running.
 
 ## History
 
+- 2026-11-16T05:57Z: egret FRESH d2e27119fda4 DONE (43798340706; speed/balanced 22/22, 0 errors; local small c1 p50 speed/balanced 1.15 ADBC / 1.12 JDBC carried over; load +42-43 %; upstream 28d6ea713b8e still 0-1/22); maintainer unblocked marten/heron with d2e27119fda4: marten compare sf=1,10 ours vs ours_rf running (43809296573/43809299659), heron pinned it (e2e 43808937358/43808940518 green), connector-compare 43808943657 SF10 running; ALL DONE still withdrawn; kestrel unchanged, locks free (marten/heron locks 05:13Z active).
 - 2026-11-16T04:57Z: no change: ALL DONE still withdrawn; marten (04:41Z) / heron (session 299) blocked on the 2c169a53db3b upload; egret FRESH d2e27119fda4 (43798340706) still running; main Dev CI gate-only red, no new CI runs or pre-releases; locks free.
 - 2026-11-16T03:58Z: ALL DONE withdrawn (items 49/50, pre-releases 7ab48cd6675c and d2e27119fda4; marten/heron blocked on 2c169a53db3b upload; egret FRESH d2e27119fda4 running; main Dev CI gate-only red).
 - 2026-11-15T21:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
@@ -101,4 +103,3 @@ No bug-first notes in any lane. No stale locks (all kestrel locks and marten/her
 - 2026-11-10T16:57Z: refresh (ALL DONE). **ITEM 40(b) DONE 135e6dac** written 16:06Z by the catalogs lane (c1 p50 ~10-15 % below deafc861, HDFS point +2..6 %; Q-40b-1 proposed to close without a default change, needs maintainer OK). Core lane took the lock 16:41Z and runs the real-cluster package: Dev CI 42857169249 on `pkg/2ff22144` (`package=true`) in progress; no new pre-release yet (newest `server-1.0.0-37bf9401d77c`). main Dev CI 42837979902 green; service matrix unchanged (cluster 42840719877 pass, hdfs 42794862424, security/stores 42777504125/42777507448 pass). marten/heron: nothing new, locks empty; egret idle, newest FRESH 37bf9401d77c. No stale locks, no red CI.
 - 2026-11-10T15:57Z: refresh (ALL DONE). Catalogs 40(b) session active (lock 15:22Z): Small query perf 42843856272 (main) + 42843860772 (perf/40b-final) running, HDFS point perf 42843864824 (main) / 42843869104 green; ITEM 40(b) DONE not yet written; lane 3 Service cluster 42840719877 green on main; main Dev CI 42837979902 (34e24d3b) green; plugins session 15:16Z nothing open; no new pre-release or egret FRESH; no stale locks, no red CI.
 - 2026-11-10T14:57Z: refresh (ALL DONE). Catalogs 40(b) session (8) merged 135e6dac (pruning shapes for decimal / long / date literals; branch Dev CI 42835145513 green, Small query perf 42835176027 within noise), lock released; ITEM 40(b) DONE not yet written (next: JFR check, gizmo vs speed on HDFS point cell); Q-40b-1 proposed for closing without a default change (needs maintainer OK); main Dev CI 42828677361 (6abf6264) green, 42837979902 (34e24d3b) running; core package for the real cluster still waits for 40(b) DONE; all locks free, no red CI, no new pre-release or egret FRESH.
-- 2026-11-10T13:58Z: refresh (ALL DONE). Catalogs 40(b) cut 5 (3a01265e, one pruning per DoGet) on main, Dev CI 42822143053 green, c1 p50 back at baseline without a default change, so Q-40b-1 is now optional; next cut 4228c733 (one jOOQ parse per point-query shape) on main, Dev CI 42828677361 running; lock catalogs 13:24Z active; no stale locks, no red CI.
