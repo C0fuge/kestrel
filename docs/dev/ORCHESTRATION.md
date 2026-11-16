@@ -3,7 +3,7 @@
 ALL DONE (2026-11-12T09:56Z) **withdrawn**: new work since 2026-11-15 22:00Z (kestrel items 49 / 50, two new pre-releases,
 new upstream items in marten and heron); egret FRESH for the newest pre-release is still running.
 
-Status as of **2026-11-16T03:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-16T04:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **marten and heron are blocked on you:** your 2026-11-16 01:45 notes need server `server-1.0.0-2c169a53db3b` for the
@@ -23,10 +23,10 @@ Points for the maintainer:
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 50 PACKAGED (02:05Z); no open core item until your next note | 02:05Z (~2 h) | free | main Dev CI 43784755805 red (gate only); pkg 43786741509 green |
+| core (`STATUS.md`) | ITEM 50 PACKAGED (02:05Z); no open core item until your next note | 02:05Z (~3 h) | free | main Dev CI 43784755805 red (gate only); pkg 43786741509 green |
 | plugins (`PLUGINS-STATUS.md`) | ITEM 49(b) DONE f0adaf52; nothing open | 03:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 49(c) DONE df3dae71; session 72 nothing open | 03:21Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d) DONE 64d566cb, ITEM 50 DONE d2e27119; nothing open | 01:11Z | free | Dev CI main 43774021600 (a69848c9) green |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 49(c) DONE df3dae71; session 73 nothing open | 04:21Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d) DONE 64d566cb, ITEM 50 DONE d2e27119; nothing open (04:03Z status) | 04:03Z | free | Dev CI main 43774021600 (a69848c9) green |
 
 No bug-first notes in any lane. No stale locks (all kestrel locks and marten/heron `docs/LOCK` empty).
 
@@ -49,7 +49,7 @@ No bug-first notes in any lane. No stale locks (all kestrel locks and marten/her
 
 - marten: IMPROVEMENTS DONE (2026-11-03). New maintainer item (2026-11-16 01:45, upstream StarRocks connector changes):
   join runtime filters adopted (series `4a9848e-flbcef73`; FE 43771325687 52/52, BE 43771314584, be-ut 43771314581 24/24
-  green); measurement blocked (03:40Z: 2c169a53db3b not in `m4-assets`).
+  green); measurement blocked (still at 04:41Z: 2c169a53db3b not in `m4-assets`).
 - heron: IMPROVEMENTS DONE. New maintainer item (upstream Trino partial aggregation pushdown): reviewed (session 297),
   blocked on maintainer input (session 299, 03:51Z).
 
@@ -58,10 +58,11 @@ No bug-first notes in any lane. No stale locks (all kestrel locks and marten/her
 - Newest FRESH result: still **2c169a53db3b** (`results/FRESH-2c169a53db3b.md`, run 43175544843; upstream `cfaa929746cb`):
   22/22 speed and balanced, 0 errors; small c1 p50 speed/balanced 1.09 JDBC / 1.14 ADBC; S3 TPC-H 0.13-0.16; load +39-42 %.
 - README 'In progress': EGRET ACCEPT 7ab48cd6675c / d2e27119fda4 DONE (SHIP); **EGRET FRESH d2e27119fda4 RUNNING**
-  (run 43798340706 since 03:27Z, upstream now `28d6ea713b8e`).
+  (run 43798340706 since 03:27Z, still in progress at 04:56Z; upstream now `28d6ea713b8e`).
 
 ## History
 
+- 2026-11-16T04:57Z: no change: ALL DONE still withdrawn; marten (04:41Z) / heron (session 299) blocked on the 2c169a53db3b upload; egret FRESH d2e27119fda4 (43798340706) still running; main Dev CI gate-only red, no new CI runs or pre-releases; locks free.
 - 2026-11-16T03:58Z: ALL DONE withdrawn (items 49/50, pre-releases 7ab48cd6675c and d2e27119fda4; marten/heron blocked on 2c169a53db3b upload; egret FRESH d2e27119fda4 running; main Dev CI gate-only red).
 - 2026-11-15T21:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T20:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
