@@ -284,6 +284,7 @@ class DistributedTwoProcessTlsTest {
                 "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
                 "-Xmx512m", "-DlogLevel=info", "-DnumServers=2", "-DresultMode=complete",
                 "-DendpointsPerServer=2", "-DdistributedComplete=true", "-DdataDirShared=true",
+                "-DdistributedCompleteLocalScanMaxBytes=0",
                 "-DduckDbThreads=1", "-DduckDbWarmConnections=1",
                 "-cp", System.getProperty("java.class.path"),
                 HadoopArrowFlightServer.class.getName(),

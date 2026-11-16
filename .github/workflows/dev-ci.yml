@@ -184,6 +184,8 @@ jobs:
       # 16 full scans + 32 small queries at once must all be exact, with no failed execution in the
       # server log. 16 scans, not the stand's 8: on a 4-core runner 8 passed even before the fix
       # (the stand has more cores), 16 failed with the stand's "memory limit" INVALID_ARGUMENT.
+      # distributedCompletePointLookups=merge: the check is about merges (with local, item 50 computes the
+      # unfiltered count(*) and the sum over SF1 lineitem on the node alone).
       # The data generator takes a DuckDB wheel only (duckdb 1.4.1 has none for the runner's Python
       # and compiled from source for 12-15 min, which ran the job into its timeout).
       - name: Distributed complete under concurrency (items 35, 39 (d))
@@ -206,6 +208,7 @@ jobs:
               --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
               -Dio.netty.tryReflectionSetAccessible=true -Dhazelcast.phone.home.enabled=false \
               -DresourceProfile=speed -DdistributedComplete=true -DresultMode=complete \
+              -DdistributedCompletePointLookups=merge \
               -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:$(cat "$work/cp.txt")" \
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$work/data" \
               --localhost 127.0.0.1 --port 32010 --hazelcast-port 5701 --hosts 127.0.0.1:5701 \
