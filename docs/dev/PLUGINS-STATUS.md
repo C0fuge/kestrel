@@ -1403,3 +1403,6 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   exception; `STATUS.md` Log line written. CI: Dev CI 43770929566 on `fix/49b` (a8271c2d) green; rebased onto 49(a) and
   49(c), targeted tests green locally, merged as f0adaf52 (push CI on `main`: 43772674958 cancelled by lane 3's push, Dev CI 43774021600 on a69848c9, which contains it, green). Runtime change: the core lane packages
   once 49(a)-(d) are done.
+- 2026-11-16 03:12Z (plugins session): no open item (49(b) DONE f0adaf52 and packaged by the core lane in
+  `server-1.0.0-7ab48cd6675c` / `server-1.0.0-d2e27119fda4`; waiting on the maintainer: Q-46, Q-40a follow-up, stand
+  checks of items 44 (2) / 46). No code change, no CI run; lock released.
