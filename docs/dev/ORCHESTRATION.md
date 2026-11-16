@@ -5,11 +5,11 @@ ALL DONE (2026-11-12T09:56Z) **withdrawn** since 2026-11-15 22:00Z. Remaining fo
 not in `m4-assets`), heron's patched-Trino item (measured, waits for the maintainer's freeze/remove answer). egret FRESH
 on the newest pre-release `server-1.0.0-6f0aa5a026fa` is now DONE.
 
-Status as of **2026-11-16T13:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-16T14:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **Still blocking marten (and so ITEM 51 DONE):** pre-release `server-1.0.0-6f0aa5a026fa` (ITEM 51) is not in marten's
-  `m4-assets` (checked 13:58Z: no 6f0aa5a026fa asset; newest d2e27119fda4). marten's 12:41Z finish-mode session stopped
+  `m4-assets` (checked 14:57Z: no 6f0aa5a026fa asset; newest d2e27119fda4). marten's 12:41Z finish-mode session stopped
   again (no marten session since). Please upload it (jar, flight-plugins, flight-server-libs, flight-auth, SHA256SUMS).
 - **heron Open question: freeze or remove the patched-Trino series** (proposal: freeze). Session 304 A/B (43852765801):
   d2e27119fda4 = deafc861cce3 within noise, 22/22 exact; session 305 (43870753170, ABA 5 rounds) closed the q01 watch
@@ -29,8 +29,8 @@ Points for the maintainer:
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 51 PACKAGED (waits for numbers); items 26 / 27 DONE 2026-11-03 | 09:27Z | free | main Dev CI 43831943883 green (6f0aa5a0); pkg 43834254344 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open | 13:18Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | session 82 nothing open | 13:27Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d), ITEM 50 DONE; nothing open | 12:05Z | free | lane/distributed Dev CI 43782908034 green |
+| catalogs (`CATALOGS-STATUS.md`) | session 83 nothing open | 14:25Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 49(d), ITEM 50 DONE; nothing open | 14:04Z | free | lane/distributed Dev CI 43782908034 green |
 
 No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 12:42Z);
 heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; no new pre-releases.
@@ -66,6 +66,7 @@ heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; 
 
 ## History
 
+- 2026-11-16T14:57Z: no change: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron idle on the patched-Trino question; lane 3 / catalogs (session 83) nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T13:58Z: no change in blockers: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron session 305 closed the q01 watch (43870753170, no regression), 306 idle on the patched-Trino question; plugins/catalogs nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T12:58Z: egret FRESH 6f0aa5a026fa DONE (43840086547 + rereport 43861228344; 22/22, 0 errors, no item 51 cost; local small ADBC c1 speed/balanced 1.26 carried over, larger); marten finish-mode session 12:41Z stopped again (6f0aa5a026fa still not in m4-assets); heron session 304 A/B: d2e27119fda4 = deafc861cce3, new session lock 12:53Z, connector-compare 43870753170 running; kestrel no code/CI change; no stale locks.
 - 2026-11-16T11:58Z: no kestrel code/CI change (catalogs session 80 nothing open); marten finish-mode session 11:42Z again stopped: 6f0aa5a026fa still not in m4-assets; heron session 304 server A/B (43852765801) still running, lock 10:51Z active; egret FRESH 6f0aa5a026fa run 43840086547 finished, raw results committed 11:49Z, FRESH-6f0aa5a026fa.md not yet written; no stale locks.
@@ -105,4 +106,3 @@ heron `docs/LOCK` empty (released 13:52Z). No new kestrel CI runs since 09:05Z; 
 - 2026-11-11T06:57Z: no change in lanes (all nothing open, locks free, no new kestrel CI runs or pre-releases); egret ACCEPT 42965889054 on 29f1267b995f hit apt mirror failures in 4 cells (infra, harness retry 95395a4), rerun 42972471705 + FRESH 42965886044 running; ALL DONE still suspended.
 - 2026-11-11T05:58Z: no change in lanes (core/plugins/catalogs/lane 3 nothing open; plugins 05:15Z note: 29f1267b995f is the stand build for item 44 / Q-40a); egret FRESH 42965886044 + ACCEPT 42965889054 on 29f1267b995f running (upstream head `46d565e93c19`); ALL DONE still suspended; no new CI runs, no stale locks, no red code CI.
 - 2026-11-11T04:59Z: MORNING BUILD DONE: pre-release `server-1.0.0-29f1267b995f` (hadoopfs afc8 default, items 44+45) from pkg/29f1267b, all package runs green (Dev CI 42956935228, Service cluster/hdfs/security/stores, Catalogs CI); main Dev CI 42955017367 red only at the service gate (main moved by the 03:57Z orchestrator commit during the build; not a test failure, no rerun); ALL DONE suspended until egret FRESH on 29f1267b995f; no stale locks.
-- 2026-11-11T03:58Z: ALL DONE kept; plugins ITEM 44 DONE e75705c9 (part (2) Ranger staleness recheck merged); core lane on the morning note: afc8 default 29f1267b, package=true Dev CI 42955017367 running (two superseded Dev CI runs cancelled); Service cluster 42955011424 green, Service hdfs 42955011583 running, Catalogs CI green; marten/heron idle; no stale locks, no red CI, no new pre-release yet.
