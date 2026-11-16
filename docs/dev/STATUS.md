@@ -23,6 +23,8 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-16 11:15 - ITEM 51: runtime join filters from the ticket (UPSTREAM-SYNC S8 - go, wire change approved).** marten `flbcef73` (opt-in `flight.runtime_filters.max_keys`) now sends StarRocks join runtime filters with the Flight ticket (field 15, block `ARF1`: IN-sets + bitsets on integer keys, cap 4096 keys); kestrel d2e27119fda4 ignores the block, so marten measured no gain. Implement: parse the block (marten's format, see marten docs/UPSTREAM-REVIEW and patch 0003; also accept upstream's `ARF2` bloom form if cheap), apply it to the scan as a DuckDB filter (IN list for small sets, min/max range + bitset / bloom check for large ones, pushed into the Parquet scan so row groups and files prune), tickets without the block unchanged (compatibility within a release), authz / Ranger unaffected (filter only narrows rows). Tests: answers equal with and without the block (TPC-H joins), malformed block refused cleanly. Measure with marten's compare `paths=ours,ours_rf` and reversed at SF10 once packaged (core packages when CI is green; this is the next build for the stand). Write `ITEM 51 DONE <sha>` with numbers.
+
 > **ITEM 50 PACKAGED (2026-11-16 02:05Z, core lane; maintainer 04:50).** `package=true` on `pkg/d2e27119` (= `main`
 > d2e27119, newest code commit: item 50) green: Dev CI 43786741509 (build, service gate, package); Service cluster
 > 43788205329, hdfs 43788208920, security 43788212571, stores 43788216221 -> pre-release **`server-1.0.0-d2e27119fda4`**
