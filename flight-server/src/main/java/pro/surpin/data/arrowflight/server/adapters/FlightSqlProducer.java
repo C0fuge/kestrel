@@ -825,6 +825,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                         || !distributed.stream(query, user, listener)) {
                     streamComplete(allocator, query, expanded, state, listener, pathTracker);
                 }
+            } else if (runtimeFilters.isEmpty()) {
+                executionService.readParquet(
+                        allocator, query, filePaths, listener, true, pathTracker);
             } else {
                 executionService.readParquet(
                         allocator, query, filePaths, listener, true, pathTracker, runtimeFilters);

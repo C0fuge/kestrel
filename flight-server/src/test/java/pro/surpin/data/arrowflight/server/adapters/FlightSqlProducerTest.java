@@ -1813,4 +1813,20 @@ class FlightSqlProducerTest {
         verify(listener, never()).onCompleted();
         return assertInstanceOf(FlightRuntimeException.class, error.getValue()).status().code();
     }
+
+    @Test
+    void findsTheRuntimeFilterBlockOfAStatementTicketOnly() throws Exception {
+        byte[] plain = com.google.protobuf.Any.pack(org.apache.arrow.flight.sql.impl.FlightSql
+                .TicketStatementQuery.newBuilder()
+                .setStatementHandle(com.google.protobuf.ByteString.copyFromUtf8("h")).build()).toByteArray();
+        assertNull(FlightSqlProducer.runtimeFilterTicket(new org.apache.arrow.flight.Ticket(plain)));
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(plain);
+        com.google.protobuf.CodedOutputStream coded = com.google.protobuf.CodedOutputStream.newInstance(out);
+        coded.writeByteArray(pro.surpin.data.arrowflight.server.services.RuntimeFilters.TICKET_FIELD,
+                new byte[] {1, 2});
+        coded.flush();
+        assertNotNull(FlightSqlProducer.runtimeFilterTicket(new org.apache.arrow.flight.Ticket(out.toByteArray())));
+        assertNull(FlightSqlProducer.runtimeFilterTicket(new org.apache.arrow.flight.Ticket(new byte[] {(byte) 0xFF})));
+    }
 }
