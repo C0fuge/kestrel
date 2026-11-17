@@ -4,6 +4,9 @@
 # flat at ~25 q/s from 1 to 128 clients with 2-6 cores busy; this run shows where its threads wait.
 # Item 54: with scanRounds set, the cell reads tpch.lineitem in full instead (one stream, scanClients
 # streams, export; per-thread server CPU of one stream) for the variants (default: the scan variants below).
+# Item 54 step 2: hdfsModes runs every variant on each HDFS of the list (plain = short-circuit, tcp = no
+# short-circuit, sasl = Kerberos + data-transfer protection authentication,privacy, sasl-auth /
+# sasl-privacy = protection authentication / privacy only; the sasl modes read every block over SASL TCP).
 # Manual, not part of Dev CI; also on push to a fix/39c-* branch touching its files.
 name: HDFS point perf
 
@@ -42,6 +45,10 @@ on:
         description: "scan mode: concurrent streams of the xN shape"
         type: string
         default: "4"
+      hdfsModes:
+        description: "HDFS modes, comma separated: plain, tcp, sasl, sasl-auth, sasl-privacy"
+        type: string
+        default: "plain"
       serverCpus:
         description: "server CPUs (cpuset) / client CPUs, e.g. 0,1/2,3"
         type: string
@@ -142,6 +149,7 @@ jobs:
         env:
           SCAN_ROUNDS: ${{ inputs.scanRounds }}
           SCAN_CLIENTS: ${{ inputs.scanClients || '4' }}
+          MODES: ${{ inputs.hdfsModes || 'plain' }}
           CPUS: ${{ inputs.serverCpus || '0,1/2,3' }}
           SCAN_VARIANTS: "speed=speed:;speed-nofilecache=speed:-DduckDbExternalFileCache=false;speed-zerocopyoff=speed:-DflightZeroCopyWrites=false;speed-batch1m=speed:-DbatchSize=1048576;balanced=balanced:;balanced-noorder=balanced:-DduckDbPreserveInsertionOrder=false;balanced-nofilecache=balanced:-DduckDbExternalFileCache=false;balanced-noorder-nofilecache=balanced:-DduckDbPreserveInsertionOrder=false -DduckDbExternalFileCache=false"
           VARIANTS: ${{ inputs.variants || 'balanced=balanced:;balanced-nopruning=balanced:-DfileStatsPruningMaxFiles=0;balanced-filecache=balanced:-DduckDbExternalFileCache=true;balanced-metacache=balanced:-DduckDbParquetMetadataCache=true;speed=speed:;speed-nopruning=speed:-DfileStatsPruningMaxFiles=0;speed-metacache=speed:-DduckDbParquetMetadataCache=true' }}
@@ -153,12 +161,23 @@ jobs:
           IFS=';' read -ra vs <<< "$VARIANTS"
           if [ "${{ matrix.runner }}" = b ]; then rev=(); for (( i=${#vs[@]}-1; i>=0; i-- )); do rev+=("${vs[i]}"); done; vs=("${rev[@]}"); fi
           status=0
-          for v in "${vs[@]}"; do
-            name=${v%%=*} rest=${v#*=}; profile=${rest%%:*} options=${rest#*:}
-            echo "::group::$name"
-            LABEL=$name tools/ci/hdfs-point-cell.sh "$profile" "$RUNNER_TEMP/in" "$RUNNER_TEMP/work/$name" \
-              "${{ inputs.clients || '1,8,32' }}" "${{ inputs.seconds || '30' }}" "$keys" "$options ${{ inputs.extra }}" || status=1
-            echo "::endgroup::"
+          IFS=',' read -ra modes <<< "$MODES"
+          for m in "${modes[@]}"; do
+            case "$m" in
+              plain|tcp|sasl) hm=$m protection=authentication,privacy ;;
+              sasl-auth) hm=sasl protection=authentication ;;
+              sasl-privacy) hm=sasl protection=privacy ;;
+              *) echo "unknown HDFS mode $m"; status=1; continue ;;
+            esac
+            prefix=""; [ "$MODES" = plain ] || prefix="$m-"
+            for v in "${vs[@]}"; do
+              name=$prefix${v%%=*} rest=${v#*=}; profile=${rest%%:*} options=${rest#*:}
+              echo "::group::$name"
+              HDFS_MODE=$hm SASL_PROTECTION=$protection LABEL=$name tools/ci/hdfs-point-cell.sh "$profile" "$RUNNER_TEMP/in" \
+                "$RUNNER_TEMP/work/$name" "${{ inputs.clients || '1,8,32' }}" "${{ inputs.seconds || '30' }}" "$keys" \
+                "$options ${{ inputs.extra }}" || status=1
+              echo "::endgroup::"
+            done
           done
           cat "$RUNNER_TEMP"/work/*/result.txt
           exit "$status"

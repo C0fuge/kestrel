@@ -14,6 +14,11 @@
 # `SELECT * FROM tpch.lineitem` in complete mode: one stream (x1), SCAN_CLIENTS streams at once and an
 # export, SCAN_ROUNDS measured passes each, plus the server's per-thread CPU during one x1 pass
 # (tools/ci/thread-cpu.py). SERVER_CPUS / CLIENT_CPUS (default 0,1 / 2,3) pin server and client.
+# HDFS_MODE (item 54 step 2): plain (default, short-circuit when the native library loads), tcp (no
+# short-circuit: every block over the DataNode's TCP port, no security) or sasl (Kerberos realm CI.TEST
+# from an MIT KDC container, as tools/ci/service-hdfs-cell.sh sasl-direct, DataNode with
+# dfs.data.transfer.protection=${SASL_PROTECTION:-authentication,privacy}, no short-circuit: DuckDB reads
+# every block over SASL data transfer, hdfsSaslDataTransfer auto, like the stand's direct reads).
 set -u
 profile=$1 in=$2 work=$3 clients=$4 seconds=$5 keys=$6 extra=${7:-}
 image=${HADOOP_IMAGE:-apache/hadoop:3.4.1}
@@ -21,30 +26,44 @@ mkdir -p "$work"
 res="$work/result.txt"; : > "$res"
 fail() {
   echo "$profile|setup|$*" | tee -a "$res"
-  for c in nn1 dn1 srv; do
+  for c in kdc nn1 dn1 srv; do
     docker logs "$c" > "$work/$c.log" 2>&1 || true
     echo "--- $c (last lines)"; tail -n 25 "$work/$c.log" | cut -c1-400
   done
+  docker rm -f srv dn1 nn1 kdc > /dev/null 2>&1 || true
   exit 1
 }
+mode=${HDFS_MODE:-plain}
+case "$mode" in plain|tcp|sasl) ;; *) fail "unknown HDFS_MODE $mode" ;; esac
 case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) fail "unknown profile $profile" ;; esac
 opts="$opts $extra"
 
 docker network create --subnet 172.31.0.0/24 hd > /dev/null 2>&1 || true
 hd=/srv/hd
-sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/sock"
+sudo rm -rf "$hd"; sudo install -d -o 1000 -g 1000 -m 755 "$hd" "$hd/nn1" "$hd/sock" "$hd/krb"
 conf="$work/conf"; mkdir -p "$conf"
 # DuckDB (hadoopfs, libhdfs3) reads short-circuit; the server's own Java client runs without the
 # native Hadoop library (with it, this cell's JVM crashed in ShortCircuitCache: "NativeIO is not
 # available", SIGSEGV), so its few footer reads go over TCP.
 sc=off native=()
-if docker run --rm "$image" hadoop checknative 2>&1 | grep -qE '^hadoop: +true'; then
+if [ "$mode" = plain ] && docker run --rm "$image" hadoop checknative 2>&1 | grep -qE '^hadoop: +true'; then
   sc=on
 fi
 props=(fs.defaultFS hdfs://172.31.0.10:8020 dfs.replication 1 dfs.permissions.enabled false
   dfs.namenode.rpc-bind-host 0.0.0.0 dfs.namenode.http-bind-host 0.0.0.0 dfs.namenode.name.dir /hd/name
   dfs.datanode.data.dir /tmp/hdfs/dn dfs.namenode.datanode.registration.ip-hostname-check false)
 [ "$sc" = on ] && props+=(dfs.client.read.shortcircuit true dfs.domain.socket.path /var/run/hdfs-sockets/dn)
+[ "$sc" = on ] || props+=(dfs.client.read.shortcircuit false)
+if [ "$mode" = sasl ]; then
+  p() { echo "$1/hdfs.ci@CI.TEST"; }
+  props+=(hadoop.security.authentication kerberos hadoop.security.authorization false hadoop.rpc.protection authentication
+    dfs.block.access.token.enable true
+    dfs.namenode.kerberos.principal "$(p nn)" dfs.namenode.keytab.file /hd/krb/hdfs.keytab
+    dfs.namenode.kerberos.internal.spnego.principal "$(p HTTP)"
+    dfs.datanode.kerberos.principal "$(p dn)" dfs.datanode.keytab.file /hd/krb/hdfs.keytab
+    dfs.web.authentication.kerberos.principal "$(p HTTP)" dfs.web.authentication.kerberos.keytab /hd/krb/hdfs.keytab
+    ignore.secure.ports.for.testing true dfs.data.transfer.protection "${SASL_PROTECTION:-authentication,privacy}")
+fi
 {
   echo '<?xml version="1.0"?>'; echo '<configuration>'
   set -- "${props[@]}"
@@ -55,23 +74,93 @@ cp "$conf/hdfs-site.xml" "$conf/core-site.xml"
 hconf=(-v "$conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro" -v "$conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro")
 sock=(); [ "$sc" = on ] && sock=(-v "$hd/sock:/var/run/hdfs-sockets")
 
-docker rm -f nn1 dn1 srv > /dev/null 2>&1 || true
+docker rm -f nn1 dn1 srv kdc > /dev/null 2>&1 || true
+kenv=() srvKrb=()
+if [ "$mode" = sasl ]; then
+  # The KDC of tools/ci/service-hdfs-cell.sh (MIT krb5 on ubuntu:24.04, bounded apt retries over three
+  # mirrors); test-only principals and keytabs, made here.
+  cat > "$conf/krb5.conf" <<'EOF'
+[libdefaults]
+  default_realm = CI.TEST
+  dns_lookup_kdc = false
+  dns_lookup_realm = false
+  rdns = false
+  dns_canonicalize_hostname = false
+  udp_preference_limit = 1
+  forwardable = true
+  ticket_lifetime = 4h
+[realms]
+  CI.TEST = {
+    kdc = 172.31.0.5:88
+    admin_server = 172.31.0.5
+  }
+EOF
+  cat > "$work/kdc.sh" <<'EOF'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt_opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+for t in 1 2 3; do
+  [ "$t" != 2 ] || sed -i -e 's#http://archive.ubuntu.com#http://azure.archive.ubuntu.com#g' \
+    -e 's#http://security.ubuntu.com#http://azure.archive.ubuntu.com#g' /etc/apt/sources.list.d/ubuntu.sources
+  [ "$t" != 3 ] || sed -i -E 's#http://[a-z.]*ubuntu[.]com/ubuntu#http://mirrors.kernel.org/ubuntu#g' \
+    /etc/apt/sources.list.d/ubuntu.sources
+  echo "kdc: apt try $t $(date -u +%T)"
+  timeout 240 apt-get $apt_opts update -qq && timeout 240 apt-get $apt_opts install -y -qq --no-install-recommends \
+    krb5-kdc krb5-admin-server krb5-user > /dev/null && break
+  [ "$t" -lt 3 ] || { echo "kdc: apt failed"; exit 1; }
+  sleep 5
+done
+cp /conf/krb5.conf /etc/krb5.conf
+mkdir -p /etc/krb5kdc
+printf '%s\n' '[realms]' ' CI.TEST = {' '  master_key_type = aes256-cts-hmac-sha1-96' \
+  '  supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal' ' }' > /etc/krb5kdc/kdc.conf
+kdb5_util create -s -r CI.TEST -P "$KPASS" > /dev/null
+for p in nn dn HTTP; do kadmin.local -q "addprinc -randkey $p/hdfs.ci@CI.TEST" > /dev/null; done
+kadmin.local -q "addprinc -randkey flight@CI.TEST" > /dev/null
+kadmin.local -q "ktadd -k /krb/hdfs.keytab nn/hdfs.ci@CI.TEST dn/hdfs.ci@CI.TEST HTTP/hdfs.ci@CI.TEST" > /dev/null
+kadmin.local -q "ktadd -k /krb/flight.keytab flight@CI.TEST" > /dev/null
+krb5kdc
+for _ in $(seq 30); do kinit -kt /krb/hdfs.keytab -c /krb/nn.ccache nn/hdfs.ci@CI.TEST 2> /dev/null && break; sleep 1; done
+chmod 644 /krb/*
+touch /krb/ready
+exec tail -F /var/log/krb5kdc.log /dev/null
+EOF
+  docker run -d --name kdc --network hd --ip 172.31.0.5 -e KPASS="$(openssl rand -hex 16)" -v "$conf:/conf:ro" \
+    -v "$hd/krb:/krb" -v "$work/kdc.sh:/kdc.sh:ro" ubuntu:24.04 bash /kdc.sh > /dev/null
+  for _ in $(seq 900); do [ -f "$hd/krb/ready" ] && break
+    [ "$(docker inspect -f '{{.State.Running}}' kdc)" = true ] || break; sleep 1; done
+  [ -f "$hd/krb/ready" ] || fail "KDC did not come up: $(docker logs kdc 2>&1 | grep '^kdc:' | tail -n 1)"
+  hconf+=(-v "$conf/krb5.conf:/etc/krb5.conf:ro" -v "$hd/krb:/hd/krb:ro")
+  kenv=(-e KRB5CCNAME=/hd/krb/nn.ccache)
+  srvKrb=(-v "$conf/krb5.conf:/etc/krb5.conf:ro" -v "$hd/krb/flight.keytab:/krb/flight.keytab:ro"
+    -e KRB5_CONFIG=/etc/krb5.conf -e KRB5CCNAME=/tmp/krb5cc_flight)
+  opts="$opts -Djava.security.krb5.conf=/etc/krb5.conf -DhdfsKerberosPrincipal=flight@CI.TEST -DhdfsKerberosKeytab=/krb/flight.keytab"
+fi
 docker run -d --name nn1 --network hd --ip 172.31.0.10 --hostname nn1 "${hconf[@]}" -v "$hd/nn1:/hd/name" "$image" \
   bash -c 'hdfs namenode -format -nonInteractive -force > /tmp/format.log 2>&1 || { cat /tmp/format.log; exit 1; }; exec hdfs namenode' > /dev/null
 docker run -d --name dn1 --network hd --ip 172.31.0.12 --hostname dn1 "${hconf[@]}" "${sock[@]}" "$image" hdfs datanode > /dev/null
 report=""
 for _ in $(seq 120); do
-  report=$(docker exec nn1 hdfs dfsadmin -report 2>/dev/null || true)
+  report=$(docker exec "${kenv[@]}" nn1 hdfs dfsadmin -report 2>/dev/null || true)
   [[ $report == *"Live datanodes (1)"* && $report != *'Safe mode is ON'* ]] && break
   sleep 1
 done
 [[ $report == *"Live datanodes (1)"* ]] || fail "HDFS did not come up"
 docker cp "$in/data" nn1:/tmp/upload > /dev/null
-docker exec nn1 bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || fail "HDFS upload failed"
+docker exec "${kenv[@]}" nn1 bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/tpch /data/' || fail "HDFS upload failed"
+if [ "$mode" = sasl ]; then
+  # The NameNode container is not on the DataNode's host: its reads go over TCP; without SASL refused.
+  probe=$(docker exec "${kenv[@]}" nn1 hdfs dfs -ls -R /data/tpch 2>/dev/null | awk '$1 ~ /^-/ {print $NF}' | head -n 1)
+  if docker exec "${kenv[@]}" nn1 hdfs dfs -Ddfs.data.transfer.protection= -cat "$probe" > /dev/null 2>&1; then
+    fail "the DataNode served a TCP read without SASL ($probe): data-transfer protection is not enforced"
+  fi
+  docker exec "${kenv[@]}" nn1 hdfs dfs -cat "$probe" > /dev/null 2> "$work/probe-sasl.log" \
+    || fail "a SASL TCP read failed: $(grep -m 1 -E 'Exception|ERROR' "$work/probe-sasl.log" | cut -c1-200)"
+fi
 
-echo "server options: ${opts} short-circuit=$sc" | tee "$work/notes.txt"
+echo "server options: ${opts} hdfsMode=$mode short-circuit=$sc" | tee "$work/notes.txt"
 # shellcheck disable=SC2086
-docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
+docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" "${srvKrb[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
   -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
@@ -90,6 +179,10 @@ done
 docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' \
   || fail "server did not start: $(docker logs srv 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
 docker logs srv 2>&1 | grep -m 3 -oE 'duckdb=(threads|sizing|sharedDatabaseOpened) .*' | cut -c1-300 | tee -a "$work/notes.txt"
+docker logs srv 2>&1 | grep -m 2 -oE 'hdfs=(shortCircuit|saslDataTransfer) .*' | cut -c1-300 | sed "s/^/${LABEL:-$profile}|/" | tee -a "$res"
+if [ "$mode" = sasl ] && ! docker logs srv 2>&1 | grep -q 'hdfs=saslDataTransfer mode=auto direct=true'; then
+  fail "sasl: the server did not log hdfs=saslDataTransfer mode=auto direct=true"
+fi
 
 py="$RUNNER_TEMP/py/bin/python"
 if [ -n "${SCAN_ROUNDS:-}" ]; then
@@ -112,11 +205,13 @@ if [ -n "${SCAN_ROUNDS:-}" ]; then
   done
   peak=$(cat "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' srv).scope/memory.peak" 2>/dev/null || true)
   [ -n "$peak" ] && echo "${LABEL:-$profile}|server memory peak $(( peak / 1048576 )) MiB" | tee -a "$res"
-  for c in nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done
+  for c in kdc nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done
+  # DataNode-side transfer of the run (TCP block reads; short-circuit reads do not count here).
+  echo "${LABEL:-$profile}|datanode $(grep -c 'op: HDFS_READ' "$work/dn1.log") TCP block reads (clienttrace op: HDFS_READ)" | tee -a "$res"
   # With -DstreamTimingLog=true: where each stream's time went (DuckDB / send / backpressure).
   grep -oE 'streamTiming .*' "$work/srv.log" | cut -c1-260 | head -n 12 | sed "s/^/${LABEL:-$profile}|/" | tee -a "$res"
   rm -f "$work/export.parquet"
-  docker rm -f srv dn1 nn1 > /dev/null 2>&1 || true
+  docker rm -f srv dn1 nn1 kdc > /dev/null 2>&1 || true
   exit "$status"
 fi
 max=$(echo "$clients" | tr ',' '\n' | sort -n | tail -n 1)
