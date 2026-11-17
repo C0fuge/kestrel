@@ -4511,3 +4511,7 @@ S3 slowdown item below stays open for then).
   dc and batches of copies merge a GROUP BY on an aliased `date_trunc('<part>', col)`; jOOQ's default dialect renders
   `date_trunc` as `trunc(x, null)` (part lost), so the key is rebuilt from its POSTGRES rendering. Full Dev CI 44194423955
   pending. Details in LANE6-STATUS.md.
+- 2026-11-17T23:15Z (lane 5): item 55 (a) merged into `main` 49f44a18 (core `ClusterService`, `QueryPlanner`): a plan
+  collects its load writes (`ClusterService.writeBatch()`) and writes the added load once per node (summed) with the
+  endpoint reservations before it returns; same semantics, fewer writes. Fast tier 44194776591 green; full Dev CI
+  44196365448 pending. Details in LANE5-STATUS.md.

@@ -2,7 +2,21 @@
 
 ## Next steps
 
-> **Lane 5 next step (2026-11-17T21:50Z):** FIRST read full Dev CI 44180696125 (push, `main` 66b19368: cluster
+> **Lane 5 next step (2026-11-17T23:15Z):** FIRST read full Dev CI 44196365448 (push, `main` 49f44a18: plan write
+> batch); red = fix it first. Restart `fix/55a` with `git checkout -B fix/55a origin/main`. Step (2) of the earlier note
+> is answered: on the 1-CPU CI cell the cluster writes ARE the c8 planning cost - `hazelcast.planWrites` (3 endpoint
+> reservations + one load change per node) p50 ~90 / p99 ~250 ms at c8, 1-2 ms at c1 (DC tail perf 44194780093);
+> running them side by side on a pool made it worse (44193153607: c8 p99 limob 1386 ms), so they run serially on the
+> planning thread. Next: (a) `hazelcast.addLoad` counts ~5.7 per merged query on node 1 with 3 endpoints although a plan
+> now writes <= 3: find the other callers (claims? the peers' endpoint-internal plans?); (b) consider not
+> load-tracking merge-internal endpoints at all (the coordinator reads them at once and releases them within ms; the
+> snapshot already counts this node's own planned load) - that changes load balancing between nodes, so as an optional
+> setting with default off, or ask the maintainer (Open question); (c) then the real-cluster rerun (p99 <= 1.5x speed).
+> Current CI-cell numbers (44194780093, a faster runner than earlier runs: point qps ~2x): c8 p99 sum_date / avg_date /
+> limob 457 / 466 / 679 ms, c1 p99 91 / 86 / 96, scans x1 / x4 / x8 380-405 / 377 / 426 MB/s. A speed variant was not
+> run in this session; compare speed and dc in one run next time (`variants` empty = speed, dc, dc-4ep).
+
+> ~~**Lane 5 next step (2026-11-17T21:50Z):**~~ (done: CI 44180696125 green, step (2) tried) FIRST read full Dev CI 44180696125 (push, `main` 66b19368: cluster
 > snapshot cache, file-plan refresh-ahead, optional member-check memory); red = fix it first. `fix/55a` still holds
 > the pre-rebase commits: restart it with `git checkout -B fix/55a origin/main` (force-with-lease) instead of rebasing.
 > State of 55 (a) on the CI cell (DC tail perf 44178943268, 3 x 1 CPU, SF1, timing): c8 p99 dc / dc-mc / speed -
@@ -81,3 +95,9 @@
   (all 1386 flight-server tests) green; DC tail perf 44174076316 (before the file-plan fix) and 44178943268 (all
   fixes, numbers in Next steps). Merged into `main` 66b19368; full Dev CI 44180696125 pending. Item 55 (a) not done:
   c8 p99 now <= 1.25x speed on the CI cell, c1 p99 1.5x (outliers); real-cluster numbers pending.
+- 2026-11-17T22:43-23:15Z (lane 5): full Dev CI 44180696125 on `main` 66b19368 green. Plan write batch
+  (`ClusterService.writeBatch()`): a plan's endpoint load reservations and its added load (one summed change per node)
+  are written when the plan is made, before it returns. Side by side on a pool first (fast tier 44193148712 green,
+  DC tail perf 44193153607: c8 p99 worse, planWrites p50 ~95 ms), then serially on the planning thread (fast tier
+  44194776591 green, DC tail perf 44194780093: c8 p99 457 / 466 / 679 ms sum_date / avg_date / limob, no
+  regression). Merged into `main` 49f44a18; full Dev CI 44196365448 pending. Item 55 (a) not done.
