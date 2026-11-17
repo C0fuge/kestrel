@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Item 39 (c), lane 4: point / small queries on a single-node HDFS, closed loop, per resource profile.
 #
-# Usage: tools/ci/hdfs-point-cell.sh <balanced|speed> <input dir> <work dir> <clients> <seconds> <keys> [extra -D options]
+# Usage: tools/ci/hdfs-point-cell.sh <balanced|speed|upstream> <input dir> <work dir> <clients> <seconds> <keys> [extra -D options]
 #
 # One NameNode and one DataNode (apache/hadoop, replication 1, no security), short-circuit reads when
 # the image's native Hadoop library loads; the server runs in the DataNode's network namespace with its
@@ -19,6 +19,8 @@
 # from an MIT KDC container, as tools/ci/service-hdfs-cell.sh sasl-direct, DataNode with
 # dfs.data.transfer.protection=${SASL_PROTECTION:-authentication,privacy}, no short-circuit: DuckDB reads
 # every block over SASL data transfer, hdfsSaslDataTransfer auto, like the stand's direct reads).
+# Profile upstream (item 54 step 3): the upstream server of <input>/upapp (hdfs-point-perf.yml input
+# upstream) with its defaults and only the command-line options scan-perf.yml starts it with.
 set -u
 profile=$1 in=$2 work=$3 clients=$4 seconds=$5 keys=$6 extra=${7:-}
 image=${HADOOP_IMAGE:-apache/hadoop:3.4.1}
@@ -35,7 +37,18 @@ fail() {
 }
 mode=${HDFS_MODE:-plain}
 case "$mode" in plain|tcp|sasl) ;; *) fail "unknown HDFS_MODE $mode" ;; esac
-case "$profile" in balanced) opts="" ;; speed) opts="-DresourceProfile=speed" ;; *) fail "unknown profile $profile" ;; esac
+app="$in/app"
+srvArgs=(--hazelcast-port 5701 --hosts 172.31.0.12:5701 --metrics-enabled false)
+case "$profile" in
+  balanced) opts="" ;;
+  speed) opts="-DresourceProfile=speed" ;;
+  upstream)
+    opts="" app="$in/upapp"
+    srvArgs=(--hosts 172.31.0.12)
+    [ -f "$app/arrow-flight-server.jar" ] || fail "profile upstream needs the workflow input upstream (no $app)"
+    ;;
+  *) fail "unknown profile $profile" ;;
+esac
 opts="$opts $extra"
 
 docker network create --subnet 172.31.0.0/24 hd > /dev/null 2>&1 || true
@@ -161,7 +174,7 @@ fi
 echo "server options: ${opts} hdfsMode=$mode short-circuit=$sc" | tee "$work/notes.txt"
 # shellcheck disable=SC2086
 docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" "${srvKrb[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
-  -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
+  -v "$app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
   sc-server /jdk/bin/java -Xmx2g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
@@ -170,7 +183,7 @@ docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" "${
   -Dhazelcast.phone.home.enabled=false -DnumServers=1 $opts -Darrowflight.duckdb.extensionDir=/extdir \
   -cp "/conf:/app/arrow-flight-server.jar:/app/libs/*" pro.surpin.data.arrowflight.server.HadoopArrowFlightServer \
   --data-dir hdfs://172.31.0.10:8020/data --localhost 172.31.0.12 --port 32010 --hazelcast-port 5701 \
-  --hosts 172.31.0.12:5701 --metrics-enabled false > /dev/null
+  "${srvArgs[@]}" > /dev/null
 for _ in $(seq 180); do
   docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' && break
   [ "$(docker inspect -f '{{.State.Running}}' srv)" = true ] || break
@@ -179,6 +192,12 @@ done
 docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' \
   || fail "server did not start: $(docker logs srv 2>&1 | grep -m 1 -E 'Exception|ERROR' | cut -c1-250)"
 docker logs srv 2>&1 | grep -m 3 -oE 'duckdb=(threads|sizing|sharedDatabaseOpened) .*' | cut -c1-300 | tee -a "$work/notes.txt"
+if [ "$profile" = upstream ]; then
+  # How upstream reads HDFS (its DuckDB extension or the Java client) and its DuckDB settings, for the record.
+  echo "${LABEL:-$profile}|upstream $(cat "$app/upstream-sha.txt" 2>/dev/null)" | tee -a "$res"
+  docker logs srv 2>&1 | grep -iE 'hadoopfs|hdfs|threads|extension' | grep -v -iE 'warn.*native' | head -n 8 \
+    | cut -c1-250 | sed "s/^/${LABEL:-$profile}|log /" | tee -a "$res"
+fi
 docker logs srv 2>&1 | grep -m 2 -oE 'hdfs=(shortCircuit|saslDataTransfer) .*' | cut -c1-300 | sed "s/^/${LABEL:-$profile}|/" | tee -a "$res"
 if [ "$mode" = sasl ] && ! docker logs srv 2>&1 | grep -q 'hdfs=saslDataTransfer mode=auto direct=true'; then
   fail "sasl: the server did not log hdfs=saslDataTransfer mode=auto direct=true"

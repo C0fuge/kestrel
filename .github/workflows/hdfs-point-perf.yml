@@ -7,6 +7,8 @@
 # Item 54 step 2: hdfsModes runs every variant on each HDFS of the list (plain = short-circuit, tcp = no
 # short-circuit, sasl = Kerberos + data-transfer protection authentication,privacy, sasl-auth /
 # sasl-privacy = protection authentication / privacy only; the sasl modes read every block over SASL TCP).
+# Item 54 step 3: input upstream builds the upstream server at that ref (with its Hadoop version's client
+# jars, as scan-perf.yml) for variants of profile "upstream", so one runner gives the ratio to upstream.
 # Manual, not part of Dev CI; also on push to a fix/39c-* branch touching its files.
 name: HDFS point perf
 
@@ -53,6 +55,10 @@ on:
         description: "server CPUs (cpuset) / client CPUs, e.g. 0,1/2,3"
         type: string
         default: "0,1/2,3"
+      upstream:
+        description: "upstream ref (full SHA, branch, tag or HEAD) built as profile 'upstream' (variant upstream=upstream:), empty = none"
+        type: string
+        default: ""
   push:
     branches: ["fix/39c-*"]
     paths:
@@ -95,6 +101,34 @@ jobs:
           ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
           cp flight-server/target/arrow-flight-server-1.0.0-shaded.jar "$out/arrow-flight-server.jar"
           cp -r flight-server/target/libs "$out/"
+      - name: Upstream server (input upstream)
+        if: ${{ inputs.upstream != '' }}
+        env:
+          UPSTREAM_REF: ${{ inputs.upstream }}
+        run: |
+          set -euo pipefail
+          up="$RUNNER_TEMP/up"; out="$RUNNER_TEMP/in/upapp"; mkdir -p "$out/plugins" "$out/libs"
+          git init -q "$up"
+          git -C "$up" fetch -q --depth 1 https://github.com/VadimSurpin/arrow-flight-server "$UPSTREAM_REF"
+          git -C "$up" checkout -q FETCH_HEAD
+          git -C "$up" rev-parse HEAD | tee "$out/upstream-sha.txt"
+          (cd "$up" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+          cp "$up"/flight-server/target/*-shaded.jar "$out/arrow-flight-server.jar"
+          # Upstream takes Hadoop from the deployment (scope provided): hadoop-client and hadoop-hdfs of its version.
+          hv=$(cd "$up" && ./mvnw -q -pl flight-server help:evaluate -Dexpression=hadoop.version -DforceStdout)
+          mkdir -p "$RUNNER_TEMP/uplibs"
+          cat > "$RUNNER_TEMP/uplibs/pom.xml" <<EOF2
+          <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
+            <groupId>ci</groupId><artifactId>upstream-libs</artifactId><version>1</version>
+            <dependencies>
+              <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-client</artifactId><version>$hv</version></dependency>
+              <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-hdfs</artifactId><version>$hv</version></dependency>
+            </dependencies>
+          </project>
+          EOF2
+          ./mvnw -q -f "$RUNNER_TEMP/uplibs/pom.xml" dependency:copy-dependencies -DincludeScope=runtime \
+            -DoutputDirectory="$out/libs"
+          echo "upstream $(cat "$out/upstream-sha.txt") Hadoop $hv: $(ls "$out/libs" | wc -l) jars"
       - name: DuckDB hadoopfs extension (ci-assets)
         env:
           GH_TOKEN: ${{ github.token }}
