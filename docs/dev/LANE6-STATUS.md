@@ -11,8 +11,8 @@
 > stay single-node. `GROUP BY g` where `g` is also a table column stays single-node (`shadowedAliasKey`; DuckDB binds the
 > column first - checked). Partial mode unchanged: `completeAnswerReason` still set, the merge reads the new `mergeReason`.
 > avg next to a computed key works through `AverageMerge` (integration test). Fast tier 44174563888 green; full Dev CI on
-> main 728b5df0 dispatched by the push.
-> **Next session:** (0) read the full Dev CI run on main for 728b5df0 (red = fix first). (1) If the maintainer gave the
+> main: run 44175118886 (head 924baf8f, includes 728b5df0).
+> **Next session:** (0) read full Dev CI 44175118886 (red = fix first). (1) If the maintainer gave the
 > exact GROUP BY or the INFO `distributedComplete=single reason=` line, handle that shape. (2) Otherwise: `date_trunc`
 > (and `strftime`, which jOOQ cannot parse) as computed keys need the client's own text instead of jOOQ's rendering -
 > e.g. keep the select item's source text (parse positions) or a DuckDB-side check; do not widen the whitelist without
@@ -100,4 +100,4 @@
 - 2026-11-17 20:44-21:05Z (lane 6): full Dev CI 44169154810 (e3d14331) green. ITEM 55(c) step 2: computed GROUP BY
   keys merged under dc (see Next steps). Tests: DistributedCompleteMergeableTest, CompleteAnswerMergeTest (DuckDB
   equivalence with endpoint SQL built from the parse), DistributedCompleteIntegrationTest (4 merged shapes + an alias
-  shadowing a column kept single-node). Fast tier 44174563888 green; merged into main 728b5df0; full Dev CI pending.
+  shadowing a column kept single-node). Fast tier 44174563888 green; merged into main 728b5df0; full Dev CI 44175118886 (924baf8f) pending.

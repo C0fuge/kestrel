@@ -4490,4 +4490,4 @@ S3 slowdown item below stays open for then).
   ordinal or same expression; whitelisted deterministic operators only). Parser: new `SelectExpr.computed`,
   `ParquetQueryParser.mergeReason` (used by `CompleteAnswerMerge.refusal`; `completeAnswerReason` and so the partial mode
   unchanged), `aliasGroupKeys`; `DuckDbAdapter.buildDuckSqlWithFilter` renders computed keys. Fast tier 44174563888 green;
-  full Dev CI on main pending. Full 44169154810 (e3d14331) was green. Details in LANE6-STATUS.md.
+  full Dev CI 44175118886 (924baf8f) pending. Full 44169154810 (e3d14331) was green. Details in LANE6-STATUS.md.
