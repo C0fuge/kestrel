@@ -817,6 +817,49 @@ class S3IntegrationTest {
     }
 
     /**
+     * Item 52 (b): with a DuckDB per connection and the external file cache capped, a connection
+     * that keeps more than its share after a query is closed when the query's slot closes, and
+     * the thread's next query reads on a fresh DuckDB with an empty cache; within the share the
+     * connection and its cache are kept. Runs with the lockdown, which refuses turning the cache
+     * off at run time.
+     */
+    @Test
+    void aConnectionAboveItsFileCacheShareIsReplacedAfterItsQuery() throws Exception {
+        Assumptions.assumeTrue(s3 != null, "fake S3 only");
+        long rows = 400_000L;
+        Path data = dir.resolve("big.parquet");
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = conn.createStatement()) {
+            s.execute("COPY (SELECT range AS id, md5(range::VARCHAR) || md5((range + 1)::VARCHAR) AS pad"
+                    + " FROM range(" + rows + ")) TO '" + data + "' (FORMAT parquet, COMPRESSION uncompressed)");
+        }
+        s3.put(bucket, "flight-it/m/r0.parquet", Files.readAllBytes(data));
+        String scan = "SELECT count(*), sum(length(pad)) FROM 's3://" + bucket + "/flight-it/m/r0.parquet'";
+        memoryLimit = "256MiB";
+        externalFileCache = true;
+        threads = 2;
+        open(null);
+        duckDb.capExternalFileCache(1L << 30);
+        try (DuckDbAdapter.QuerySlot slot = duckDb.enterQuery()) {
+            assertArrayEquals(new long[] {rows, 64 * rows}, answer(scan));
+        }
+        long cached = externalFileCacheBytes();
+        assertTrue(cached > 0, "the cache holds file data");
+        assertEquals(0, duckDb.fileCacheRecycles(), "within the share: kept");
+
+        Connection before = duckDb.connection();
+        duckDb.capExternalFileCache(cached / 2);
+        Thread.sleep(TimeUnit.NANOSECONDS.toMillis(DuckDbAdapter.FILE_CACHE_CHECK_INTERVAL_NANOS) + 50);
+        try (DuckDbAdapter.QuerySlot slot = duckDb.enterQuery()) {
+            assertArrayEquals(new long[] {rows, 64 * rows}, answer(scan));
+        }
+        assertEquals(1, duckDb.fileCacheRecycles(), "above the share: replaced");
+        assertTrue(before.isClosed());
+        assertEquals(0, externalFileCacheBytes(), "the fresh DuckDB starts with an empty cache");
+        assertArrayEquals(new long[] {rows, 64 * rows}, answer(scan));
+    }
+
+    /**
      * Verifies that with the shared DuckDB of {@code resourceProfile=speed} (item 24) DuckDB's
      * external file cache stays within the one node-wide {@code memory_limit} while several
      * sessions read in parallel: the sessions share one buffer pool, so the node holds at most

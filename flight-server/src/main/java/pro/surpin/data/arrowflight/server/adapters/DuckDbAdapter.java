@@ -84,7 +84,7 @@ public final class DuckDbAdapter implements AutoCloseable {
     /** Least time between two logs of the shared DuckDB's memory after it ran out of it. */
     private static final long MEMORY_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
     /** Least time between two reads of one session's external file cache size (item 52 (b)). */
-    static final long FILE_CACHE_CHECK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
+    public static final long FILE_CACHE_CHECK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
     private static final String TEMP_ROOT_PREFIX = "duckdb-";
     /**
      * Prefix of the in-memory catalog each session of a shared DuckDB keeps its catalog views
