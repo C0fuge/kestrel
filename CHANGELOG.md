@@ -30,6 +30,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `forwarded=true`. New setting `distributedCompleteForwardScans` (`FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS`,
   default true; false = the DuckDB merge as before).
 
+- Item 55 (a) (lane 5): distributed complete no longer lists a table's files on the storage for every one-row
+  aggregate / small LIMIT / unfiltered `count(*)` it considers computing on the planning node (item 50's size rule):
+  the sizes come from the catalog views' file list (refreshed as before), the listing only for a table without one.
+  CI cell `dc-tail-perf.yml` (3 x 1 CPU, SF1): `count(*)` c1 p50 under dc was 95 ms vs 6 ms under speed, a one-row
+  aggregate over one pruned file 92 vs 8 ms, though both were computed locally.
+
 - Item 52: new setting `memoryBudgetBytes` (`FLIGHT_MEMORY_BUDGET`, accepts `48g`, `48GiB` or bytes) overrides the
   host / cgroup memory detection for every resource profile (startup line `memoryBudget source=setting`), so DuckDB's
   memory limits, and with them its external file cache, are sized from it. A start that sizes from the host's memory

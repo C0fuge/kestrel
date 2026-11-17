@@ -177,6 +177,23 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies the size rule's file list comes from the catalog views, as the storage lists the
+     * table, so that a local decision lists nothing per query (item 55 (a)).
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void localSizeRuleUsesTheViewsFileList() throws Exception {
+        answer("SELECT count(*) AS n FROM s.t");
+        List<pro.surpin.data.arrowflight.spi.storage.DataFile> files = helper.executionService.viewFiles("s", "t");
+        org.junit.jupiter.api.Assertions.assertNotNull(files);
+        assertEquals(FILES, files.size());
+        long bytes = files.stream().mapToLong(pro.surpin.data.arrowflight.spi.storage.DataFile::size).sum();
+        assertEquals(helper.queryPlanner.localScanBytes("SELECT sum(v) AS total FROM s.t"), bytes);
+        org.junit.jupiter.api.Assertions.assertNull(helper.executionService.viewFiles("s", "missing"));
+    }
+
+    /**
      * Sorts the row lines of an answer (a plain scan has no order), keeping its schema line first.
      *
      * @param answer schema line and rows as {@link #answer} gives them

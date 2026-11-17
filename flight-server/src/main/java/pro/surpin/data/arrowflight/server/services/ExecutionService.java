@@ -382,6 +382,19 @@ public final class ExecutionService {
     }
 
     /**
+     * Returns the files of a directory table as the current catalog views read them, without
+     * listing the table on the storage (item 55 (a): a listing per query, e.g. a NameNode call,
+     * was the tail of the queries distributed complete computes on the planning node).
+     *
+     * @param schema schema name
+     * @param table table name
+     * @return the table's files, or null when it has no such view
+     */
+    public List<DataFile> viewFiles(String schema, String table) {
+        return catalogViews.directoryFiles(schema, table);
+    }
+
+    /**
      * Files a query reads after footer pruning.
      *
      * @param files kept files

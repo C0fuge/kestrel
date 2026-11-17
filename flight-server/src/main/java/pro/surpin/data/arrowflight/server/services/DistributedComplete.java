@@ -499,7 +499,7 @@ public final class DistributedComplete implements AutoCloseable {
         if (!filesBound && !countOnly && !(maxBytes > 0 && (aggregate || smallLimit))) {
             return null;
         }
-        long tableBytes = planner.localScanBytes(partQuery);
+        long tableBytes = localTableBytes(parsed, partQuery);
         if (tableBytes < 0) {
             return null;
         }
@@ -552,6 +552,34 @@ public final class DistributedComplete implements AutoCloseable {
             return "aggregate over " + (bytes >> 20) + " MiB < " + (minBytes >> 20) + " MiB";
         }
         return null;
+    }
+
+    /**
+     * Sums the sizes of a single-table query's files when this node alone may compute it: from
+     * the catalog views' file list when the table has one (no listing of the storage per query,
+     * item 55 (a)), else from the planner's listing.
+     *
+     * @param parsed the part query
+     * @param partQuery the query the endpoints would answer
+     * @return bytes of the table's files, or -1 when this node cannot compute it alone or the
+     *         table has no listed files
+     */
+    private long localTableBytes(ParquetQueryParser parsed, String partQuery) {
+        if (!parsed.isJoin && parsed.schema != null && parsed.table != null) {
+            List<pro.surpin.data.arrowflight.spi.storage.DataFile> files =
+                    execution.viewFiles(parsed.schema, parsed.table);
+            if (files != null && !files.isEmpty()) {
+                if (!planner.answerableHere(partQuery)) {
+                    return -1;
+                }
+                long total = 0;
+                for (pro.surpin.data.arrowflight.spi.storage.DataFile file : files) {
+                    total += Math.max(0L, file.size());
+                }
+                return total;
+            }
+        }
+        return planner.localScanBytes(partQuery);
     }
 
     /**

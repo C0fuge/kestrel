@@ -53,6 +53,7 @@ on:
     branches: ["fix/55a*"]
     paths:
       - .github/workflows/dc-tail-perf.yml
+      - flight-server/src/main/**
 
 permissions:
   contents: read
