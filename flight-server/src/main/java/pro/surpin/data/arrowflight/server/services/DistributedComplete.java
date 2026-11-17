@@ -125,6 +125,13 @@ public final class DistributedComplete implements AutoCloseable {
      * pruning to be computed on this node alone, with point lookups local (item 50); 0 merges.
      */
     private volatile long localScanMaxBytes = DEFAULT_LOCAL_SCAN_MAX_BYTES;
+    /**
+     * With {@code distributedComplete=false} and {@code distributedAggregateMinBytes} set (item
+     * 55): only aggregates whose files after footer pruning have at least this many bytes are
+     * merged; 0 (distributedComplete) merges every mergeable shape.
+     */
+    private volatile long aggregatesOnlyMinBytes;
+    private final AtomicLong notBigEnough = new AtomicLong();
 
     /**
      * Creates the distributed path of complete answers.
@@ -225,6 +232,15 @@ public final class DistributedComplete implements AutoCloseable {
             partQuery = averages.partQuery();
             parsed = mergeable(partQuery);
             if (parsed == null) {
+                return false;
+            }
+        }
+        if (aggregatesOnlyMinBytes > 0) {
+            String reason = notBigAggregate(parsed, readQuery, partQuery);
+            if (reason != null) {
+                notBigEnough.incrementAndGet();
+                LOGGER.debug("node={} distributedAggregate=local reason='{}' query='{}'", LogUtil.node(), reason,
+                        LogUtil.oneLine(query));
                 return false;
             }
         }
@@ -487,6 +503,34 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
+     * Tells why a query is not merged when only big aggregates are (item 55): it has no
+     * aggregate, or its table's files after footer pruning have fewer than
+     * {@code distributedAggregateMinBytes}, or their size is unknown (a catalog table, a join).
+     *
+     * @param parsed the part query
+     * @param readQuery the query with its tables qualified
+     * @param partQuery the query the endpoints would answer
+     * @return the reason for the log line, or null when the query is merged
+     */
+    private String notBigAggregate(ParquetQueryParser parsed, String readQuery, String partQuery) {
+        if (!parsed.hasAggregation) {
+            return "no aggregate";
+        }
+        long tableBytes = planner.tableBytes(partQuery);
+        if (tableBytes < 0) {
+            return "table size unknown";
+        }
+        ExecutionService.PrunedFiles pruned = parsed.filter == null || parsed.filter.isBlank() ? null
+                : execution.prunedHere(readQuery);
+        long bytes = pruned != null ? Math.min(pruned.bytes(), tableBytes) : tableBytes;
+        long minBytes = aggregatesOnlyMinBytes;
+        if (bytes < minBytes) {
+            return "aggregate over " + (bytes >> 20) + " MiB < " + (minBytes >> 20) + " MiB";
+        }
+        return null;
+    }
+
+    /**
      * Tells whether a part query is a LIMIT of at most {@link #SMALL_LIMIT} rows without
      * aggregation, with or without ORDER BY (item 50).
      *
@@ -681,6 +725,31 @@ public final class DistributedComplete implements AutoCloseable {
             throw new IllegalArgumentException("localScanMaxBytes must be 0 or more: " + maxBytes);
         }
         this.localScanMaxBytes = maxBytes;
+    }
+
+    /**
+     * Merges only aggregates whose files after footer pruning have at least this many bytes
+     * ({@code distributedAggregateMinBytes} with {@code distributedComplete=false}, item 55); 0,
+     * the default, merges every mergeable shape (distributedComplete).
+     *
+     * @param minBytes the bound, 0 or more
+     * @throws IllegalArgumentException for a negative bound
+     */
+    public void aggregatesOnly(long minBytes) {
+        if (minBytes < 0) {
+            throw new IllegalArgumentException("aggregatesOnly must be 0 or more: " + minBytes);
+        }
+        this.aggregatesOnlyMinBytes = minBytes;
+    }
+
+    /**
+     * Counts the complete answers left to this node alone since start because only big
+     * aggregates are merged and they were none (item 55).
+     *
+     * @return answers not merged for that reason
+     */
+    public long notBigEnough() {
+        return notBigEnough.get();
     }
 
     /**

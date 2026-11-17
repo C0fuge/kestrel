@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (b) (lane 3): new setting `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 =
+  off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
+  footer pruning total at least this size are merged from endpoint answers on the nodes, as under distributedComplete;
+  all other queries stay on the receiving node. Unset, nothing changes.
 - Item 53: `resourceProfile=balanced` (the default) now runs the node's shared DuckDB (`duckDbSharedDatabase=true`):
   one instance with one thread pool (at most `duckDbSharedMaxThreads`, 8) and one node-wide memory limit within the
   budget, instead of a DuckDB per Flight thread whose count, threads and caches grew with the clients (real cluster:
