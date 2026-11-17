@@ -1022,6 +1022,34 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns {@code flightStreamPrefetchBatches} from the system configuration.
+     *
+     * @return batches a DuckDB result stream reads ahead on a thread of its own, 0 = none
+     */
+    public static int flightStreamPrefetchBatches() {
+        return flightStreamPrefetchBatches(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code flightStreamPrefetchBatches} ({@code arrowflight.flight.streamPrefetchBatches},
+     * {@code FLIGHT_STREAM_PREFETCH_BATCHES}; item 54): how many batches a DuckDB result stream
+     * loads ahead on a thread of its own while the stream's thread sends; default 0 (load and send
+     * on one thread, one after the other).
+     *
+     * @param props configuration source
+     * @return batches read ahead, 0 = none
+     * @throws IllegalArgumentException for a negative or non-integer value, or one above 64
+     */
+    public static int flightStreamPrefetchBatches(ConfigSource props) {
+        int value = getIntWithEnv("flightStreamPrefetchBatches", "arrowflight.flight.streamPrefetchBatches",
+                "FLIGHT_STREAM_PREFETCH_BATCHES", 0, props);
+        if (value < 0 || value > 64) {
+            throw new IllegalArgumentException("flightStreamPrefetchBatches must be between 0 and 64: " + value);
+        }
+        return value;
+    }
+
+    /**
      * Returns {@code streamTimingLog} from the system configuration.
      *
      * @return whether every finished DuckDB result stream logs one streamTiming INFO line

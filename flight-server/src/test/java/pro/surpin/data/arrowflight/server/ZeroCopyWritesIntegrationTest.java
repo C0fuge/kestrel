@@ -33,7 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Checks {@code flightZeroCopyWrites}: gRPC sends DuckDB's batch buffers without copying them, so
  * a batch must stay intact while DuckDB computes the next ones. Readers that take their time keep
  * many batches queued on the server; the answers must equal those of a server that copies, for
- * mixed column types, both result modes, plain and compressed streams.
+ * mixed column types, both result modes, plain and compressed streams; also with
+ * {@code flightStreamPrefetchBatches} (item 54), where another thread loads the next batches.
  */
 @Tag("integration")
 class ZeroCopyWritesIntegrationTest {
@@ -52,7 +53,7 @@ class ZeroCopyWritesIntegrationTest {
      * @throws Exception on failure
      */
     @Test
-    @Timeout(value = 4, unit = TimeUnit.MINUTES)
+    @Timeout(value = 8, unit = TimeUnit.MINUTES)
     void zeroCopyStreamsGiveTheSameAnswers(@TempDir Path dir) throws Exception {
         Path table = Files.createDirectories(dir.resolve("z").resolve("wide"));
         try (Connection duck = DriverManager.getConnection("jdbc:duckdb:");
@@ -76,6 +77,15 @@ class ZeroCopyWritesIntegrationTest {
                     List<String> copied = answers(dir, mode, codec, false);
                     List<String> zeroCopy = answers(dir, mode, codec, true);
                     assertEquals(copied, zeroCopy, mode + " " + codec);
+                    // Item 54: batches read ahead on a thread of their own, sent copied and zero-copy.
+                    System.setProperty("flightStreamPrefetchBatches", "2");
+                    try {
+                        assertEquals(copied, answers(dir, mode, codec, false), mode + " " + codec + " prefetch");
+                        assertEquals(copied, answers(dir, mode, codec, true),
+                                mode + " " + codec + " prefetch zero-copy");
+                    } finally {
+                        System.clearProperty("flightStreamPrefetchBatches");
+                    }
                 }
             }
         } finally {

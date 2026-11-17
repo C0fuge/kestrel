@@ -274,6 +274,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final boolean parquetMetadataCache = ConfigAdapter.duckDbParquetMetadataCache();
     /** Whether every finished result stream logs one {@code streamTiming} INFO line (streamTimingLog). */
     private final boolean streamTimingLog = ConfigAdapter.streamTimingLog();
+    /** Batches a stream reads ahead on a thread of its own (item 54); 0 = none. */
+    private final int streamPrefetchBatches = ConfigAdapter.flightStreamPrefetchBatches();
     /**
      * Lets gRPC send DuckDB's batch buffers without a copy (flightZeroCopyWrites); safe because
      * each batch DuckDB exports lives in new buffers that gRPC keeps until it has written them.
@@ -2004,21 +2006,32 @@ public final class DuckDbAdapter implements AutoCloseable {
         boolean sent = false;
         try (ProducingStreamGate.Pass pass = enterGate(listener);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
-                ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
+                ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize);
+                // Item 54: with flightStreamPrefetchBatches > 0 a thread of its own loads the next
+                // batches while this one sends, and the listener sends a root of its own. Closed
+                // before the reader: the prefetch thread has left it by then.
+                PrefetchingBatchReader prefetcher = streamPrefetchBatches > 0
+                        ? new PrefetchingBatchReader(reader, () -> loadNextBatch(reader, pass), allocator,
+                                streamPrefetchBatches)
+                        : null;
+                VectorSchemaRoot sendRoot = prefetcher != null
+                        ? VectorSchemaRoot.create(reader.getVectorSchemaRoot().getSchema(), allocator)
+                        : null) {
             // Gate wait, executeQuery and arrowExportStream.
             long executeNanos = System.nanoTime() - streamStartNanos;
             long duckNanos = 0;
             long sendNanos = 0;
-            VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
+            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
             started = true;
             if (zeroCopyWrites) {
                 listener.setUseZeroCopy(true);
             }
+            VectorSchemaRoot duckRoot = sendRoot != null ? sendRoot : readerRoot;
 
             int batchesSent = 0;
             long rowsSent = 0;
             long tNext = System.nanoTime();
-            while (loadNextBatch(reader, pass)) {
+            while (prefetcher != null ? prefetcher.next(duckRoot) : loadNextBatch(reader, pass)) {
                 duckNanos += System.nanoTime() - tNext;
                 int rows = duckRoot.getRowCount();
                 if (rows == 0) {
