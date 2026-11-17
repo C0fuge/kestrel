@@ -7,6 +7,18 @@ below). Production target: on-prem Hadoop 3.1.3 (HA, Kerberos), Hive Metastore, 
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 53 (maintainer exception to the lane scope): balanced throughput collapses with clients.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Closed-loop point load (point_orders, point_lineitem, count_filter; q/s): balanced c1 58 / c8 142 / c32 62 / c64 51 / c128 28 (p95 c32 1240 ms, c128 17 s) while speed is 81 / 315 / 350 / 253 / 121; small-query mix balanced p50 c32 240 ms vs speed 67, p99 7.3 s vs 0.76 s; balanced RSS 22 GB in load, 29 GB in scans. q/s falling as clients grow is a defect (queueing / thrashing), not just fewer threads: find it (connections=4, threads=4 per the start line; external file cache on; admission waits?), make balanced at least flat from c8 up and keep its memory within its budget. Reproduce in CI with 16 cores and an HDFS cell (and on a local dir); before/after numbers; write `ITEM 53 DONE <sha>`.
 
+ITEM 53 DONE 7f53357e (2026-11-17, plugins lane; `fix/53-balanced` merged into `main`, see Log 15:45Z). Cause: balanced
+ran a DuckDB per Flight thread - every client added an instance with its own 4 threads, caches (external file cache,
+footers, HDFS fds) and memory limit, so instances, cold reads and RSS grew with the clients. Fix: balanced supplies
+`duckDbSharedDatabase=true` (one DuckDB, threads capped by `duckDbSharedMaxThreads` 8, one node-wide memory limit within
+the budget; `-DduckDbSharedDatabase=false` restores the old mode). The producing-stream cap (`duckDbProducingStreams=4`)
+alone did not help. Before/after (16-core sizing via `-XX:ActiveProcessorCount=16`, 2 real CPUs): HDFS point cell
+balanced c8/c32/c64 87/93/86 -> 97/118/120 q/s (runner b 66/73/69 per-connection vs 74/85/91), p99 c64 2.9-4.2 ->
+1.6-2.2 s, fd requests/query 0.14-0.44 -> 0, equal to speed (runs 44109875188 before, 44113964792 after); local dir
+c32/c64 395-423/394-405 -> 481-496/516-526 q/s (run 44109935634). CI cannot show the real cluster's collapse (2 CPUs,
+no Kerberos/SASL) nor RSS. **Next for the maintainer's stand:** repeat the point load on the next package (balanced
+should stay flat from c8, RSS within `duckdb=sharedDatabaseOpened memoryLimit` + heap + direct); see Q-53.
+
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(b) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `a5d6a43e9dbe` (scan cancellation propagation + optional scan admission limit) and `fd3c76a1d092` (bounded retained Flight / metadata state). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
 ITEM 49(b) DONE f0adaf52 (2026-11-15, plugins lane; `fix/49b` rebase-merged into `main`, see Log 23:35Z).
@@ -815,6 +827,12 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 
 ## Open questions
 
+- Q-53 (2026-11-17, item 53): balanced now defaults to the shared DuckDB. An operator who set `duckDbThreads` /
+  `duckDbMemoryLimit` for balanced meant them per connection; with the shared DuckDB they are node-wide (e.g. a
+  per-connection `duckDbMemoryLimit=4GiB` now caps the whole node at 4 GiB). Keep, or let balanced fall back to a DuckDB
+  per connection when either is set explicitly? Today: node-wide (as under speed); `duckDbSharedDatabase=false` restores
+  the old meaning. Packaging is left for after items 52-55 (maintainer's note on item 52).
+
 - **(Q-46, 2026-11-11, plugins lane) negotiated data-transfer QOP / cipher (item 46 (3)).** The server cannot see
   what DataNodes negotiate: the hadoopfs extension (afc8) exposes no setting or function for it. `fix/46` logs what
   the client asks for in the `hdfs=saslDataTransfer` start line (`requestedQop= encryptDataTransfer= cipherSuites=
@@ -1444,3 +1462,8 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
 - 2026-11-17 13:16Z (plugins session): no open item (no new note for this lane since 11:12Z; only lane notes and the
   orchestrator status changed). Waiting on the maintainer: Q-46, Q-40a follow-up, stand checks of items 44 (2) / 46.
   No code change, no CI run; lock not taken.
+- 2026-11-17 15:45Z (plugins session): ITEM 53 DONE 7f53357e - balanced supplies `duckDbSharedDatabase=true`
+  (`ResourceProfile.balanced`, tests in `ResourceProfileTest`, README / START-NOTES / CHANGELOG). Measured: HDFS point
+  cell 44109875188 (before: per-connection, gate4, shared, speed) and 44113964792 (after), local small-query
+  44109935634; Dev CI full on the branch 44113887980 green (flight-server 1358 tests). Merged after rebasing on item 52;
+  the push on `main` runs the full Dev CI - check it first next session. Q-53 opened. No package (after 52-55).

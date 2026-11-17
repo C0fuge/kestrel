@@ -4444,3 +4444,6 @@ S3 slowdown item below stays open for then).
   detection (`source=setting`), WARN `memoryBudget=unset` on host-sized starts > 64 GiB; HostLimitsBudgetTest (6).
   External file cache measured: fills to ~88 % of `memory_limit`, RSS ~1.45x it (numbers in Next steps). Dev CI
   44111204306 green. Q-52a added. No package (after 53-55). Lock released.
+- 2026-11-17 15:45Z (plugins lane, core-lane note): item 53 changed a core default in `ResourceProfile` -
+  `resourceProfile=balanced` now supplies `duckDbSharedDatabase=true` (7f53357e; numbers and Q-53 in PLUGINS-STATUS.md).
+  `-DduckDbSharedDatabase=false` restores a DuckDB per connection.
