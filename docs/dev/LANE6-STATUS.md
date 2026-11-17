@@ -2,6 +2,23 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-17 21:30 - ITEM 55(c) step 1 merged into main 72edab3d + e3d14331 (not DONE).** Finding: dc's 890 s vs
+> speed's 1001 s means that GROUP BY was most likely never merged, so one node computed it alone as under speed (count/min/max/sum
+> got 20x because it *was* merged). `DistributedComplete.mergeable` silently refuses (DEBUG only) these GROUP BY shapes:
+> `ORDER BY <aggregate>` (e.g. `ORDER BY count(*) DESC`), a GROUP BY expression (`id % 6`, `date_trunc(...)`, `GROUP BY 1`
+> on an expression), `avg` next to other aggregates (`AverageMerge.of` returns null for `SELECT t, count(*), avg(v)`),
+> `count(DISTINCT)` and HAVING. Plain-column groups with count/sum/min/max (+ ORDER BY alias / ordinal) do merge.
+> Fixed now: an ORDER BY aggregate that is also selected renders as its position (parser `aggregateOrdinal`; also helps
+> batches of copies), so it merges. New INFO line `distributedComplete=single reason='...'` for every aggregate kept on one
+> node. Fast tier 44167850389 + 44168551211 green; full Dev CI 44169154810 on main e3d14331 running at session end.
+> **Next session:** (0) read 44169154810; red = fix first. (1) The maintainer's exact GROUP BY (or the new INFO reason
+> from a stand run on a build with e3d14331) decides what is left; meanwhile (2) merge the next most likely shape: a GROUP BY expression that is also selected (`SELECT id % 6 AS g, count(*) ...
+> GROUP BY g / 1 / id % 6`): parser must keep the select item as a group "column" with its quoted expression
+> (`SelectExpr.inputExpression`), the endpoints' partial path must compute it (check `ExecutionService` ~3099 and
+> `MetadataService` ~405-483, which assume `inputColumn` is a physical column), and the merge groups by the output column
+> (`appendAggregateMerge` already does). (3) `avg` mixed with other aggregates in `AverageMerge`. (4) Only if the merged GROUP BY
+> is still slow at scale: per-node endpoints (`mergeEndpointsPerNode` is 0 for GROUP BY, many statements per node).
+
 > **Maintainer, 2026-11-17 19:20 - ITEM 52(b) then 55(c): memory and speed of big aggregates (moved here from core / lane 3).** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB, server on 16 cores, -Xmx8g, direct 8g, HDFS Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; full context in `STATUS.md` item 52 and `LANE3-STATUS.md` item 55).
 > (52b) Balanced on a 754 GB host sized DuckDB `memoryLimit=160188MiB` and its RSS passed 48 GB, then 96 GB, on
 > `SELECT count(id), min(id), max(id), sum(id) FROM <1.27 TB table>` - a streaming aggregate that should need little memory.
@@ -56,3 +73,9 @@
   query's slot; Q-52b), unit tests (DuckDbAdapterTest, DuckDbSizingTest, ConfigAdapterTest) and S3IntegrationTest with
   real httpfs + lockdown (25 MiB cached, share 12 MiB -> replaced, fresh cache 0). Fast tier 44156451682 green; merged
   into main bdeda437; full Dev CI 44158521271 pending. Next: check it, then 55(c).
+- 2026-11-17 20:12-21:30Z (lane 6): full Dev CI 44158521271 (bdeda437) was red in the item 35 step - lane 5's, fixed by
+  them (44162578438 green). ITEM 55(c) step 1: probe of the GROUP BY shapes dc refuses (see Next steps); ORDER BY a
+  selected aggregate now merges (dc and batches of copies), INFO reason for unmerged aggregates. Tests: CompleteAnswerMergeTest,
+  CopyBatchMergeTest, DistributedCompleteMergeableTest, ExecutionServiceTest. Fast tier 44167850389, 44168551211 green;
+  merged into main 72edab3d + e3d14331; full Dev CI 44169154810 pending. Local full unit run: only HiveCatalogIntegrationTest
+  (non-UTF-8 file names in the container, fails without the change too) and LakeFsPluginTest (plugin not built) errored.
