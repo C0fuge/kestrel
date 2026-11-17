@@ -425,6 +425,64 @@ class QueryPlannerTest {
     }
 
     /**
+     * Item 55 (a): on shared storage a node's published inventory is looked up once per member,
+     * not once per plan; a restarted node (a new member) is looked up again.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void sharedStorageLooksUpEachMembersInventoryOnce() throws Exception {
+        when(clusterService.serverUri()).thenReturn(P1);
+        when(clusterService.allServerLoads()).thenReturn(Map.of(P1, 0L, P2, 0L, P3, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(P1, P2, P3));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.memberId(P1)).thenReturn("m1");
+        when(clusterService.memberId(P2)).thenReturn("m2", "m2", "m2-restarted");
+        when(clusterService.memberId(P3)).thenReturn(null);
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(Map.of(
+                "s/t/a.parquet", new FileAssignment(100L, Set.of(P2)),
+                "s/t/b.parquet", new FileAssignment(100L, Set.of(P3))));
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        storageListsTheInventories();
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+
+        for (int i = 0; i < 3; i++) {
+            assertEquals(2, planner.plan("SELECT * FROM s.t").endpoints().size());
+        }
+        verify(clusterService, times(1)).hasFileInventory(P1);
+        verify(clusterService, times(2)).hasFileInventory(P2);
+        verify(clusterService, times(3)).hasFileInventory(P3);
+    }
+
+    /**
+     * Item 55 (a): on local data directories every plan looks the inventories up, which must
+     * fail plans while a node's inventory is missing.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void localStorageLooksUpTheInventoriesInEveryPlan() throws Exception {
+        when(clusterService.allServerLoads()).thenReturn(Map.of("s1", 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of("s1"));
+        when(clusterService.hasFileInventory("s1")).thenReturn(true, true, false);
+
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+        for (int i = 0; i < 2; i++) {
+            try {
+                planner.determineEndpoints("SELECT * FROM s.t");
+            } catch (Exception e) {
+                // No files are listed here: only the inventory lookups count.
+            }
+        }
+        IOException missing = assertThrows(IOException.class,
+                () -> planner.determineEndpoints("SELECT * FROM s.t"));
+        assertTrue(missing.getMessage().contains("file inventories"), missing.getMessage());
+        verify(clusterService, times(3)).hasFileInventory("s1");
+        verify(clusterService, never()).memberId(anyString());
+    }
+
+    /**
      * Verifies HDFS read short-circuit only (SASL DataNodes): each file goes to a node holding
      * all its blocks, and backups are only such holders, never any other live node.
      *

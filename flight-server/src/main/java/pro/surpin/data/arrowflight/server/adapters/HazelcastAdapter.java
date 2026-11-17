@@ -228,6 +228,21 @@ public final class HazelcastAdapter implements AutoCloseable {
     }
 
     /**
+     * Returns the UUID of the current member that serves a Flight URI.
+     *
+     * @param serverUri Flight URI
+     * @return the member's UUID, or null when no current member tells that URI
+     */
+    public String memberUuid(String serverUri) {
+        for (Member member : instance.getCluster().getMembers()) {
+            if (serverUri.equals(member.getAttribute(SERVER_URI_ATTRIBUTE))) {
+                return member.getUuid().toString();
+            }
+        }
+        return null;
+    }
+
+    /**
      * Registers an entry-expired listener on the statement cache.
      *
      * @param listener the listener to attach

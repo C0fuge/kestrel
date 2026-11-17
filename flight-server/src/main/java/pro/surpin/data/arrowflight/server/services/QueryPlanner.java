@@ -62,6 +62,8 @@ public final class QueryPlanner {
     private final int backupLocations;
     private final int endpointsPerServer;
     private final Map<String, CachedFilePlan> filePlanCache = new ConcurrentHashMap<>();
+    /** Server URI -> UUID of the member whose published file inventory a plan saw (item 55 (a)). */
+    private final Map<String, String> inventorySeen = new ConcurrentHashMap<>();
     private final TableStatisticsService tableStatistics;
 
     /**
@@ -714,7 +716,7 @@ public final class QueryPlanner {
             throw new IOException("No live Flight servers are registered");
         }
         Set<String> missing = uris.stream()
-                .filter(uri -> !clusterService.hasFileInventory(uri))
+                .filter(uri -> !inventoryPublished(uri))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (!missing.isEmpty()) {
             throw new IOException("Flight nodes have not published file inventories: " + missing);
@@ -726,6 +728,31 @@ public final class QueryPlanner {
             serverLoad.put(uri, load != null ? load : 0L);
         }
         return new ClusterSnapshot(Set.copyOf(uris), Map.copyOf(serverLoad));
+    }
+
+    /**
+     * Tells whether a node published its file inventory. On shared storage the inventory gives
+     * locality only (the store's listing gives the files), so once seen it is remembered for
+     * that member: a cluster map lookup per node and plan took most of a small merged query's
+     * planning under load (item 55 (a)). A restarted node is a new member and is looked up again.
+     *
+     * @param uri server URI
+     * @return true when the node's inventory is published
+     */
+    private boolean inventoryPublished(String uri) {
+        String member = parquetAdapter.sharedStorage() ? clusterService.memberId(uri) : null;
+        if (member != null && member.equals(inventorySeen.get(uri))) {
+            return true;
+        }
+        boolean published = clusterService.hasFileInventory(uri);
+        if (member != null) {
+            if (published) {
+                inventorySeen.put(uri, member);
+            } else {
+                inventorySeen.remove(uri);
+            }
+        }
+        return published;
     }
 
     private Map<String, FileAssignment> validatedPathLocations(

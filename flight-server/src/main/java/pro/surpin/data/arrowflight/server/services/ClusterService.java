@@ -1117,6 +1117,20 @@ public final class ClusterService implements AutoCloseable {
      *
      * @return URIs, or null when membership cannot tell (a member without its URI)
      */
+    /**
+     * Returns the UUID of the current Hazelcast member that serves a Flight URI.
+     *
+     * @param serverUri Flight URI
+     * @return the member's UUID, or null when membership cannot tell
+     */
+    public String memberId(String serverUri) {
+        try {
+            return hazelcast.memberUuid(serverUri);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     private Set<String> memberServerUris() {
         try {
             Set<String> uris = hazelcast.memberServerUris();
