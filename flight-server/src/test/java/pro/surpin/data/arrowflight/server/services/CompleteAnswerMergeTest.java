@@ -81,6 +81,11 @@ class CompleteAnswerMergeTest {
             "SELECT DISTINCT grp FROM s.t ORDER BY grp DESC LIMIT 3",
             "SELECT grp, sum(qty) AS sq FROM s.t GROUP BY grp ORDER BY sq DESC",
             "SELECT id, name FROM s.t ORDER BY name NULLS FIRST, id LIMIT 9",
+            // Item 55 (c): an ORDER BY aggregate that is a select item orders by its position.
+            "SELECT grp, sum(qty) FROM s.t GROUP BY grp ORDER BY sum(qty) DESC",
+            "SELECT grp, count(qty) AS c, max(name) FROM s.t GROUP BY grp"
+                    + " ORDER BY count(qty), max(name) DESC NULLS LAST",
+            "SELECT grp, min(price) AS lo FROM s.t WHERE id > 7 GROUP BY grp ORDER BY min(price) DESC, grp",
         };
         for (String query : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);
@@ -124,6 +129,8 @@ class CompleteAnswerMergeTest {
                 "SELECT grp, count(*) AS c, max(name) AS hi FROM s.t WHERE id > 40 GROUP BY grp"},
             {"SELECT count(*) AS c, min(qty) AS lo FROM s.t LIMIT 1",
                 "SELECT count(*) AS c, min(qty) AS lo FROM s.t"},
+            {"SELECT grp, sum(qty) AS sq FROM s.t GROUP BY grp ORDER BY sum(qty) LIMIT 2",
+                "SELECT grp, sum(qty) AS sq FROM s.t GROUP BY grp"},
         };
         for (String[] pair : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(pair[0]);
@@ -148,7 +155,8 @@ class CompleteAnswerMergeTest {
         assertEquals(scan, CompleteAnswerMerge.partQuery(scan));
         for (String query : new String[] {
             "SELECT grp, count(*) FROM s.t GROUP BY grp HAVING count(*) > 3 LIMIT 2",
-            "SELECT grp, count(*) FROM s.t GROUP BY grp ORDER BY count(*) LIMIT 2",
+            "SELECT grp, count(*) FROM s.t GROUP BY grp ORDER BY count(*) + 1 LIMIT 2",
+            "SELECT grp FROM s.t GROUP BY grp ORDER BY count(*) LIMIT 2",
             "SELECT count(*) FROM s.t GROUP BY grp LIMIT 2",
             "SELECT id FROM s.t ORDER BY id LIMIT 3 OFFSET 2",
         }) {
@@ -192,6 +200,13 @@ class CompleteAnswerMergeTest {
                 () -> CompleteAnswerMerge.mergeSql(notSelected, "parts", List.of("id")));
         assertThrows(IllegalArgumentException.class,
                 () -> CompleteAnswerMerge.mergeSql(swapped, "parts", List.of("qty", "id")));
+        // Item 55 (c): an aggregate over a column that a select alias also names stays as written.
+        ParquetQueryParser shadowed = ParquetQueryParser.parse(
+                "SELECT grp AS qty, sum(qty) FROM s.t GROUP BY grp ORDER BY sum(qty)");
+        assertEquals("sum(\"qty\")", shadowed.orderBy);
+        assertNotNull(CompleteAnswerMerge.refusal(shadowed));
+        assertEquals("2 desc", ParquetQueryParser.parse(
+                "SELECT grp, count(*) AS n FROM s.t GROUP BY grp ORDER BY count(*) DESC").orderBy);
         assertThrows(IllegalArgumentException.class, () -> CompleteAnswerMerge.mergeSql(
                 ParquetQueryParser.parse("SELECT grp, count(*) FROM s.t GROUP BY grp"),
                 "parts", List.of("c", "c")));

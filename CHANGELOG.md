@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) (lane 6): distributed complete mode (and batches of copies) now merge an aggregate whose ORDER BY names
+  an aggregate it selects (`GROUP BY t ORDER BY count(*) DESC`), ordered by that item's position; before, such a
+  GROUP BY ran on one node alone. An aggregate that still keeps the single-node path logs why at INFO
+  (`distributedComplete=single reason=...`: HAVING, a GROUP BY expression, DISTINCT aggregates, ...). Answers unchanged.
 - Item 55 (a) (lane 5): on shared storage (HDFS, object stores, `dataDirShared`) planning remembers that a cluster
   member published its file inventory instead of looking every node's inventory up in the cluster map per plan (a
   restarted node is a new member and is looked up again; local data directories unchanged). DC tail perf, 3 x 1 CPU,

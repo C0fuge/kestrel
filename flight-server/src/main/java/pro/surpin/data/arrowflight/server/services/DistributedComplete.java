@@ -233,11 +233,13 @@ public final class DistributedComplete implements AutoCloseable {
         if (parsed == null) {
             averages = AverageMerge.of(readQuery);
             if (averages == null) {
+                logUnmergedAggregate(readQuery, query);
                 return false;
             }
             partQuery = averages.partQuery();
             parsed = mergeable(partQuery);
             if (parsed == null) {
+                logUnmergedAggregate(readQuery, query);
                 return false;
             }
         }
@@ -1056,6 +1058,44 @@ public final class DistributedComplete implements AutoCloseable {
             return null;
         }
         return parsed;
+    }
+
+    /**
+     * Logs, at INFO, why an aggregate keeps the single-node path (item 55 (c): a GROUP BY over a
+     * big table was barely faster under dc than one node, and the reason was only at DEBUG).
+     *
+     * @param readQuery the query with qualified table names
+     * @param query client SQL
+     */
+    private static void logUnmergedAggregate(String readQuery, String query) {
+        String reason = unmergedAggregateReason(readQuery);
+        if (reason != null) {
+            LOGGER.info("node={} distributedComplete=single reason='{}' query='{}'", LogUtil.node(), reason,
+                    LogUtil.oneLine(query));
+        }
+    }
+
+    /**
+     * Tells why an aggregate query cannot be merged from endpoint answers.
+     *
+     * @param query SQL
+     * @return reason, or null when the query is no one-table aggregate or can be merged
+     */
+    static String unmergedAggregateReason(String query) {
+        ParquetQueryParser parsed;
+        try {
+            parsed = ParquetQueryParser.parse(query);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (parsed.isJoin || !parsed.hasAggregation) {
+            return null;
+        }
+        if (TimeTravelClause.present(query)) {
+            return "time travel";
+        }
+        String refusal = CompleteAnswerMerge.refusal(parsed);
+        return refusal != null ? refusal : otherTables(query);
     }
 
     /**

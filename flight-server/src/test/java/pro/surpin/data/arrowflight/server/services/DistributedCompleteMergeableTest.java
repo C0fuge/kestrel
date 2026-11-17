@@ -44,6 +44,20 @@ class DistributedCompleteMergeableTest {
         }
     }
 
+    /** Item 55 (c): a GROUP BY ordered by its aggregate is merged; refused aggregates say why. */
+    @Test
+    void groupByOrderedByItsAggregateIsMergedAndRefusalsAreNamed() {
+        String ordered = "SELECT event_type, count(*) FROM ev.events GROUP BY event_type ORDER BY count(*) DESC";
+        assertNotNull(DistributedComplete.mergeable(ordered));
+        assertNull(DistributedComplete.unmergedAggregateReason(ordered));
+        assertEquals("HAVING", DistributedComplete.unmergedAggregateReason(
+                "SELECT event_type, count(*) FROM ev.events GROUP BY event_type HAVING count(*) > 1"));
+        assertTrue(DistributedComplete.unmergedAggregateReason(
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY id % 6").contains("GROUP BY expression"));
+        assertNull(DistributedComplete.unmergedAggregateReason("SELECT * FROM ev.events"));
+        assertNull(DistributedComplete.unmergedAggregateReason("not sql"));
+    }
+
     /** Item 43: point lookups and small LIMITs start on probation; scans and ORs do not. */
     /** Item 55 (a): the merged line's phases are the gaps between the marks, in microseconds. */
     @Test

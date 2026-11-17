@@ -83,6 +83,9 @@ class CopyBatchMergeTest {
             // Item 33 (B): GROUP BY ordinals group like the columns they name.
             "SELECT grp AS g, k, count(*) AS c, sum(qty) FROM s.t GROUP BY 1, 2 HAVING count(*) > 0"
                     + " ORDER BY g, k",
+            // Item 55 (c): ORDER BY an aggregate that is a select item orders by its position.
+            "SELECT grp, sum(qty) FROM s.t GROUP BY grp HAVING count(*) > 1 ORDER BY sum(qty) DESC",
+            "SELECT k, count(*) AS c FROM s.t GROUP BY k HAVING min(qty) > 0 ORDER BY count(*), k",
             "SELECT k, count(DISTINCT grp) AS dg FROM s.t GROUP BY k HAVING sum(qty) IS NULL OR"
                     + " sum(qty) > 3000 ORDER BY k",
         };
@@ -208,7 +211,7 @@ class CopyBatchMergeTest {
                 "SELECT grp, sum(qty) FROM s.t GROUP BY grp HAVING count(DISTINCT k) > 1",
                 "SELECT grp, sum(qty) FROM s.t GROUP BY grp HAVING sum(qty) FILTER (WHERE k > 1) > 1",
                 "SELECT sum(qty) FROM s.t GROUP BY grp HAVING sum(qty) > 1",
-                "SELECT grp, count(*) FROM s.t GROUP BY grp HAVING count(*) > 1 ORDER BY count(*)",
+                "SELECT grp, count(*) FROM s.t GROUP BY grp HAVING count(*) > 1 ORDER BY count(*) + 1",
                 "SELECT grp, count(*) FROM s.t GROUP BY grp HAVING count(*) > 1 LIMIT 2 OFFSET 1",
                 "SELECT x.grp, count(*) FROM s.t x JOIN s.u y ON x.id = y.id GROUP BY x.grp")) {
             assertNull(CopyBatchMerge.of(query, ParquetQueryParser.parse(query)), query);

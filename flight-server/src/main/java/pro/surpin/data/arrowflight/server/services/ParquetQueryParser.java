@@ -12,11 +12,13 @@ import pro.surpin.data.arrowflight.server.metrics.CacheMetrics;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -927,7 +929,7 @@ public class ParquetQueryParser {
         JoinTable primary = joinTables.get(0);
         return new ParquetQueryParser(primary.schema, primary.table, columns, filter,
                 false, Collections.emptyList(), exprs, true, joinTables, duckDbSql,
-                renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
+                renderOrderBy(select, quotedCtx, null), rowCount(select.$limit()),
                 rowCount(select.$offset()), false, null, null, where);
     }
 
@@ -1015,7 +1017,7 @@ public class ParquetQueryParser {
         Condition having = select.$having();
         return new ParquetQueryParser(schema, table, columns, filter, hasAgg, gbCols, exprs,
                 false, Collections.emptyList(), null,
-                renderOrderBy(select, quotedCtx), rowCount(select.$limit()),
+                renderOrderBy(select, quotedCtx, exprs), rowCount(select.$limit()),
                 rowCount(select.$offset()), select.$distinct(),
                 having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason, where);
     }
@@ -1055,14 +1057,65 @@ public class ParquetQueryParser {
      *
      * @param select parsed query
      * @param quotedCtx renderer for executable DuckDB SQL
+     * @param exprs parsed select items of a one-table query, or null to keep every item as written
      * @return comma-separated sort list, or null when the query has no ORDER BY
      */
-    private static String renderOrderBy(Select<?> select, DSLContext quotedCtx) {
+    private static String renderOrderBy(Select<?> select, DSLContext quotedCtx, List<SelectExpr> exprs) {
         List<String> parts = new ArrayList<>();
         for (SortField<?> sortField : select.$orderBy()) {
-            parts.add(quotedCtx.renderInlined(sortField).trim());
+            String rendered = quotedCtx.renderInlined(sortField).trim();
+            parts.add(aggregateOrdinal(select, sortField, rendered, quotedCtx, exprs));
         }
         return parts.isEmpty() ? null : String.join(", ", parts);
+    }
+
+    /**
+     * Rewrites an ORDER BY item that is a plain count, sum, min or max also selected by the query
+     * as that select item's position (item 55 (c)): {@code ORDER BY count(*) DESC} orders exactly
+     * as {@code ORDER BY 2 DESC} when {@code count(*)} is the second select item, and merged
+     * answers (distributed complete mode, batches of copies) can order by a position but not by
+     * an aggregate of the merged rows. Any other item, and an aggregate whose input columns share
+     * a name with a select alias (DuckDB might bind it differently), is kept as it is.
+     *
+     * @param select parsed query
+     * @param sortField ORDER BY item
+     * @param rendered the item rendered as executable SQL
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @param exprs parsed select items, in select-list order, or null
+     * @return the item, or its select-list position with its direction and null order
+     */
+    private static String aggregateOrdinal(Select<?> select, SortField<?> sortField, String rendered,
+            DSLContext quotedCtx, List<SelectExpr> exprs) {
+        org.jooq.Field<?> sorted = sortField.$field();
+        boolean aggregate = sorted instanceof org.jooq.impl.QOM.Count || sorted instanceof org.jooq.impl.QOM.Sum
+                || sorted instanceof org.jooq.impl.QOM.Min<?> || sorted instanceof org.jooq.impl.QOM.Max<?>;
+        String text = quotedCtx.renderInlined(sorted).trim();
+        if (exprs == null || !aggregate || !rendered.startsWith(text)) {
+            return rendered;
+        }
+        List<? extends SelectFieldOrAsterisk> items = select.$select();
+        if (items.size() != exprs.size()) {
+            return rendered;
+        }
+        Set<String> aliases = new HashSet<>();
+        for (SelectFieldOrAsterisk item : items) {
+            if (item instanceof org.jooq.impl.QOM.FieldAlias<?> alias) {
+                aliases.add(alias.getName().toLowerCase(Locale.ROOT));
+            }
+        }
+        for (int i = 0; i < items.size(); i++) {
+            org.jooq.Field<?> field = (org.jooq.Field<?>) items.get(i);
+            if (field instanceof org.jooq.impl.QOM.FieldAlias<?> alias) {
+                field = alias.$field();
+            }
+            if (!text.equals(quotedCtx.renderInlined(field).trim())) {
+                continue;
+            }
+            boolean shadowed = exprs.get(i).inputColumns.stream()
+                    .anyMatch(c -> aliases.contains(c.replace("\"", "").toLowerCase(Locale.ROOT)));
+            return shadowed ? rendered : (i + 1) + rendered.substring(text.length());
+        }
+        return rendered;
     }
 
     /**
