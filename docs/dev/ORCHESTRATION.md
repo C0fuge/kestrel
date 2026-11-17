@@ -5,7 +5,7 @@ written 20:50Z (items 26 / 27 DONE 2026-11-03); marten ITEM 51 item (2) measured
 m4 S3 1-9 with RF PASS), default switch proposed to the maintainer; heron UPSTREAM 2026-11 DONE a11a36c (series
 frozen); egret FRESH on the newest pre-release `server-1.0.0-6f0aa5a026fa` DONE.
 
-Status as of **2026-11-17T12:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-17T13:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **marten proposal (STATUS Open questions, 2026-11-16 20:10):** make runtime filters the default (FE-only: 0002
@@ -25,12 +25,12 @@ Points for the maintainer:
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 51 DONE 6f0aa5a0 (20:50Z); nothing open until the next maintainer note | 20:42Z | free | main Dev CI 43831943883 green (6f0aa5a0); pkg 43834254344 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 21:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open | 06:21Z | free | - |
-| lane 3 (`LANE3-STATUS.md`) | nothing open | 21:03Z | free | lane/distributed Dev CI 43782908034 green |
+| plugins (`PLUGINS-STATUS.md`) | nothing open | 13:16Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open | 13:24Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | nothing open | 13:04Z | free | lane/distributed Dev CI 43782908034 green |
 
 No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 03:50Z);
-heron `docs/LOCK` empty (session 312 released 05:51Z; session 310 SF1 re-check 44013068299: runner noise, pin
+heron `docs/LOCK` empty (session 319 released 13:51Z; session 310 SF1 re-check 44013068299: runner noise, pin
 6f0aa5a026fa kept). No new kestrel CI runs since 09:05Z; no new pre-releases.
 
 ## Service matrix (newest run per workflow)
@@ -54,16 +54,17 @@ heron `docs/LOCK` empty (session 312 released 05:51Z; session 310 SF1 re-check 4
   (m4 default d2e27119fda4); (2) measured on 6f0aa5a026fa (a576386 / a346a62 / dfc5de2): SF10 both orders 22/22, SF1
   88/88, m4 S3 1-9 with RF PASS, without RF 43950963745 PASS; default switch proposed (waits for the maintainer).
 - heron: IMPROVEMENTS DONE (session 98). UPSTREAM 2026-11 DONE a11a36c; finish mode, pinned 6f0aa5a026fa; session 310
-  connector-compare 44013068299 (SF1 default, 22/22 exact) cleared the SF1 watch as runner noise; session 311 idle.
+  connector-compare 44013068299 (SF1 default, 22/22 exact) cleared the SF1 watch as runner noise; sessions 311-319 idle.
 
 ## egret
 
 - Newest FRESH: **6f0aa5a026fa** (`results/FRESH-6f0aa5a026fa.md`, run 43840086547 + rereport 43861228344; upstream
   `28d6ea713b8e`, unchanged): speed/balanced 22/22, 0 errors; local small ADBC c1 p50 speed/balanced 1.26 (regression by
   the rule, carried over, larger); load +34-41 % at 128 clients (0.95-0.96 of upstream native); scans x4/x8 1.24-1.62 of
-  balanced. Upstream native still fails TPC-H answers. README 'In progress': 11:26Z idle, newest tracked 6f0aa5a026fa.
+  balanced. Upstream native still fails TPC-H answers. README 'In progress': 13:28Z idle, newest tracked 6f0aa5a026fa.
 
 ## History
+- 2026-11-17T13:57Z: ALL DONE kept; no change: kestrel only lane no-open-item notes (lane 3 13:04Z, plugins 13:16Z, catalogs 13:24Z), no new CI runs or pre-releases (newest 6f0aa5a026fa), no red CI; marten 13:41Z still waits for the maintainer (RF default proposal); heron session 319 idle; egret idle (13:28Z); all locks empty.
 
 - 2026-11-17T12:57Z: ALL DONE kept; no change: kestrel only lane no-open-item notes (lane 3 12:03Z, catalogs 12:22Z), no new CI runs or pre-releases (newest 6f0aa5a026fa), no red CI; marten 12:41Z still waits for the maintainer (RF default proposal); heron session 318 idle; egret idle (11:26Z); all locks empty.
 - 2026-11-17T11:57Z: ALL DONE kept; no change: kestrel only lane no-open-item notes (lane 3 11:03Z, plugins 11:11Z, catalogs 11:21Z), no new CI runs or pre-releases (newest 6f0aa5a026fa), no red CI; marten 11:41Z still waits for the maintainer (RF default proposal); heron sessions 316/317 idle; egret idle (11:26Z); all locks empty.
@@ -103,5 +104,3 @@ heron `docs/LOCK` empty (session 312 released 05:51Z; session 310 SF1 re-check 4
 - 2026-11-12T09:56Z: **ALL DONE** again: egret FRESH 2c169a53db3b DONE (43175544843; 22/22, 0 errors; local small c1 speed/balanced 1.09 JDBC / 1.14 ADBC carried over; speed local SF10 +5 %); core 09:41Z / marten 09:41Z / heron 229 nothing open; all CI green, no stale locks.
 - 2026-11-12 08:57Z: egret ACCEPT 2c169a53db3b **SHIP** (43175547634, all 6 checks, 4 cells); FRESH 43175544843 still running, so ALL DONE still suspended; catalogs session 13 (08:25Z) no open item; marten/heron idle; all CI green, no stale locks.
 - 2026-11-12 07:58Z: egret started FRESH 43175544843 + ACCEPT 43175547634 on `server-1.0.0-2c169a53db3b` (07:28Z); ALL DONE still suspended; no kestrel lane commit since 05:03Z; marten/heron idle; all CI green, no stale locks.
-- 2026-11-12 06:58Z: no change: no kestrel lane commit since 05:03Z; egret has not started FRESH/ACCEPT on `server-1.0.0-2c169a53db3b`; marten (06:42Z)/heron (session 226) idle; all CI green, no stale locks.
-- 2026-11-12T05:57Z: egret FRESH 74464701e372 DONE (43148390757; 22/22, local small c1 speed/balanced 1.12 JDBC / 1.23 ADBC carried over); egret not yet on newest pre-release 2c169a53db3b, so ALL DONE still suspended; lanes nothing open, locks free, no new CI runs or pre-releases, no red CI.
