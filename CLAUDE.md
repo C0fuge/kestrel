@@ -45,6 +45,21 @@ backlog, decisions, history pointers). The change record of earlier local work i
 - Anything needing the maintainer's decision → "Open questions" in docs/dev/STATUS.md.
 - Docs and commit messages in English.
 
+## CI tiers: fast while working, full at the end (maintainer, 2026-11-17)
+
+To save runner time and session tokens, every lane checks intermediate states cheaply and keeps the full set for the end:
+- **Intermediate (each push of a work branch):** `gh workflow run dev-ci.yml --ref <branch> -f tier=fast -f modules=<the
+  modules you touched, e.g. flight-server>` (build + tests of those modules with `-am`, Checkstyle; no SpotBugs, no item
+  35 / 39 (b) / 40(a) steps). If the item needs a service check, run **only the one** service workflow that covers it
+  (e.g. `service-hdfs.yml` for HDFS reads, `service-cluster.yml` for distributed work) at the smallest `sf`, not all four.
+  Local `./mvnw -pl <module> -Dtest=<Class>` runs in the session are fine and cheaper still.
+- **Before merging into `main`:** the fast tier on the branch tip is green and the item's own regression test passes.
+- **Full:** the push on `main` runs the full Dev CI automatically; `package=true` always runs the full set plus every
+  service workflow through the service gate. If the full run on `main` goes red after your merge, fixing it is your
+  lane's first step in the next session (before anything else).
+- **Do not poll CI for long.** After dispatching, end the session with a precise next-step note if the run takes more
+  than ~10 minutes; the next session reads the result. Read only the failed job's log tail, not whole logs.
+
 ## Second lane: plugins and integrations (maintainer, 2026-10-28)
 
 A second recurring session ("kestrel plugins") works in parallel with the core session. It follows the session routine

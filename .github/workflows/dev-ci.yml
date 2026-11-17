@@ -19,6 +19,15 @@ on:
         description: "Also publish a linux-only jar + plugins dir + libs set as a release server-<version>-<sha> (after every service-*.yml run on the commit is green)"
         type: boolean
         default: false
+      tier:
+        description: "fast = intermediate check of a branch: build + tests of the named modules only, Checkstyle, no SpotBugs, no item 35 / 39 (b) / 40(a) steps; full = everything (always used for main pushes and package=true)"
+        type: choice
+        options: [ "full", "fast" ]
+        default: "full"
+      modules:
+        description: "fast tier only: comma-separated Maven modules to build and test (with -am), e.g. flight-server or flight-server,flight-plugin-s3"
+        type: string
+        default: "flight-server"
 
 permissions:
   contents: read
@@ -34,6 +43,9 @@ env:
 
 jobs:
   build:
+    env:
+      # fast only on a dispatch that asks for it and does not package (package always runs the full set)
+      FAST: ${{ github.event_name == 'workflow_dispatch' && inputs.tier == 'fast' && !inputs.package && 'true' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -141,6 +153,7 @@ jobs:
       # GenericFlightClientsIntegrationTest: DuckDB's community airport extension reads plain Flight
       # descriptors (P5). Newest DuckDB with an airport build wins; none skips that test.
       - name: DuckDB airport extension
+        if: env.FAST != 'true'
         run: |
           python3 -m venv "$RUNNER_TEMP/airport"
           py="$RUNNER_TEMP/airport/bin/python"
@@ -157,6 +170,7 @@ jobs:
       # GenericFlightClientsIntegrationTest: ClickHouse's arrowFlight table function reads plain
       # Flight descriptors (P5). A failed pull skips that test instead of failing the build.
       - name: ClickHouse image
+        if: env.FAST != 'true'
         run: |
           image=clickhouse/clickhouse-server:26.8
           if docker pull -q "$image" || docker pull -q "mirror.gcr.io/$image"; then
@@ -166,7 +180,23 @@ jobs:
             echo "::warning::ClickHouse image not pulled; its test is skipped"
           fi
 
+      - name: Fast tier - build + tests of the named modules, Checkstyle (intermediate branch check)
+        if: env.FAST == 'true'
+        env:
+          LD_LIBRARY_PATH: ${{ env.HADOOPFS_LIBS }}
+          MODULES: ${{ inputs.modules }}
+        run: >
+          ./mvnw clean verify checkstyle:check -pl "$MODULES" -am
+          -DexcludedGroups=perf,real-services
+          -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
+          -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"
+          -Dpython.it.executable="$PYTHON_IT"
+          -Dclickhouse.it.image="$CLICKHOUSE_IT"
+          -Dairport.it.python="$AIRPORT_IT"
+          -Dhadoopfs.it.extension="$HADOOPFS_IT"
+
       - name: Build, all tests (no perf / real-services), Checkstyle, SpotBugs
+        if: env.FAST != 'true'
         env:
           LD_LIBRARY_PATH: ${{ env.HADOOPFS_LIBS }}
         run: >
@@ -189,6 +219,7 @@ jobs:
       # The data generator takes a DuckDB wheel only (duckdb 1.4.1 has none for the runner's Python
       # and compiled from source for 12-15 min, which ran the job into its timeout).
       - name: Distributed complete under concurrency (items 35, 39 (d))
+        if: env.FAST != 'true'
         timeout-minutes: 15
         run: |
           set -euo pipefail
@@ -247,6 +278,7 @@ jobs:
       # 16 GB), an aggregate whose hash table (100 M groups) is larger than the scope: the start log must name the
       # scope's limit, the answer must be exact and the scope must see no OOM kill (DuckDB spills instead).
       - name: Server in a memory-limited systemd scope (item 39 (b))
+        if: env.FAST != 'true'
         timeout-minutes: 12
         run: |
           set -euo pipefail
@@ -298,6 +330,7 @@ jobs:
           [ "$rc" -eq 0 ] || { tail -n 30 "$work/server.log" | cut -c1-400; exit 1; }
 
       - name: speed's JVM reservation under memory pressure (item 40(a), Q-40a)
+        if: env.FAST != 'true'
         # speed sizes DuckDB with the heap the JVM uses (min(-Xmx, max(1 GiB, in use x 2))) and
         # min(direct, 1 GiB + 25 %), not the limits. Check: 6G scope, -Xmx3g / direct 1g, heap filled
         # to 90 % after start, a 100 M-group aggregate holds DuckDB at its limit (spills), exact
