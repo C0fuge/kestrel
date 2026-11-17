@@ -112,6 +112,9 @@ jobs:
           git -C "$up" fetch -q --depth 1 https://github.com/VadimSurpin/arrow-flight-server "$UPSTREAM_REF"
           git -C "$up" checkout -q FETCH_HEAD
           git -C "$up" rev-parse HEAD | tee "$out/upstream-sha.txt"
+          # For the record: how upstream loads DuckDB extensions (hadoopfs) and which settings name them.
+          grep -rn -iE 'hadoopfs|extension_directory|LOAD |INSTALL |allow_unsigned|HdfsExtension|EXTENSION' \
+            "$up/flight-server/src/main" | grep -v -E '^\S+:[0-9]+:\s*(\*|//|import )' | cut -c1-240 | head -n 40 || true
           (cd "$up" && ./mvnw package -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
           cp "$up"/flight-server/target/*-shaded.jar "$out/arrow-flight-server.jar"
           # Upstream takes Hadoop from the deployment (scope provided): hadoop-client and hadoop-hdfs of its version.

@@ -39,12 +39,18 @@ mode=${HDFS_MODE:-plain}
 case "$mode" in plain|tcp|sasl) ;; *) fail "unknown HDFS_MODE $mode" ;; esac
 app="$in/app"
 srvArgs=(--hazelcast-port 5701 --hosts 172.31.0.12:5701 --metrics-enabled false)
+upExtra=()
 case "$profile" in
   balanced) opts="" ;;
   speed) opts="-DresourceProfile=speed" ;;
   upstream)
-    opts="" app="$in/upapp"
+    app="$in/upapp"
     srvArgs=(--hosts 172.31.0.12)
+    # Upstream's DuckDB finds no hdfs:// file system with /extdir alone (run 44172681969): hadoopfs also in DuckDB's
+    # default extension directory and under the setting names this fork inherited.
+    hext=/extdir/${DUCKDB_VERSION:-v1.5.6}/linux_amd64/hadoopfs.duckdb_extension
+    upExtra=(-v "$in/extdir:/root/.duckdb/extensions:ro" -e "DUCKDB_HDFS_EXTENSION=$hext")
+    opts="-DduckDbHdfsExtension=$hext -Darrowflight.duckdb.hdfs.extension=$hext"
     [ -f "$app/arrow-flight-server.jar" ] || fail "profile upstream needs the workflow input upstream (no $app)"
     ;;
   *) fail "unknown profile $profile" ;;
@@ -173,7 +179,7 @@ fi
 
 echo "server options: ${opts} hdfsMode=$mode short-circuit=$sc" | tee "$work/notes.txt"
 # shellcheck disable=SC2086
-docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" "${srvKrb[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
+docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" "${upExtra[@]}" "${srvKrb[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
   -v "$app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
