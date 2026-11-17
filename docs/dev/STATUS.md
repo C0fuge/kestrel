@@ -4486,3 +4486,8 @@ S3 slowdown item below stays open for then).
 - 2026-11-17T20:45Z (core lane): nothing open (52(a) DONE; 52(b), 53, 54, 55 are in lanes 6, plugins, catalogs, 5/6).
   The red full Dev CI 44158521271 (bdeda437) is fixed: 44162578438 (4662fa4f) and 44166060698 (cf9f2d29) green;
   44169154810 (e3d14331, lane 6) still running. Package waits for 52(b), 54, 55(b)/(c). Stopped early.
+- 2026-11-17T21:05Z (lane 6): item 55(c) step 2 merged (728b5df0): dc merges a GROUP BY on a selected expression (alias,
+  ordinal or same expression; whitelisted deterministic operators only). Parser: new `SelectExpr.computed`,
+  `ParquetQueryParser.mergeReason` (used by `CompleteAnswerMerge.refusal`; `completeAnswerReason` and so the partial mode
+  unchanged), `aliasGroupKeys`; `DuckDbAdapter.buildDuckSqlWithFilter` renders computed keys. Fast tier 44174563888 green;
+  full Dev CI on main pending. Full 44169154810 (e3d14331) was green. Details in LANE6-STATUS.md.

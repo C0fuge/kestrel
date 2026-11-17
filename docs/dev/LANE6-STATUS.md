@@ -2,6 +2,24 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-17 21:05 - ITEM 55(c) step 2 merged into main 728b5df0 (not DONE).** dc now merges a GROUP BY on a
+> selected expression: `SELECT id % 6 AS g, count(*) ... GROUP BY g | 1 | id % 6`. The parser models the key as a
+> `COLUMN` item with `computed=true` (`inputColumn` = output name, `inputExpression` = quoted SQL), endpoints render
+> `<expr> AS "g" ... GROUP BY <expr>`, the merge groups by the output column. Only whitelisted jOOQ nodes (columns,
+> literals, `+ - * / %`, neg, CAST, extract year/month/day/hour, lower, upper, floor, ceil, abs, substring, coalesce):
+> jOOQ renders `date_trunc('day', ts)` as `trunc("ts", null)` (silently wrong), `random()` is not deterministic, so they
+> stay single-node. `GROUP BY g` where `g` is also a table column stays single-node (`shadowedAliasKey`; DuckDB binds the
+> column first - checked). Partial mode unchanged: `completeAnswerReason` still set, the merge reads the new `mergeReason`.
+> avg next to a computed key works through `AverageMerge` (integration test). Fast tier 44174563888 green; full Dev CI on
+> main 728b5df0 dispatched by the push.
+> **Next session:** (0) read the full Dev CI run on main for 728b5df0 (red = fix first). (1) If the maintainer gave the
+> exact GROUP BY or the INFO `distributedComplete=single reason=` line, handle that shape. (2) Otherwise: `date_trunc`
+> (and `strftime`, which jOOQ cannot parse) as computed keys need the client's own text instead of jOOQ's rendering -
+> e.g. keep the select item's source text (parse positions) or a DuckDB-side check; do not widen the whitelist without
+> a DuckDB equivalence test in `CompleteAnswerMergeTest.computedGroupKeysMergeIntoTheCompleteAnswer`. (3) Batches of
+> copies (`CopyBatchMerge`) still refuse computed keys (it checks `completeAnswerReason`): switch it to `mergeReason`
+> with a test. (4) Then per-node endpoints for big GROUP BYs if still slow at scale (see step 1 note below).
+
 > **Lane 6, 2026-11-17 20:25 - ITEM 55(c) step 1 merged into main 72edab3d + e3d14331 (not DONE).** Finding: dc's 890 s vs
 > speed's 1001 s means that GROUP BY was most likely never merged, so one node computed it alone as under speed (count/min/max/sum
 > got 20x because it *was* merged). `DistributedComplete.mergeable` silently refuses (DEBUG only) these GROUP BY shapes:
@@ -79,3 +97,7 @@
   CopyBatchMergeTest, DistributedCompleteMergeableTest, ExecutionServiceTest. Fast tier 44167850389, 44168551211 green;
   merged into main 72edab3d + e3d14331; full Dev CI 44169154810 pending. Local full unit run: only HiveCatalogIntegrationTest
   (non-UTF-8 file names in the container, fails without the change too) and LakeFsPluginTest (plugin not built) errored.
+- 2026-11-17 20:44-21:05Z (lane 6): full Dev CI 44169154810 (e3d14331) green. ITEM 55(c) step 2: computed GROUP BY
+  keys merged under dc (see Next steps). Tests: DistributedCompleteMergeableTest, CompleteAnswerMergeTest (DuckDB
+  equivalence with endpoint SQL built from the parse), DistributedCompleteIntegrationTest (4 merged shapes + an alias
+  shadowing a column kept single-node). Fast tier 44174563888 green; merged into main 728b5df0; full Dev CI pending.
