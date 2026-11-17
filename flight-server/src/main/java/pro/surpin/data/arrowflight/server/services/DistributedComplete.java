@@ -215,6 +215,7 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public boolean stream(String query, String user, FlightProducer.ServerStreamListener listener)
             throws Exception {
+        long entered = System.nanoTime();
         // Partial endpoints need schema.table: a plain name is planned as the table DuckDB reads
         // for it here (the one schema with it, or defaultSchema), so peers read that table too.
         String readQuery;
@@ -240,6 +241,7 @@ public final class DistributedComplete implements AutoCloseable {
                 return false;
             }
         }
+        long parsedAt = System.nanoTime();
         if (aggregatesOnlyMinBytes > 0) {
             String reason = notBigAggregate(parsed, readQuery, partQuery);
             if (reason != null) {
@@ -261,11 +263,12 @@ public final class DistributedComplete implements AutoCloseable {
         if (pointLookupsLocal) {
             String reason = localReason(parsed, readQuery, partQuery);
             if (reason != null) {
-                LOGGER.debug("node={} distributedComplete=local reason='{}' query='{}'", LogUtil.node(), reason,
-                        LogUtil.oneLine(query));
+                LOGGER.debug("node={} distributedComplete=local reason='{}' decideUs={} query='{}'", LogUtil.node(),
+                        reason, micros(parsedAt, System.nanoTime()), LogUtil.oneLine(query));
                 return false;
             }
         }
+        long decidedAt = System.nanoTime();
         QueryPlan plan;
         try {
             plan = planner.plan(partQuery, mergeEndpointsPerNode(parsed));
@@ -280,8 +283,11 @@ public final class DistributedComplete implements AutoCloseable {
         // HDFS): then the endpoint's node reads them, from node-local copies if need be (item 30).
         if (endpoints.size() < 2 && (endpoints.isEmpty() || planner.filesNotReadableHere(partQuery).isEmpty())) {
             releaseLoads(endpoints);
+            LOGGER.debug("node={} distributedComplete=local reason='{} endpoints' planUs={} query='{}'",
+                    LogUtil.node(), endpoints.size(), micros(decidedAt, System.nanoTime()), LogUtil.oneLine(query));
             return false;
         }
+        long plannedAt = System.nanoTime();
         PeerStreamAdmission.Admitted admitted;
         try {
             // Waits while the merges running here hold their endpoint streams' memory (item 35);
@@ -327,9 +333,11 @@ public final class DistributedComplete implements AutoCloseable {
             }
             failOver(endpoints, streams, gates, identity);
             Schema schema = commonSchema(opened(streams));
+            long openedAt = System.nanoTime();
             // The answer the client was promised: names and types of the single-node path.
             Schema expected = execution.completeSchema(allocator, query);
             client.expect(expected);
+            long schemaAt = System.nanoTime();
             List<String> columns = schema.getFields().stream().map(Field::getName).toList();
             String name = VIEW_PREFIX + NEXT.incrementAndGet();
             List<String> outputNames = expected.getFields().stream().map(Field::getName).toList();
@@ -362,10 +370,12 @@ public final class DistributedComplete implements AutoCloseable {
             merged.incrementAndGet();
             // The endpoint nodes log how they read the files; this node read none of them.
             execution.logNoFileReads("endpoints=" + endpoints.size());
+            long doneAt = System.nanoTime();
             LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
-                    + " peerWaitMs={} permits={} probation={} forwarded={} query='{}'", LogUtil.node(),
-                    endpoints.size(), (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
-                    answers.waitNanos() / 1_000_000, admitted.held(), admitted.onProbation(), forward, query);
+                    + " peerWaitMs={} permits={} probation={} forwarded={} phasesUs={} query='{}'", LogUtil.node(),
+                    endpoints.size(), (doneAt - start) / 1_000_000, answers.bytesRead(),
+                    answers.waitNanos() / 1_000_000, admitted.held(), admitted.onProbation(), forward,
+                    phases(entered, parsedAt, decidedAt, plannedAt, start, openedAt, schemaAt, doneAt), query);
             return true;
         } catch (Exception e) {
             cancel(streams);
@@ -519,6 +529,37 @@ public final class DistributedComplete implements AutoCloseable {
      * @param partQuery the query the endpoints would answer
      * @return the reason for the log line, or null when the query is merged
      */
+    /**
+     * Returns the microseconds between two System.nanoTime() values.
+     *
+     * @param from earlier value
+     * @param to later value
+     * @return microseconds
+     */
+    private static long micros(long from, long to) {
+        return (to - from) / 1_000;
+    }
+
+    /**
+     * Formats where a merged query's time went before and during its merge (item 55 (a)): parse
+     * (qualifying and parsing), decide (local rules), plan, admit (admission wait), open (endpoint
+     * streams and their first batches), schema (the client's schema), merge (reading the answers).
+     *
+     * @param marks System.nanoTime() at entry and after each of the seven phases
+     * @return the phases' microseconds, e.g. "parse:120,decide:40,plan:900,..."
+     */
+    static String phases(long... marks) {
+        String[] names = {"parse", "decide", "plan", "admit", "open", "schema", "merge"};
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < names.length && i + 1 < marks.length; i++) {
+            if (i > 0) {
+                text.append(',');
+            }
+            text.append(names[i]).append(':').append(micros(marks[i], marks[i + 1]));
+        }
+        return text.toString();
+    }
+
     private String localReason(ParquetQueryParser parsed, String readQuery, String partQuery) {
         boolean aggregate = oneRow(parsed);
         boolean smallLimit = smallLimit(parsed);

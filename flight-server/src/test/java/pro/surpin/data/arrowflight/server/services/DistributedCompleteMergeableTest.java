@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -44,6 +45,14 @@ class DistributedCompleteMergeableTest {
     }
 
     /** Item 43: point lookups and small LIMITs start on probation; scans and ORs do not. */
+    /** Item 55 (a): the merged line's phases are the gaps between the marks, in microseconds. */
+    @Test
+    void phasesAreTheGapsBetweenMarks() {
+        assertEquals("parse:1,decide:2,plan:3,admit:0,open:10,schema:5,merge:1000",
+                DistributedComplete.phases(0, 1_000, 3_000, 6_000, 6_500, 16_500, 21_500, 1_021_500));
+        assertEquals("parse:7", DistributedComplete.phases(0, 7_000));
+    }
+
     /** Item 55 (a): only plain scans are the concatenation of their endpoint answers. */
     @Test
     void onlyPlainScansAreConcatenations() {

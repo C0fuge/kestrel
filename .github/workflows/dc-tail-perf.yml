@@ -6,7 +6,8 @@
 # LIMITs with endpointsPerServer endpoints per node, as before item 55 (a)). Per variant:
 # - small queries: each class of tools/ci/point-query-load.py alone, closed loop, at the client counts
 #   given, against node 1 (p50 / p95 / p99 / max per class), and node 1's distributedComplete decision
-#   lines per class (local reason / merged, with elapsedMs), so a class whose tail comes from the
+#   lines per class (local reason / merged, with elapsedMs, p50 / p99 of the merged queries' phases
+#   parse / decide / plan / admit / open / schema / merge), so a class whose tail comes from the
 #   merge shows up as such; distributedCompleteLocalScanMaxBytes=<localScan> (default 1MiB) lets the
 #   CI tables merge the classes the real cluster's SF10 tables merge (orders > 256 MiB there).
 # - scans: tools/ci/scan-adbc.py full lineitem reads, 1 stream and <streams> concurrent streams, MB/s.
@@ -146,7 +147,13 @@ jobs:
                 mergeMs=$(grep -oE 'distributedComplete=merged endpoints=[0-9]+ elapsedMs=[0-9]+' <<< "$log" | sed -E 's/.*elapsedMs=//' | sort -n \
                   | awk '{ a[NR] = $1 } END { if (NR) printf "merge p50=%d p99=%d max=%d", a[int(NR * 0.5) + (NR * 0.5 > int(NR * 0.5))], a[int(NR * 0.99) + (NR * 0.99 > int(NR * 0.99))], a[NR] }')
                 reason=$(grep -m 1 -oE "distributedComplete=local reason='[^']*'" <<< "$log" | sed -E 's/.*reason=//')
-                echo "$name $cls ${line:-(no result: $(tail -n 1 "$RUNNER_TEMP/load.err" | cut -c1-160))} | merged=$merged local=$loc waits=$waits ${mergeMs} ${reason:+local=$reason}" | tee -a "$out"
+                one=$(grep -c "distributedComplete=local reason='[01] endpoints'" <<< "$log")
+                # p50 / p99 ms of each phase of the merged queries (parse, decide, plan, admit, open, schema, merge).
+                phases=$(grep -oE 'phasesUs=[a-z:0-9,]+' <<< "$log" | sed 's/phasesUs=//' | tr ',' '\n' | tr ':' ' ' | sort -k1,1 -k2,2n | awk '
+                  function out() { if (n) printf "%s=%.1f/%.1f ", k, a[int(n * 0.5) + (n * 0.5 > int(n * 0.5))] / 1000, a[int(n * 0.99) + (n * 0.99 > int(n * 0.99))] / 1000 }
+                  $1 != k { out(); k = $1; n = 0 } { a[++n] = $2 } END { out() }')
+                echo "$name $cls ${line:-(no result: $(tail -n 1 "$RUNNER_TEMP/load.err" | cut -c1-160))} | merged=$merged local=$loc oneEndpoint=$one waits=$waits ${mergeMs} ${reason:+local=$reason}" | tee -a "$out"
+                [ -n "$phases" ] && echo "$name $cls phases p50/p99 ms: $phases" | tee -a "$out"
               done
             done
             IFS=',' read -ra ss <<< "$STREAMS"
