@@ -1,11 +1,11 @@
 # Orchestration status
 
-ALL DONE 2026-11-17T03:58Z (restored 20:58Z; withdrawn 2026-11-15 22:00Z for items 49-51). kestrel `ITEM 51 DONE 6f0aa5a0`
+ALL DONE 2026-11-17T04:58Z (restored 20:58Z; withdrawn 2026-11-15 22:00Z for items 49-51). kestrel `ITEM 51 DONE 6f0aa5a0`
 written 20:50Z (items 26 / 27 DONE 2026-11-03); marten ITEM 51 item (2) measured (SF10 both orders 22/22, SF1 88/88,
 m4 S3 1-9 with RF PASS), default switch proposed to the maintainer; heron UPSTREAM 2026-11 DONE a11a36c (series
 frozen); egret FRESH on the newest pre-release `server-1.0.0-6f0aa5a026fa` DONE.
 
-Status as of **2026-11-17T03:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-17T04:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **marten proposal (STATUS Open questions, 2026-11-16 20:10):** make runtime filters the default (FE-only: 0002
@@ -13,7 +13,7 @@ Points for the maintainer:
   m4 default (needs iceberg 1,11,12, lakefs 1,3,4,10, check 13 on top of S3 1-9). Evidence: SF10 ~3 % order-corrected
   (q21 -16/-17 %, q11 -20/-30 %), SF1 ours first 43950959245 88/88 (sum neutral, q21 0.96 -> 0.64), m4 S3 1-9 with RF
   43942242083 PASS; m4 S3 1-9 without RF (baseline) 43950963745 PASS (21:40Z). Measurements complete; marten waits
-  only for the maintainer's answer.
+  only for the maintainer's answer (still unanswered, marten session 03:40Z).
 - Still open: Q-51a (marten partial mode; ARF2 bloom filters skipped), Q-46 (hadoopfs negotiated QOP / cipher),
   catalogs Q11; plugins Q-40a follow-up; stand checks of items 44 (2) / 46 / 50 / 51.
 - egret FRESH 6f0aa5a026fa: local small ADBC c1 p50 speed/balanced 1.26 (regression by the rule, carried over).
@@ -26,12 +26,12 @@ Points for the maintainer:
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 51 DONE 6f0aa5a0 (20:50Z); nothing open until the next maintainer note | 20:42Z | free | main Dev CI 43831943883 green (6f0aa5a0); pkg 43834254344 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open | 21:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (session 87) | 21:21Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (session 89) | 04:20Z | free | - |
 | lane 3 (`LANE3-STATUS.md`) | nothing open | 21:03Z | free | lane/distributed Dev CI 43782908034 green |
 
-No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 21:41Z);
-heron `docs/LOCK` 20:51Z (active session, 1 h old; pinned server 6f0aa5a026fa 21:13Z, e2e 43954114349 / 43954119852
-green). No new kestrel CI runs since 09:05Z; no new pre-releases.
+No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 03:50Z);
+heron `docs/LOCK` empty (session 311 released 04:50Z; session 310 SF1 re-check 44013068299: runner noise, pin
+6f0aa5a026fa kept). No new kestrel CI runs since 09:05Z; no new pre-releases.
 
 ## Service matrix (newest run per workflow)
 
@@ -53,8 +53,8 @@ green). No new kestrel CI runs since 09:05Z; no new pre-releases.
 - marten: IMPROVEMENTS DONE (2026-11-03); UPSTREAM 2026-11 DONE `flbcef73`. Maintainer 11:15 items: (1) DONE 09:50Z
   (m4 default d2e27119fda4); (2) measured on 6f0aa5a026fa (a576386 / a346a62 / dfc5de2): SF10 both orders 22/22, SF1
   88/88, m4 S3 1-9 with RF PASS, without RF 43950963745 PASS; default switch proposed (waits for the maintainer).
-- heron: IMPROVEMENTS DONE (session 98). UPSTREAM 2026-11 DONE a11a36c; session (lock 20:51Z) pinned server
-  6f0aa5a026fa (13c7acc, e2e 43954114349 / 43954119852 green), connector-compare 43954195113 running.
+- heron: IMPROVEMENTS DONE (session 98). UPSTREAM 2026-11 DONE a11a36c; finish mode, pinned 6f0aa5a026fa; session 310
+  connector-compare 44013068299 (SF1 default, 22/22 exact) cleared the SF1 watch as runner noise; session 311 idle.
 
 ## egret
 
@@ -65,6 +65,7 @@ green). No new kestrel CI runs since 09:05Z; no new pre-releases.
 
 ## History
 
+- 2026-11-17T04:58Z: ALL DONE kept; no change: kestrel only catalogs session 89 no-open-item note, no new CI runs or pre-releases; marten still waiting for the maintainer; heron session 310 cleared SF1 watch (44013068299, noise), 311 idle; no stale locks.
 - 2026-11-17T03:58Z: ALL DONE kept; no new kestrel commits except lane no-open-item notes, no new CI runs or pre-releases; marten waiting for the maintainer (runtime-filter default proposal, 03:40Z); heron session active (lock 03:50Z); no stale locks.
 - 2026-11-16T21:58Z: ALL DONE kept; marten m4 S3 1-9 without RF 43950963745 PASS (measurements complete, default switch waits for the maintainer); heron pinned 6f0aa5a026fa (e2e green, compare running, lock 20:51Z active); kestrel lanes nothing open, no new CI runs or pre-releases; no stale locks.
 - 2026-11-16T20:58Z: **ALL DONE** restored: kestrel ITEM 51 DONE 6f0aa5a0 (20:50Z); marten ITEM 51 measured (SF1 ours first 43950959245 88/88; m4 S3 1-9 with RF PASS 43942242083) and runtime-filter default switch proposed (maintainer decision); heron new session (lock 20:51Z) running e2e + compare; no kestrel CI runs or pre-releases; no stale locks.
@@ -104,4 +105,3 @@ green). No new kestrel CI runs since 09:05Z; no new pre-releases.
 - 2026-11-11T17:57Z: ALL DONE kept; plugins ITEM 46 DONE c96a1272 (main 74464701; Dev CI 43064709644, Service hdfs 43064709693, Catalogs CI 43064709784 green); core lane (lock 17:44Z) packaging on pkg/74464701 (Dev CI 43071198734 running); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-11T16:57Z: ALL DONE kept; plugins ITEM 46 on fix/46 progressing: Dev CI 43056505119 green after mirror fixes, Service hdfs 43056510473 red (apt infra), lane pushed bea11172 and 43060538104 is running (no orchestrator rerun); main unchanged, no new pre-release; marten/heron/egret idle; no stale locks.
 - 2026-11-11T15:57Z: ALL DONE kept, but plugins ITEM 46 (maintainer stand note 18:40: sizing budget, qid=null in denials, QOP log; Q-46 for the extension repo) on fix/46, unmerged: TPC-H perf 43047430684 green, Dev CI / Service hdfs red on runner ubuntu.com DNS (infra), failed job of 43050095655 re-run once; main unchanged, locks free, no new pre-release; marten/heron/egret idle.
-- 2026-11-11T12:57Z: ALL DONE kept; no change (lanes nothing open, plugins state line 12:20Z; locks free; no new CI runs or pre-releases; marten 12:40Z / heron session 218 / egret 11:29Z README idle).
