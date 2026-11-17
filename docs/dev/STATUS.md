@@ -4455,3 +4455,7 @@ S3 slowdown item below stays open for then).
   budgetMiB=3174`, -Xmx2g, direct 1g, 6 GiB container) was OOM-killed during 4 concurrent full lineitem SF5 scans on HDFS
   (HDFS point perf run 44116044127, runner a); balanced peaked at the 6144 MiB limit in every scan variant, speed at 1.9-2.3 GiB.
   Details in CATALOGS-STATUS.md item 54.
+- 2026-11-17T18:45Z (core lane): nothing open - 52(a) DONE; the package waits for 52(b) / 55(c) (lane 6), 54 (lane 4),
+  55(a) (lane 5); 53 and 55(b) DONE. Full run green: package Dev CI 44143892740 on `pkg/f4feb0d5` + Service cluster
+  44146698684, hdfs 44146705728, security 44146711823, stores 44146719328 (main since then: CI tooling / docs only).
+  Stopped early.
