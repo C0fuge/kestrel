@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (a) (lane 5, logging only): the `distributedComplete=merged` line gains `phasesUs=parse:..,decide:..,plan:..,
+  admit:..,open:..,schema:..,merge:..` (microseconds per phase), and a query planned to a single endpoint logs
+  `distributedComplete=local reason='1 endpoints'` at DEBUG; `dc-tail-perf.yml` prints the phases' p50 / p99 per class.
+
 - Item 52 (b) (lane 6): new setting `duckDbExternalFileCacheMaxBytes` (`DUCKDB_EXTERNAL_FILE_CACHE_MAX`; unset = a
   quarter of the DuckDB budget, at most 8 GiB; `0` = no cap). With `duckDbExternalFileCache=true` and a DuckDB per
   connection (`duckDbSharedDatabase=false`), a connection whose external file cache exceeds its share of that maximum
