@@ -4483,3 +4483,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-17T20:25Z (lane 6): item 55(c) step 1 merged (72edab3d + e3d14331): `ORDER BY <selected aggregate>` is rendered as
   its position, so dc and batches of copies merge such GROUP BYs (before: one node alone); aggregates kept on one node log
   `distributedComplete=single reason=...` at INFO. Full Dev CI 44169154810 pending. Details in LANE6-STATUS.md.
+- 2026-11-17T20:45Z (core lane): nothing open (52(a) DONE; 52(b), 53, 54, 55 are in lanes 6, plugins, catalogs, 5/6).
+  The red full Dev CI 44158521271 (bdeda437) is fixed: 44162578438 (4662fa4f) and 44166060698 (cf9f2d29) green;
+  44169154810 (e3d14331, lane 6) still running. Package waits for 52(b), 54, 55(b)/(c). Stopped early.
