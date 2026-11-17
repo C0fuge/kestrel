@@ -165,7 +165,9 @@ class DistributedTwoProcessTlsTest {
             }
         }
         String log = NODES.get(0).output();
-        assertEquals(queries.size(), count(log, "distributedComplete=merged endpoints=4"), log);
+        // Item 55 (a): the one-row aggregate and the small LIMIT take one endpoint per node.
+        assertEquals(2, count(log, "distributedComplete=merged endpoints=2 "), log);
+        assertEquals(queries.size() - 2, count(log, "distributedComplete=merged endpoints=4 "), log);
         assertEquals(0, count(log, "distributedComplete=fallback"), log);
         assertEquals(0, count(log, "distributedComplete=failover"), log);
     }
