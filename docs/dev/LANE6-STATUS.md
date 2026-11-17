@@ -2,6 +2,20 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-17 21:50 - ITEM 55(c) step 3 merged into main 5b751015 (not DONE).** Batches of local copies
+> (`CopyBatchMerge`) now refuse on `mergeReason`, so computed GROUP BY keys merge there too (ordinal, expression, alias;
+> averages next to them through `AverageMerge`). New guard: an alias GROUP BY key is accepted only when the table's footer
+> columns are known and none has that name (`CopyBatchMerge.shadowedAliasKey`, `ExecutionService.copyBatchMerge`); the
+> static `notBatchableReason` / `mergeable` know no columns, so the complete-mode batched path declines alias keys (with the
+> reason) - ordinals / expressions go. Full Dev CI 44175118886 (924baf8f) was green; fast tier 44179162271 green; full run
+> on main for 5b751015 dispatched by the push.
+> **Next session:** (0) read the full Dev CI of main 5b751015 (red = fix first). (1) If the maintainer gave the exact
+> GROUP BY / the INFO `distributedComplete=single reason=` line, handle that shape. (2) `date_trunc` / `strftime` keys:
+> keep the client's own select-item text (jOOQ renders `date_trunc` wrongly, cannot parse `strftime`), with a DuckDB
+> equivalence test in `CompleteAnswerMergeTest.computedGroupKeysMergeIntoTheCompleteAnswer`. (3) Optional: let
+> `notBatchableReason` take the footer columns so alias keys also go the complete-mode batched path. (4) Per-node endpoints
+> for big GROUP BYs if still slow at scale.
+
 > **Lane 6, 2026-11-17 21:05 - ITEM 55(c) step 2 merged into main 728b5df0 (not DONE).** dc now merges a GROUP BY on a
 > selected expression: `SELECT id % 6 AS g, count(*) ... GROUP BY g | 1 | id % 6`. The parser models the key as a
 > `COLUMN` item with `computed=true` (`inputColumn` = output name, `inputExpression` = quoted SQL), endpoints render
@@ -101,3 +115,7 @@
   keys merged under dc (see Next steps). Tests: DistributedCompleteMergeableTest, CompleteAnswerMergeTest (DuckDB
   equivalence with endpoint SQL built from the parse), DistributedCompleteIntegrationTest (4 merged shapes + an alias
   shadowing a column kept single-node). Fast tier 44174563888 green; merged into main 728b5df0; full Dev CI 44175118886 (924baf8f) pending.
+- 2026-11-17 21:16-21:50Z (lane 6): full Dev CI 44175118886 (924baf8f) green. ITEM 55(c) step 3: batches of copies merge
+  computed GROUP BY keys, alias keys guarded against shadowing a table column (see Next steps). Tests: CopyBatchMergeTest
+  (DuckDB equivalence incl. avg + LIMIT), ExecutionServiceTest (mergeable lists; end-to-end batches with alias and ordinal
+  keys). Fast tier 44179162271 green; merged into main 5b751015; full Dev CI on main pending.

@@ -4491,3 +4491,6 @@ S3 slowdown item below stays open for then).
   `ParquetQueryParser.mergeReason` (used by `CompleteAnswerMerge.refusal`; `completeAnswerReason` and so the partial mode
   unchanged), `aliasGroupKeys`; `DuckDbAdapter.buildDuckSqlWithFilter` renders computed keys. Fast tier 44174563888 green;
   full Dev CI 44175118886 (924baf8f) pending. Full 44169154810 (e3d14331) was green. Details in LANE6-STATUS.md.
+- 2026-11-17T21:50Z (lane 6): item 55(c) step 3 merged (5b751015): `CopyBatchMerge` (batches of copies) refuses on
+  `mergeReason`, so computed GROUP BY keys merge there; an alias key that may be a table column is refused (footer columns).
+  Fast tier 44179162271 green; full Dev CI 44175118886 (924baf8f) was green. Details in LANE6-STATUS.md.
