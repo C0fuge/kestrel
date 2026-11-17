@@ -67,8 +67,6 @@ public final class ClusterService implements AutoCloseable {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     /** Synchronous backups of the registry, heartbeat and statement maps (Hazelcast's default). */
     private static final int MAP_BACKUP_COUNT = 1;
-    /** Threads that run the cluster writes of plans side by side. */
-    private static final int BATCH_WRITE_THREADS = 8;
 
     private final HazelcastAdapter hazelcast;
     private final AppConfig appConfig;
@@ -82,8 +80,6 @@ public final class ClusterService implements AutoCloseable {
     // Writes whose key lives on a member that stopped answering run here, one after the other,
     // so that neither a query nor the heartbeat waits for that member (item D3).
     private final ExecutorService deferredWriteExecutor;
-    // Runs the load writes of one plan side by side ({@link #writeBatch()}); the plan waits for them.
-    private final ExecutorService batchWriteExecutor;
     /** The plan writes being collected on this thread, or null. */
     private final ThreadLocal<WriteBatch> currentBatch = new ThreadLocal<>();
     /** Lists the data directory again now and then (item 49 (d)); started by {@link #refreshInventory}. */
@@ -181,11 +177,6 @@ public final class ClusterService implements AutoCloseable {
         });
         this.deferredWriteExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "flight-cluster-write");
-            t.setDaemon(true);
-            return t;
-        });
-        this.batchWriteExecutor = Executors.newFixedThreadPool(BATCH_WRITE_THREADS, r -> {
-            Thread t = new Thread(r, "flight-plan-write");
             t.setDaemon(true);
             return t;
         });
@@ -784,7 +775,7 @@ public final class ClusterService implements AutoCloseable {
     /**
      * Starts collecting this thread's load writes of one plan: the endpoints' load reservations
      * ({@link #createEndpointHandle}) and the nodes' added load ({@link #addLoad}, one write per
-     * node). {@link WriteBatch#close()} runs them side by side and returns once all are done, so
+     * node). {@link WriteBatch#close()} runs them and returns once all are done, so
      * a plan returns its endpoints, as before, only after their load is written, and a release
      * cannot come before its reservation. Writes whose key lives on a member that stopped
      * answering are deferred as before. A batch started while one is open does nothing.
@@ -813,7 +804,7 @@ public final class ClusterService implements AutoCloseable {
         }
 
         /**
-         * Runs the collected writes side by side and waits for them.
+         * Runs the collected writes; a failed one does not stop the others.
          *
          * @throws RuntimeException the first write's failure, after every write ended
          */
@@ -833,27 +824,11 @@ public final class ClusterService implements AutoCloseable {
                 return;
             }
             long t = LogUtil.mark();
-            List<CompletableFuture<Void>> others = new ArrayList<>();
+            // One after the other on the planning thread: side by side on a pool was slower under
+            // CPU load (DC tail perf 44193153607, c8 p99 up to 1.9x).
             RuntimeException failure = null;
-            try {
-                for (int i = 1; i < all.size(); i++) {
-                    others.add(CompletableFuture.runAsync(all.get(i), batchWriteExecutor));
-                }
-            } catch (RejectedExecutionException e) {
-                // Closing: what was not handed over runs here.
-                for (int i = others.size() + 1; i < all.size(); i++) {
-                    failure = runCollecting(all.get(i), failure);
-                }
-            }
-            failure = runCollecting(all.get(0), failure);
-            for (CompletableFuture<Void> other : others) {
-                try {
-                    other.join();
-                } catch (java.util.concurrent.CompletionException e) {
-                    if (failure == null) {
-                        failure = e.getCause() instanceof RuntimeException r ? r : e;
-                    }
-                }
+            for (Runnable write : all) {
+                failure = runCollecting(write, failure);
             }
             LogUtil.logTiming(t, "hazelcast.planWrites", "writes=" + all.size());
             if (failure != null) {
@@ -1427,7 +1402,6 @@ public final class ClusterService implements AutoCloseable {
         deregister();
         loadClaimExecutor.shutdownNow();
         deferredWriteExecutor.shutdownNow();
-        batchWriteExecutor.shutdownNow();
         localHandles.clear();
         try {
             hazelcast.close();

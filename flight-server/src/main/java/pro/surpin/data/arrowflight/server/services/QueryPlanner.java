@@ -299,8 +299,8 @@ public final class QueryPlanner {
 
     private QueryPlan planInScope(String query, boolean plannerAsBackup, int maxEndpointsPerNode,
             boolean mergeInternal) throws IOException {
-        // The endpoints' load writes run side by side when the plan is made, not one per
-        // endpoint while it is made (item 55 (a)); a mocked cluster service returns no batch.
+        // The endpoints' load writes run when the plan is made, one load change per node instead
+        // of one per endpoint (item 55 (a)); a mocked cluster service returns no batch.
         try (ClusterService.WriteBatch writes = clusterService.writeBatch()) {
             return planEndpoints(query, plannerAsBackup, maxEndpointsPerNode, mergeInternal);
         }

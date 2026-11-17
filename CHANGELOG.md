@@ -14,9 +14,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for the endpoints as written (jOOQ's default dialect renders it as `trunc(x, null)`, dropping the part). An unaliased
   `date_trunc`, other arguments or parts, `ORDER BY date_trunc(...)` (use the alias or position) and `date_trunc` keys next
   to `avg` stay on one node, with their reason.
-- Item 55 (a) (lane 5): a plan writes its endpoints' load reservations and the nodes' added load (one change per node,
-  summed) side by side when the plan is made, instead of one synchronous cluster write per endpoint while it is made.
-  The plan still returns only after the writes are done; writes for a member that does not answer are deferred as before.
+- Item 55 (a) (lane 5): a plan writes the nodes' added load once per node (the sum of its endpoints) instead of once
+  per endpoint, together with the endpoints' load reservations when the plan is made. The plan still returns only after
+  the writes are done; writes for a member that does not answer are deferred as before.
 - Item 55 (c) step 3 (lane 6): batches of local copies (item 30) now also merge a GROUP BY on a selected expression
   (by ordinal, the expression itself, or an alias that is not a column of the table per the Parquet footers; an alias that
   is also a column stays refused, DuckDB groups by the column), also next to averages.
