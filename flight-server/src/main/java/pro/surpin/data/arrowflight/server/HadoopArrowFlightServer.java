@@ -557,6 +557,10 @@ public class HadoopArrowFlightServer {
         distributedComplete.localAggregateMaxFiles(aggregateFiles);
         long scanBytes = ConfigAdapter.distributedCompleteLocalScanMaxBytes(ConfigSource.system());
         distributedComplete.localScanMaxBytes(scanBytes);
+        boolean forwardScans = ConfigAdapter.distributedCompleteForwardScans(ConfigSource.system());
+        distributedComplete.forwardScans(forwardScans);
+        LOGGER.info("distributedComplete plain scans: {}", forwardScans
+                ? "endpoint batches forwarded as they are" : "merged through DuckDB");
         LOGGER.info("distributedComplete point lookups: {}", pointLookupsLocal
                 ? "local (computed on the planning node when it can read the files); filtered one-row"
                         + " aggregates: local when footer pruning keeps <= " + aggregateFiles + " files"

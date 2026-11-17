@@ -22,6 +22,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   point load 142 q/s at c8, 28 at c128, RSS 22 GB). HDFS point cell (16-core sizing): c32 90 -> 117 q/s, p99
   1.1-1.3 -> 0.8 s, fd requests per query 0.3 -> 0. `-DduckDbSharedDatabase=false` restores the old mode, where
   `duckDbThreads` / `duckDbMemoryLimit` are per connection; with the shared DuckDB they are node-wide.
+
+- Item 55 (a) (lane 5): distributed complete sends the endpoint batches of a merged plain scan (no aggregate, DISTINCT,
+  ORDER BY, LIMIT or OFFSET, endpoint columns equal to the complete answer's) to the client as they are instead of
+  re-reading them through DuckDB on one thread of the planning node (the real cluster's 4 / 8 concurrent lineitem
+  scans ran at 0.58 / 0.44 of speed). Same rows in the same endpoint order; the `distributedComplete=merged` line says
+  `forwarded=true`. New setting `distributedCompleteForwardScans` (`FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS`,
+  default true; false = the DuckDB merge as before).
+
 - Item 52: new setting `memoryBudgetBytes` (`FLIGHT_MEMORY_BUDGET`, accepts `48g`, `48GiB` or bytes) overrides the
   host / cgroup memory detection for every resource profile (startup line `memoryBudget source=setting`), so DuckDB's
   memory limits, and with them its external file cache, are sized from it. A start that sizes from the host's memory

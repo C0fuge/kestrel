@@ -476,6 +476,16 @@ class ConfigAdapterTest {
                 source(Map.of("distributedAggregateMinBytes", "big"), Map.of())));
     }
 
+    /** Item 55 (a): merged plain scans forward the endpoint batches unless turned off. */
+    @Test
+    void distributedCompleteForwardScansDefaultsToTrue() throws IOException {
+        assertTrue(ConfigAdapter.distributedCompleteForwardScans(source(Map.of(), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompleteForwardScans(
+                source(Map.of("distributedCompleteForwardScans", "false"), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompleteForwardScans(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS", "false"))));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));

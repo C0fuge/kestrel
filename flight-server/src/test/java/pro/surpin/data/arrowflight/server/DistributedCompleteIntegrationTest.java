@@ -141,6 +141,56 @@ class DistributedCompleteIntegrationTest {
         }
     }
 
+    /** Plain scans: their merge only concatenates the endpoint answers (item 55 (a)). */
+    private static final List<String> SCANS = List.of(
+            "SELECT * FROM s.t",
+            "SELECT v, name, amount FROM s.t WHERE v % 3 = 0");
+
+    /**
+     * Verifies a merged plain scan sends the endpoint batches on without DuckDB and answers the
+     * rows the node computes alone, as the DuckDB merge does when forwarding is off (item 55 (a)).
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void plainScansForwardEndpointBatches() throws Exception {
+        for (String query : SCANS) {
+            String alone = sortedRows(answer(query));
+            useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
+            assertEquals(alone, sortedRows(answer(query)), query);
+            assertEquals(1, distributed.mergedAnswers(), query);
+            assertEquals(1, distributed.forwardedAnswers(), query);
+            distributed.forwardScans(false);
+            assertEquals(alone, sortedRows(answer(query)), query);
+            assertEquals(2, distributed.mergedAnswers(), query);
+            assertEquals(1, distributed.forwardedAnswers(), query);
+            assertEquals(0, distributed.fallbacks(), query);
+            useDistributed(null);
+        }
+        // Merges that compute something are never forwarded.
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
+        for (String query : MERGED) {
+            answer(query);
+        }
+        assertEquals(MERGED.size(), distributed.mergedAnswers());
+        assertEquals(0, distributed.forwardedAnswers());
+    }
+
+    /**
+     * Sorts the row lines of an answer (a plain scan has no order), keeping its schema line first.
+     *
+     * @param answer schema line and rows as {@link #answer} gives them
+     * @return schema line and sorted rows
+     */
+    private static String sortedRows(String answer) {
+        List<String> lines = new java.util.ArrayList<>(List.of(answer.split("\n")));
+        String schema = lines.remove(0);
+        // Each batch repeats the TSV header line; keep the rows only.
+        lines.removeIf(line -> line.startsWith("v\t") || line.startsWith("k\t"));
+        java.util.Collections.sort(lines);
+        return schema + "\n" + String.join("\n", lines) + "\nrows=" + lines.size();
+    }
+
     /**
      * Verifies a query whose shape does not merge keeps the single-node path untouched.
      *

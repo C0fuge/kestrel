@@ -646,6 +646,38 @@ public final class ExecutionService {
         }
     }
 
+    /** Longest wait for a client's stream to accept a forwarded batch when no configuration is given. */
+    private static final long DEFAULT_FORWARD_READY_TIMEOUT_MILLIS = 300_000;
+
+    /**
+     * Sends Arrow batches read on this node (the endpoint answers of a distributed complete
+     * answer whose merge would only concatenate them, item 55 (a)) to a Flight listener as they
+     * are, without DuckDB: each batch waits until the client's stream is ready.
+     *
+     * @param parts batches to send, in order; the caller closes the reader
+     * @param listener Flight stream listener, started by this method with the batches' schema
+     * @return batches sent
+     * @throws Exception when reading a batch fails, or the client cancels or is not ready in time
+     */
+    public long forwardArrowParts(org.apache.arrow.vector.ipc.ArrowReader parts,
+            FlightProducer.ServerStreamListener listener) throws Exception {
+        long timeout = appConfig == null ? DEFAULT_FORWARD_READY_TIMEOUT_MILLIS
+                : appConfig.flightListenerReadyTimeoutMillis();
+        VectorSchemaRoot root = parts.getVectorSchemaRoot();
+        listener.start(root);
+        long sent = 0;
+        while (parts.loadNextBatch()) {
+            if (root.getRowCount() == 0) {
+                continue;
+            }
+            if (DuckDbAdapter.awaitListenerReady(listener, timeout)) {
+                listener.putNext();
+                sent++;
+            }
+        }
+        return sent;
+    }
+
     /**
      * Streams the result of one statement over Arrow batches read on this node (the endpoint
      * answers of a distributed complete answer): the batches are registered on this thread's

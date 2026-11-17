@@ -786,6 +786,22 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteForwardScans}
+     * ({@code arrowflight.cluster.distributedCompleteForwardScans},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS}): whether a merged plain scan (no
+     * aggregate, DISTINCT, ORDER BY, LIMIT or OFFSET) sends its endpoint batches to the client as
+     * they are instead of reading them through DuckDB (item 55 (a)); default true.
+     *
+     * @param props configuration source
+     * @return true when plain scans are forwarded
+     */
+    public static boolean distributedCompleteForwardScans(ConfigSource props) {
+        return getBooleanWithEnv("distributedCompleteForwardScans",
+                "arrowflight.cluster.distributedCompleteForwardScans",
+                "FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS", true, props);
+    }
+
+    /**
      * Resolves {@code distributedCompleteLocalScanMaxBytes}
      * ({@code arrowflight.cluster.distributedCompleteLocalScanMaxBytes},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES}): with

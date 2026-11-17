@@ -44,6 +44,19 @@ class DistributedCompleteMergeableTest {
     }
 
     /** Item 43: point lookups and small LIMITs start on probation; scans and ORs do not. */
+    /** Item 55 (a): only plain scans are the concatenation of their endpoint answers. */
+    @Test
+    void onlyPlainScansAreConcatenations() {
+        for (String query : List.of("SELECT * FROM s.t", "SELECT a, b FROM s.t WHERE a > 3")) {
+            assertTrue(DistributedComplete.concatenation(ParquetQueryParser.parse(query)), query);
+        }
+        for (String query : List.of("SELECT count(*) FROM s.t", "SELECT DISTINCT a FROM s.t",
+                "SELECT a FROM s.t ORDER BY a", "SELECT a FROM s.t LIMIT 5",
+                "SELECT a, count(*) FROM s.t GROUP BY a")) {
+            assertFalse(DistributedComplete.concatenation(ParquetQueryParser.parse(query)), query);
+        }
+    }
+
     @Test
     void pointLookupsAreSmallAnswers() {
         for (String query : List.of("SELECT * FROM tpch.orders WHERE o_orderkey = 5",

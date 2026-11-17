@@ -113,6 +113,7 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong localPointLookups = new AtomicLong();
     private final AtomicLong localAggregates = new AtomicLong();
     private final AtomicLong localScans = new AtomicLong();
+    private final AtomicLong forwarded = new AtomicLong();
     /** Point lookups computed on this node alone when it can read the files (item 43). */
     private volatile boolean pointLookupsLocal;
     /**
@@ -132,6 +133,8 @@ public final class DistributedComplete implements AutoCloseable {
      */
     private volatile long aggregatesOnlyMinBytes;
     private final AtomicLong notBigEnough = new AtomicLong();
+    /** Whether plain scans send the endpoint batches on as they are (item 55 (a)). */
+    private volatile boolean forwardScans = true;
 
     /**
      * Creates the distributed path of complete answers.
@@ -337,8 +340,17 @@ public final class DistributedComplete implements AutoCloseable {
             if (admitted.onProbation()) {
                 answers.meter(admitted::charge);
             }
+            // Item 55 (a): a plain scan's merge only concatenates the endpoint answers; DuckDB
+            // re-reading them on one thread halved the scan rate of 4 to 8 concurrent streams.
+            boolean forward = averages == null && forwardScans && concatenation(parsed)
+                    && DeferredStart.sameColumns(expected.getFields(), schema.getFields());
             try {
-                execution.readArrowParts(allocator, answers, name, sql, client);
+                if (forward) {
+                    execution.forwardArrowParts(answers, client);
+                    forwarded.incrementAndGet();
+                } else {
+                    execution.readArrowParts(allocator, answers, name, sql, client);
+                }
             } finally {
                 peerBytes.addAndGet(answers.bytesRead());
                 peerWaitNanos.addAndGet(answers.waitNanos());
@@ -349,9 +361,9 @@ public final class DistributedComplete implements AutoCloseable {
             // The endpoint nodes log how they read the files; this node read none of them.
             execution.logNoFileReads("endpoints=" + endpoints.size());
             LOGGER.info("node={} distributedComplete=merged endpoints={} elapsedMs={} peerBytes={}"
-                    + " peerWaitMs={} permits={} probation={} query='{}'", LogUtil.node(), endpoints.size(),
-                    (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
-                    answers.waitNanos() / 1_000_000, admitted.held(), admitted.onProbation(), query);
+                    + " peerWaitMs={} permits={} probation={} forwarded={} query='{}'", LogUtil.node(),
+                    endpoints.size(), (System.nanoTime() - start) / 1_000_000, answers.bytesRead(),
+                    answers.waitNanos() / 1_000_000, admitted.held(), admitted.onProbation(), forward, query);
             return true;
         } catch (Exception e) {
             cancel(streams);
@@ -398,6 +410,18 @@ public final class DistributedComplete implements AutoCloseable {
      */
     private boolean oneStreamPerNode(ParquetQueryParser parsed) {
         return !oneRow(parsed) && execution.localCopies();
+    }
+
+    /**
+     * Tells whether a query's complete answer is the concatenation of its endpoint answers: no
+     * aggregate, DISTINCT, HAVING, ORDER BY, LIMIT or OFFSET (item 55 (a)).
+     *
+     * @param parsed the part query
+     * @return true for a plain scan
+     */
+    static boolean concatenation(ParquetQueryParser parsed) {
+        return !parsed.hasAggregation && !parsed.distinct && parsed.having == null
+                && parsed.orderBy == null && parsed.limit == null && parsed.offset == null;
     }
 
     /**
@@ -750,6 +774,25 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public long notBigEnough() {
         return notBigEnough.get();
+    }
+
+    /**
+     * Turns sending plain scans' endpoint batches on as they are on or off (item 55 (a)); off,
+     * DuckDB reads them through the merge statement like every other merge.
+     *
+     * @param forward true to forward plain scans
+     */
+    public void forwardScans(boolean forward) {
+        this.forwardScans = forward;
+    }
+
+    /**
+     * Returns the merged answers whose endpoint batches were sent on as they are (item 55 (a)).
+     *
+     * @return count
+     */
+    public long forwardedAnswers() {
+        return forwarded.get();
     }
 
     /**
