@@ -6,7 +6,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 54 (maintainer exception): single-stream scan slower than upstream on HDFS.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Raw Flight full scan of tpch.lineitem (MB/s): 1 stream - upstream 1032, speed 722, balanced 329, dc 646; 4 streams 1377 / 1975 / 1088 / 1154; 8 streams 1993 / 2171 / 1679 / 964. Upstream (DuckDB through its own reader, no SASL wrap negotiated) wins the single stream by 1.4x over speed and 3.1x over balanced. Find where one stream loses (read-ahead / hadoopfs block size, DuckDB threads per stream, Arrow batch size, flightBackpressureThresholdBytes, zero-copy writes, compression off?) - profile one stream on the HDFS CI cell with SASL `authentication,privacy`; goal: one stream >= upstream in speed and >= 0.8 of it in balanced. Write `ITEM 54 DONE <sha>` with numbers.
 
-ITEM 54 IN PROGRESS (2026-11-17, sessions 100-102) - steps 1 and 2 of 3 done, step 3 part 1 done (plain HDFS profile; SASL / TCP ruled out).
+ITEM 54 IN PROGRESS (2026-11-17, sessions 100-103) - steps 1 and 2 of 3 done, step 3 parts 1-2 done (plain HDFS profile; SASL / TCP, client CPU and the per-stream DuckDB shape ruled out); part 3 (same-runner upstream) running.
 `hdfs-point-perf.yml` has a scan mode (inputs `scanRounds`, `scanClients`, `serverCpus`; `tools/ci/hdfs-point-cell.sh`
 with `SCAN_ROUNDS`, `tools/ci/thread-cpu.py` per-thread server CPU, streamTiming lines): single-node HDFS, short-circuit,
 TPC-H SF5 lineitem (4 files, 4.8 GiB Arrow), server on 2 CPUs / 6 GiB, client on 1, `SELECT *` complete mode, best of 2.
@@ -46,17 +46,23 @@ Runs 44110283975 (8 variants), 44111414923 (prefetch), 44116044127 (streaming bu
   in-memory DuckDB with `SET threads = duckDbThreads`, default **1**, and streams with the same `arrowExportStream`
   + `putNext` loop (no zero-copy). One stream there is one DuckDB thread scanning and converting with no hand-off;
   ours runs the scan on 3-4 DuckDB threads feeding the stream thread through DuckDB's streaming result.
-- **Next (step 3, part 2):** read run **44167354107** (dispatched 20:15Z on main 83f1e853: `serverCpus=0,1,2/3`,
-  plain, SF5, `-DstreamTimingLog=true`; variants speed, balanced, speed-own-t1 = `-DduckDbSharedDatabase=false
-  -DduckDbThreads=1` (upstream-like), speed-own-t2 (threads 2), speed-t1 (shared DuckDB, threads 1),
-  balanced-own-t1). New in this run: `cpu x1 r1 client N %` lines and `(client cpu ...% on 3)` on the best lines
-  (scan-adbc.py, 83f1e853) - near 100 % means the 1-CPU client caps x1 and the cell must give the client 2 CPUs
-  (`serverCpus=0,1/2,3`) before any server conclusion. If own-t1 x1 >= speed x1 on the same runner: the hand-off
-  between DuckDB workers and the stream thread is what one stream loses; then test it on the 16-core shape
-  (`serverCpus` cannot show it on a 4-core runner beyond this) and propose a per-stream thread count for a lone stream
-  (e.g. `duckDbThreadsWhenIdle` style) as an Open question - a default change needs the maintainer. If not: build
-  upstream in the cell (as `scan-perf.yml` does, plus its hadoopfs `duckDbHdfsExtension` settings) for a same-runner
-  ratio. Then decide Q54-1.
+- **Step 3, part 2 (session 103): run 44167354107 read - the upstream-like engine shape is slower, not faster.**
+  Same cell (SF5, plain, `serverCpus=0,1,2/3`, client on CPU 3), best x1 / x4 MB/s runner a / b: speed 1091 / 663,
+  x4 1410 / 905; speed-t1 (shared DuckDB, threads 1) 934 / 600, x4 1464 / 979; speed-own-t1 (own DuckDB per
+  connection, threads 1 = upstream's shape) 818 / 572, x4 1292 / 898; speed-own-t2 802 / 537; balanced 818 / 571,
+  x4 1209 / 841; balanced-own-t1 761 / 538. **The client is not the cap:** its CPU per x1 pass is 41-70 % of its one
+  core. One thread per stream loses 14-25 % to speed's shared multi-thread DuckDB (streamTiming x1 `duckMs` speed
+  4.4-5.6 s, own-t1 5.9-6.5 s, `sendMs` 0.05-0.2 s in both); so the DuckDB-to-stream hand-off is not what one stream
+  loses either, and no per-stream thread change is proposed. In this cell speed is above balanced by 1.16-1.33x x1.
+- **Next (step 3, part 3):** read run **44172681969** (dispatched 20:58Z on main 5254fe28, new input `upstream=HEAD`:
+  the cell builds upstream with its Hadoop client jars, profile `upstream` started with upstream's own command-line
+  options; variants speed, balanced, upstream; SF5, plain, `serverCpus=0,1,2/3`, `scanRounds=2`). The result lines
+  `upstream|upstream <sha>` and `upstream|log ...` show which upstream commit ran and how it read HDFS (its DuckDB
+  hadoopfs extension or the Java client - if it did not load hadoopfs from `/extdir`, find its setting in the upstream
+  source read in CI and re-run). Then: if upstream x1 <= speed x1 on the same runner, the stand's 1.4x is a property of
+  the stand (16 cores, Kerberos, cgroup v1; e.g. DuckDB threads sized from 80 host cores) - write it as an Open question
+  with what to measure on the stand (speed with `-DduckDbThreads=16`; `duckdb=sizing` log line); if upstream wins here
+  too, profile both x1 streams (async-profiler / JFR on the stream thread) in the same cell. Then decide Q54-1.
 
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
