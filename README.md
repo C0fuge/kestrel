@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `hdfsAccessRecheckMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
+| DuckDB | `memoryBudgetBytes`, `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `hdfsAccessRecheckMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -304,6 +304,14 @@ the one left by the full `-Xmx` and direct limit as `limitsBudgetMiB`); threads 
 one per GiB of that limit (fewer than 4 made TPC-H SF10 1.35-1.7x slower on 4-16 core hosts). `duckDbMemoryLimit=none` leaves DuckDB's own default (80 % of
 the memory per instance); explicit values always win. The startup line `duckdb=sizing` lists the
 inputs and the chosen values.
+
+`memoryBudgetBytes` (`FLIGHT_MEMORY_BUDGET`, e.g. `48g`, `48GiB` or bytes; unset = detect) is the memory the server
+may use: it replaces the cgroup / machine memory above for every resource profile, so DuckDB's limits and with them
+its external file cache are sized from it (startup line `memoryBudget source=setting`). Set it when the server shares a
+big machine without a cgroup memory limit (e.g. a `systemd-run --user --scope -p MemoryMax=...` scope on cgroup v1
+gets no memory controller): without it a start with `source=host` above 64 GiB logs one WARN `memoryBudget=unset`.
+DuckDB's resident memory can exceed the sum of its `memory_limit`s by about half again (allocator, file cache held
+in each connection's pool), so leave room for that within the budget.
 
 `fileStatsPruningMaxFiles` (default 1024, 0 = off): a complete answer of a plain single-table query over a directory
 table reads only the Parquet files whose footer min/max of signed integer and date columns its WHERE clause can match

@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 52: new setting `memoryBudgetBytes` (`FLIGHT_MEMORY_BUDGET`, accepts `48g`, `48GiB` or bytes) overrides the
+  host / cgroup memory detection for every resource profile (startup line `memoryBudget source=setting`), so DuckDB's
+  memory limits, and with them its external file cache, are sized from it. A start that sizes from the host's memory
+  (`source=host`) above 64 GiB logs one WARN `memoryBudget=unset`. A malformed or zero value fails the start. Unset:
+  behaviour unchanged.
+
 - Pre-release `server-1.0.0-6f0aa5a026fa` (2026-11-16): `main` 6f0aa5a0 with item 51.
 - Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
   `flight.runtime_filters.max_keys`) may append a block to a statement ticket (protobuf field 15 of its `Any`; `ARF1`

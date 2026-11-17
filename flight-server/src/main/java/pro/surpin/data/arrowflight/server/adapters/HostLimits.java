@@ -6,14 +6,20 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
+
 /**
- * Cores and memory the server process really has: the container's (cgroup) limits where set,
- * else the machine's, plus the JVM's own heap and direct memory limits.
+ * Cores and memory the server process really has: the operator's {@code memoryBudgetBytes} where
+ * set, else the container's (cgroup) limits where set, else the machine's, plus the JVM's own heap
+ * and direct memory limits.
  *
  * @param cores            processors available to the JVM
  * @param memoryBytes      memory of the container or machine, 0 when unknown
@@ -31,6 +37,21 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
     /** Values at or above this in a cgroup limit file mean "no limit" (cgroup v1 writes ~2^63). */
     private static final long NO_CGROUP_LIMIT = 1L << 60;
 
+    /** Above this much host memory without a budget the start logs a warning (64 GiB). */
+    static final long BIG_HOST_BYTES = 64L << 30;
+
+    /** Memory source: {@code memoryBudgetBytes}. */
+    static final String SOURCE_SETTING = "setting";
+
+    /** Memory source: the cgroup limit. */
+    static final String SOURCE_CGROUP = "cgroup";
+
+    /** Memory source: the machine. */
+    static final String SOURCE_HOST = "host";
+
+    /** A JVM-style size: digits and an optional k, m, g or t (binary units). */
+    private static final Pattern JVM_SIZE = Pattern.compile("(\\d+)\\s*([kmgt]?)");
+
     /**
      * Creates host limits without a measured heap use.
      *
@@ -44,27 +65,134 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
     }
 
     /**
-     * Reads the limits of the running process.
+     * Reads the limits of the running process with the budget of the server's own configuration.
      *
      * @return host limits
+     * @throws IllegalArgumentException for a malformed {@code memoryBudgetBytes}
      */
     public static HostLimits detect() {
+        return detect(ConfigSource.systemWithoutProfile());
+    }
+
+    /**
+     * Reads the limits of the running process (item 52): {@code memoryBudgetBytes}
+     * ({@code FLIGHT_MEMORY_BUDGET}, e.g. {@code 48g}) replaces the detected memory when set, so
+     * every profile sizes DuckDB and its caches from it; else the cgroup limit, else the host's.
+     *
+     * @param props configuration source
+     * @return host limits
+     * @throws IllegalArgumentException for a malformed {@code memoryBudgetBytes}
+     */
+    public static HostLimits detect(ConfigSource props) {
+        long budget = memoryBudgetBytes(props);
         long host = physicalMemory();
         List<String> ownCgroup = procSelfCgroup();
         long cgroup = cgroupMemoryLimit(Path.of("/sys/fs/cgroup"), ownCgroup);
-        long memory = host;
-        boolean fromCgroup = cgroup > 0 && (host <= 0 || cgroup <= host);
-        if (fromCgroup) {
-            memory = cgroup;
-        }
+        String source = memorySource(budget, host, cgroup);
+        long memory = switch (source) {
+            case SOURCE_SETTING -> budget;
+            case SOURCE_CGROUP -> cgroup;
+            default -> host;
+        };
         long usedHeap = usedHeap();
         if (LOGGED.compareAndSet(false, true)) {
             LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={} usedHeapMiB={}",
-                    fromCgroup ? "cgroup" : "host", memory >> 20, host >> 20, cgroup >> 20,
-                    String.join(";", ownCgroup), usedHeap >> 20);
+                    source, memory >> 20, host >> 20, cgroup >> 20, String.join(";", ownCgroup), usedHeap >> 20);
+            String warning = noBudgetWarning(source, memory);
+            if (warning != null) {
+                LOGGER.warn("memoryBudget=unset {}", warning);
+            }
         }
         return new HostLimits(Runtime.getRuntime().availableProcessors(), memory,
                 Runtime.getRuntime().maxMemory(), OutboundBudget.maxDirectMemory(), usedHeap);
+    }
+
+    /**
+     * Chooses where the memory budget comes from.
+     *
+     * @param budget {@code memoryBudgetBytes}, 0 when unset
+     * @param host   memory of the machine, 0 when unknown
+     * @param cgroup smallest cgroup limit, 0 when none
+     * @return {@code setting}, {@code cgroup} or {@code host}
+     */
+    static String memorySource(long budget, long host, long cgroup) {
+        if (budget > 0) {
+            return SOURCE_SETTING;
+        }
+        return cgroup > 0 && (host <= 0 || cgroup <= host) ? SOURCE_CGROUP : SOURCE_HOST;
+    }
+
+    /**
+     * Returns the warning for a big host without a budget: a server pinned to a few cores of a
+     * large machine (a systemd scope on cgroup v1 gets no memory controller) would otherwise size
+     * DuckDB from the whole machine.
+     *
+     * @param source where the memory came from
+     * @param memory memory in bytes
+     * @return key=value pairs with a hint, or null when there is nothing to warn about
+     */
+    static String noBudgetWarning(String source, long memory) {
+        if (!SOURCE_HOST.equals(source) || memory <= BIG_HOST_BYTES) {
+            return null;
+        }
+        return "source=host memoryMiB=" + (memory >> 20) + " thresholdMiB=" + (BIG_HOST_BYTES >> 20)
+                + " hint=DuckDB and its caches are sized from the whole machine;"
+                + " set memoryBudgetBytes (FLIGHT_MEMORY_BUDGET, e.g. 48g) or run the server in a cgroup"
+                + " with a memory limit";
+    }
+
+    /**
+     * Resolves {@code memoryBudgetBytes} ({@code arrowflight.memoryBudgetBytes},
+     * {@code FLIGHT_MEMORY_BUDGET}): the memory the server may use, overriding host and cgroup
+     * detection.
+     *
+     * @param props configuration source
+     * @return bytes, 0 when unset
+     * @throws IllegalArgumentException for a malformed, zero or negative value
+     */
+    public static long memoryBudgetBytes(ConfigSource props) {
+        String value = props.lookup(List.of("memoryBudgetBytes", "arrowflight.memoryBudgetBytes"),
+                List.of("FLIGHT_MEMORY_BUDGET")).orElse("").trim();
+        if (value.isEmpty()) {
+            return 0;
+        }
+        Long bytes = parseBudget(value);
+        if (bytes == null || bytes <= 0) {
+            throw new IllegalArgumentException("memoryBudgetBytes must be a positive size such as 48g,"
+                    + " 48GiB or 51539607552: " + value);
+        }
+        return bytes;
+    }
+
+    /**
+     * Parses a budget: plain bytes, a JVM-style size ({@code 48g}, {@code 512m}, binary units) or
+     * a DuckDB size ({@code 48GiB}, {@code 50GB}).
+     *
+     * @param text size text
+     * @return bytes, or null when the text is no size
+     */
+    static Long parseBudget(String text) {
+        Matcher m = JVM_SIZE.matcher(text.toLowerCase(Locale.ROOT));
+        if (m.matches()) {
+            int shift = switch (m.group(2)) {
+                case "k" -> 10;
+                case "m" -> 20;
+                case "g" -> 30;
+                case "t" -> 40;
+                default -> 0;
+            };
+            try {
+                long value = Long.parseLong(m.group(1));
+                return value > (Long.MAX_VALUE >> shift) ? null : value << shift;
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        try {
+            return DuckDbSizing.parseBytes(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
