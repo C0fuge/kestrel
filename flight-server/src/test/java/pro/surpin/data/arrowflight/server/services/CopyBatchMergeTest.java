@@ -33,7 +33,8 @@ class CopyBatchMergeTest {
     private static final String[] BATCHES = {"id % 3 = 0", "id % 3 = 1", "id % 3 = 2", "id < 0"};
 
     /** Lower-case column names of the source table. */
-    private static final java.util.Set<String> COLUMNS = java.util.Set.of("id", "grp", "qty", "price", "k", "name");
+    private static final java.util.Set<String> COLUMNS = java.util.Set.of("id", "grp", "qty", "price", "k", "name",
+            "ts");
 
     private Connection connection;
 
@@ -49,7 +50,8 @@ class CopyBatchMergeTest {
             st.execute("CREATE TABLE src AS SELECT i::INTEGER AS id, 'g' || (i % 5) AS grp,"
                     + " CASE WHEN i % 7 = 0 THEN NULL ELSE i * 3 END::BIGINT AS qty,"
                     + " (i * 1.25)::DECIMAL(12,2) AS price, (i % 13)::INTEGER AS k,"
-                    + " CASE WHEN i % 11 = 0 THEN NULL ELSE 'n' || (i % 17) END AS name"
+                    + " CASE WHEN i % 11 = 0 THEN NULL ELSE 'n' || (i % 17) END AS name,"
+                    + " TIMESTAMP '2020-12-25 00:00:00' + i * INTERVAL 9 HOUR AS ts"
                     + " FROM range(300) r(i)");
             st.execute("CREATE SCHEMA s");
         }
@@ -165,6 +167,11 @@ class CopyBatchMergeTest {
             "SELECT lower(grp) AS lg, k % 2, count(qty) AS n FROM s.t WHERE id > 4"
                     + " GROUP BY lower(grp), k % 2 ORDER BY n DESC, lg, 2 LIMIT 4",
             "SELECT id % 4 AS m, avg(price) AS ap, count(*) AS c FROM s.t GROUP BY m ORDER BY m",
+            // Step 4: date_trunc keys (by ordinal, alias and the expression itself).
+            "SELECT date_trunc('day', ts) AS d, count(*) AS c, sum(qty) FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT date_trunc('month', ts) AS mo, max(name) FROM s.t GROUP BY mo",
+            "SELECT date_trunc('week', ts) AS w, k % 2, min(price) FROM s.t GROUP BY date_trunc('week', ts), k % 2"
+                    + " ORDER BY 1, 2 LIMIT 5",
         };
         for (String query : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);
