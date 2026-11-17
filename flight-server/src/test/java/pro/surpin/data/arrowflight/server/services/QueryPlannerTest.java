@@ -263,6 +263,36 @@ class QueryPlannerTest {
         verify(clusterService, never()).addLoad(anyString(), anyLong());
     }
 
+    /**
+     * Item 55 (a): within the refresh-ahead time before a file plan expires one plan reloads it;
+     * a reload that fails there keeps the still valid entry.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void filePlanIsReloadedAheadOfItsExpiryAndKeptWhenTheReloadFails() throws Exception {
+        when(parquetAdapter.localFileInventory()).thenReturn(Map.of());
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1));
+        when(clusterService.hasFileInventory(S1)).thenReturn(true);
+        Map<String, FileAssignment> files = Map.of(
+                "s/t/f.parquet", new FileAssignment(100L, Set.of(S1)));
+        when(clusterService.fileLocations(anyBoolean())).thenReturn(files);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1, 2, 3});
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+        // Every cached entry is within the refresh-ahead time of its expiry.
+        planner.filePlanRefreshAheadNanos(java.util.concurrent.TimeUnit.MINUTES.toNanos(1));
+
+        planner.plan("SELECT * FROM s.t");
+        planner.plan("SELECT * FROM s.t");
+        verify(clusterService, times(2)).fileLocations(anyBoolean());
+
+        when(clusterService.fileLocations(anyBoolean())).thenAnswer(invocation -> {
+            throw new IOException("listing failed");
+        });
+        assertEquals(100L, planner.plan("SELECT * FROM s.t").totalBytes());
+    }
+
     @Test
     void determineEndpoints_throwsWhenRegistryEmpty() throws Exception {
         when(clusterService.allServerLoads()).thenReturn(Map.of());

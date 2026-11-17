@@ -22,6 +22,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cluster maps for `distributedCompleteClusterSnapshotMillis` (`FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS`,
   default 250 ms; 0 = read them for every plan as before), plus the load this node planned since, instead of two
   cluster-map reads per plan (most of a merged small query's planning tail on a loaded node). Client plans unchanged.
+  A cached file plan (30 s) is reloaded by one plan in its last 3 s while the others keep using it: at expiry all
+  concurrent plans reloaded together (DC tail perf, 8 clients: `planning.fileLocations` p99 1.2-2.1 s). New optional
+  `distributedCompleteMemberCheckMillis` (`FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS`, default 0 = unchanged)
+  remembers for that time that a node-to-node call came from a live member's address instead of reading the
+  registry and heartbeats for every peer call; refused addresses are checked every call.
 - Item 55 (c) (lane 6): distributed complete mode (and batches of copies) now merge an aggregate whose ORDER BY names
   an aggregate it selects (`GROUP BY t ORDER BY count(*) DESC`), ordered by that item's position; before, such a
   GROUP BY ran on one node alone. An aggregate that still keeps the single-node path logs why at INFO

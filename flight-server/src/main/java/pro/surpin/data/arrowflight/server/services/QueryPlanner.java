@@ -51,6 +51,8 @@ public final class QueryPlanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryPlanner.class);
     private static final long FILE_PLAN_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    /** Default time before a file plan expires in which one plan reloads it (item 55 (a)). */
+    private static final long FILE_PLAN_REFRESH_AHEAD_NANOS = TimeUnit.SECONDS.toNanos(3);
     /** SELECT keywords: more than one means a subquery, CTE or set operation. */
     private static final java.util.regex.Pattern SELECT_WORD =
             java.util.regex.Pattern.compile("(?i)\\bselect\\b");
@@ -62,6 +64,9 @@ public final class QueryPlanner {
     private final int backupLocations;
     private final int endpointsPerServer;
     private final Map<String, CachedFilePlan> filePlanCache = new ConcurrentHashMap<>();
+    /** Source keys whose file plan one plan is reloading ahead of its expiry. */
+    private final Set<String> refreshingFilePlans = ConcurrentHashMap.newKeySet();
+    private volatile long filePlanRefreshAheadNanos = FILE_PLAN_REFRESH_AHEAD_NANOS;
     /** Server URI -> UUID of the member whose published file inventory a plan saw (item 55 (a)). */
     private final Map<String, String> inventorySeen = new ConcurrentHashMap<>();
     private final TableStatisticsService tableStatistics;
@@ -182,6 +187,15 @@ public final class QueryPlanner {
     public TableStatisticsService.TableStatistics tableStatistics(String schema, String table,
             List<String> columns) throws IOException {
         return tableStatistics.statistics(schema, table, columns);
+    }
+
+    /**
+     * Sets how long before a cached file plan expires one plan reloads it; tests only.
+     *
+     * @param nanos the time
+     */
+    void filePlanRefreshAheadNanos(long nanos) {
+        this.filePlanRefreshAheadNanos = nanos;
     }
 
     /**
@@ -859,7 +873,22 @@ public final class QueryPlanner {
         CachedFilePlan cached = filePlanCache.get(cacheKey);
         Map<String, FileAssignment> pathLocations;
         boolean reusedCache = cached != null && cached.expiresAtNanos() > now;
-        if (reusedCache) {
+        if (reusedCache && cached.expiresAtNanos() - now <= filePlanRefreshAheadNanos
+                && refreshingFilePlans.add(cacheKey)) {
+            // One plan reloads shortly before the entry expires while the others use it: all
+            // plans that found it expired at once reloaded together, each taking seconds on a
+            // loaded node (item 55 (a)). No plan uses files older than the TTL.
+            try {
+                pathLocations = loadFilePlan(parsed, cacheKey, now);
+                reusedCache = false;
+            } catch (IOException e) {
+                LOGGER.debug("node={} planning=fileRefreshFailed key={} reason='{}'", LogUtil.node(),
+                        cacheKey, e.toString());
+                pathLocations = cached.files();
+            } finally {
+                refreshingFilePlans.remove(cacheKey);
+            }
+        } else if (reusedCache) {
             pathLocations = cached.files();
         } else {
             pathLocations = loadFilePlan(parsed, cacheKey, now);
