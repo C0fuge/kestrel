@@ -113,6 +113,8 @@ if [ -n "${SCAN_ROUNDS:-}" ]; then
   peak=$(cat "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' srv).scope/memory.peak" 2>/dev/null || true)
   [ -n "$peak" ] && echo "${LABEL:-$profile}|server memory peak $(( peak / 1048576 )) MiB" | tee -a "$res"
   for c in nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done
+  # With -DstreamTimingLog=true: where each stream's time went (DuckDB / send / backpressure).
+  grep -oE 'streamTiming .*' "$work/srv.log" | cut -c1-260 | head -n 12 | sed "s/^/${LABEL:-$profile}|/" | tee -a "$res"
   rm -f "$work/export.parquet"
   docker rm -f srv dn1 nn1 > /dev/null 2>&1 || true
   exit "$status"
