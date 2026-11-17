@@ -1,0 +1,181 @@
+# Item 55 (a), lane 5 (only lane 5 edits this file): where distributedComplete's small-query tails and
+# scan rate go. Three servers of this ref on the runner's host network (one Hazelcast cluster, each
+# limited to <cpus> CPUs, one shared data dir of TPC-H SF<sf>, lineitem / orders in <files> key-range
+# files), resource profile speed, in three variants: speed (distributedComplete=false), dc (true) and
+# dc-noforward (true, distributedCompleteForwardScans=false: plain scans merged through DuckDB as before
+# item 55 (a)). Per variant:
+# - small queries: each class of tools/ci/point-query-load.py alone, closed loop, at the client counts
+#   given, against node 1 (p50 / p95 / p99 / max per class), and node 1's distributedComplete decision
+#   lines per class (local reason / merged, with elapsedMs), so a class whose tail comes from the
+#   merge shows up as such; distributedCompleteLocalScanMaxBytes=<localScan> (default 1MiB) lets the
+#   CI tables merge the classes the real cluster's SF10 tables merge (orders > 256 MiB there).
+# - scans: tools/ci/scan-adbc.py full lineitem reads, 1 stream and <streams> concurrent streams, MB/s.
+# The numbers are reported, not checked (runners differ); the job fails only when a load or scan failed
+# or two scans disagree on rows / checksum. Manual, and on push to a fix/55a* branch touching its files.
+name: DC tail perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      sf:
+        description: "TPC-H scale factor"
+        type: string
+        default: "1"
+      files:
+        description: "lineitem / orders Parquet files (key ranges)"
+        type: string
+        default: "12"
+      cpus:
+        description: "CPUs of each of the three server containers"
+        type: string
+        default: "1"
+      clients:
+        description: "client counts of the small-query loads"
+        type: string
+        default: "1,8"
+      seconds:
+        description: "seconds per class and client count"
+        type: string
+        default: "15"
+      streams:
+        description: "concurrent scan streams (comma-separated)"
+        type: string
+        default: "4,8"
+      localScan:
+        description: "distributedCompleteLocalScanMaxBytes of the dc variants"
+        type: string
+        default: "1MiB"
+      variants:
+        description: "variants name=distributedComplete:options separated by ';' (empty = speed, dc, dc-noforward)"
+        type: string
+        default: ""
+  push:
+    branches: ["fix/55a*"]
+    paths:
+      - .github/workflows/dc-tail-perf.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dc-tail-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: --batch-mode --errors --no-transfer-progress
+  LC_ALL: C.UTF-8
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+
+      - name: Build this ref (no tests)
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+          mkdir -p "$RUNNER_TEMP/jars"
+          cp -r flight-server/target/arrow-flight-server-1.0.0-shaded.jar flight-server/target/libs "$RUNNER_TEMP/jars/"
+          docker pull -q eclipse-temurin:21-jre
+
+      - name: TPC-H data and the client
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install -q duckdb==1.5.6 pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          "$RUNNER_TEMP/py/bin/python" -I tools/ci/service-cluster-data.py "$RUNNER_TEMP/in" "${{ inputs.sf || '1' }}" "${{ inputs.files || '12' }}" range
+          du -sh "$RUNNER_TEMP"/in/data/tpch/*
+
+      - name: Measure
+        env:
+          VARIANTS: ${{ inputs.variants || 'speed=false:;dc=true:;dc-noforward=true:-DdistributedCompleteForwardScans=false' }}
+          CLIENTS: ${{ inputs.clients || '1,8' }}
+          SECONDS_PER: ${{ inputs.seconds || '15' }}
+          STREAMS: ${{ inputs.streams || '4,8' }}
+          CPUS: ${{ inputs.cpus || '1' }}
+          LOCAL_SCAN: ${{ inputs.localScan || '1MiB' }}
+        run: |
+          set +e -u
+          py="$RUNNER_TEMP/py/bin/python"; out="$RUNNER_TEMP/results.txt"; : > "$out"
+          keys=$(( 1500000 * ${{ inputs.sf || '1' }} ))
+          classes="point_orders point_lineitem count_filter point_date agg_range sum_date avg_date count_all limob"
+          seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703
+          status=0
+          IFS=';' read -ra vs <<< "$VARIANTS"
+          for v in "${vs[@]}"; do
+            name=${v%%=*} rest=${v#*=}; dc=${rest%%:*} options=${rest#*:}
+            [ "$dc" = true ] && options="$options -DdistributedCompleteLocalScanMaxBytes=$LOCAL_SCAN"
+            echo "::group::$name"
+            for i in 0 1 2; do
+              # shellcheck disable=SC2086
+              docker run -d --name "srv$i" --network host --cpus="$CPUS" --memory=4g \
+                -v "$RUNNER_TEMP/jars:/app:ro" -v "$RUNNER_TEMP/in/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
+                eclipse-temurin:21-jre \
+                java -Xmx1g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
+                --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
+                --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
+                -Dhazelcast.phone.home.enabled=false -DnumServers=3 -DresultMode=complete -DresourceProfile=speed \
+                -DdistributedComplete="$dc" -DdataDirShared=true $options \
+                -Dorg.slf4j.simpleLogger.log.pro.surpin.data.arrowflight.server.services.DistributedComplete=debug \
+                -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
+                pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir /data --localhost 127.0.0.1 \
+                --port $((32010 + i)) --hazelcast-port $((5701 + i)) --hosts "$seeds" --metrics-enabled false > /dev/null
+            done
+            for i in 0 1 2; do
+              for _ in $(seq 120); do docker logs "srv$i" 2>&1 | grep -q 'Server Arrow Flight SQL started' && break; sleep 1; done
+            done
+            sleep 10 # all three members and their inventories
+            POINT_QUERY_CLASSES=point_orders,sum_date,limob "$py" -I tools/ci/point-query-load.py 127.0.0.1:32010 2 5 "$keys" > /dev/null 2>&1 # warm-up
+            for cls in $classes; do
+              IFS=',' read -ra cs <<< "$CLIENTS"
+              for c in "${cs[@]}"; do
+                before=$(docker logs srv0 2>&1 | wc -l)
+                line=$(POINT_QUERY_CLASSES=$cls "$py" -I tools/ci/point-query-load.py 127.0.0.1:32010 "$c" "$SECONDS_PER" "$keys" 2> "$RUNNER_TEMP/load.err") || status=1
+                log=$(docker logs srv0 2>&1 | tail -n +"$((before + 1))")
+                merged=$(grep -c 'distributedComplete=merged ' <<< "$log")
+                loc=$(grep -c 'distributedComplete=local ' <<< "$log")
+                waits=$(grep -c 'distributedComplete=admissionWait' <<< "$log")
+                mergeMs=$(grep -oE 'distributedComplete=merged endpoints=[0-9]+ elapsedMs=[0-9]+' <<< "$log" | sed -E 's/.*elapsedMs=//' | sort -n \
+                  | awk '{ a[NR] = $1 } END { if (NR) printf "merge p50=%d p99=%d max=%d", a[int(NR * 0.5) + (NR * 0.5 > int(NR * 0.5))], a[int(NR * 0.99) + (NR * 0.99 > int(NR * 0.99))], a[NR] }')
+                reason=$(grep -m 1 -oE "distributedComplete=local reason='[^']*'" <<< "$log" | sed -E 's/.*reason=//')
+                echo "$name $cls ${line:-(no result: $(tail -n 1 "$RUNNER_TEMP/load.err" | cut -c1-160))} | merged=$merged local=$loc waits=$waits ${mergeMs} ${reason:+local=$reason}" | tee -a "$out"
+              done
+            done
+            IFS=',' read -ra ss <<< "$STREAMS"
+            for s in "${ss[@]}"; do
+              before=$(docker logs srv0 2>&1 | wc -l)
+              "$py" -I tools/ci/scan-adbc.py 127.0.0.1:32010 tpch.lineitem 1 "$s" "$RUNNER_TEMP/export.parquet" > "$RUNNER_TEMP/scan.txt" 2>&1 || status=1
+              log=$(docker logs srv0 2>&1 | tail -n +"$((before + 1))")
+              fw=$(grep -c 'distributedComplete=merged .*forwarded=true' <<< "$log")
+              waits=$(grep -c 'distributedComplete=admissionWait' <<< "$log")
+              grep -E '^x[0-9]+ r1 |^export r1 ' "$RUNNER_TEMP/scan.txt" | sed "s/^/$name scan /; s/$/ | forwarded=$fw waits=$waits/" | tee -a "$out"
+              grep -vE '^x[0-9]+ r|^export r' "$RUNNER_TEMP/scan.txt" | tail -n 5
+            done
+            docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' srv0 srv1 srv2 | sed "s/^/$name stats /" | tee -a "$out"
+            mkdir -p "$RUNNER_TEMP/logs/$name"
+            for i in 0 1 2; do docker logs "srv$i" > "$RUNNER_TEMP/logs/$name/srv$i.log" 2>&1; done
+            docker rm -f srv0 srv1 srv2 > /dev/null
+            echo "::endgroup::"
+          done
+          {
+            echo "### DC tail perf: SF${{ inputs.sf || '1' }}, ${{ inputs.files || '12' }} files, 3 x $CPUS CPU on $(nproc) cores, $GITHUB_SHA"
+            echo '```'; cat "$out"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Scans of all variants must agree on rows and checksum.
+          sums=$(grep -oE ' scan x[0-9]+ r1 .* rows [0-9]+ .* sum [0-9a-f]+' "$out" | sed -E 's/.* rows ([0-9]+) .* sum ([0-9a-f]+)/\1 \2/' | sort -u | wc -l)
+          if [ "$sums" -gt 1 ]; then echo "scan answers differ between variants"; status=1; fi
+          exit "$status"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: dc-tail-perf-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
