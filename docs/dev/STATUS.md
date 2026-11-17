@@ -2084,6 +2084,12 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **(Q-52b, 2026-11-17, lane 6) Default of `duckDbExternalFileCacheMaxBytes`.** Item 52 (b) caps the external file
+  cache of the DuckDB-per-connection mode by default at min(DuckDB budget / 4, 8 GiB), split over the expected
+  connections; a connection above its share after a query is closed and reopened (loses its statement cache, footer
+  cache and hadoopfs fds). Affects only `duckDbSharedDatabase=false` with the cache on (e.g. explicit per-connection
+  setups on HDFS); balanced's shared DuckDB is unchanged. Options: keep the default, or default `0` (no cap, old
+  behaviour). `0` restores the old behaviour per node. Maintainer's call.
 - **(Q-52a, 2026-11-17, core lane) Default budget on big hosts without a cgroup limit.** Item 52 only warns when
   balanced sizes from a > 64 GiB host. Options: (1) keep (operator sets `memoryBudgetBytes`); (2) cap the detected host
   budget by default, e.g. at 4 GiB per available core (16 cores -> 64 GiB), which changes existing defaults; (3) also

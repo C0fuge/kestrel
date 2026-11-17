@@ -241,6 +241,13 @@ public final class ServerModule {
                 new ProducingStreamGate(ConfigAdapter.duckDbProducingStreams()),
                 ConfigAdapter.flightZeroCopyWrites(), shared);
         adapter.useTableSecrets(registry.tableSecrets());
+        if (config.duckDbExternalFileCache() && shared == null) {
+            adapter.capExternalFileCache(sizing.externalFileCacheShareBytes(
+                    ConfigAdapter.duckDbExternalFileCacheMaxBytes()));
+            LOGGER.info("node={} duckdb=externalFileCacheCap shareMiB={} connections={}{}", LogUtil.node(),
+                    adapter.externalFileCacheShareBytes() >> 20, sizing.connections(),
+                    adapter.externalFileCacheShareBytes() > 0 ? "" : " cap=off");
+        }
         return adapter;
     }
 

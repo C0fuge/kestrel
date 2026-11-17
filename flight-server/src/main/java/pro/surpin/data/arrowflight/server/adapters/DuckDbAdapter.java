@@ -83,6 +83,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     static final int SHARED_STATEMENT_SHARE = 8;
     /** Least time between two logs of the shared DuckDB's memory after it ran out of it. */
     private static final long MEMORY_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
+    /** Least time between two reads of one session's external file cache size (item 52 (b)). */
+    static final long FILE_CACHE_CHECK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
     private static final String TEMP_ROOT_PREFIX = "duckdb-";
     /**
      * Prefix of the in-memory catalog each session of a shared DuckDB keeps its catalog views
@@ -280,6 +282,16 @@ public final class DuckDbAdapter implements AutoCloseable {
      */
     private final boolean zeroCopyWrites;
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
+    /**
+     * External file cache one DuckDB of its own may keep after a query before it is closed and a
+     * fresh one opened (duckDbExternalFileCacheMaxBytes split over the connections); 0 = no cap.
+     */
+    private volatile long fileCacheShareBytes;
+    /** Sessions closed because their external file cache exceeded fileCacheShareBytes. */
+    private final AtomicLong fileCacheRecycles = new AtomicLong();
+    /** Reads a DuckDB's external file cache size; replaced in tests. */
+    private volatile java.util.function.ToLongFunction<Connection> fileCacheSize =
+            DuckDbAdapter::externalFileCacheBytes;
     /** hadoopfs file-status / located-blocks cache TTL in ms (hdfsMetadataCacheTtlMs), 0 = off. */
     private final int hdfsMetadataCacheTtlMs;
     /** hadoopfs settings the loaded extension does not know, warned about once. */
@@ -1757,8 +1769,114 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             session = local.get();
         }
+        session.home = local;
         syncTableSecrets(session);
         return session;
+    }
+
+    /**
+     * Caps DuckDB's external file cache of the DuckDB-per-connection mode (item 52 (b)): after a
+     * query, a session of this thread whose cache exceeds the share is closed and the thread's
+     * next query opens a fresh DuckDB. DuckDB evicts that cache only at memory_limit, so without
+     * the cap every live connection may keep up to its limit after one large scan. Ignored with
+     * the shared DuckDB (one memory limit bounds its cache) and without duckDbExternalFileCache.
+     *
+     * @param shareBytes cache one session may keep, 0 = no cap
+     */
+    public void capExternalFileCache(long shareBytes) {
+        if (shareBytes < 0) {
+            throw new IllegalArgumentException("shareBytes must not be negative: " + shareBytes);
+        }
+        this.fileCacheShareBytes = shared == null && appConfig.duckDbExternalFileCache() ? shareBytes : 0;
+    }
+
+    /**
+     * Returns the cache one session may keep after a query, for tests and the startup log.
+     *
+     * @return bytes, 0 = no cap
+     */
+    public long externalFileCacheShareBytes() {
+        return fileCacheShareBytes;
+    }
+
+    /**
+     * Returns how many sessions were closed because their external file cache exceeded the share.
+     *
+     * @return sessions closed since start
+     */
+    public long fileCacheRecycles() {
+        return fileCacheRecycles.get();
+    }
+
+    /**
+     * Replaces how a DuckDB's external file cache size is read, for tests.
+     *
+     * @param size reads the size of a connection's DuckDB
+     */
+    void fileCacheSize(java.util.function.ToLongFunction<Connection> size) {
+        this.fileCacheSize = size;
+    }
+
+    /**
+     * Tells whether a session keeping this much external file cache is closed after its query.
+     *
+     * @param cacheBytes the session's external file cache
+     * @param shareBytes cache one session may keep, 0 = no cap
+     * @return true above a set share
+     */
+    static boolean recyclesFileCache(long cacheBytes, long shareBytes) {
+        return shareBytes > 0 && cacheBytes > shareBytes;
+    }
+
+    /**
+     * Closes the current thread's sessions of a DuckDB of their own whose external file cache
+     * exceeds the share; each session is checked at most once per
+     * {@link #FILE_CACHE_CHECK_INTERVAL_NANOS}. Runs when a query's slot closes: no statement of
+     * the thread runs then and no caller holds the session's connection.
+     */
+    void recycleCachingSessions() {
+        long share = fileCacheShareBytes;
+        if (share <= 0) {
+            return;
+        }
+        Thread current = Thread.currentThread();
+        long now = System.nanoTime();
+        for (Session session : allSessions) {
+            if (session.owner != current || session.root != null || session.home == null
+                    || now - session.cacheCheckedNanos < FILE_CACHE_CHECK_INTERVAL_NANOS) {
+                continue;
+            }
+            session.cacheCheckedNanos = now;
+            long cached = fileCacheSize.applyAsLong(session.conn);
+            if (!recyclesFileCache(cached, share)) {
+                continue;
+            }
+            session.home.remove();
+            if (allSessions.remove(session)) {
+                session.close();
+                fileCacheRecycles.incrementAndGet();
+                LOGGER.info("node={} duckdb=fileCacheRecycled cacheMiB={} shareMiB={} thread={} open={}",
+                        LogUtil.node(), cached >> 20, share >> 20, current.getName(), allSessions.size());
+            }
+        }
+    }
+
+    /**
+     * Reads the size of a DuckDB's external file cache.
+     *
+     * @param conn connection of the DuckDB
+     * @return bytes, 0 when DuckDB cannot tell
+     */
+    static long externalFileCacheBytes(Connection conn) {
+        try (Statement s = conn.createStatement();
+                ResultSet rs = s.executeQuery("SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory()"
+                        + " WHERE tag = 'EXTERNAL_FILE_CACHE'")) {
+            return rs.next() ? rs.getLong(1) : 0;
+        } catch (java.sql.SQLException e) {
+            LOGGER.debug("node={} duckdb=fileCacheSizeUnknown error={}", LogUtil.node(),
+                    firstLine(String.valueOf(e.getMessage())));
+            return 0;
+        }
     }
 
     /**
@@ -1768,13 +1886,15 @@ public final class DuckDbAdapter implements AutoCloseable {
      * then share the cores instead of each starting duckDbThreads threads. With
      * duckDbThreadsWhenIdle set, a query that starts while no other query runs takes this
      * thread's high-thread session and keeps it to its end, even when other queries start
-     * meanwhile. Close the slot once, on the same thread.
+     * meanwhile. With the external file cache capped ({@link #capExternalFileCache}), closing the
+     * slot closes this thread's sessions whose cache exceeds the share. Close the slot once, on
+     * the same thread.
      *
      * @return slot to close when the query ends
      */
     public QuerySlot enterQuery() {
         if (loadSession == null && idleSession == null) {
-            return NO_SLOT;
+            return fileCacheShareBytes > 0 ? this::recycleCachingSessions : NO_SLOT;
         }
         int running = runningQueries.incrementAndGet();
         try {
@@ -1795,6 +1915,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         return () -> {
             slotSessions.remove();
             runningQueries.decrementAndGet();
+            recycleCachingSessions();
         };
     }
 
@@ -3994,6 +4115,10 @@ public final class DuckDbAdapter implements AutoCloseable {
         private final Thread owner;
         private final Connection conn;
         private final int maxStatements;
+        /** Thread-local that holds this session for its owner; set on first use. */
+        private ThreadLocal<Session> home;
+        /** When the external file cache size was last read (System.nanoTime()). */
+        private long cacheCheckedNanos = System.nanoTime() - FILE_CACHE_CHECK_INTERVAL_NANOS;
         private long viewsVersion = Long.MIN_VALUE;
         /** Version of the table secrets this session's DuckDB has. */
         private long tableSecretsVersion;

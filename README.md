@@ -282,7 +282,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 | Area | Key Properties |
 | :--- | :--- |
-| DuckDB | `memoryBudgetBytes`, `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `hdfsAccessRecheckMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
+| DuckDB | `memoryBudgetBytes`, `fileStatsPruningMaxFiles`, `batchSize`, `duckDbThreads`, `duckDbGroups`, `duckDbWarmConnections`, `duckDbMemoryLimit`, `duckDbMemoryConnections`, `duckDbStreamResults`, `duckDbExternalFileCache`, `duckDbExternalFileCacheMaxBytes`, `duckDbParquetMetadataCache`, `hdfsMetadataCacheTtlMs`, `hdfsAccessRecheckMs`, `duckDbStatementCacheSize`, `duckDbTempDirectory`, `duckDbMaxTempSize`, `duckDbPreserveInsertionOrder`, `duckDbStreamingBufferSize`, `duckDbThreadsUnderLoad`, `duckDbProducingStreams`, `duckDbSharedDatabase`, `duckDbSharedBufferedConnections`, `duckDbSharedMaxThreads` |
 | Access | `authToken` (or the `FLIGHT_AUTH_TOKEN` environment variable); empty = no check |
 | Answers | `resultMode` (`FLIGHT_RESULT_MODE`): `complete` (default) or `partial`, see below; `widenUnsignedTypes`; `duckDbLockdown` |
 | I/O | `ioParallelism`, `ioParallelismMinThreads`, `ioFileBufferSize` |
@@ -334,7 +334,13 @@ so a node may hold up to `memory_limit` times its live DuckDB connections (one p
 thread that ran a query, plus the `duckDbThreadsUnderLoad` / `duckDbThreadsWhenIdle` ones). With
 the cache on the startup line `duckdb=externalFileCache` names the per-connection bound; with
 `duckDbMemoryLimit=none` (80 % of the memory per connection) the server WARNs
-`duckdb=externalFileCacheUnbounded` - the setup that got servers OOM-killed on the stand. For a
+`duckdb=externalFileCacheUnbounded` - the setup that got servers OOM-killed on the stand. In this DuckDB-per-connection mode
+`duckDbExternalFileCacheMaxBytes` (`DUCKDB_EXTERNAL_FILE_CACHE_MAX`, `8g`, `8GiB` or bytes; unset = a quarter of the
+DuckDB budget, at most 8 GiB; `0` = no cap) bounds what the connections keep after their queries (item 52 (b)): split
+over the expected connections (startup line `duckdb=externalFileCacheCap shareMiB=`), a connection whose cache exceeds
+its share when a query ends (checked at most once a second per connection) is closed and the thread's next query opens
+a fresh DuckDB (`duckdb=fileCacheRecycled cacheMiB=`). The `memory_limit` still bounds the cache while a query runs.
+DuckDB's `lock_configuration` (`duckDbLockdown`) refuses `SET enable_external_file_cache` at run time, hence closing. For a
 node-wide bound on S3 / lakeFS use the plugins' read cache (`arrowflight.s3.cacheMegabytes`). With
 `duckDbSharedDatabase=true` (and so under `resourceProfile=speed`, which turns the cache on there) all sessions share
 one buffer pool: the cache stays within the one node-wide `memory_limit` (startup line `duckdb=externalFileCache

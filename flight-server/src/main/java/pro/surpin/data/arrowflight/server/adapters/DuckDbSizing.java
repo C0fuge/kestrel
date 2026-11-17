@@ -427,6 +427,40 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
                 + " bound=memoryLimitTimesLiveConnections";
     }
 
+    /** Most external file cache of the node by default (item 52 (b)). */
+    static final long DEFAULT_FILE_CACHE_MAX_BYTES = 8L << 30;
+
+    /** Share of the DuckDB budget the node's external file cache may keep by default (item 52 (b)). */
+    static final int DEFAULT_FILE_CACHE_BUDGET_DIVISOR = 4;
+
+    /** Smallest external file cache one connection may keep, so small scans never recycle a connection. */
+    static final long MIN_FILE_CACHE_SHARE_BYTES = 64L << 20;
+
+    /**
+     * Sizes the external file cache one connection may keep after a query (item 52 (b),
+     * {@code duckDbExternalFileCacheMaxBytes}): the node-wide maximum split over the connections
+     * expected to run at once, at least {@link #MIN_FILE_CACHE_SHARE_BYTES}. Unset, the maximum
+     * is a quarter of the DuckDB budget, at most {@link #DEFAULT_FILE_CACHE_MAX_BYTES} (that when
+     * the budget is unknown).
+     *
+     * @param configuredMax node-wide maximum set by the operator, null = default, 0 = no cap
+     * @return bytes one connection may keep, 0 = no cap
+     */
+    public long externalFileCacheShareBytes(Long configuredMax) {
+        long max;
+        if (configuredMax != null) {
+            max = configuredMax;
+        } else {
+            long budget = reservedBudgetBytes();
+            max = budget > 0 ? Math.min(DEFAULT_FILE_CACHE_MAX_BYTES, budget / DEFAULT_FILE_CACHE_BUDGET_DIVISOR)
+                    : DEFAULT_FILE_CACHE_MAX_BYTES;
+        }
+        if (max <= 0) {
+            return 0;
+        }
+        return Math.max(MIN_FILE_CACHE_SHARE_BYTES, max / Math.max(1, connections));
+    }
+
     /**
      * Tells whether DuckDB's external file cache has no per-connection bound below DuckDB's own
      * default (80 % of the host memory per connection), the case that got servers OOM-killed.

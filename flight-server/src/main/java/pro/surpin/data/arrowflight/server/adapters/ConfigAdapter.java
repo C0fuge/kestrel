@@ -984,6 +984,40 @@ public class ConfigAdapter {
     }
 
     /**
+     * Returns duckDbExternalFileCacheMaxBytes from the system configuration.
+     *
+     * @return bytes, null when unset
+     */
+    public static Long duckDbExternalFileCacheMaxBytes() {
+        return duckDbExternalFileCacheMaxBytes(ConfigSource.system());
+    }
+
+    /**
+     * Resolves {@code duckDbExternalFileCacheMaxBytes} ({@code arrowflight.duckdb.externalFileCacheMaxBytes},
+     * {@code DUCKDB_EXTERNAL_FILE_CACHE_MAX}; item 52 (b)): how much of DuckDB's external file cache
+     * the node's connections may keep together after their queries in the DuckDB-per-connection
+     * mode ({@code 8g}, {@code 8GiB} or bytes; {@code 0} = no cap). Unset = a quarter of the DuckDB
+     * budget, at most 8 GiB.
+     *
+     * @param props configuration source
+     * @return bytes, null when unset
+     * @throws IllegalArgumentException for a malformed or negative value
+     */
+    public static Long duckDbExternalFileCacheMaxBytes(ConfigSource props) {
+        String value = getStringWithEnv("duckDbExternalFileCacheMaxBytes",
+                "arrowflight.duckdb.externalFileCacheMaxBytes", "DUCKDB_EXTERNAL_FILE_CACHE_MAX", "", props).trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        Long bytes = HostLimits.parseBudget(value);
+        if (bytes == null || bytes < 0) {
+            throw new IllegalArgumentException("duckDbExternalFileCacheMaxBytes must be a size such as 8g,"
+                    + " 8GiB, 8589934592 or 0: " + value);
+        }
+        return bytes;
+    }
+
+    /**
      * Returns duckDbParquetMetadataCache from the system configuration.
      *
      * @return whether every DuckDB keeps the Parquet footers it read

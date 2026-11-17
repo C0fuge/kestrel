@@ -187,6 +187,22 @@ class ConfigAdapterTest {
         assertTrue(e.getMessage().contains("duckDbParquetMetadataCache"), e.getMessage());
     }
 
+    /** Item 52 (b): the external file cache maximum is unset by default and takes sizes or 0. */
+    @Test
+    void duckDbExternalFileCacheMaxBytesTakesSizes() throws IOException {
+        assertNull(ConfigAdapter.duckDbExternalFileCacheMaxBytes(source(Map.of(), Map.of())));
+        assertEquals(8L << 30, ConfigAdapter.duckDbExternalFileCacheMaxBytes(
+                source(Map.of("duckDbExternalFileCacheMaxBytes", "8g"), Map.of())));
+        assertEquals(2L << 30, ConfigAdapter.duckDbExternalFileCacheMaxBytes(
+                source(Map.of(), Map.of("DUCKDB_EXTERNAL_FILE_CACHE_MAX", "2GiB"))));
+        assertEquals(0L, ConfigAdapter.duckDbExternalFileCacheMaxBytes(
+                source(Map.of("duckDbExternalFileCacheMaxBytes", "0"), Map.of())));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> ConfigAdapter.duckDbExternalFileCacheMaxBytes(
+                        source(Map.of("duckDbExternalFileCacheMaxBytes", "lots"), Map.of())));
+        assertTrue(e.getMessage().contains("duckDbExternalFileCacheMaxBytes"), e.getMessage());
+    }
+
     /** Item 39: the hadoopfs metadata cache TTL is 30 s for an hdfs:// data dir, off elsewhere. */
     @Test
     void hdfsMetadataCacheTtlDefaultsTo30sOnHdfsOnly() throws IOException {

@@ -606,6 +606,84 @@ class DuckDbAdapterTest {
         }
     }
 
+    /**
+     * Item 52 (b): with the external file cache capped, a session whose DuckDB keeps more than the
+     * share after a query is closed when the query's slot closes, and the thread's next query gets
+     * a fresh DuckDB; within the share, without a cap, or within the check interval it is kept.
+     */
+    @Test
+    void sessionAboveTheFileCacheShareIsClosedAfterItsQuery() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, true, 64, null, null, "complete", true, true);
+        java.util.concurrent.atomic.AtomicLong cached = new java.util.concurrent.atomic.AtomicLong();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            adapter.fileCacheSize(conn -> cached.get());
+            Connection first = adapter.connection();
+            try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                cached.set(900L << 20);
+            }
+            assertFalse(first.isClosed(), "no cap set: kept");
+
+            adapter.capExternalFileCache(256L << 20);
+            assertEquals(256L << 20, adapter.externalFileCacheShareBytes());
+            cached.set(100L << 20);
+            try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                assertEquals(first, adapter.connection());
+            }
+            assertFalse(first.isClosed(), "within the share: kept");
+
+            cached.set(900L << 20);
+            try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                assertEquals(first, adapter.connection());
+            }
+            assertFalse(first.isClosed(), "checked less than a second ago: kept");
+
+            Thread.sleep(TimeUnit.NANOSECONDS.toMillis(DuckDbAdapter.FILE_CACHE_CHECK_INTERVAL_NANOS) + 50);
+            try (DuckDbAdapter.QuerySlot slot = adapter.enterQuery()) {
+                assertEquals(first, adapter.connection());
+            }
+            assertTrue(first.isClosed(), "above the share: closed");
+            assertEquals(1, adapter.fileCacheRecycles());
+            assertEquals(0, adapter.openSessions());
+
+            Connection fresh = adapter.connection();
+            assertNotEquals(first, fresh);
+            assertFalse(fresh.isClosed());
+            try (Statement s = fresh.createStatement(); ResultSet rs = s.executeQuery("SELECT 42")) {
+                assertTrue(rs.next());
+                assertEquals(42, rs.getInt(1));
+            }
+        } finally {
+            ioPool.shutdownNow();
+        }
+    }
+
+    /** Item 52 (b): the cap is off without duckDbExternalFileCache, and the real cache size is read. */
+    @Test
+    void fileCacheCapNeedsTheCacheAndReadsDuckDbsSize() throws Exception {
+        ExecutorService ioPool = Executors.newSingleThreadExecutor();
+        AppConfig config = new AppConfig(
+                3, 2, 1, 131072, 0, 1, 1,
+                null, false, null, null,
+                null, null, null, false, 1048576, 67108864, 60000L, null, null,
+                32010, 5701, 60, 3, 1000, 30000, true, false, 64, null, null, "complete", true, true);
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, ioPool)) {
+            adapter.capExternalFileCache(256L << 20);
+            assertEquals(0, adapter.externalFileCacheShareBytes());
+            assertEquals(0, DuckDbAdapter.externalFileCacheBytes(adapter.connection()));
+            assertThrows(IllegalArgumentException.class, () -> adapter.capExternalFileCache(-1));
+        } finally {
+            ioPool.shutdownNow();
+        }
+        assertTrue(DuckDbAdapter.recyclesFileCache(2, 1));
+        assertFalse(DuckDbAdapter.recyclesFileCache(1, 1));
+        assertFalse(DuckDbAdapter.recyclesFileCache(Long.MAX_VALUE, 0));
+    }
+
     /** Verifies connections spill to directories of their own, removed with the adapter. */
     @Test
     void connectionsUseSeparateTempDirectories(@org.junit.jupiter.api.io.TempDir java.nio.file.Path base)

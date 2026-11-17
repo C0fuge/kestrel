@@ -31,6 +31,30 @@ class DuckDbSizingTest {
     }
 
     /**
+     * Item 52 (b): the node-wide external file cache defaults to a quarter of the DuckDB budget,
+     * at most 8 GiB, split over the expected connections with a 64 MiB floor; 0 is no cap.
+     */
+    @Test
+    void externalFileCacheShareSplitsTheNodeMaximum() {
+        DuckDbSizing big = DuckDbSizing.compute(new HostLimits(16, 754 * GIB, 8 * GIB, 8 * GIB),
+                false, 0, null, 0);
+        assertEquals((8 * GIB) / big.connections(), big.externalFileCacheShareBytes(null), big.describe());
+        assertEquals((4 * GIB) / big.connections(), big.externalFileCacheShareBytes(4 * GIB));
+        assertEquals(0, big.externalFileCacheShareBytes(0L));
+        assertEquals(64L << 20, big.externalFileCacheShareBytes(1L << 20));
+
+        DuckDbSizing small = DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB),
+                false, 0, null, 0);
+        long budget = small.reservedBudgetBytes();
+        assertEquals(Math.max(64L << 20, budget / 4 / small.connections()), small.externalFileCacheShareBytes(null));
+        assertTrue(small.externalFileCacheShareBytes(null) * small.connections() <= budget / 4 + small.connections(),
+                small.describe());
+
+        DuckDbSizing unknown = DuckDbSizing.compute(new HostLimits(4, 0, 0, 0), false, 0, null, 0);
+        assertEquals((8 * GIB) / unknown.connections(), unknown.externalFileCacheShareBytes(null));
+    }
+
+    /**
      * The screening container: 2 CPUs, 6 GB, -Xmx3g, direct 2g - 4 threads as before 19, and the
      * 1 GiB per connection it passed TPC-H SF10 22/22 with: the cap is the budget left by the
      * JVM's real reservation (6 - 1 - 1.5 - 0.9 = 2.6 GiB), not by the full -Xmx and direct

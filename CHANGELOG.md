@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 52 (b) (lane 6): new setting `duckDbExternalFileCacheMaxBytes` (`DUCKDB_EXTERNAL_FILE_CACHE_MAX`; unset = a
+  quarter of the DuckDB budget, at most 8 GiB; `0` = no cap). With `duckDbExternalFileCache=true` and a DuckDB per
+  connection (`duckDbSharedDatabase=false`), a connection whose external file cache exceeds its share of that maximum
+  when a query ends is closed and replaced by a fresh one (`duckdb=fileCacheRecycled`): DuckDB evicts that cache only
+  at `memory_limit`, so after one large scan every idle connection kept up to its limit. The shared DuckDB (balanced's
+  default since item 53) is unchanged: its one memory limit bounds the cache.
+
 - Item 54 (lane 4, CI only): `hdfs-point-perf.yml` scan mode (`scanRounds`, `scanClients`, `serverCpus`): one-stream,
   N-stream and export reads of `tpch.lineitem` on HDFS with per-thread server CPU (`tools/ci/thread-cpu.py`). No server change.
 
