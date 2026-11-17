@@ -6,7 +6,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 54 (maintainer exception): single-stream scan slower than upstream on HDFS.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Raw Flight full scan of tpch.lineitem (MB/s): 1 stream - upstream 1032, speed 722, balanced 329, dc 646; 4 streams 1377 / 1975 / 1088 / 1154; 8 streams 1993 / 2171 / 1679 / 964. Upstream (DuckDB through its own reader, no SASL wrap negotiated) wins the single stream by 1.4x over speed and 3.1x over balanced. Find where one stream loses (read-ahead / hadoopfs block size, DuckDB threads per stream, Arrow batch size, flightBackpressureThresholdBytes, zero-copy writes, compression off?) - profile one stream on the HDFS CI cell with SASL `authentication,privacy`; goal: one stream >= upstream in speed and >= 0.8 of it in balanced. Write `ITEM 54 DONE <sha>` with numbers.
 
-ITEM 54 IN PROGRESS (2026-11-17, sessions 100-103) - steps 1 and 2 of 3 done, step 3 parts 1-2 done (plain HDFS profile; SASL / TCP, client CPU and the per-stream DuckDB shape ruled out); part 3 (upstream build in the cell) done, part 4 (same-runner ratio, run 44178894320) running.
+ITEM 54 IN PROGRESS (2026-11-17, sessions 100-104) - steps 1-3 done in the CI cell: same runner, same hadoopfs reader, one stream is speed 1.20-1.21x and balanced 1.04-1.11x of upstream's native branch (goal >= 1.0 / >= 0.8 met in the cell); the stand gap needs stand measurements (Q54-2).
 `hdfs-point-perf.yml` has a scan mode (inputs `scanRounds`, `scanClients`, `serverCpus`; `tools/ci/hdfs-point-cell.sh`
 with `SCAN_ROUNDS`, `tools/ci/thread-cpu.py` per-thread server CPU, streamTiming lines): single-node HDFS, short-circuit,
 TPC-H SF5 lineitem (4 files, 4.8 GiB Arrow), server on 2 CPUs / 6 GiB, client on 1, `SELECT *` complete mode, best of 2.
@@ -64,15 +64,25 @@ Runs 44110283975 (8 variants), 44111414923 (prefetch), 44116044127 (streaming bu
   "upstream `main`: full-table scan OOM / results not streamed"; same runner speed x1 786 / 803 MB/s. So upstream
   `main` is not what the stand compared against; the stand's 1032 MB/s is presumably the native branch.
   The cell now writes a dead server's exit code / OOMKilled / last errors into the result lines (53efb7bc).
-- **Next (step 3, part 4):** read run **44178894320** (dispatched 21:21Z on main 53efb7bc, `upstream=feat/starrocks-
-  native-integration`, variants upstream, speed, balanced; SF5, plain, `serverCpus=0,1,2/3`, `scanRounds=2`,
-  `-DstreamTimingLog=true`): `upstream|upstream <sha>`, `upstream|best x1`, `upstream|server exited ...` lines. If
-  it ran: same-runner ratio speed / upstream and balanced / upstream x1 (goal >= 1.0 / >= 0.8). If upstream x1 <=
-  speed x1 here, the stand's 1.4x is a property of the stand (16 cores, Kerberos, cgroup v1 - e.g. DuckDB threads
-  sized from 80 host cores, `duckdb=sizing` log line) - write it as an Open question with what to measure on the stand
-  (speed with `-DduckDbThreads=16`); if upstream wins here, profile both x1 streams (JFR on the stream thread) in the
-  same cell. If upstream died again: read its `server exited` / `srv` lines (memory: give it `-Xmx` / container
-  room, or a smaller sf). Then decide Q54-1.
+- **Step 3, part 4 (session 104): same-runner ratio - in the cell one stream beats upstream; goal met there.** Run
+  44178894320 (main 53efb7bc, `upstream=feat/starrocks-native-integration` = d05bf9c5, SF5, plain, `serverCpus=0,1,2/3`,
+  client on CPU 3, best of 2 after a warm-up), best MB/s runner a / b: **x1** upstream 742 / 542, speed 898 / 652
+  (**1.21 / 1.20x upstream**), balanced 826 / 561 (**1.11 / 1.04x**); x4 upstream 1172 / 876, speed 1220 / 900 (1.04 /
+  1.03x), balanced 1190 / 825 (1.01 / 0.94x); export (pyarrow table, client-bound at 100 % of its core) upstream
+  253 / 184, speed 256 / 182, balanced 265 / 189. Same 29999795 rows and checksum in every profile. Upstream read
+  through our hadoopfs (0 DataNode TCP reads, as for us); memory peak upstream 2.4 GiB, speed 1.9 GiB, balanced
+  2.2-2.3 GiB. x1 server threads: upstream `flight-server-d` 80-92 % + gRPC 26-32 % (one thread scans and converts);
+  speed stream thread 56-69 % + 3 DuckDB workers 10-15 % each; balanced stream thread 71-96 %. streamTiming x1 speed
+  `duckMs` 5.5-9.0 s of 5.6-9.3 s, `sendMs` 0.07-0.2 s; balanced `sendMs` 0.4-0.9 s of 6.2-10.6 s. So with the same
+  reader, data and cores the fork is not slower on one stream: **the stand's 1.4x (speed) / 3.1x (balanced) is a
+  property of the stand** (its upstream read "through its own reader" without the SASL wrap, ours with SASL privacy;
+  16 pinned cores of an 80-core host; cgroup v1 without a memory controller) - Q54-2 asks for the stand measurements
+  that separate these. Nothing to change in the server from the cell; Q54-1 is no longer needed for the 0.8 goal in
+  the cell (balanced with insertion order kept is 1.04-1.11x upstream here).
+- **Next:** wait for Q54-2 (stand numbers). If the stand's lines point at something the cell can model (DuckDB threads
+  per stream: `-DduckDbThreads=N` variants; SASL privacy cost at > 1 GB/s: `hdfsModes=sasl` with more server cores),
+  add the variant to `hdfs-point-perf.yml` and measure; otherwise item 54 stays at "cell goal met" until the stand
+  answers. Q54-1 stays the maintainer's.
 
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
@@ -745,11 +755,26 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- **Q54-2 (2026-11-17, item 54): the single-stream gap does not reproduce in CI - please measure on the stand.** In
+  the HDFS CI cell (run 44178894320, same runner, same hadoopfs reader, 3 server cores) one full lineitem stream is
+  speed 1.20-1.21x and balanced 1.04-1.11x of upstream `feat/starrocks-native-integration` (d05bf9c5); on the stand
+  upstream won 1.4x / 3.1x. Differences the cell cannot model: the stand's upstream read "through its own reader, no
+  SASL wrap negotiated" while ours ran direct SASL with `authentication,privacy` (in the cell privacy costs 0-4 % at
+  ~800 MB/s, untested above 1 GB/s); 16 pinned cores of an 80-core host; cgroup v1 with `cgroupMiB=0`. What would
+  separate them on the stand, one stream each, same table: (1) the server's `duckdb=sizing` and `resourceProfile` log
+  lines; (2) speed with `-DstreamTimingLog=true` (the `duckMs` / `sendMs` / `backpressureMs` split shows whether
+  DuckDB or the Flight write is slow); (3) speed with `-DduckDbThreads=4`, `8`, `16`; (4) ours against a path without
+  `privacy` (or upstream with the same hadoopfs and SASL as ours), to price the SASL wrap at stand speed. Until then
+  no server change is proposed.
+
 - **Q54-1 (2026-11-17, item 54): balanced default `duckDbPreserveInsertionOrder=false`?** On HDFS one full lineitem stream
   in balanced is 18-33 % faster with it (runs 44110283975, 44116044127; speed already has it since item 27, upstream sets
   it too); rows of a query without ORDER BY may then come in another order (answers unchanged). Item 16 (2026-10-28) kept
   balanced at DuckDB's `true` from local numbers (`false` 4-35 % slower locally). Proposal: `false` in balanced only for
   HDFS / S3 / plugin data dirs (explicit setting wins); not done without you - it is a default change.
+  Update 2026-11-17 (session 104): since item 53 (shared DuckDB in balanced) the gap is smaller: balanced/speed x1
+  0.89-0.99 (run 44147368932), noorder +0-4 %; balanced keeping insertion order is 1.04-1.11x upstream in the cell
+  (44178894320), so `false` is no longer needed for item 54's 0.8 goal there - a nice-to-have, still your call.
 
 - **Closed (Q-40b-1 done 2f31c071, maintainer yes 2026-11-11).** Q-40b-1 (2026-11-10, item 40 (b)): the speed (and balanced) c1 point-query regression on local data is file pruning
   by footer statistics (on by default since item 39 (c)): +0.3..0.5 ms p50 / +0.3 ms CPU per point query at c1 on a
@@ -1212,3 +1237,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-17T19:45Z (session 101): ITEM 54 step 2: `hdfsModes` (tcp / sasl / sasl-auth / sasl-privacy) in `hdfs-point-perf.yml` (ea9c3c2b); run 44147368932 (SF5, 2 CPUs): one stream equal within 0-4 % on short-circuit, TCP, SASL authentication and SASL privacy (speed 787 / 769 / 773 / 754 MB/s on runner b), balanced (shared DuckDB) 0.89-0.99 of speed; the 2-core cell is CPU-bound. Step 3 run 44159553651 (3 server CPUs) dispatched, result for the next session. No server change.
 - 2026-11-17T20:20Z (session 102): ITEM 54 step 3 part 1: run 44159553651 read (3 server CPUs: one stream not faster than with 2, x4 is; serial per-stream path); upstream HEAD 1a57765 streams on a thread-local DuckDB with threads=1. Client CPU per scan pass in `scan-adbc.py` / HDFS cell (83f1e853, perf tooling only, [skip ci]; CHANGELOG line). Run 44167354107 dispatched (own DuckDB threads 1 / 2 vs shared, client CPU), still running at session end (its cancelled predecessor 44167065420 had a subset). Next: read 44167354107 (see Next steps, step 3 part 2).
 - 2026-11-17T21:25Z (session 103): ITEM 54 step 3 parts 2-3: run 44167354107 read (client CPU 41-70 % of its core: not the cap; upstream-like own DuckDB with threads 1 is 14-25 % slower than speed: no per-stream thread change). `hdfs-point-perf.yml` input `upstream` + cell profile `upstream` (5254fe28, 62020d62, 53efb7bc, perf tooling only, [skip ci]; CHANGELOG line): run 44172681969 (upstream without hadoopfs: no files), 44175802249 (upstream HEAD 1a57765 = `main`: warm-up 116 MB/s, then the server died; speed 786 / 803). Run 44178894320 (upstream native branch) dispatched, result for the next session.
+- 2026-11-17T22:55Z (session 104): ITEM 54 step 3 part 4: run 44178894320 read (upstream native branch d05bf9c5 in the HDFS cell, same runner, same hadoopfs): one stream speed 1.20-1.21x and balanced 1.04-1.11x of upstream, x4 0.94-1.04x; goal met in the cell, the stand gap is the stand's (Q54-2 asks for stand measurements; Q54-1 updated). Docs only, no code change, no CI run.
