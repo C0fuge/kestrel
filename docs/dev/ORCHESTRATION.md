@@ -1,19 +1,23 @@
 # Orchestration status
 
 ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55 (maintainer notes 2026-11-17). Package once 52(a)/(b), 53, 54,
-55(a)/(b)/(c) are each DONE. Done: 52(a), 53, 55(b). Open: 52(b) + 55(c) (lane 6), 54 (catalogs), 55(a) (lane 5).
+55(a)/(b)/(c) are each DONE. Done: 52(a), 53, 55(b). Open: 52(b) (merged, waits for cluster numbers) + 55(c) (lane 6),
+54 (catalogs, step 3), 55(a) (lane 5).
 
-Status as of **2026-11-17T18:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-17T19:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- New pre-release **`server-1.0.0-f4feb0d5e404`** (18:03Z, item 55(b) `distributedAggregateMinBytes`; package Dev CI
-  44143892740 + 4 service runs green) - ready for the stand check of 55(b) (`-DdistributedAggregateMinBytes=8GiB` on the
-  1.27 TB table). Not yet in egret FRESH (egret idle since 2026-11-16 19:27Z).
-- Open questions: **Q-52a** (default memory budget on big hosts), **lane 3 Q5** (default of `distributedAggregateMinBytes`,
-  0 = off), **Q54-1** (catalogs: balanced loses 18-33 % of a single scan to `preserve_insertion_order`); still open Q-51a,
-  Q-46, catalogs Q11, plugins Q-40a follow-up; stand checks of items 44 (2) / 46 / 50 / 51 / 55(b).
-- Lane 6 lock 16:16Z without a lane 6 commit since 15:24Z (2h40m; not stale by the 3 h rule yet - the next run releases it
-  if nothing moves).
+- **main Dev CI red** since the 55(a) merge dfaac51c: step 'Distributed complete under concurrency (items 35, 39 (d))',
+  `48 of 48 exact; merged 32` -> `only 32 of 48 answers merged` (package run 44154778833, and again on bdeda437 push run
+  44158521271 - same check, not infrastructural; answers exact). Your bug-first note is at the top of LANE5-STATUS (no
+  extra note written). Lane 5's fix d50d4b63 "Dev CI item 35 step: keep one-row answers merged on its one node" is on
+  main; full Dev CI **44162578438** (4662fa4f) running.
+- **Item 52(b) merged** (bdeda437, lane 6: DuckDB-per-connection session whose external file cache exceeds its share is
+  recycled, `duckdb=fileCacheRecycled`), but lane 6 does not write `ITEM 52(b) DONE` without real-cluster numbers (RSS with
+  `duckDbSharedDatabase=false` + cache on HDFS) or a CI HDFS cell run; it needs main green first.
+- New pre-release `server-1.0.0-f4feb0d5e404` (55(b)) still waits for the stand check (`-DdistributedAggregateMinBytes=8GiB`).
+- Open questions unchanged: Q-52a, lane 3 Q5, Q54-1, Q-51a, Q-46, catalogs Q11, plugins Q-40a follow-up; stand checks of
+  items 44 (2) / 46 / 50 / 51 / 55(b).
 - Branches `pkg/f4feb0d5`, `pkg/6f0aa5a0`, `pkg/d2e27119`, `pkg/7ab48cd6`, `pkg/2c169a53`, `pkg/74464701`, `pkg/29f1267b`,
   `pkg/2ff22144`, `pkg/37bf9401` can be deleted.
 
@@ -21,17 +25,17 @@ Points for the maintainer:
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | ITEM 52(a) DONE 183a1775; idle, waits for 52b/54/55a/55c before the package | 18:41Z | free | main: full run of f4feb0d5 green on pkg (44143892740) |
-| plugins (`PLUGINS-STATUS.md`) | ITEM 53 DONE 7f53357e; nothing open | 18:11Z | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | ITEM 54 step 2 of 3 (HDFS tcp / sasl modes in hdfs-point-perf, ea9c3c2b) | 18:23Z | 18:21Z (active) | HDFS point perf 44147368932 running (main) |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 55(b) DONE b5c677a9, packaged as server-1.0.0-f4feb0d5e404; nothing else open | 18:04Z | free | pkg Dev CI 44143892740 + service runs green |
-| lane 5 (`LANE5-STATUS.md`) | ITEM 55(a) dc tails, branch fix/55a (53f4c273) | 18:46Z | 18:36Z (active) | fix/55a Dev CI 44151537756 green (two earlier red iterations 44150348261/44150905231 superseded); DC tail perf 44150307344 running |
-| lane 6 (`LANE6-STATUS.md`) | ITEM 52(b) diagnosed (external file cache), fix next; then 55(c) | 15:24Z | 16:16Z (no commit since) | - |
+| core (`STATUS.md`) | idle (52(a) DONE 183a1775); notes main red, lane 5 fixing | 19:41Z | free | main Dev CI 44162578438 running |
+| plugins (`PLUGINS-STATUS.md`) | ITEM 53 DONE 7f53357e; nothing open | 16:13Z | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | ITEM 54 step 3 of 3 (run 44159553651: serverCpus, plain/sasl, speed/balanced) | 19:32Z | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 55(b) DONE b5c677a9 (f4feb0d5e404); nothing else open | 19:04Z | free | - |
+| lane 5 (`LANE5-STATUS.md`) | FIRST: main red (item 35 check); then ITEM 55(a) phase timings (724a1f99 merged, fix/55a 8cd73695) | 19:55Z | 19:07Z (active) | fix/55a Dev CI 44163831594 + DC tail perf 44163827273 running |
+| lane 6 (`LANE6-STATUS.md`) | 52(b) merged bdeda437 (not DONE, needs cluster numbers); next 55(c) on fix/55c after main is green | 19:26Z | free | fast tier 44156451682 green; full 44158521271 red (item 35, lane 5's) |
 
-Main CI: no Dev CI on main since f4feb0d5 except the cancelled push run 44143776793 (superseded by the green full package
-run 44143892740 on the same sha); 44118413074 (28ebd7e5) red only in service-gate (no service runs on that commit) -
-superseded, no bug-first note. Main commits since f4feb0d5 are [skip ci] (docs / CI tooling). No stale locks (kestrel
-catalogs 18:21Z / lane 5 18:36Z / lane 6 16:16Z under 3 h; marten 18:40Z active; heron empty).
+Main CI: 44154778833 (dfaac51c, package) red and 44158521271 (bdeda437) red in 'Distributed complete under concurrency'
+(merged 32 of 48 - expectation vs 55(a)'s one-endpoint-per-node merges); 44154760020 cancelled; 44162578438 (4662fa4f,
+with lane 5's check fix) running. No rerun (not infrastructural). No stale locks (lane 5 19:07Z active; marten / heron
+empty).
 
 ## Service matrix (newest run per workflow)
 
@@ -44,25 +48,24 @@ catalogs 18:21Z / lane 5 18:36Z / lane 6 16:16Z under 3 h; marten 18:40Z active;
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-f4feb0d5e404` (2026-11-17 18:03Z): items 52(a), 53, 55(b); no egret FRESH yet.
-- `server-1.0.0-6f0aa5a026fa` (2026-11-16): item 51; egret FRESH DONE; now the marten m4 / compare default.
+- `server-1.0.0-f4feb0d5e404` (2026-11-17 18:03Z): items 52(a), 53, 55(b); egret FRESH running.
+- `server-1.0.0-6f0aa5a026fa` (2026-11-16): item 51; egret FRESH DONE; marten m4 / compare default, heron pinned.
 - `server-1.0.0-d2e27119fda4` (2026-11-16): items 49 + 50; the real cluster run of 2026-11-16 (items 52-55) used it.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). Maintainer GO (2026-11-17 18:30) done: runtime filters default (series
-  fl234f9b), full regression PASS, 6f0aa5a026fa is the m4 / compare default (18:42Z); compare sf=10 ours (RF default) vs
-  jdbc dispatched 18:54Z (up-fe 44150752848). Lock 18:40Z active.
-- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa; session 322 idle (18:51Z), no new server in
-  e2e-assets.
+- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; m4 regression on 6f0aa5a026fa all PASS (18:40-19:50Z); repeat
+  compare SF10 ours speed 44160944676 22/22, 39.35 / 47.83 s warm / cold (earlier q01 connect error transient). Lock free.
+- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa; session 323 idle (19:51Z). Lock free.
 
 ## egret
 
 - Newest FRESH: **6f0aa5a026fa** (`results/FRESH-6f0aa5a026fa.md`; upstream `28d6ea713b8e`): speed/balanced 22/22, 0
-  errors; local small ADBC c1 p50 speed/balanced 1.26 (carried over); load +34-41 % at 128 clients. Newer pre-release
-  f4feb0d5e404 not yet screened. README 'In progress': idle 2026-11-16 19:27Z, newest tracked 6f0aa5a026fa (last commit 15:26Z).
+  errors; load +34-41 % at 128 clients. README 'In progress': FRESH **f4feb0d5e404 RUNNING** (19:28Z, compare run
+  44158872708 vs upstream `d05bf9c52129` - new upstream head; ACCEPT run 44154946019).
 
 ## History
+- 2026-11-17T19:58Z: main Dev CI red after 55(a) merge (item 35 check, 44154778833 / 44158521271; maintainer note in LANE5), lane 5 fix d50d4b63 on main, Dev CI 44162578438 running; lane 6 52(b) merged bdeda437 (not DONE, needs cluster numbers); catalogs 54 step 3 run 44159553651; egret FRESH f4feb0d5e404 running (upstream d05bf9c52129); marten compare 44160944676 22/22; heron 323 idle; no stale locks.
 - 2026-11-17T18:57Z: new pre-release server-1.0.0-f4feb0d5e404 (55(b), package + 4 service runs green); catalogs 54 step 2 (HDFS point perf 44147368932 running); lane 5 fix/55a Dev CI 44151537756 green, DC tail perf running; lane 6 lock 16:16Z quiet since 15:24Z; marten GO done (RF default, 6f0aa5a026fa default, compare sf=10 vs jdbc dispatched); heron 322 idle; egret not yet on f4feb0d5e404; main effectively green; no stale locks.
 - 2026-11-17T15:58Z: **ALL DONE withdrawn** for items 52-55 (maintainer 2026-11-17, lanes 5/6 added). Done: 52(a) 183a1775, 53 7f53357e, 55(b) b5c677a9; open: 52(b)/55(c) lane 6, 54 catalogs (lock 14:59Z), 55(a) lane 5 (lock 15:15Z). Main Dev CI 44117935189 green (87cd3c00), 44118413074 running; c74e9018 red 44115291931 superseded. marten: maintainer GO on RF default, regression running. New Qs: Q-52a, lane 3 Q5. No stale locks.
 - 2026-11-17T14:57Z: ALL DONE kept; no change: kestrel only lane no-open-item notes (lane 3 14:04Z, catalogs 14:22Z), no new CI runs or pre-releases (newest 6f0aa5a026fa), no red CI; marten 14:41Z still waits for the maintainer (RF default proposal); heron session 320 idle; egret idle (13:28Z); all locks empty.
@@ -102,4 +105,3 @@ catalogs 18:21Z / lane 5 18:36Z / lane 6 16:16Z under 3 h; marten 18:40Z active;
 - 2026-11-14T14:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-14T11:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-14T10:57Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-12T09:56Z: **ALL DONE** again: egret FRESH 2c169a53db3b DONE (43175544843; 22/22, 0 errors; local small c1 speed/balanced 1.09 JDBC / 1.14 ADBC carried over; speed local SF10 +5 %); core 09:41Z / marten 09:41Z / heron 229 nothing open; all CI green, no stale locks.
