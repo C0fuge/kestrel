@@ -1467,3 +1467,7 @@ into queries, tests, docs); no new items are taken. Open questions below stay fo
   cell 44109875188 (before: per-connection, gate4, shared, speed) and 44113964792 (after), local small-query
   44109935634; Dev CI full on the branch 44113887980 green (flight-server 1358 tests). Merged after rebasing on item 52;
   the push on `main` runs the full Dev CI - check it first next session. Q-53 opened. No package (after 52-55).
+- 2026-11-17 16:20Z (plugins session): checked `main` after the item 53 merge - full build of Dev CI run 44118413074
+  (28ebd7e5, contains 7f53357e) green; its service gate failed only with "main moved, not dispatched" (lane 3's
+  package run, not a test failure); run 44117935189 (87cd3c00) green. Nothing open in this lane: waiting on the
+  maintainer's stand for item 53 (Q-53), Q-46 and the Q-40a wave. Stopped early.
