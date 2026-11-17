@@ -4451,3 +4451,7 @@ S3 slowdown item below stays open for then).
   (default 0 = off) - with `distributedComplete=false`, aggregates over >= that many bytes of files after footer pruning
   are merged across the nodes like dc; the server then starts the dc path (`DistributedComplete.aggregatesOnly`) and its
   internal-call authenticator. New Service cluster cell `speed-agg`. Default question: LANE3-STATUS Q5.
+- 2026-11-17T16:10Z (lane 4, item 54, no core change): for item 52 - balanced (`connections=2 memoryLimit=1075MiB
+  budgetMiB=3174`, -Xmx2g, direct 1g, 6 GiB container) was OOM-killed during 4 concurrent full lineitem SF5 scans on HDFS
+  (HDFS point perf run 44116044127, runner a); balanced peaked at the 6144 MiB limit in every scan variant, speed at 1.9-2.3 GiB.
+  Details in CATALOGS-STATUS.md item 54.

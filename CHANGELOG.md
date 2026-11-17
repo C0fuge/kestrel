@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 54 (lane 4, CI only): `hdfs-point-perf.yml` scan mode (`scanRounds`, `scanClients`, `serverCpus`): one-stream,
+  N-stream and export reads of `tpch.lineitem` on HDFS with per-thread server CPU (`tools/ci/thread-cpu.py`). No server change.
+
 - Item 55 (b) (lane 3): new setting `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 =
   off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
   footer pruning total at least this size are merged from endpoint answers on the nodes, as under distributedComplete;

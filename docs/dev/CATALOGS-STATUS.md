@@ -6,6 +6,31 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 54 (maintainer exception): single-stream scan slower than upstream on HDFS.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Raw Flight full scan of tpch.lineitem (MB/s): 1 stream - upstream 1032, speed 722, balanced 329, dc 646; 4 streams 1377 / 1975 / 1088 / 1154; 8 streams 1993 / 2171 / 1679 / 964. Upstream (DuckDB through its own reader, no SASL wrap negotiated) wins the single stream by 1.4x over speed and 3.1x over balanced. Find where one stream loses (read-ahead / hadoopfs block size, DuckDB threads per stream, Arrow batch size, flightBackpressureThresholdBytes, zero-copy writes, compression off?) - profile one stream on the HDFS CI cell with SASL `authentication,privacy`; goal: one stream >= upstream in speed and >= 0.8 of it in balanced. Write `ITEM 54 DONE <sha>` with numbers.
 
+ITEM 54 IN PROGRESS (2026-11-17, session 100) - step 1 of 3 done: cause located on plain HDFS, not yet on SASL.
+`hdfs-point-perf.yml` has a scan mode (inputs `scanRounds`, `scanClients`, `serverCpus`; `tools/ci/hdfs-point-cell.sh`
+with `SCAN_ROUNDS`, `tools/ci/thread-cpu.py` per-thread server CPU, streamTiming lines): single-node HDFS, short-circuit,
+TPC-H SF5 lineitem (4 files, 4.8 GiB Arrow), server on 2 CPUs / 6 GiB, client on 1, `SELECT *` complete mode, best of 2.
+Runs 44110283975 (8 variants), 44111414923 (prefetch), 44116044127 (streaming buffer); MB/s x1 per runner (a / b):
+- speed 1052 / 961, balanced 756 / 664 (0.72 / 0.69 of speed); balanced `-DduckDbPreserveInsertionOrder=false` 896 / 881
+  (**+18 / +33 %**, 0.85 / 0.92 of speed; 870 in 44116044127), balanced without the external file cache 809 / 719 (+7 / +8 %),
+  both 904 / 887; speed without the file cache 991 / 930 (-6 / -3 %), speed with zero-copy off 928 / 795 (-12 / -17 %).
+- **Where one stream's time goes:** streamTiming x1 speed `duckMs` 5.1-6.5 s of 5.2-6.8 s total, `sendMs` 0.04-0.19 s (the
+  Flight write is 1-3 %); server CPU during x1 only 105-130 % of 2 cores: no thread saturated (speed: stream thread
+  37-55 %, DuckDB workers 10-15 % each, gRPC 16-23 %); balanced: one thread 69-100 %, its other DuckDB threads idle - with
+  insertion order kept, the per-connection DuckDB (threads=4) scans on one thread.
+- **Tried, no gain:** read-ahead of batches on a thread of its own (`flightStreamPrefetchBatches` 2 / 4, branch
+  `fix/54-prefetch` fa588eb7, tests + Dev CI 44111452525 green, **not merged**: speed +2 / +4 %, -0 / +2 %, balanced
+  +1 / +5 %, within runner noise); `duckDbStreamingBufferSize` 16 / 64 MiB on speed -2 / -4 %, balanced 64 MiB -11 / -5 %;
+  `batchSize=1048576` fails in the ADBC client (183 MB message > its 16 MiB limit), not a server fault.
+- Side finding for items 52 / 53: balanced (sizing `connections=2 memoryLimit=1075MiB budgetMiB=3174` in 6 GiB) was
+  OOM-killed during 4 concurrent full scans (run 44116044127 runner a, balanced-noorder x4; container peak = 6144 MiB in
+  every balanced variant, speed 1.9-2.3 GiB).
+- **Next (step 2):** the scan cell on SASL `authentication,privacy` (reuse `service-hdfs-cell.sh` sasl-direct's KDC /
+  DataNode setup, server with `hdfsSaslDataTransfer` auto, short-circuit off so blocks go over SASL TCP like the stand's
+  direct reads) plus a TCP-only plain variant; there the remaining 0.7x of upstream at 16 cores is expected in hadoopfs's
+  read path (read size / read-ahead per block, `input.read.timeout`-style buffers) since DuckDB threads sit mostly idle
+  here. Step 3: upstream built in the cell (as `scan-perf.yml`) and `serverCpus` 0,1,2 for more threads; then decide Q54-1.
+
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
 ITEM 49(c) DONE df3dae71 (2026-11-15, session 71). `b85c78487f4f` (estimateRowCount footers in parallel) and
@@ -677,6 +702,12 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
 
 ## Open questions
 
+- **Q54-1 (2026-11-17, item 54): balanced default `duckDbPreserveInsertionOrder=false`?** On HDFS one full lineitem stream
+  in balanced is 18-33 % faster with it (runs 44110283975, 44116044127; speed already has it since item 27, upstream sets
+  it too); rows of a query without ORDER BY may then come in another order (answers unchanged). Item 16 (2026-10-28) kept
+  balanced at DuckDB's `true` from local numbers (`false` 4-35 % slower locally). Proposal: `false` in balanced only for
+  HDFS / S3 / plugin data dirs (explicit setting wins); not done without you - it is a default change.
+
 - **Closed (Q-40b-1 done 2f31c071, maintainer yes 2026-11-11).** Q-40b-1 (2026-11-10, item 40 (b)): the speed (and balanced) c1 point-query regression on local data is file pruning
   by footer statistics (on by default since item 39 (c)): +0.3..0.5 ms p50 / +0.3 ms CPU per point query at c1 on a
   local `dataDir`, gone with `-DfileStatsPruningMaxFiles=0` (run 42811208123). Turn pruning off by default for a local
@@ -1134,3 +1165,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-17T12:22Z (session 97): no open item (item 49(c) DONE df3dae71 and packaged; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note for this lane since session 96). No code change, lock not taken.
 - 2026-11-17T13:24Z (session 98): no open item (item 49(c) DONE df3dae71 and packaged; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note for this lane since session 97). No code change, lock not taken.
 - 2026-11-17T14:22Z (session 99): no open item (item 49(c) DONE df3dae71 and packaged; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note for this lane since session 98). No code change, lock not taken.
+- 2026-11-17T16:10Z (session 100): ITEM 54 step 1 (maintainer note 18:10): scan mode of `hdfs-point-perf.yml` (e35bfe51, 0485f5ac); runs 44110283975, 44111414923, 44116044127 (plain HDFS, 2 CPUs): Flight send is 1-3 % of one stream, balanced loses 18-33 % to `preserve_insertion_order` (Q54-1), read-ahead prefetch / streaming buffer give nothing (`fix/54-prefetch` not merged, Dev CI 44111452525), balanced OOM at 4 scans in 6 GiB (for 52 / 53). Note for the plugins lane: I cancelled its HDFS point perf run 44109875188 (fix/53-balanced) by mistake at 15:04Z and re-ran it at once with the same inputs (attempt 2). Next: step 2 (SASL privacy scan cell).
