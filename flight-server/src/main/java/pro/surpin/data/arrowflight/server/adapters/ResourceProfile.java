@@ -12,8 +12,8 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 
 /**
  * Resource profile of {@code resourceProfile} ({@code FLIGHT_RESOURCE_PROFILE}): {@code balanced}
- * (default) changes nothing except {@code duckDbExternalFileCache=true} on an {@code hdfs://} data
- * dir; {@code speed} trades memory and CPU for speed by supplying defaults
+ * (default) supplies {@code duckDbSharedDatabase=true} (item 53) and {@code duckDbExternalFileCache=true}
+ * on an {@code hdfs://} data dir; {@code speed} trades memory and CPU for speed by supplying defaults
  * for the settings measured as faster. A setting given as a system property or in the
  * environment always wins over the profile; the profile wins over {@code arrowflight.properties}.
  *
@@ -23,7 +23,7 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
  */
 public record ResourceProfile(String name, Map<String, String> defaults, Map<String, String> explicit) {
 
-    /** Default profile: today's behaviour (external file cache on for an HDFS data dir). */
+    /** Default profile: the node's shared DuckDB, external file cache on for an HDFS data dir. */
     public static final String BALANCED = "balanced";
 
     /** Profile that trades memory and CPU for speed. */
@@ -68,17 +68,34 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         String name = raw.lookup(List.of("resourceProfile", "arrowflight.resourceProfile"),
                 List.of("FLIGHT_RESOURCE_PROFILE")).orElse(BALANCED).toLowerCase(Locale.ROOT);
         if (BALANCED.equals(name)) {
-            if (!hdfsDataDir(raw)) {
-                return new ResourceProfile(BALANCED, Map.of(), Map.of());
-            }
-            Builder b = new Builder(raw);
-            offerHdfsFileCache(b);
-            return new ResourceProfile(BALANCED, b.defaults, b.explicit);
+            return balanced(raw);
         }
         if (!SPEED.equals(name)) {
             throw new IllegalArgumentException("resourceProfile must be balanced or speed: " + name);
         }
         return speed(raw, host.get());
+    }
+
+    /**
+     * Builds the {@code balanced} profile: the node's shared DuckDB (item 53) and, on HDFS, its
+     * external file cache. With a DuckDB per Flight thread every client added an instance with
+     * its own threads, caches and memory limit: on the real cluster (16 cores) point load fell
+     * from 142 q/s at c8 to 28 at c128 with RSS at 22 GB, and the HDFS point cell asked the
+     * DataNode for short-circuit fds 0.14 to 0.44 times per query as clients grew; the shared
+     * DuckDB (one thread pool capped by duckDbSharedMaxThreads, one memory limit within the
+     * budget) gave c32 117 vs 90 q/s there, as fast as speed (run 44109875188).
+     * {@code duckDbSharedDatabase=false} restores a DuckDB per connection.
+     *
+     * @param raw configuration source without profile defaults
+     * @return profile
+     */
+    static ResourceProfile balanced(ConfigSource raw) {
+        Builder b = new Builder(raw);
+        b.offer("true", "duckDbSharedDatabase", "arrowflight.duckdb.sharedDatabase", "DUCKDB_SHARED_DATABASE");
+        if (hdfsDataDir(raw)) {
+            offerHdfsFileCache(b);
+        }
+        return new ResourceProfile(BALANCED, b.defaults, b.explicit);
     }
 
     /**

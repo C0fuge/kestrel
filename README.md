@@ -377,7 +377,8 @@ budget holds no turn, so a client may read endpoints in any order. Try cores / `
 (e.g. 1-2 on 2 cores) for many parallel endpoints on few cores; a long aggregation holds its turn
 until its first batch, so keep it off for mixed workloads with heavy queries.
 
-`duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default false) runs every Flight worker's
+`duckDbSharedDatabase` (`DUCKDB_SHARED_DATABASE`, default true under both resource profiles since item 53; the bundled
+file's `false` applies only without a profile default) runs every Flight worker's
 connection on one DuckDB of the node instead of one DuckDB per connection: one thread pool sized to
 the node, so N parallel streams share the cores instead of starting N x `duckDbThreads` threads, and
 one `memory_limit` for the node. The storage setup, secrets and lockdown run once at startup (and
@@ -396,8 +397,11 @@ views in an in-memory catalog of its own (`flight_session_<n>`, made its default
 of concurrent queries do not mix; client SQL naming such a catalog or schema is refused. Queries are
 described (prepare, GetFlightInfo) in a second node-wide DuckDB that reads no files (1 thread,
 256 MB, external access off, as the per-connection describe DuckDB before), again in a catalog of
-its own per connection. The startup line `duckdb=sharedDatabaseOpened` shows the sizing. Opt-in
-while it is measured (item 22).
+its own per connection. The startup line `duckdb=sharedDatabaseOpened` shows the sizing. Default of
+`resourceProfile=balanced` since item 53: with a DuckDB per Flight thread every client added an instance
+with its own threads, caches and memory limit, and point-query throughput fell as clients grew (16-core
+cluster: 142 q/s at c8, 28 at c128, RSS 22 GB). `-DduckDbSharedDatabase=false` restores a DuckDB per
+connection, where `duckDbThreads` / `duckDbMemoryLimit` are per connection again.
 
 `flightBackpressureThresholdBytes` is the most a single Flight stream queues for a slow client;
 `flightOutboundBudgetBytes` (default 0 = a quarter of the JVM's direct memory limit,

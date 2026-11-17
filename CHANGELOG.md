@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 53: `resourceProfile=balanced` (the default) now runs the node's shared DuckDB (`duckDbSharedDatabase=true`):
+  one instance with one thread pool (at most `duckDbSharedMaxThreads`, 8) and one node-wide memory limit within the
+  budget, instead of a DuckDB per Flight thread whose count, threads and caches grew with the clients (real cluster:
+  point load 142 q/s at c8, 28 at c128, RSS 22 GB). HDFS point cell (16-core sizing): c32 90 -> 117 q/s, p99
+  1.1-1.3 -> 0.8 s, fd requests per query 0.3 -> 0. `-DduckDbSharedDatabase=false` restores the old mode, where
+  `duckDbThreads` / `duckDbMemoryLimit` are per connection; with the shared DuckDB they are node-wide.
 - Item 52: new setting `memoryBudgetBytes` (`FLIGHT_MEMORY_BUDGET`, accepts `48g`, `48GiB` or bytes) overrides the
   host / cgroup memory detection for every resource profile (startup line `memoryBudget source=setting`), so DuckDB's
   memory limits, and with them its external file cache, are sized from it. A start that sizes from the host's memory
