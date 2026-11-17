@@ -2,6 +2,19 @@
 
 ## Next steps
 
+> **Lane 5 next step (2026-11-17T21:50Z):** FIRST read full Dev CI 44180696125 (push, `main` 66b19368: cluster
+> snapshot cache, file-plan refresh-ahead, optional member-check memory); red = fix it first. `fix/55a` still holds
+> the pre-rebase commits: restart it with `git checkout -B fix/55a origin/main` (force-with-lease) instead of rebasing.
+> State of 55 (a) on the CI cell (DC tail perf 44178943268, 3 x 1 CPU, SF1, timing): c8 p99 dc / dc-mc / speed -
+> sum_date 512 / 405 / 410, avg_date 568 / 463 / 479, limob 721 / 639 / 896 ms (was 1697 / 1592 / 2203 vs ~510 /
+> 510 / 1008 in 44174076316); c1 p99 sum_date 131 / 165 / 84, avg_date 92 / 81 / 85, limob 97 / 93 / 97 (c1 p99 is
+> a few outliers of ~300 ms: check what they are, e.g. GC or the first plan after the snapshot / file-plan refresh);
+> scans dc / speed MB/s x1 327-378 / 383-387, x4 358 / 344, x8 363 / 345. dc-mc = `distributedCompleteMemberCheckMillis=250`,
+> default 0 until the maintainer answers Q-55a-mc in STATUS.md. Remaining in the merged-shape phases at c8: open
+> (endpoint execution on the peers) 93-195 ms p50, plan 40-106 ms p50 (`hazelcast.addLoad` per endpoint: next
+> step (2) of the earlier note - does a merge-internal plan need the synchronous load write? check
+> `claimEndpointLoadLater` first). Then ask the maintainer for a real-cluster rerun (p99 <= 1.5x speed).
+
 > **Lane 5, 2026-11-17T20:10Z: done** - the item 35 check now runs with
 > `distributedCompleteSmallAnswerEndpointsPerNode=0` (one node: 55 (a) computes one-row answers there alone, as
 > `DistributedCompleteSchemaIntegrationTest` already did); full Dev CI 44162578438 on `main` 4662fa4f green.
@@ -14,7 +27,7 @@
 > lookups, a periodic stall such as the 30 s file inventory refresh?) with per-query timing on the CI cluster cell (3 servers,
 > HDFS SASL) and fix it; goal p99 <= 1.5x speed and scans >= 0.9x speed. Branch `fix/55a`. Write `ITEM 55(a) DONE <sha>` with numbers.
 
-> **Lane 5 next step (2026-11-17T20:10Z):** FIRST read full Dev CI 44166060698 (push, `main` cf9f2d29, the inventory cache); red = fix it first. Then: the merged-shape tail is planning, then opening the endpoints. DC tail perf
+> ~~**Lane 5 next step (2026-11-17T20:10Z):**~~ (done: CI green, (1) done, tail found in file-plan expiry and member checks) FIRST read full Dev CI 44166060698 (push, `main` cf9f2d29, the inventory cache); red = fix it first. Then: the merged-shape tail is planning, then opening the endpoints. DC tail perf
 > 44163827273 (`variants=dc=true:`, `timing=true`, 3 x 1 CPU, SF1): at c8 the merged line's phases (p50/p99 ms) are
 > plan 102/1175, open 119/285, merge 11/168, everything else < 1 ms; inside plan `planning.validateServers` 48/178
 > (was 88/251 before this session's inventory cache), `hazelcast.allServerLoads` 16/111, `hazelcast.filterLiveServers`
@@ -58,3 +71,13 @@
   and 44163831594 green, DC tail perf 44155712825 (all variants, phases), 44162414933 / 44163827273 (dc, timing,
   before / after the inventory cache), full Dev CI 44162578438 on `main` 4662fa4f green. Merged `fix/55a` into main.
   Item 55 (a) not done: c8 p99 of merged one-row aggregates still ~1.1 s vs speed ~0.6 s on the 1-CPU CI cell.
+- 2026-11-17T20:36-21:50Z (lane 5): full Dev CI 44166060698 on `main` cf9f2d29 green. Timing run 44171909394 showed
+  three remaining tail sources: (a) the merge plans' registry + heartbeat reads, (b) the same reads in the internal
+  calls' member address check on every peer call (`InternalCallAuthenticator.memberAddressCheck`), (c) the 30 s file
+  plan expiry, at which all concurrent plans reloaded together (`planning.fileLocations` p99 1.2-2.1 s at c8). Fixed:
+  merge plans reuse a cluster snapshot for `distributedCompleteClusterSnapshotMillis` (default 250 ms, plus the load
+  planned since; one plan renews it at a time), one plan reloads a file plan in the last 3 s of its TTL, new optional
+  `distributedCompleteMemberCheckMillis` (default 0; Q-55a-mc). Fast tier 44171418695, 44174010663, 44178948114
+  (all 1386 flight-server tests) green; DC tail perf 44174076316 (before the file-plan fix) and 44178943268 (all
+  fixes, numbers in Next steps). Merged into `main` 66b19368; full Dev CI 44180696125 pending. Item 55 (a) not done:
+  c8 p99 now <= 1.25x speed on the CI cell, c1 p99 1.5x (outliers); real-cluster numbers pending.

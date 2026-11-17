@@ -2084,6 +2084,14 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **(Q-55a-mc, 2026-11-17, lane 5) Default of `distributedCompleteMemberCheckMillis`.** Every node-to-node call of
+  distributed complete is admitted only from the address of a live member, read from the cluster maps (registry +
+  heartbeats) per call; under load those reads wait for CPU before the endpoint starts. The new setting remembers an
+  admitted address for that many ms (refused addresses are checked every call; the signed identity header is checked
+  every call regardless). Default 0 = unchanged. With 250: DC tail perf 44178943268 c8 p99 405-639 ms vs 512-721
+  without, q/s +20-25 %. Effect on security: a node that stopped being a live member can still make internal calls
+  (with a valid signature) for up to that time after its last admitted call - the heartbeat timeout already allows
+  seconds. Options: keep 0, or default 250. Lane 5 recommends 250.
 - **(Q-52b, 2026-11-17, lane 6) Default of `duckDbExternalFileCacheMaxBytes`.** Item 52 (b) caps the external file
   cache of the DuckDB-per-connection mode by default at min(DuckDB budget / 4, 8 GiB), split over the expected
   connections; a connection above its share after a query is closed and reopened (loses its statement cache, footer
@@ -4494,3 +4502,8 @@ S3 slowdown item below stays open for then).
 - 2026-11-17T21:50Z (lane 6): item 55(c) step 3 merged (5b751015): `CopyBatchMerge` (batches of copies) refuses on
   `mergeReason`, so computed GROUP BY keys merge there; an alias key that may be a table column is refused (footer columns).
   Fast tier 44179162271 green; full Dev CI 44175118886 (924baf8f) was green. Details in LANE6-STATUS.md.
+- 2026-11-17T21:50Z (lane 5): item 55 (a) merged into `main` 66b19368 (core `QueryPlanner`, `InternalCallAuthenticator`):
+  merge plans reuse the cluster snapshot (`distributedCompleteClusterSnapshotMillis`, default 250), file plans are
+  reloaded by one plan ahead of their 30 s expiry (all plans; no plan uses files older than before), optional
+  `distributedCompleteMemberCheckMillis` (default 0, Q-55a-mc). Fast tier 44178948114 green; full Dev CI 44180696125
+  pending. Details in LANE5-STATUS.md.
