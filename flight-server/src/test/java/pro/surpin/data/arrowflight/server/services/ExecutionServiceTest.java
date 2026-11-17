@@ -1310,11 +1310,13 @@ class ExecutionServiceTest {
                 "SELECT a, max(b) AS m FROM s.t GROUP BY a HAVING NOT (a = 2 OR count(*) * 2 <= 10)"
                         + " ORDER BY m LIMIT 2",
                 // Item 33 regression (egret sp-group / sp-distinct shapes).
-                "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a")) {
+                "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a",
+                // Item 55 (c): ORDER BY a selected aggregate orders by its position.
+                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3")) {
             assertTrue(ExecutionService.mergeable(query), query);
         }
         for (String query : List.of("SELECT a FROM s.t", "SELECT a FROM s.t ORDER BY a",
-                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3",
+                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) + 1 LIMIT 3",
                 "SELECT a FROM s.t ORDER BY a LIMIT 3 OFFSET 1",
                 "SELECT count(DISTINCT a + 1) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a LIMIT 2",
                 "SELECT a, sum(b) FROM s.t GROUP BY a HAVING avg(b) > 1",
