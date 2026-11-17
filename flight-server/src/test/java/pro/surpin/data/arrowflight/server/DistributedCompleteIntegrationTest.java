@@ -65,7 +65,9 @@ class DistributedCompleteIntegrationTest {
                 statement.execute("COPY (SELECT (i % " + (f == 3 ? 9 : 10) + ")::INTEGER AS k,"
                         + " (i * " + FILES + " + " + f + ")::BIGINT AS v, (i / 4.0)::DOUBLE AS d,"
                         + " 'n' || (i % 13) AS name,"
-                        + " ((i * 7919 + " + f + ") % 100003 / 100.0)::DECIMAL(15,2) AS amount"
+                        + " ((i * 7919 + " + f + ") % 100003 / 100.0)::DECIMAL(15,2) AS amount,"
+                        + " TIMESTAMP '2021-01-01 00:00:00' + (i * " + FILES + " + " + f + ") * INTERVAL 5 HOUR"
+                        + " AS ts"
                         + " FROM range(1000) r(i))"
                         + " TO '" + table.resolve("part-" + f + ".parquet") + "' (FORMAT PARQUET)");
             }
@@ -127,7 +129,11 @@ class DistributedCompleteIntegrationTest {
             "SELECT k % 4, count(*) FROM s.t GROUP BY k % 4 ORDER BY 1",
             "SELECT upper(name) AS un, floor(v / 1000) AS b, min(amount) AS lo FROM s.t GROUP BY 1, 2"
                     + " ORDER BY 1, 2",
-            "SELECT v % 5 AS g, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY g ORDER BY g");
+            "SELECT v % 5 AS g, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY g ORDER BY g",
+            // Step 4: date_trunc keys.
+            "SELECT date_trunc('month', ts) AS m, count(*) AS n, sum(v) AS sv FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT date_trunc('week', ts) AS w, min(amount) AS lo FROM s.t GROUP BY date_trunc('week', ts)"
+                    + " ORDER BY w");
 
     /**
      * Verifies merged answers equal the answers the node computes alone.

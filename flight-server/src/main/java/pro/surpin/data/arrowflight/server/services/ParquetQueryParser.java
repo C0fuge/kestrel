@@ -683,20 +683,80 @@ public class ParquetQueryParser {
             }
             return found;
         }
-        if (!(gf instanceof org.jooq.Field<?> expression) || !computable(expression)) {
+        String text = gf instanceof org.jooq.Field<?> expression ? keyText(expression, quotedCtx) : null;
+        if (text == null) {
             return -1;
         }
-        String text = quotedCtx.renderInlined(expression).trim();
         for (int i = 0; i < selectList.size(); i++) {
             SelectFieldOrAsterisk item = selectList.get(i);
             org.jooq.Field<?> field = item instanceof org.jooq.impl.QOM.FieldAlias<?> alias ? alias.$field()
                     : item instanceof org.jooq.Field<?> plain ? plain : null;
-            if (field != null && computedItem(item) && text.equals(quotedCtx.renderInlined(field).trim())) {
+            if (field != null && computedItem(item) && text.equals(keyText(field, quotedCtx))) {
                 return i;
             }
         }
         return -1;
     }
+
+    /** Renders {@code date_trunc} with its date part (jOOQ's default dialect drops the part). */
+    private static final DSLContext DATE_TRUNC_CTX = DSL.using(SQLDialect.POSTGRES,
+            new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
+
+    /** jOOQ's default-dialect rendering of {@code date_trunc(part, x)}: {@code trunc(x, null)}. */
+    private static final Pattern DEFAULT_TRUNC_DATE = Pattern.compile("(?s)^trunc\\((.*), null\\)$");
+
+    /** The PostgreSQL rendering of {@code date_trunc}, whose part is kept. */
+    private static final Pattern POSTGRES_TRUNC_DATE = Pattern.compile("^date_trunc\\('([a-z]+)', ");
+
+    /** A column, or a CAST of a column, as {@code date_trunc}'s argument of a computed key. */
+    private static final Pattern TRUNC_DATE_ARGUMENT = Pattern.compile(
+            "^(?:\"[^\"]+\"|cast\\(\"[^\"]+\" as [a-z ]+\\))$");
+
+    /** Date parts of a {@code date_trunc} key; DuckDB reads each as PostgreSQL does. */
+    private static final Set<String> TRUNC_DATE_PARTS = Set.of("year", "quarter", "month", "week", "day",
+            "hour", "minute", "second");
+
+    /** jOOQ's parse node of {@code date_trunc}, which has no public model type. */
+    private static final String TRUNC_DATE_CLASS = "org.jooq.impl.TruncDate";
+
+    /**
+     * Renders a computed GROUP BY key as executable DuckDB SQL (item 55 (c)). A
+     * {@link #computable} expression renders as jOOQ renders it; {@code date_trunc('<part>', x)},
+     * which jOOQ's default dialect renders as {@code trunc(x, null)} (silently dropping the part),
+     * is accepted only as the whole key, with a column or a CAST of a column as {@code x} and one
+     * of year, quarter, month, week, day, hour, minute or second as the part, and rendered as
+     * {@code date_trunc('<part>', x)} from jOOQ's PostgreSQL rendering of the part.
+     *
+     * @param field key expression without its alias
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @return the key's SQL, or null when no endpoint may compute it
+     */
+    static String keyText(org.jooq.Field<?> field, DSLContext quotedCtx) {
+        if (field.getClass().getName().equals(TRUNC_DATE_CLASS)) {
+            Matcher argument = DEFAULT_TRUNC_DATE.matcher(quotedCtx.renderInlined(field).trim());
+            Matcher part = POSTGRES_TRUNC_DATE.matcher(DATE_TRUNC_CTX.renderInlined(field).trim());
+            if (!argument.matches() || !part.lookingAt() || !TRUNC_DATE_PARTS.contains(part.group(1))
+                    || !TRUNC_DATE_ARGUMENT.matcher(argument.group(1)).matches()) {
+                return null;
+            }
+            return "date_trunc('" + part.group(1) + "', " + argument.group(1) + ")";
+        }
+        return computable(field) ? quotedCtx.renderInlined(field).trim() : null;
+    }
+
+    /**
+     * Tells whether rendered SQL holds a {@code date_trunc} as jOOQ's default dialect renders it
+     * ({@code trunc(x, null)}), which means something else to DuckDB.
+     *
+     * @param rendered rendered SQL
+     * @return true when it may hold one
+     */
+    static boolean holdsDefaultTruncDate(String rendered) {
+        return rendered != null && TRUNC_DATE_IN_TEXT.matcher(rendered).find();
+    }
+
+    /** A {@code date_trunc} anywhere in default-dialect SQL. */
+    private static final Pattern TRUNC_DATE_IN_TEXT = Pattern.compile("(?is)\\btrunc\\(.*, null\\)");
 
     /**
      * Tells whether a select item is a computed expression (not a plain column) that
@@ -708,8 +768,18 @@ public class ParquetQueryParser {
     private static boolean computedItem(SelectFieldOrAsterisk item) {
         org.jooq.Field<?> field = item instanceof org.jooq.impl.QOM.FieldAlias<?> alias ? alias.$field()
                 : item instanceof org.jooq.Field<?> plain ? plain : null;
-        return field != null && !(field instanceof TableField<?, ?>) && computable(field);
+        if (field == null || field instanceof TableField<?, ?>) {
+            return false;
+        }
+        // An unaliased date_trunc would be named after jOOQ's wrong rendering, not as DuckDB names it.
+        boolean truncDate = field.getClass().getName().equals(TRUNC_DATE_CLASS);
+        return (!truncDate || item instanceof org.jooq.impl.QOM.FieldAlias<?>)
+                && keyText(field, KEY_CTX) != null;
     }
+
+    /** Renderer for {@link #keyText} checks outside a parse. */
+    private static final DSLContext KEY_CTX = DSL.using(SQLDialect.DEFAULT,
+            new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
 
     /** Date parts whose {@code extract} jOOQ renders as DuckDB reads them. */
     private static final Set<DatePart> KEY_DATE_PARTS = Set.of(DatePart.YEAR, DatePart.MONTH,
@@ -1226,7 +1296,7 @@ public class ParquetQueryParser {
             }
 
             if (computedKey) {
-                exprs.add(SelectExpr.computedKey(quotedCtx.renderInlined(f).trim(), outputName));
+                exprs.add(SelectExpr.computedKey(keyText(f, quotedCtx), outputName));
             } else if (f instanceof org.jooq.impl.QOM.Count count) {
                 hasAgg = true;
                 org.jooq.Field<?> arg = count.$field();
@@ -1258,9 +1328,14 @@ public class ParquetQueryParser {
         String filter = quotedCtx.renderInlined(where);
 
         Condition having = select.$having();
+        String orderBy = renderOrderBy(select, quotedCtx, exprs);
+        if (mergeReason == null && !computedKeys.isEmpty() && holdsDefaultTruncDate(orderBy)) {
+            // Merged rows would be sorted by jOOQ's rendering of date_trunc, which drops its part.
+            mergeReason = "The ORDER BY '" + orderBy + "' holds a date_trunc; order by its alias or position";
+        }
         return new ParquetQueryParser(schema, table, columns, filter, hasAgg, gbCols, exprs,
                 false, Collections.emptyList(), null,
-                renderOrderBy(select, quotedCtx, exprs), rowCount(select.$limit()),
+                orderBy, rowCount(select.$limit()),
                 rowCount(select.$offset()), select.$distinct(),
                 having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason, where,
                 mergeReason, aliasGroupKeys);

@@ -72,7 +72,12 @@ class DistributedCompleteMergeableTest {
                 "SELECT event_type, floor(id / 100) AS b, sum(v) FROM ev.events GROUP BY event_type, b",
                 "SELECT upper(substring(name, 1, 2)) AS p, min(v) FROM ev.events GROUP BY 1",
                 "SELECT extract(year FROM ts) AS y, count(*) AS n FROM ev.events GROUP BY y ORDER BY n DESC",
-                "SELECT cast(coalesce(v, -1) AS INTEGER) % 4 AS q, max(id) FROM ev.events GROUP BY q")) {
+                "SELECT cast(coalesce(v, -1) AS INTEGER) % 4 AS q, max(id) FROM ev.events GROUP BY q",
+                // Step 4: date_trunc keys are rendered with their part (jOOQ's own rendering drops it).
+                "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1",
+                "SELECT date_trunc('month', ts) AS m, sum(v) FROM ev.events GROUP BY m ORDER BY m",
+                "SELECT date_trunc('hour', cast(ts AS TIMESTAMP)) AS h, count(*) FROM ev.events"
+                        + " GROUP BY date_trunc('hour', cast(ts AS TIMESTAMP))")) {
             ParquetQueryParser parsed = DistributedComplete.mergeable(query);
             assertNotNull(parsed, query);
             assertNull(DistributedComplete.unmergedAggregateReason(query), query);
@@ -87,8 +92,15 @@ class DistributedCompleteMergeableTest {
         assertEquals(List.of(), ParquetQueryParser.parse(
                 "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY 1").aliasGroupKeys);
         for (String query : List.of(
-                // jOOQ renders date_trunc('day', ts) as trunc("ts", null): not accepted.
-                "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1",
+                // date_trunc: another part in GROUP BY, no alias, an argument that is no column,
+                // a part outside the list, ORDER BY the function itself, nested in another key.
+                "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY date_trunc('month', ts)",
+                "SELECT date_trunc('day', ts), count(*) FROM ev.events GROUP BY 1",
+                "SELECT date_trunc('day', ts + INTERVAL '1' HOUR) AS d, count(*) FROM ev.events GROUP BY 1",
+                "SELECT date_trunc('millennium', ts) AS d, count(*) FROM ev.events GROUP BY 1",
+                "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1"
+                        + " ORDER BY date_trunc('day', ts)",
+                "SELECT extract(year FROM date_trunc('month', ts)) AS y, count(*) FROM ev.events GROUP BY 1",
                 "SELECT random() AS r, count(*) FROM ev.events GROUP BY 1",
                 "SELECT extract(isodow FROM ts) AS w, count(*) FROM ev.events GROUP BY 1",
                 "SELECT count(*) AS n, id % 6 AS g FROM ev.events GROUP BY 1",

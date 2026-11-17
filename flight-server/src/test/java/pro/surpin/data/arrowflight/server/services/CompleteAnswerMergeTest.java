@@ -44,7 +44,8 @@ class CompleteAnswerMergeTest {
             st.execute("CREATE TABLE src AS SELECT i::INTEGER AS id, 'g' || (i % 5) AS grp,"
                     + " CASE WHEN i % 7 = 0 THEN NULL ELSE i * 3 END::BIGINT AS qty,"
                     + " (i * 1.25)::DECIMAL(12,2) AS price,"
-                    + " CASE WHEN i % 11 = 0 THEN NULL ELSE 'n' || i END AS name"
+                    + " CASE WHEN i % 11 = 0 THEN NULL ELSE 'n' || i END AS name,"
+                    + " TIMESTAMP '2020-12-25 00:00:00' + i * INTERVAL 7 HOUR AS ts"
                     + " FROM range(300) r(i)");
             st.execute("CREATE SCHEMA s");
         }
@@ -126,6 +127,12 @@ class CompleteAnswerMergeTest {
             "SELECT extract(year FROM DATE '2020-12-25' + id) AS y, extract(month FROM DATE '2020-12-25' + id) AS m,"
                     + " count(*) AS c FROM s.t GROUP BY y, m",
             "SELECT lower(grp) AS lg, count(*) AS c FROM s.t WHERE id > 33 GROUP BY lg",
+            // Step 4: date_trunc keys, which jOOQ's default dialect renders without their part.
+            "SELECT date_trunc('day', ts) AS d, count(*) AS c, sum(qty) FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT date_trunc('month', ts) AS m, grp, min(price) AS lo FROM s.t GROUP BY m, grp ORDER BY m, grp",
+            "SELECT date_trunc('week', ts) AS w, count(*) AS c FROM s.t GROUP BY date_trunc('week', ts)",
+            "SELECT date_trunc('quarter', cast(ts AS DATE)) AS q, max(name) FROM s.t GROUP BY q",
+            "SELECT date_trunc('hour', ts) AS h, count(*) AS c FROM s.t GROUP BY h ORDER BY c DESC, h",
         };
         for (String query : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);

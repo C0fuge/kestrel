@@ -187,7 +187,7 @@ class CopyBatchMergeTest {
                 assertEquals(sorted(expected.rows), sorted(merged.rows), query + " -> " + sql);
             }
         }
-        // DuckDB groups by the column k, not by k % 2; a date_trunc key is not whitelisted.
+        // DuckDB groups by the column k, not by k % 2; a date_trunc of no column is refused.
         for (String query : List.of("SELECT k % 2 AS k, count(*) FROM s.t GROUP BY k",
                 "SELECT date_trunc('day', now()) AS d, count(*) FROM s.t GROUP BY d")) {
             assertNull(CopyBatchMerge.of(query, ParquetQueryParser.parse(query), COLUMNS), query);

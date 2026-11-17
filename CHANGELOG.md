@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) step 4 (lane 6): distributed complete mode and batches of copies now merge a GROUP BY on an aliased
+  `date_trunc('<part>', <column or CAST of a column>)` (year, quarter, month, week, day, hour, minute, second), rendered
+  for the endpoints as written (jOOQ's default dialect renders it as `trunc(x, null)`, dropping the part). An unaliased
+  `date_trunc`, other arguments or parts, `ORDER BY date_trunc(...)` (use the alias or position) and `date_trunc` keys next
+  to `avg` stay on one node, with their reason.
 - Item 55 (c) step 3 (lane 6): batches of local copies (item 30) now also merge a GROUP BY on a selected expression
   (by ordinal, the expression itself, or an alias that is not a column of the table per the Parquet footers; an alias that
   is also a column stays refused, DuckDB groups by the column), also next to averages.

@@ -130,7 +130,10 @@ class AverageMergeTest {
             "SELECT avg(a.qty) FROM s.t a JOIN s.u b ON a.id = b.id",
             "SELECT avg(qty) FROM s.t AT (VERSION => 3)",
             "not sql",
+            // Item 55 (c): jOOQ would render the part query's date_trunc without its part.
+            "SELECT date_trunc('day', ts) AS d, avg(qty) FROM s.t GROUP BY 1",
         };
+        assertNull(AverageMerge.of("SELECT date_trunc('day', ts) AS d, avg(qty) FROM s.t GROUP BY 1"));
         for (String query : refused) {
             AverageMerge rewrite = AverageMerge.of(query);
             boolean merges = rewrite != null

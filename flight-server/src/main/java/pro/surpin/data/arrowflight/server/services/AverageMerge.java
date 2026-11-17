@@ -104,6 +104,10 @@ public final class AverageMerge {
         String partSql = DSL.using(SQLDialect.DEFAULT,
                 new Settings().withRenderQuotedNames(RenderQuotedNames.EXPLICIT_DEFAULT_QUOTED))
                 .renderInlined(part);
+        if (ParquetQueryParser.holdsDefaultTruncDate(partSql)) {
+            // jOOQ renders date_trunc('day', ts) as trunc("ts", null), which loses the part (item 55 (c)).
+            return null;
+        }
         return new AverageMerge(original, partSql, averages);
     }
 
