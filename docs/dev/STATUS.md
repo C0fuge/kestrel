@@ -4507,3 +4507,7 @@ S3 slowdown item below stays open for then).
   reloaded by one plan ahead of their 30 s expiry (all plans; no plan uses files older than before), optional
   `distributedCompleteMemberCheckMillis` (default 0, Q-55a-mc). Fast tier 44178948114 green; full Dev CI 44180696125
   pending. Details in LANE5-STATUS.md.
+- 2026-11-17T22:56Z (lane 6): item 55(c) step 4 merged (549f00c9 + 8044fe75, core `ParquetQueryParser`, `AverageMerge`):
+  dc and batches of copies merge a GROUP BY on an aliased `date_trunc('<part>', col)`; jOOQ's default dialect renders
+  `date_trunc` as `trunc(x, null)` (part lost), so the key is rebuilt from its POSTGRES rendering. Full Dev CI 44194423955
+  pending. Details in LANE6-STATUS.md.

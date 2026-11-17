@@ -2,6 +2,24 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-17 22:55 - ITEM 55(c) step 4 merged into main 549f00c9 + 8044fe75 (not DONE).** dc and batches of
+> copies now merge a GROUP BY on an aliased `date_trunc('<part>', <column or CAST of a column>)` key (parts year, quarter,
+> month, week, day, hour, minute, second; by ordinal, alias or the expression). jOOQ parses it as the package-private
+> `TruncDate` (no accessor for the part) and its default dialect renders `trunc("ts", null)`; the part is read from jOOQ's
+> POSTGRES rendering (`ParquetQueryParser.keyText`). Kept single-node with a reason: unaliased `date_trunc` (its output name
+> would be jOOQ's wrong text), other arguments / parts, nested in another key, `ORDER BY date_trunc(...)`, and next to `avg`
+> (`AverageMerge` re-renders the whole query with the default dialect; now refused explicitly, `holdsDefaultTruncDate`).
+> `strftime` / `time_bucket` are still not parsed by jOOQ at all (the query is not parsed -> single node).
+> Fast tier 44194021162 green; full Dev CI on main: run 44194423955 (head 8044fe75).
+> **Next session:** (0) read full Dev CI 44194423955 (red = fix first). (1) If the maintainer gave the exact GROUP BY /
+> INFO `distributedComplete=single reason=` line, handle that shape. (2) `date_trunc` next to `avg`: let `AverageMerge`
+> build its part query from the parse (`keyText`) instead of re-rendering the jOOQ tree, test in AverageMergeTest +
+> the integration test. (3) `strftime(ts, fmt)` / `time_bucket`: pre-parse substitution with a placeholder function jOOQ
+> parses (and the original text kept for the endpoints) - only with DuckDB equivalence tests. (4) Optional: alias keys in
+> the complete-mode batched path (`notBatchableReason` with footer columns). (5) Per-node endpoints for big GROUP BYs if
+> still slow at scale. Side note (not lane 6): a `date_trunc` in WHERE / aggregates renders as `trunc(x, null)` too;
+> DuckDB then fails loudly (no silent wrong answer expected), worth a check by the core lane.
+
 > **Lane 6, 2026-11-17 21:50 - ITEM 55(c) step 3 merged into main 5b751015 (not DONE).** Batches of local copies
 > (`CopyBatchMerge`) now refuse on `mergeReason`, so computed GROUP BY keys merge there too (ordinal, expression, alias;
 > averages next to them through `AverageMerge`). New guard: an alias GROUP BY key is accepted only when the table's footer
@@ -119,3 +137,8 @@
   computed GROUP BY keys, alias keys guarded against shadowing a table column (see Next steps). Tests: CopyBatchMergeTest
   (DuckDB equivalence incl. avg + LIMIT), ExecutionServiceTest (mergeable lists; end-to-end batches with alias and ordinal
   keys). Fast tier 44179162271 green; merged into main 5b751015; full Dev CI 44179759902 (8025e7f5) pending.
+- 2026-11-17 22:43-22:56Z (lane 6): full Dev CI 44180696125 (66b19368, includes 5b751015) green (44179759902 was
+  cancelled by the next push). ITEM 55(c) step 4: aliased `date_trunc` GROUP BY keys merge under dc and in batches of
+  copies (see Next steps). Tests: CompleteAnswerMergeTest, CopyBatchMergeTest (DuckDB equivalence), DistributedCompleteMergeableTest
+  (accepted + 6 refused shapes), AverageMergeTest, DistributedCompleteIntegrationTest (2 merged date_trunc shapes).
+  Fast tier 44194021162 green; merged into main 549f00c9 + 8044fe75; full Dev CI 44194423955 pending.
