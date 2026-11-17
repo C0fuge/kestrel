@@ -4515,3 +4515,6 @@ S3 slowdown item below stays open for then).
   collects its load writes (`ClusterService.writeBatch()`) and writes the added load once per node (summed) with the
   endpoint reservations before it returns; same semantics, fewer writes. Fast tier 44194776591 green; full Dev CI
   44196365448 pending. Details in LANE5-STATUS.md.
+- 2026-11-17T23:58Z (lane 6): item 55(c) step 5 merged (da895086, core `AverageMerge`): an aliased `date_trunc` GROUP BY
+  key next to `avg` merges under dc (key rendered from the parse in the part query). Full Dev CI 44202588350 pending.
+  Details in LANE6-STATUS.md.

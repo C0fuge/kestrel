@@ -2,6 +2,18 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-17 23:58 - ITEM 55(c) step 5 merged into main da895086 (not DONE).** An aliased `date_trunc` GROUP BY
+> key next to `avg` now merges under dc: `AverageMerge` replaces an aliased `date_trunc` select item and a whole
+> `date_trunc` GROUP BY key by `ParquetQueryParser.keyText` (plain SQL) before rendering the part query; any other
+> `date_trunc` (WHERE, unaliased, nested, other parts) still leaves jOOQ's `trunc(x, null)` in it and is refused.
+> Tests: AverageMergeTest (3 DuckDB-equivalence shapes, 5 refused shapes), DistributedCompleteIntegrationTest (+1 merged
+> shape). Fast tier 44202134874 green; full Dev CI on main: run 44202588350 (head da895086).
+> **Next session:** (0) read full Dev CI 44202588350 (red = fix first). (1) If the maintainer gave the exact GROUP BY /
+> INFO `distributedComplete=single reason=` line, handle that shape. (2) `strftime(ts, fmt)` / `time_bucket`: pre-parse
+> substitution with a placeholder function jOOQ parses (original text kept for the endpoints) - only with DuckDB
+> equivalence tests. (3) Optional: alias keys in the complete-mode batched path (`notBatchableReason` with footer
+> columns). (4) Per-node endpoints for big GROUP BYs if still slow at scale.
+
 > **Lane 6, 2026-11-17 22:55 - ITEM 55(c) step 4 merged into main 549f00c9 + 8044fe75 (not DONE).** dc and batches of
 > copies now merge a GROUP BY on an aliased `date_trunc('<part>', <column or CAST of a column>)` key (parts year, quarter,
 > month, week, day, hour, minute, second; by ordinal, alias or the expression). jOOQ parses it as the package-private
@@ -142,3 +154,6 @@
   copies (see Next steps). Tests: CompleteAnswerMergeTest, CopyBatchMergeTest (DuckDB equivalence), DistributedCompleteMergeableTest
   (accepted + 6 refused shapes), AverageMergeTest, DistributedCompleteIntegrationTest (2 merged date_trunc shapes).
   Fast tier 44194021162 green; merged into main 549f00c9 + 8044fe75; full Dev CI 44194423955 pending.
+- 2026-11-17 23:41-23:58Z (lane 6): full Dev CI 44196365448 (49f44a18, includes 8044fe75) green (44194423955 cancelled
+  by the next push). ITEM 55(c) step 5: `date_trunc` keys next to `avg` (see Next steps). Fast tier 44202134874 green;
+  merged into main da895086; full Dev CI 44202588350 pending.
