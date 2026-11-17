@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) step 3 (lane 6): batches of local copies (item 30) now also merge a GROUP BY on a selected expression
+  (by ordinal, the expression itself, or an alias that is not a column of the table per the Parquet footers; an alias that
+  is also a column stays refused, DuckDB groups by the column), also next to averages.
 - Item 55 (c) step 2 (lane 6): distributed complete mode now merges a GROUP BY on a selected expression
   (`SELECT id % 6 AS g, count(*) ... GROUP BY g` / `GROUP BY 1` / `GROUP BY id % 6`): every endpoint computes the key,
   the merge groups by its output column. Accepted keys: columns, literals, `+ - * / %`, CAST, extract of year / month /

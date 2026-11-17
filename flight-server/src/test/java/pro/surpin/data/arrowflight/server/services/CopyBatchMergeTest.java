@@ -32,6 +32,9 @@ class CopyBatchMergeTest {
     /** Rows of one batch each, and one batch without rows. */
     private static final String[] BATCHES = {"id % 3 = 0", "id % 3 = 1", "id % 3 = 2", "id < 0"};
 
+    /** Lower-case column names of the source table. */
+    private static final java.util.Set<String> COLUMNS = java.util.Set.of("id", "grp", "qty", "price", "k", "name");
+
     private Connection connection;
 
     /**
@@ -147,6 +150,53 @@ class CopyBatchMergeTest {
                 assertEquals(sorted(expected.rows), sorted(merged.rows), query + " -> " + sql);
             }
         }
+    }
+
+    /**
+     * Item 55 (c): GROUP BY keys that are selected expressions ({@code id % 6 AS g}, by alias,
+     * ordinal or the expression itself) merge from batches of copies like plain columns, also
+     * next to averages; an alias shadowing a table column stays refused.
+     */
+    @Test
+    void computedGroupKeysMergeIntoTheAnswer() throws SQLException {
+        String[] queries = {
+            "SELECT id % 6 AS g, count(*) AS c, sum(qty) FROM s.t GROUP BY g",
+            "SELECT k + 1, min(name), max(price) FROM s.t GROUP BY 1 ORDER BY 1 DESC",
+            "SELECT lower(grp) AS lg, k % 2, count(qty) AS n FROM s.t WHERE id > 4"
+                    + " GROUP BY lower(grp), k % 2 ORDER BY n DESC, lg, 2 LIMIT 4",
+            "SELECT id % 4 AS m, avg(price) AS ap, count(*) AS c FROM s.t GROUP BY m ORDER BY m",
+        };
+        for (String query : queries) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            assertNotNull(parsed.completeAnswerReason, query);
+            // An average is merged as sum and count (AverageMerge), not by the plain merge.
+            assertEquals(query.contains("avg("), parsed.mergeReason != null, query);
+            CopyBatchMerge merge = CopyBatchMerge.of(query, parsed, COLUMNS);
+            assertNotNull(merge, query);
+            assertEquals(query.contains("avg("), merge.averages(), query);
+            // Each batch answers the part query as the executor renders it (no ORDER BY, LIMIT).
+            List<String> columns = batchAnswers(pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter
+                    .buildDuckSqlWithFilter(merge.partQuery(), "s.t", false));
+            Answer expected = answer(query, "src");
+            String sql = merge.mergeSql("parts", columns, expected.names(), partScales());
+            Answer merged = answer(sql, null);
+            assertEquals(expected.header, merged.header, query + " -> " + sql);
+            if (parsed.orderBy != null) {
+                assertEquals(expected.rows, merged.rows, query + " -> " + sql);
+            } else {
+                assertEquals(sorted(expected.rows), sorted(merged.rows), query + " -> " + sql);
+            }
+        }
+        // DuckDB groups by the column k, not by k % 2; a date_trunc key is not whitelisted.
+        for (String query : List.of("SELECT k % 2 AS k, count(*) FROM s.t GROUP BY k",
+                "SELECT date_trunc('day', now()) AS d, count(*) FROM s.t GROUP BY d")) {
+            assertNull(CopyBatchMerge.of(query, ParquetQueryParser.parse(query), COLUMNS), query);
+        }
+        // Without the table's columns an alias key may be a column: refused; ordinals are not.
+        String alias = "SELECT id % 6 AS g, count(*) FROM s.t GROUP BY g";
+        assertNull(CopyBatchMerge.of(alias, ParquetQueryParser.parse(alias)));
+        String ordinal = "SELECT id % 6 AS g, count(*) FROM s.t GROUP BY 1";
+        assertNotNull(CopyBatchMerge.of(ordinal, ParquetQueryParser.parse(ordinal)));
     }
 
     /**

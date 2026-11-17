@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Merges the answers one node computes for batches of a ticket's files into the ticket's answer
@@ -78,12 +79,28 @@ public final class CopyBatchMerge {
      * @return the merge, or null when the batches' answers cannot be merged into its answer
      */
     public static CopyBatchMerge of(String query, ParquetQueryParser parsed) {
-        if (parsed.isJoin) {
+        return of(query, parsed, null);
+    }
+
+    /**
+     * Plans the merge of a query's answers for batches of its files, knowing the columns of the
+     * table it reads: a GROUP BY name that is a select alias of an expression and also a column
+     * of the table groups by the column in DuckDB, not by the expression, so it is refused.
+     *
+     * @param query client SQL
+     * @param parsed the parsed client query
+     * @param tableColumns lower-case column names of the table, or null when unknown (every
+     *        GROUP BY alias of an expression is then refused)
+     * @return the merge, or null when the batches' answers cannot be merged into its answer
+     */
+    public static CopyBatchMerge of(String query, ParquetQueryParser parsed, Set<String> tableColumns) {
+        if (parsed.isJoin || shadowedAliasKey(parsed, tableColumns) != null) {
             return null;
         }
         boolean distinctAggregate = parsed.selectExprs.stream().anyMatch(e -> e.distinct);
         if (parsed.having == null && !distinctAggregate) {
-            if (parsed.completeAnswerReason != null) {
+            // Computed GROUP BY keys are no reason here: every batch computes them (item 55 (c)).
+            if (parsed.mergeReason != null) {
                 return averages(query, parsed);
             }
             if (CompleteAnswerMerge.partsRefusal(parsed) != null
@@ -98,6 +115,27 @@ public final class CopyBatchMerge {
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /**
+     * Tells why a GROUP BY alias of a selected expression may name a column of the table
+     * (item 55 (c)): DuckDB binds such a name to the column, the merge would group by the
+     * expression.
+     *
+     * @param parsed parsed client query
+     * @param tableColumns lower-case column names of the table, or null when unknown
+     * @return the reason, or null when no GROUP BY alias can be a column
+     */
+    static String shadowedAliasKey(ParquetQueryParser parsed, Set<String> tableColumns) {
+        for (String key : parsed.aliasGroupKeys) {
+            if (tableColumns == null) {
+                return "The GROUP BY name '" + key + "' is a select alias and the table's columns are unknown";
+            }
+            if (tableColumns.contains(key.toLowerCase(Locale.ROOT))) {
+                return "The GROUP BY name '" + key + "' is a select alias and a column of the table";
+            }
+        }
+        return null;
     }
 
     /**

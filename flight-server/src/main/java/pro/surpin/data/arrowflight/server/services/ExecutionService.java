@@ -1165,7 +1165,7 @@ public final class ExecutionService {
         }
         boolean concatenatable = concatenatable(parsedQuery);
         CopyBatchMerge merge = startListener && unreadable != null && !concatenatable
-                ? CopyBatchMerge.of(query, parsedQuery) : null;
+                ? copyBatchMerge(query, parsedQuery) : null;
         // A merged answer does not depend on the file order: copies already cached go first,
         // so they are reused before the cache makes room for the others (item 33 (C)).
         List<String[]> batches = startListener && unreadable != null
@@ -1187,6 +1187,33 @@ public final class ExecutionService {
             readParquetFiles(allocator, query, parsedQuery, parquetFiles,
                     resolveUris(fileUris, copies), listener, startListener, pathTracker);
         }
+    }
+
+    /**
+     * Plans the merge of a query's answers for batches of copies ({@link CopyBatchMerge#of}),
+     * with the columns of its table from the Parquet footers, so a GROUP BY alias that is not
+     * a column of the table merges (item 55 (c)).
+     *
+     * @param query client SQL
+     * @param parsed the parsed query
+     * @return the merge, or null when the batches' answers cannot be merged
+     */
+    private CopyBatchMerge copyBatchMerge(String query, ParquetQueryParser parsed) {
+        java.util.Set<String> columns = null;
+        if (!parsed.aliasGroupKeys.isEmpty()) {
+            try {
+                Schema table = footerTableSchema(parsed.schema, parsed.table);
+                if (table != null) {
+                    columns = new java.util.HashSet<>();
+                    for (Field field : table.getFields()) {
+                        columns.add(field.getName().toLowerCase(java.util.Locale.ROOT));
+                    }
+                }
+            } catch (RuntimeException e) {
+                columns = null;
+            }
+        }
+        return CopyBatchMerge.of(query, parsed, columns);
     }
 
     /**
@@ -2481,7 +2508,7 @@ public final class ExecutionService {
             return CopyBatches.declined(notBatchable);
         }
         Schema complete = completeSchema(allocator, sql);
-        CopyBatchMerge merge = concatenatable(parsed) ? null : CopyBatchMerge.of(sql, parsed);
+        CopyBatchMerge merge = concatenatable(parsed) ? null : copyBatchMerge(sql, parsed);
         // Averages are answered by the batches as sums and counts, named by the complete answer.
         Schema partial = merge != null && merge.averages() ? complete : resultSchema(allocator, sql);
         boolean renamed = !sameColumns(complete, partial);
@@ -2588,7 +2615,9 @@ public final class ExecutionService {
         if (concatenatable(parsed) || CopyBatchMerge.of(sql, parsed) != null) {
             return null;
         }
-        String why = parsed.completeAnswerReason != null ? parsed.completeAnswerReason
+        String shadowed = CopyBatchMerge.shadowedAliasKey(parsed, null);
+        String why = parsed.mergeReason != null ? parsed.mergeReason
+                : shadowed != null ? shadowed
                 : parsed.singleNodeFeature() != null ? "it uses " + parsed.singleNodeFeature()
                 : CompleteAnswerMerge.partsRefusal(parsed);
         return "its answer cannot be merged from batches of copies"

@@ -1126,8 +1126,12 @@ class ExecutionServiceTest {
             return call.callRealMethod();
         }).when(duckDb).streamSql(any(), anyString(), any(CollectedAnswers.class),
                 org.mockito.ArgumentMatchers.eq(true));
-        ExecutionService service = new ExecutionService(parquet, duckDb,
-                mock(MetadataService.class), null, ioPool);
+        MetadataService metadata = mock(MetadataService.class);
+        // The footer columns: a GROUP BY alias that is no column merges (item 55 (c)).
+        when(metadata.getTableSchema("s", "t", null)).thenReturn(new Schema(List.of(
+                Field.nullable("g", new ArrowType.Int(64, true)), Field.nullable("v", new ArrowType.Int(64, true)),
+                Field.nullable("d", new ArrowType.Decimal(15, 2, 128)))));
+        ExecutionService service = new ExecutionService(parquet, duckDb, metadata, null, ioPool);
         String source = "read_parquet([" + String.join(", ", all) + "])";
         System.setProperty("hdfsLocalCopyMaxBytes", String.valueOf(largest));
         try (BufferAllocator allocator = new RootAllocator()) {
@@ -1149,7 +1153,10 @@ class ExecutionServiceTest {
                             + " HAVING sum(v) > 1142000 AND max(v) >= 10 ORDER BY g",
                     "SELECT count(DISTINCT g) AS ng, sum(DISTINCT g), count(*) FROM s.t WHERE v > 5",
                     "SELECT g, count(DISTINCT d) AS nd, sum(v) FROM s.t GROUP BY g"
-                            + " HAVING count(*) > 571 ORDER BY nd DESC, g LIMIT 4")) {
+                            + " HAVING count(*) > 571 ORDER BY nd DESC, g LIMIT 4",
+                    // Item 55 (c): computed GROUP BY keys (by alias and by ordinal).
+                    "SELECT v % 6 AS m, count(*) AS n, sum(d) FROM s.t GROUP BY m ORDER BY m",
+                    "SELECT g + 1, max(v), min(d) AS ld FROM s.t GROUP BY 1 ORDER BY 1 DESC")) {
                 copiesOnDisk.clear();
                 List<String> expected = new java.util.ArrayList<>();
                 try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
@@ -1312,7 +1319,10 @@ class ExecutionServiceTest {
                 // Item 33 regression (egret sp-group / sp-distinct shapes).
                 "SELECT count(DISTINCT a), count(DISTINCT b) FROM s.t", "SELECT a, avg(b) FROM s.t GROUP BY a",
                 // Item 55 (c): ORDER BY a selected aggregate orders by its position.
-                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3")) {
+                "SELECT a, count(*) FROM s.t GROUP BY a ORDER BY count(*) LIMIT 3",
+                // Item 55 (c): a GROUP BY on a selected expression.
+                "SELECT b % 6 AS g, count(*) FROM s.t GROUP BY b % 6", "SELECT a + 1, sum(b) FROM s.t GROUP BY 1",
+                "SELECT b % 2 AS p, avg(c) FROM s.t GROUP BY 1")) {
             assertTrue(ExecutionService.mergeable(query), query);
         }
         for (String query : List.of("SELECT a FROM s.t", "SELECT a FROM s.t ORDER BY a",
@@ -1324,7 +1334,9 @@ class ExecutionServiceTest {
                 "SELECT a, sum(b) FROM s.t GROUP BY a HAVING abs(sum(b)) > 1",
                 "SELECT sum(b) FROM s.t GROUP BY a HAVING sum(b) > 1",
                 "SELECT count(*) FROM s.t GROUP BY a", "SELECT a, avg(DISTINCT b) FROM s.t GROUP BY a",
-                "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a")) {
+                "SELECT x.a, count(*) FROM s.t x JOIN s.u y ON x.a = y.a GROUP BY x.a",
+                // Item 55 (c): without the table's columns a GROUP BY alias may be a column.
+                "SELECT b % 6 AS g, count(*) FROM s.t GROUP BY g")) {
             assertFalse(ExecutionService.mergeable(query), query);
         }
     }
