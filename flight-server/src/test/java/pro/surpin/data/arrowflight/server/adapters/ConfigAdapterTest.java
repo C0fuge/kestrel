@@ -476,6 +476,18 @@ class ConfigAdapterTest {
                 source(Map.of("distributedAggregateMinBytes", "big"), Map.of())));
     }
 
+    /** Item 55 (a): plain scans under distributed complete are merged unless set to local. */
+    @Test
+    void distributedCompleteScansDefaultToMerge() throws IOException {
+        assertFalse(ConfigAdapter.distributedCompleteScansLocal(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.distributedCompleteScansLocal(
+                source(Map.of("distributedCompleteScans", "local"), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompleteScansLocal(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_SCANS", "MERGE"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteScansLocal(
+                source(Map.of("distributedCompleteScans", "sometimes"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));

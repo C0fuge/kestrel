@@ -289,7 +289,7 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 | Flight/gRPC | `grpcMaxInboundMessageSize`, `flightBackpressureThresholdBytes`, `flightListenerReadyTimeoutMs`, `flightOutboundBudgetBytes`, `flightZeroCopyWrites`, `streamTimingLog`, `flightCompression`, `flightCompressionLevel`, `flightCompressionMinBytes`, `flightCompressionThreads`, `flightSessionIdleSeconds`, `flightSessionMax` |
 | Client | `client.maxRetries`, `client.retryBackoffMs`, `client.connectTimeoutMs` |
 | Hazelcast | `hazelcastClusterJoinTimeoutSec` |
-| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `distributedCompleteLocalScanMaxBytes`, `distributedAggregateMinBytes`, `fileInventoryRefreshSeconds`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
+| Cluster | `dataDirShared`, `endpointBackupLocations`, `endpointsPerServer`, `distributedComplete`, `distributedCompleteTrustedCertificates`, `distributedCompletePeerStreams`, `distributedCompleteAdmissionWaitMillis`, `distributedCompletePointLookups`, `distributedCompleteLocalAggregateMaxFiles`, `distributedCompleteLocalScanMaxBytes`, `distributedAggregateMinBytes`, `distributedCompleteScans`, `fileInventoryRefreshSeconds`, `flightLoadReservationSeconds`, `shutdownDrainSeconds` |
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
@@ -453,6 +453,11 @@ directories, held by it (the node inventories name no file of the table on anoth
 merges per stream, at least 32, at once; more wait as usual). After `distributedCompleteAdmissionWaitMillis` (default 300000)
 it is refused with `RESOURCE_EXHAUSTED`, which a client may retry. Any Arrow memory shortage is reported as
 `RESOURCE_EXHAUSTED`.
+
+Under `distributedComplete`, `distributedCompleteScans` (`FLIGHT_DISTRIBUTED_COMPLETE_SCANS`, added 2026-11-17, item 55)
+chooses how a plain scan (no aggregate, DISTINCT, ORDER BY or LIMIT) is answered: `merge` (default, as before) merges it
+from endpoint answers; `local` computes it on the planning node when that node can read every file, so the rows reach
+the client without a second hop (debug line `distributedComplete=local reason='plain scan'`).
 
 With `distributedComplete=false`, `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, added
 2026-11-17, item 55; DuckDB units such as `8GiB` or bytes, default 0 = off) merges the complete answer of an aggregate

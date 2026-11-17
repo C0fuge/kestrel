@@ -688,6 +688,30 @@ public class ConfigAdapter {
         throw new IllegalArgumentException("distributedCompletePointLookups must be local or merge: " + value);
     }
 
+    /**
+     * Resolves {@code distributedCompleteScans} ({@code arrowflight.cluster.distributedCompleteScans},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_SCANS}): how distributed complete mode answers a plain
+     * scan (no aggregate, no DISTINCT, no ORDER BY, no LIMIT; item 55 (a)): {@code merge} (default,
+     * as before) merges it from endpoint answers; {@code local} computes it on the planning node
+     * alone when that node can read every file, as without distributed complete, so its rows
+     * reach the client without a second hop.
+     *
+     * @param props configuration source
+     * @return true for {@code local}
+     * @throws IllegalArgumentException for a value other than local or merge
+     */
+    public static boolean distributedCompleteScansLocal(ConfigSource props) {
+        String value = getStringWithEnv("distributedCompleteScans", "arrowflight.cluster.distributedCompleteScans",
+                "FLIGHT_DISTRIBUTED_COMPLETE_SCANS", "merge", props).trim();
+        if ("local".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("merge".equalsIgnoreCase(value)) {
+            return false;
+        }
+        throw new IllegalArgumentException("distributedCompleteScans must be local or merge: " + value);
+    }
+
     /** Smallest default of {@code arrowAllocatorLimitBytes} (Q3): 256 MiB. */
     public static final long MIN_DEFAULT_ARROW_ALLOCATOR_LIMIT_BYTES = 256L << 20;
 

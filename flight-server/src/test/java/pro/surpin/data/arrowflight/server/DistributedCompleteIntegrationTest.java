@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import pro.surpin.data.arrowflight.server.services.DistributedComplete;
+import pro.surpin.data.arrowflight.server.services.ParquetQueryParser;
 import pro.surpin.data.arrowflight.server.services.PeerStreamAdmission;
 
 import java.net.ServerSocket;
@@ -475,6 +476,52 @@ class DistributedCompleteIntegrationTest {
         assertEquals(aggregates.size() + 1, distributed.mergedAnswers());
         assertEquals(0, distributed.fallbacks());
         assertThrows(IllegalArgumentException.class, () -> distributed.aggregatesOnly(-1));
+    }
+
+    /**
+     * Verifies item 55 (a): with {@code distributedCompleteScans=local}, a plain scan (no
+     * aggregate, DISTINCT, ORDER BY or LIMIT) is computed by this node alone, with the rows of the
+     * node's own answer; ordered scans and aggregates are still merged, and nothing is local with
+     * {@code merge}.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void plainScansAreComputedHereWhenAsked() throws Exception {
+        String scan = "SELECT v, k, name FROM s.t WHERE k < 3";
+        String ordered = "SELECT v, k FROM s.t WHERE v < 40 ORDER BY 1";
+        String grouped = "SELECT k, sum(v) AS total FROM s.t GROUP BY k ORDER BY k";
+        List<String> scanAlone = sortedLines(answer(scan));
+        String orderedAlone = answer(ordered);
+        String groupedAlone = answer(grouped);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
+        assertEquals(scanAlone, sortedLines(answer(scan)));
+        assertEquals(1, distributed.mergedAnswers(), "merge is the default");
+        assertEquals(0, distributed.localPlainScans());
+        distributed.scansLocal(true);
+        assertEquals(scanAlone, sortedLines(answer(scan)));
+        assertEquals(1, distributed.localPlainScans());
+        assertEquals(1, distributed.mergedAnswers());
+        assertEquals(orderedAlone, answer(ordered));
+        assertEquals(groupedAlone, answer(grouped));
+        assertEquals(3, distributed.mergedAnswers());
+        assertEquals(1, distributed.localPlainScans());
+        assertTrue(DistributedComplete.plainScan(ParquetQueryParser.parse(scan)));
+        assertFalse(DistributedComplete.plainScan(ParquetQueryParser.parse("SELECT DISTINCT k FROM s.t")));
+        assertFalse(DistributedComplete.plainScan(ParquetQueryParser.parse("SELECT v FROM s.t LIMIT 3")));
+        assertFalse(DistributedComplete.plainScan(ParquetQueryParser.parse(ordered)));
+    }
+
+    /**
+     * Sorts the lines of an answer text, schema line first, for answers without ORDER BY.
+     *
+     * @param answer schema and rows
+     * @return the lines in order
+     */
+    private static List<String> sortedLines(String answer) {
+        List<String> lines = new ArrayList<>(List.of(answer.split("\n")));
+        java.util.Collections.sort(lines);
+        return lines;
     }
 
     /**

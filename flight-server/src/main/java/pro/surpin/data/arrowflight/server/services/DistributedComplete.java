@@ -131,6 +131,9 @@ public final class DistributedComplete implements AutoCloseable {
      * merged; 0 (distributedComplete) merges every mergeable shape.
      */
     private volatile long aggregatesOnlyMinBytes;
+    /** Plain scans computed on this node alone when it can read the files (item 55 (a)). */
+    private volatile boolean scansLocal;
+    private final AtomicLong localPlainScans = new AtomicLong();
     private final AtomicLong notBigEnough = new AtomicLong();
 
     /**
@@ -250,6 +253,12 @@ public final class DistributedComplete implements AutoCloseable {
         if (pointLookupsLocal && pointLookup(parsed) && planner.answerableHere(partQuery)) {
             localPointLookups.incrementAndGet();
             LOGGER.debug("node={} distributedComplete=local reason='point lookup' query='{}'", LogUtil.node(),
+                    LogUtil.oneLine(query));
+            return false;
+        }
+        if (scansLocal && plainScan(parsed) && planner.answerableHere(partQuery)) {
+            localPlainScans.incrementAndGet();
+            LOGGER.debug("node={} distributedComplete=local reason='plain scan' query='{}'", LogUtil.node(),
                     LogUtil.oneLine(query));
             return false;
         }
@@ -531,6 +540,18 @@ public final class DistributedComplete implements AutoCloseable {
     }
 
     /**
+     * Tells whether a part query is a plain scan (item 55 (a)): no aggregate, no DISTINCT, no
+     * ORDER BY and no LIMIT, so its merge only concatenates the endpoint answers.
+     *
+     * @param parsed the part query
+     * @return true for a plain scan
+     */
+    public static boolean plainScan(ParquetQueryParser parsed) {
+        return !parsed.hasAggregation && !parsed.distinct && parsed.limit == null
+                && (parsed.orderBy == null || parsed.orderBy.isBlank());
+    }
+
+    /**
      * Tells whether a part query is a LIMIT of at most {@link #SMALL_LIMIT} rows without
      * aggregation, with or without ORDER BY (item 50).
      *
@@ -740,6 +761,25 @@ public final class DistributedComplete implements AutoCloseable {
             throw new IllegalArgumentException("aggregatesOnly must be 0 or more: " + minBytes);
         }
         this.aggregatesOnlyMinBytes = minBytes;
+    }
+
+    /**
+     * Sets whether plain scans are computed on this node alone when it can read their files
+     * ({@code distributedCompleteScans=local}) or merged ({@code merge}, the default) (item 55 (a)).
+     *
+     * @param local true to compute plain scans here
+     */
+    public void scansLocal(boolean local) {
+        this.scansLocal = local;
+    }
+
+    /**
+     * Counts the plain scans computed on this node alone since start (item 55 (a)).
+     *
+     * @return plain scans not merged
+     */
+    public long localPlainScans() {
+        return localPlainScans.get();
     }
 
     /**

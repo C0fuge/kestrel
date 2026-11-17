@@ -564,6 +564,12 @@ public class HadoopArrowFlightServer {
                         + " pruning have <= " + (scanBytes >> 20) + " MiB; unfiltered count(*): local"
                 : "merge (on probation: no permits until 16 MiB read)");
         distributedComplete.aggregatesOnly(aggregateMinBytes);
+        boolean scansLocal = ConfigAdapter.distributedCompleteScansLocal(ConfigSource.system());
+        distributedComplete.scansLocal(scansLocal);
+        if (scansLocal) {
+            LOGGER.info("distributedCompleteScans=local: plain scans (no aggregate, DISTINCT, ORDER BY or LIMIT)"
+                    + " are computed on the planning node when it can read their files");
+        }
         if (aggregateMinBytes > 0) {
             LOGGER.info("distributedAggregateMinBytes={} MiB: complete answers of aggregates over at least"
                     + " this many bytes after footer pruning are merged across the nodes, all other queries"

@@ -13,6 +13,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
   footer pruning total at least this size are merged from endpoint answers on the nodes, as under distributedComplete;
   all other queries stay on the receiving node. Unset, nothing changes.
+- Item 55 (a) (lane 3): new setting `distributedCompleteScans` (`FLIGHT_DISTRIBUTED_COMPLETE_SCANS`, `merge` default /
+  `local`). With `local`, distributed complete computes plain scans (no aggregate, DISTINCT, ORDER BY or LIMIT) on the
+  planning node when it can read every file instead of merging them. Default unchanged.
 
 - Pre-release `server-1.0.0-6f0aa5a026fa` (2026-11-16): `main` 6f0aa5a0 with item 51.
 - Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
