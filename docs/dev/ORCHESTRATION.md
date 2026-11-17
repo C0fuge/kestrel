@@ -1,11 +1,11 @@
 # Orchestration status
 
-ALL DONE 2026-11-17T04:58Z (restored 20:58Z; withdrawn 2026-11-15 22:00Z for items 49-51). kestrel `ITEM 51 DONE 6f0aa5a0`
+ALL DONE 2026-11-17T05:58Z (restored 20:58Z; withdrawn 2026-11-15 22:00Z for items 49-51). kestrel `ITEM 51 DONE 6f0aa5a0`
 written 20:50Z (items 26 / 27 DONE 2026-11-03); marten ITEM 51 item (2) measured (SF10 both orders 22/22, SF1 88/88,
 m4 S3 1-9 with RF PASS), default switch proposed to the maintainer; heron UPSTREAM 2026-11 DONE a11a36c (series
 frozen); egret FRESH on the newest pre-release `server-1.0.0-6f0aa5a026fa` DONE.
 
-Status as of **2026-11-17T04:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-17T05:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **marten proposal (STATUS Open questions, 2026-11-16 20:10):** make runtime filters the default (FE-only: 0002
@@ -30,7 +30,7 @@ Points for the maintainer:
 | lane 3 (`LANE3-STATUS.md`) | nothing open | 21:03Z | free | lane/distributed Dev CI 43782908034 green |
 
 No new bug-first notes in any lane. No stale locks: kestrel locks all empty; marten `docs/LOCK` empty (released 03:50Z);
-heron `docs/LOCK` empty (session 311 released 04:50Z; session 310 SF1 re-check 44013068299: runner noise, pin
+heron `docs/LOCK` empty (session 312 released 05:51Z; session 310 SF1 re-check 44013068299: runner noise, pin
 6f0aa5a026fa kept). No new kestrel CI runs since 09:05Z; no new pre-releases.
 
 ## Service matrix (newest run per workflow)
@@ -65,6 +65,7 @@ heron `docs/LOCK` empty (session 311 released 04:50Z; session 310 SF1 re-check 4
 
 ## History
 
+- 2026-11-17T05:58Z: ALL DONE kept; no change: kestrel only lane no-open-item notes (lane 3, plugins, catalogs 05:04-05:21Z), no new CI runs or pre-releases; marten waiting for the maintainer; heron session 312 idle; egret idle; no stale locks.
 - 2026-11-17T04:58Z: ALL DONE kept; no change: kestrel only catalogs session 89 no-open-item note, no new CI runs or pre-releases; marten still waiting for the maintainer; heron session 310 cleared SF1 watch (44013068299, noise), 311 idle; no stale locks.
 - 2026-11-17T03:58Z: ALL DONE kept; no new kestrel commits except lane no-open-item notes, no new CI runs or pre-releases; marten waiting for the maintainer (runtime-filter default proposal, 03:40Z); heron session active (lock 03:50Z); no stale locks.
 - 2026-11-16T21:58Z: ALL DONE kept; marten m4 S3 1-9 without RF 43950963745 PASS (measurements complete, default switch waits for the maintainer); heron pinned 6f0aa5a026fa (e2e green, compare running, lock 20:51Z active); kestrel lanes nothing open, no new CI runs or pre-releases; no stale locks.
@@ -104,4 +105,3 @@ heron `docs/LOCK` empty (session 311 released 04:50Z; session 310 SF1 re-check 4
 - 2026-11-12T03:58Z: ALL DONE suspended (egret FRESH on newest pre-release 74464701e372 running: 43148390757 / ACCEPT 43148393964); maintainer's 21:10 answers implemented: Q-40b-1 2f31c071, ITEM 47 DONE 2c169a53 (catalogs), ITEM 48 DONE 97ad4f22 + Q3 (lane 3); core lane (lock 03:46Z) packaging on pkg/2c169a53 (Dev CI 43150534816 running); main Dev CI 43147654545 red only at the service gate (main moved), no rerun; no stale locks.
 - 2026-11-11T17:57Z: ALL DONE kept; plugins ITEM 46 DONE c96a1272 (main 74464701; Dev CI 43064709644, Service hdfs 43064709693, Catalogs CI 43064709784 green); core lane (lock 17:44Z) packaging on pkg/74464701 (Dev CI 43071198734 running); no new pre-release; marten/heron/egret idle; no stale locks, no red CI.
 - 2026-11-11T16:57Z: ALL DONE kept; plugins ITEM 46 on fix/46 progressing: Dev CI 43056505119 green after mirror fixes, Service hdfs 43056510473 red (apt infra), lane pushed bea11172 and 43060538104 is running (no orchestrator rerun); main unchanged, no new pre-release; marten/heron/egret idle; no stale locks.
-- 2026-11-11T15:57Z: ALL DONE kept, but plugins ITEM 46 (maintainer stand note 18:40: sizing budget, qid=null in denials, QOP log; Q-46 for the extension repo) on fix/46, unmerged: TPC-H perf 43047430684 green, Dev CI / Service hdfs red on runner ubuntu.com DNS (infra), failed job of 43050095655 re-run once; main unchanged, locks free, no new pre-release; marten/heron/egret idle.
