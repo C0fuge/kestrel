@@ -825,6 +825,28 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteClusterSnapshotMillis}
+     * ({@code arrowflight.cluster.distributedCompleteClusterSnapshotMillis},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS}): how long the plans of a
+     * distributed-complete merge reuse the live servers and loads read from the cluster maps, plus
+     * the load this node planned since (item 55 (a)); default 250, 0 = read them for every plan.
+     *
+     * @param props configuration source
+     * @return milliseconds, 0 for none
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int distributedCompleteClusterSnapshotMillis(ConfigSource props) {
+        int value = getIntWithEnv("distributedCompleteClusterSnapshotMillis",
+                "arrowflight.cluster.distributedCompleteClusterSnapshotMillis",
+                "FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS", 250, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("distributedCompleteClusterSnapshotMillis must be 0 or more: "
+                    + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteLocalScanMaxBytes}
      * ({@code arrowflight.cluster.distributedCompleteLocalScanMaxBytes},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES}): with

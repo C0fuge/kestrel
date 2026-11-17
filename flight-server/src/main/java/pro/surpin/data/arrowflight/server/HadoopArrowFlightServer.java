@@ -561,6 +561,10 @@ public class HadoopArrowFlightServer {
         distributedComplete.forwardScans(forwardScans);
         int smallEndpoints = ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(ConfigSource.system());
         distributedComplete.smallAnswerEndpointsPerNode(smallEndpoints);
+        int snapshotMillis = ConfigAdapter.distributedCompleteClusterSnapshotMillis(ConfigSource.system());
+        component.queryPlanner().mergeClusterSnapshotMillis(snapshotMillis);
+        LOGGER.info("distributedComplete merge plans reuse the cluster's live servers and loads for {} ms",
+                snapshotMillis);
         LOGGER.info("distributedComplete one-row aggregates and small LIMITs: {} endpoints per node",
                 smallEndpoints == 0 ? "endpointsPerServer" : Integer.toString(smallEndpoints));
         LOGGER.info("distributedComplete plain scans: {}", forwardScans

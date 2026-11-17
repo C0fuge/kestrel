@@ -65,6 +65,10 @@ public final class QueryPlanner {
     /** Server URI -> UUID of the member whose published file inventory a plan saw (item 55 (a)). */
     private final Map<String, String> inventorySeen = new ConcurrentHashMap<>();
     private final TableStatisticsService tableStatistics;
+    /** How long a merge-internal plan may reuse the cluster snapshot, in nanoseconds; 0 = never. */
+    private volatile long mergeClusterSnapshotNanos;
+    /** Cluster snapshot that merge-internal plans reuse, null until one is taken (item 55 (a)). */
+    private volatile CachedCluster cachedCluster;
 
     /**
      * Stores immutable table file assignments until the inventory refresh deadline.
@@ -84,6 +88,28 @@ public final class QueryPlanner {
      */
     private record ClusterSnapshot(
             Set<String> serverUris, Map<String, Long> serverLoads) {
+    }
+
+    /**
+     * A cluster snapshot that merge-internal plans reuse for a short time, with the load this
+     * node's plans added since it was taken, so that plans in a row do not all pick the node that
+     * was least loaded when it was read.
+     *
+     * @param snapshot live servers and their loads as read
+     * @param takenAtNanos monotonic time of the read
+     * @param addedSince bytes this node's plans added per server since the read
+     */
+    private record CachedCluster(ClusterSnapshot snapshot, long takenAtNanos,
+            Map<String, Long> addedSince) {
+
+        ClusterSnapshot withAddedLoad() {
+            if (addedSince.isEmpty()) {
+                return snapshot;
+            }
+            Map<String, Long> loads = new HashMap<>(snapshot.serverLoads());
+            addedSince.forEach((uri, bytes) -> loads.computeIfPresent(uri, (k, v) -> v + bytes));
+            return new ClusterSnapshot(snapshot.serverUris(), Map.copyOf(loads));
+        }
     }
 
     /**
@@ -159,6 +185,27 @@ public final class QueryPlanner {
     }
 
     /**
+     * Sets how long the plans of a distributed-complete merge ({@link #plan(String, int)}) may
+     * reuse the live servers and loads read from the cluster maps by an earlier plan, plus the
+     * load this node's plans added since. Each read costs several cluster map calls, which wait
+     * for CPU on a loaded node and made most of a small merged query's planning tail (item 55 (a)).
+     * A node that stopped within that time is still planned; the merge then fails over as for a
+     * node that stops right after planning.
+     *
+     * @param millis the time, 0 to read the cluster maps for every plan
+     * @throws IllegalArgumentException for a negative time
+     */
+    public void mergeClusterSnapshotMillis(long millis) {
+        if (millis < 0) {
+            throw new IllegalArgumentException("mergeClusterSnapshotMillis must be 0 or more: " + millis);
+        }
+        this.mergeClusterSnapshotNanos = TimeUnit.MILLISECONDS.toNanos(millis);
+        if (millis == 0) {
+            cachedCluster = null;
+        }
+    }
+
+    /**
      * Determines Flight endpoints for a SQL query, distributing files across live servers.
      * Handles JOIN queries only when one node owns every required shard.
      *
@@ -201,7 +248,7 @@ public final class QueryPlanner {
         // One read scope: every table of the plan comes from the same data version (lakeFS commit).
         try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
                 : store.readScope()) {
-            return planInScope(query, plannerAsBackup, 0);
+            return planInScope(query, plannerAsBackup, 0, false);
         }
     }
 
@@ -225,12 +272,12 @@ public final class QueryPlanner {
         DataStore store = parquetAdapter.dataStore();
         try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
                 : store.readScope()) {
-            return planInScope(query, false, maxEndpointsPerNode);
+            return planInScope(query, false, maxEndpointsPerNode, true);
         }
     }
 
-    private QueryPlan planInScope(String query, boolean plannerAsBackup, int maxEndpointsPerNode)
-            throws IOException {
+    private QueryPlan planInScope(String query, boolean plannerAsBackup, int maxEndpointsPerNode,
+            boolean mergeInternal) throws IOException {
         long t = LogUtil.mark();
         TravelledTable travelled = null;
         if (TimeTravelClause.present(query)) {
@@ -244,7 +291,7 @@ public final class QueryPlanner {
         }
         ParquetQueryParser parsed = travelled != null ? travelled.parsed() : ParquetQueryParser.parse(query);
         long tSv = LogUtil.mark();
-        ClusterSnapshot cluster = validatedCluster();
+        ClusterSnapshot cluster = mergeInternal ? reusableCluster() : validatedCluster();
         Set<String> allServerUris = cluster.serverUris();
         LogUtil.logTiming(tSv, "planning.validateServers", "servers=" + allServerUris.size());
         String singleNodeFeature = parsed.singleNodeFeature();
@@ -705,6 +752,48 @@ public final class QueryPlanner {
         return result;
     }
 
+    /**
+     * Returns the cluster snapshot of a merge-internal plan: the cached one while it is younger
+     * than {@link #mergeClusterSnapshotMillis(long)}, otherwise a fresh read that is cached.
+     *
+     * @return live servers and loads
+     * @throws IOException as {@link #validatedCluster()}
+     */
+    private ClusterSnapshot reusableCluster() throws IOException {
+        long maxAge = mergeClusterSnapshotNanos;
+        if (maxAge <= 0) {
+            return validatedCluster();
+        }
+        CachedCluster cached = cachedCluster;
+        long now = System.nanoTime();
+        if (cached != null && now - cached.takenAtNanos() < maxAge) {
+            return cached.withAddedLoad();
+        }
+        // Added load is counted from before the read: load added while it runs may count twice,
+        // which only spreads the next plans a little more.
+        Map<String, Long> addedSince = new ConcurrentHashMap<>();
+        cachedCluster = cached == null ? null
+                : new CachedCluster(cached.snapshot(), cached.takenAtNanos(), addedSince);
+        ClusterSnapshot fresh = validatedCluster();
+        cachedCluster = new CachedCluster(fresh, now, addedSince);
+        return fresh;
+    }
+
+    /**
+     * Counts bytes planned for a server in the cluster's loads, and in the cached snapshot of
+     * merge-internal plans.
+     *
+     * @param server server URI
+     * @param bytes bytes added
+     */
+    private void addLoad(String server, long bytes) {
+        clusterService.addLoad(server, bytes);
+        CachedCluster cached = cachedCluster;
+        if (cached != null) {
+            cached.addedSince().merge(server, bytes, Long::sum);
+        }
+    }
+
     private ClusterSnapshot validatedCluster() throws IOException {
         long t = LogUtil.mark();
         Map<String, Long> registry = clusterService.allServerLoads();
@@ -1006,7 +1095,7 @@ public final class QueryPlanner {
         FlightEndpoint ep = createEndpoint(allFilesServer, files, query, addedBytes, loadTracked,
                 backups.forEndpoint(allFilesServer, files));
         if (loadTracked) {
-            clusterService.addLoad(allFilesServer, addedBytes);
+            addLoad(allFilesServer, addedBytes);
         }
         return List.of(ep);
     }
@@ -1064,7 +1153,7 @@ public final class QueryPlanner {
         FlightEndpoint ep = createEndpoint(server, files, query, addedBytes, loadTracked,
                 backups.forEndpoint(server, files));
         if (loadTracked) {
-            clusterService.addLoad(server, addedBytes);
+            addLoad(server, addedBytes);
         }
         return List.of(ep);
     }
@@ -1101,7 +1190,7 @@ public final class QueryPlanner {
                 endpoints.add(createEndpoint(server, part, query, addedBytes, loadTracked,
                         backups.forEndpoint(server, part)));
                 if (loadTracked) {
-                    clusterService.addLoad(server, addedBytes);
+                    addLoad(server, addedBytes);
                 }
             }
         }

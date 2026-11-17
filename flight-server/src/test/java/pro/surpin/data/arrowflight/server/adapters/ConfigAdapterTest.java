@@ -514,6 +514,18 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteSmallAnswerEndpointsPerNode", "-1"), Map.of())));
     }
 
+    /** Item 55 (a): merge plans reuse the cluster snapshot for 250 ms unless set otherwise. */
+    @Test
+    void distributedCompleteClusterSnapshotMillisDefaultsTo250() throws IOException {
+        assertEquals(250, ConfigAdapter.distributedCompleteClusterSnapshotMillis(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.distributedCompleteClusterSnapshotMillis(
+                source(Map.of("distributedCompleteClusterSnapshotMillis", "0"), Map.of())));
+        assertEquals(1000, ConfigAdapter.distributedCompleteClusterSnapshotMillis(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS", "1000"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteClusterSnapshotMillis(
+                source(Map.of("distributedCompleteClusterSnapshotMillis", "-1"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));

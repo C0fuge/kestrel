@@ -1172,6 +1172,43 @@ class QueryPlannerTest {
         assertEquals(Set.of(S1, S2), chosen);
     }
 
+    /**
+     * Item 55 (a): merge-internal plans reuse the cluster snapshot within its time and count the
+     * load they planned since, so the next plan goes to the other node; plain plans and a time of
+     * 0 read the cluster maps for every plan.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void mergePlansReuseTheClusterSnapshotWithTheirAddedLoad() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 50L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+        String join = "SELECT l.a FROM tpch.lineitem l JOIN tpch.nation n ON l.a = n.a";
+        assertThrows(IllegalArgumentException.class, () -> planner.mergeClusterSnapshotMillis(-1));
+        planner.mergeClusterSnapshotMillis(60_000);
+
+        QueryPlan first = planner.plan(join, 1);
+        QueryPlan second = planner.plan(join, 1);
+
+        assertEquals(S1, first.endpoints().get(0).getLocations().get(0).getUri().toString());
+        // S1 has 705 planned bytes in the reused snapshot now, S2 its 50.
+        assertEquals(S2, second.endpoints().get(0).getLocations().get(0).getUri().toString());
+        verify(clusterService, times(1)).allServerLoads();
+        verify(clusterService, times(1)).filterLiveServers(anySet());
+
+        planner.plan(join);
+        verify(clusterService, times(2)).allServerLoads();
+        planner.mergeClusterSnapshotMillis(0);
+        planner.plan(join, 1);
+        planner.plan(join, 1);
+        verify(clusterService, times(4)).allServerLoads();
+    }
+
     /** Verifies a table missing from the listing fails like a table without files. */
     @Test
     void withoutLocalityMissingTableFails() throws Exception {
