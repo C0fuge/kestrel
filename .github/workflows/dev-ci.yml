@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dev-ci-${{ github.ref }}
+  group: dev-ci-${{ github.ref }}-${{ inputs.tier || 'full' }}
   cancel-in-progress: true
 
 env:
