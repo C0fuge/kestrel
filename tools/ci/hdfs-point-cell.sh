@@ -10,6 +10,10 @@
 # latency percentiles, server CPU (docker stats, sampled), and at the largest client count three
 # jcmd Thread.print dumps 3 s apart, summarised by tools/ci/thread-dump-summary.py.
 # Writes <work>/result.txt (one line per client count), <work>/threads.txt, <work>/*.log.
+# Scan mode (item 54, SCAN_ROUNDS set): instead of the point load, tools/ci/scan-adbc.py reads
+# `SELECT * FROM tpch.lineitem` in complete mode: one stream (x1), SCAN_CLIENTS streams at once and an
+# export, SCAN_ROUNDS measured passes each, plus the server's per-thread CPU during one x1 pass
+# (tools/ci/thread-cpu.py). SERVER_CPUS / CLIENT_CPUS (default 0,1 / 2,3) pin server and client.
 set -u
 profile=$1 in=$2 work=$3 clients=$4 seconds=$5 keys=$6 extra=${7:-}
 image=${HADOOP_IMAGE:-apache/hadoop:3.4.1}
@@ -67,7 +71,7 @@ docker exec nn1 bash -c 'hdfs dfs -mkdir -p /data && hdfs dfs -put /tmp/upload/t
 
 echo "server options: ${opts} short-circuit=$sc" | tee "$work/notes.txt"
 # shellcheck disable=SC2086
-docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" --cpuset-cpus=0,1 --memory=6g \
+docker run -d --name srv --network container:dn1 "${sock[@]}" "${native[@]}" --cpuset-cpus="${SERVER_CPUS:-0,1}" --memory=6g \
   -v "$in/app:/app:ro" -v "$in/extdir:/extdir:ro" -v "$JAVA_HOME_21_X64:/jdk:ro" -v "$conf:/conf:ro" \
   -e FLIGHT_ALLOW_INSECURE=true -e DUCKDB_ALLOW_UNSIGNED_EXTENSIONS=true -e FLIGHT_PLUGINS_DIR=/app/plugins \
   -e LIBHDFS3_CONF=/conf/hdfs-site.xml -e LANG=C.UTF-8 \
@@ -88,6 +92,31 @@ docker logs srv 2>&1 | grep -q 'Server Arrow Flight SQL started' \
 docker logs srv 2>&1 | grep -m 3 -oE 'duckdb=(threads|sizing|sharedDatabaseOpened) .*' | cut -c1-300 | tee -a "$work/notes.txt"
 
 py="$RUNNER_TEMP/py/bin/python"
+if [ -n "${SCAN_ROUNDS:-}" ]; then
+  status=0
+  pid=$(docker inspect -f '{{.State.Pid}}' srv)
+  # One unmeasured x1 pass while the per-thread CPU is sampled (seconds 3-13 of the read).
+  ( sleep 3; python3 -I tools/ci/thread-cpu.py "$pid" 10 10 > "$work/thread-cpu.txt" 2>&1 ) &
+  sampler=$!
+  taskset -c "${CLIENT_CPUS:-2,3}" "$py" -I tools/ci/scan-adbc.py 172.31.0.12:32010 tpch.lineitem 0 1 \
+    "$work/export.parquet" > "$work/client-profile.log" 2>&1 || true
+  wait "$sampler"
+  sed "s/^/${LABEL:-$profile}|thread-cpu x1 /" "$work/thread-cpu.txt" | tee -a "$res"
+  taskset -c "${CLIENT_CPUS:-2,3}" "$py" -I tools/ci/scan-adbc.py 172.31.0.12:32010 tpch.lineitem "$SCAN_ROUNDS" \
+    "${SCAN_CLIENTS:-4}" "$work/export.parquet" > "$work/client-scan.log" 2>&1 || status=1
+  sed "s/^/${LABEL:-$profile}|/" "$work/client-scan.log" | tee -a "$res"
+  # Best pass per shape (MB/s), the line the summary compares.
+  for shape in x1 "x${SCAN_CLIENTS:-4}" export; do
+    best=$(grep -E "^$shape r[1-9]" "$work/client-scan.log" | grep -v error | awk '{ print $10 }' | sort -n | tail -n 1)
+    echo "${LABEL:-$profile}|best $shape ${best:-?} MB/s" | tee -a "$res"
+  done
+  peak=$(cat "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' srv).scope/memory.peak" 2>/dev/null || true)
+  [ -n "$peak" ] && echo "${LABEL:-$profile}|server memory peak $(( peak / 1048576 )) MiB" | tee -a "$res"
+  for c in nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done
+  rm -f "$work/export.parquet"
+  docker rm -f srv dn1 nn1 > /dev/null 2>&1 || true
+  exit "$status"
+fi
 max=$(echo "$clients" | tr ',' '\n' | sort -n | tail -n 1)
 status=0
 "$py" -I tools/ci/point-query-load.py 172.31.0.12:32010 1 5 "$keys" > /dev/null 2>&1 || true # warm-up

@@ -2,6 +2,8 @@
 # (short-circuit reads), closed loop, balanced vs speed, with thread dumps of the server at the
 # largest client count (tools/ci/hdfs-point-cell.sh). The maintainer's real cluster showed balanced
 # flat at ~25 q/s from 1 to 128 clients with 2-6 cores busy; this run shows where its threads wait.
+# Item 54: with scanRounds set, the cell reads tpch.lineitem in full instead (one stream, scanClients
+# streams, export; per-thread server CPU of one stream) for the variants (default: the scan variants below).
 # Manual, not part of Dev CI; also on push to a fix/39c-* branch touching its files.
 name: HDFS point perf
 
@@ -32,6 +34,18 @@ on:
         description: "variants name=profile:options separated by ';' (empty = balanced, speed, each with and without the caches)"
         type: string
         default: ""
+      scanRounds:
+        description: "scan mode (item 54): measured passes of the full lineitem read (empty = point mode)"
+        type: string
+        default: ""
+      scanClients:
+        description: "scan mode: concurrent streams of the xN shape"
+        type: string
+        default: "4"
+      serverCpus:
+        description: "server CPUs (cpuset) / client CPUs, e.g. 0,1/2,3"
+        type: string
+        default: "0,1/2,3"
   push:
     branches: ["fix/39c-*"]
     paths:
@@ -103,7 +117,7 @@ jobs:
   cell:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: ${{ inputs.scanRounds && 150 || 75 }}
     strategy:
       fail-fast: false
       matrix:
@@ -126,10 +140,16 @@ jobs:
           tools/ci/server-image.sh "$RUNNER_TEMP/img" sc-server libxml2 libkrb5-3 libgssapi-krb5-2 libgsasl7 libuuid1
       - name: Measure
         env:
+          SCAN_ROUNDS: ${{ inputs.scanRounds }}
+          SCAN_CLIENTS: ${{ inputs.scanClients || '4' }}
+          CPUS: ${{ inputs.serverCpus || '0,1/2,3' }}
+          SCAN_VARIANTS: "speed=speed:;speed-nofilecache=speed:-DduckDbExternalFileCache=false;speed-zerocopyoff=speed:-DflightZeroCopyWrites=false;speed-batch1m=speed:-DbatchSize=1048576;balanced=balanced:;balanced-noorder=balanced:-DduckDbPreserveInsertionOrder=false;balanced-nofilecache=balanced:-DduckDbExternalFileCache=false;balanced-noorder-nofilecache=balanced:-DduckDbPreserveInsertionOrder=false -DduckDbExternalFileCache=false"
           VARIANTS: ${{ inputs.variants || 'balanced=balanced:;balanced-nopruning=balanced:-DfileStatsPruningMaxFiles=0;balanced-filecache=balanced:-DduckDbExternalFileCache=true;balanced-metacache=balanced:-DduckDbParquetMetadataCache=true;speed=speed:;speed-nopruning=speed:-DfileStatsPruningMaxFiles=0;speed-metacache=speed:-DduckDbParquetMetadataCache=true' }}
         run: |
           set -u
           keys=$(( 1500000 * ${{ inputs.sf || '1' }} ))
+          if [ -n "$SCAN_ROUNDS" ] && [ -z "${{ inputs.variants }}" ]; then VARIANTS=$SCAN_VARIANTS; fi
+          export SERVER_CPUS=${CPUS%%/*} CLIENT_CPUS=${CPUS#*/}
           IFS=';' read -ra vs <<< "$VARIANTS"
           if [ "${{ matrix.runner }}" = b ]; then rev=(); for (( i=${#vs[@]}-1; i>=0; i-- )); do rev+=("${vs[i]}"); done; vs=("${rev[@]}"); fi
           status=0
