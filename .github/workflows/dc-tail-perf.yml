@@ -50,6 +50,10 @@ on:
         description: "variants name=distributedComplete:options separated by ';' (empty = speed, dc, dc-4ep)"
         type: string
         default: ""
+      timing:
+        description: "also log node 1's Timing events and print p50 / p99 per tag of merged classes (slower)"
+        type: boolean
+        default: false
   push:
     branches: ["fix/55a*"]
     paths:
@@ -103,6 +107,7 @@ jobs:
           STREAMS: ${{ inputs.streams || '4,8' }}
           CPUS: ${{ inputs.cpus || '1' }}
           LOCAL_SCAN: ${{ inputs.localScan || '1MiB' }}
+          TIMING: ${{ inputs.timing && 'true' || 'false' }}
         run: |
           set +e -u
           py="$RUNNER_TEMP/py/bin/python"; out="$RUNNER_TEMP/results.txt"; : > "$out"
@@ -114,6 +119,7 @@ jobs:
           for v in "${vs[@]}"; do
             name=${v%%=*} rest=${v#*=}; dc=${rest%%:*} options=${rest#*:}
             [ "$dc" = true ] && options="$options -DdistributedCompleteLocalScanMaxBytes=$LOCAL_SCAN"
+            [ "$TIMING" = true ] && options="$options -Dorg.slf4j.simpleLogger.log.Timing=debug"
             echo "::group::$name"
             for i in 0 1 2; do
               # shellcheck disable=SC2086
@@ -154,6 +160,12 @@ jobs:
                   $1 != k { out(); k = $1; n = 0 } { a[++n] = $2 } END { out() }')
                 echo "$name $cls ${line:-(no result: $(tail -n 1 "$RUNNER_TEMP/load.err" | cut -c1-160))} | merged=$merged local=$loc oneEndpoint=$one waits=$waits ${mergeMs} ${reason:+local=$reason}" | tee -a "$out"
                 [ -n "$phases" ] && echo "$name $cls phases p50/p99 ms: $phases" | tee -a "$out"
+                if [ "$TIMING" = true ] && [ "$merged" -gt 0 ]; then
+                  # Item 55 (a): count, p50 / p99 / sum ms per Timing tag, the 12 largest sums.
+                  grep -oE 'durationUs=[0-9]+ tag=[^ ]+' <<< "$log" | sed -E 's/durationUs=([0-9]+) tag=(.*)/\2 \1/' | sort -k1,1 -k2,2n | awk '
+                    function out() { if (n) printf "%s n=%d p50=%.1f p99=%.1f sumMs=%d\n", k, n, a[int(n * 0.5) + (n * 0.5 > int(n * 0.5))] / 1000, a[int(n * 0.99) + (n * 0.99 > int(n * 0.99))] / 1000, s / 1000 }
+                    $1 != k { out(); k = $1; n = 0; s = 0 } { a[++n] = $2; s += $2 } END { out() }' | sort -t= -k5,5nr | head -n 12 | sed "s/^/$name $cls timing /" | tee -a "$out"
+                fi
               done
             done
             IFS=',' read -ra ss <<< "$STREAMS"
