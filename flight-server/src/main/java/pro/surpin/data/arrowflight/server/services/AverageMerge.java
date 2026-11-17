@@ -90,9 +90,15 @@ public final class AverageMerge {
                 items.add(DSL.count(avg.$field()).as(COUNT_PREFIX + position));
                 averages.add(true);
             } else {
-                items.add(item);
+                org.jooq.Field<?> key = field instanceof QOM.FieldAlias<?> ? truncDateKey(inner) : null;
+                items.add(key == null ? item : key.as(field.getName()));
                 averages.add(false);
             }
+        }
+        List<org.jooq.GroupField> groupBy = new ArrayList<>();
+        for (org.jooq.GroupField key : select.$groupBy()) {
+            org.jooq.Field<?> text = key instanceof org.jooq.Field<?> keyField ? truncDateKey(keyField) : null;
+            groupBy.add(text == null ? key : text);
         }
         if (!averages.contains(true) || original.isJoin || original.singleNodeFeature() != null
                 || original.selectExprs.size() != averages.size()
@@ -100,15 +106,36 @@ public final class AverageMerge {
             return null;
         }
         // The endpoints need no order: the merge orders the complete answer.
-        Select<?> part = select.$select(items).$orderBy(List.of());
+        Select<?> part = select.$select(items).$groupBy(groupBy).$orderBy(List.of());
         String partSql = DSL.using(SQLDialect.DEFAULT,
                 new Settings().withRenderQuotedNames(RenderQuotedNames.EXPLICIT_DEFAULT_QUOTED))
                 .renderInlined(part);
         if (ParquetQueryParser.holdsDefaultTruncDate(partSql)) {
-            // jOOQ renders date_trunc('day', ts) as trunc("ts", null), which loses the part (item 55 (c)).
+            // jOOQ renders date_trunc('day', ts) as trunc("ts", null), which loses the part (item 55 (c));
+            // only an aliased select item or a whole GROUP BY key is rendered from the parse.
             return null;
         }
         return new AverageMerge(original, partSql, averages);
+    }
+
+    /** Renderer of a {@code date_trunc} key's text, quoting every name as the part query does. */
+    private static final DSLContext KEY_CTX = DSL.using(SQLDialect.DEFAULT,
+            new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
+
+    /**
+     * Replaces a {@code date_trunc} that is a whole select item or GROUP BY key by its executable
+     * text ({@link ParquetQueryParser#keyText}), since jOOQ's default dialect would render it as
+     * {@code trunc(x, null)} (item 55 (c)). For any other expression, and a {@code date_trunc}
+     * whose part or argument the key text refuses, the caller keeps jOOQ's node, so the rendered
+     * part query still holds jOOQ's wrong text and is refused.
+     *
+     * @param field select item without its alias, or GROUP BY key
+     * @return the key as plain SQL, or null to keep the field
+     */
+    private static org.jooq.Field<?> truncDateKey(org.jooq.Field<?> field) {
+        String text = field.getClass().getName().equals("org.jooq.impl.TruncDate")
+                ? ParquetQueryParser.keyText(field, KEY_CTX) : null;
+        return text == null ? null : DSL.field(text);
     }
 
     /**

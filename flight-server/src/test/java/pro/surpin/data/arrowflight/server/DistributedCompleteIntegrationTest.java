@@ -133,7 +133,9 @@ class DistributedCompleteIntegrationTest {
             // Step 4: date_trunc keys.
             "SELECT date_trunc('month', ts) AS m, count(*) AS n, sum(v) AS sv FROM s.t GROUP BY 1 ORDER BY 1",
             "SELECT date_trunc('week', ts) AS w, min(amount) AS lo FROM s.t GROUP BY date_trunc('week', ts)"
-                    + " ORDER BY w");
+                    + " ORDER BY w",
+            // Step 5: date_trunc keys next to avg.
+            "SELECT date_trunc('day', ts) AS dd, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY 1 ORDER BY 1");
 
     /**
      * Verifies merged answers equal the answers the node computes alone.

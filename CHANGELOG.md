@@ -9,6 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) step 5 (lane 6): an aliased `date_trunc` GROUP BY key next to `avg` now merges too (distributed complete
+  mode): the part query (`sum`/`count` per average) renders the key from the parse instead of jOOQ's `trunc(x, null)`.
+  A `date_trunc` elsewhere (WHERE, unaliased, nested, other parts) keeps the query on one node as before.
 - Item 55 (c) step 4 (lane 6): distributed complete mode and batches of copies now merge a GROUP BY on an aliased
   `date_trunc('<part>', <column or CAST of a column>)` (year, quarter, month, week, day, hour, minute, second), rendered
   for the endpoints as written (jOOQ's default dialect renders it as `trunc(x, null)`, dropping the part). An unaliased

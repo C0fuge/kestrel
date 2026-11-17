@@ -46,7 +46,8 @@ class AverageMergeTest {
                     + " CASE WHEN i % 7 = 0 THEN NULL ELSE (i * 7919) % 100003 END::BIGINT AS qty,"
                     + " ((i * 104729) % 9999991 / 100.0)::DECIMAL(15,2) AS price,"
                     + " ((i * 31) % 1000003 / 10000.0)::DECIMAL(18,4) AS rate,"
-                    + " (i % 1000) / 8.0 AS d"
+                    + " (i % 1000) / 8.0 AS d,"
+                    + " TIMESTAMP '2026-01-01' + to_seconds(i * 3571) AS ts"
                     + " FROM range(30000) r(i)");
             st.execute("CREATE SCHEMA s");
         }
@@ -74,6 +75,11 @@ class AverageMergeTest {
                     + " GROUP BY grp ORDER BY grp",
             "SELECT avg(price) AS ap FROM s.t WHERE id > 100000",
             "SELECT grp, avg(qty) AS qty FROM s.t GROUP BY grp ORDER BY qty",
+            // Item 55 (c): date_trunc keys rendered from the parse, not by jOOQ.
+            "SELECT date_trunc('day', ts) AS dd, avg(qty) AS aq, count(*) AS n FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT date_trunc('month', ts) AS m, grp, avg(price) FROM s.t GROUP BY m, grp ORDER BY m, grp",
+            "SELECT date_trunc('week', CAST(ts AS DATE)) AS w, avg(rate) AS ar FROM s.t"
+                    + " GROUP BY date_trunc('week', CAST(ts AS DATE)) ORDER BY w",
         };
         for (String query : queries) {
             AverageMerge rewrite = AverageMerge.of(query);
@@ -130,10 +136,13 @@ class AverageMergeTest {
             "SELECT avg(a.qty) FROM s.t a JOIN s.u b ON a.id = b.id",
             "SELECT avg(qty) FROM s.t AT (VERSION => 3)",
             "not sql",
-            // Item 55 (c): jOOQ would render the part query's date_trunc without its part.
-            "SELECT date_trunc('day', ts) AS d, avg(qty) FROM s.t GROUP BY 1",
+            // Item 55 (c): date_trunc shapes whose text jOOQ would render without the part.
+            "SELECT date_trunc('day', ts), avg(qty) FROM s.t GROUP BY 1",
+            "SELECT date_trunc('day', ts) AS dd, avg(qty) FROM s.t WHERE date_trunc('day', ts) > ts GROUP BY 1",
+            "SELECT date_trunc('millennium', ts) AS dd, avg(qty) FROM s.t GROUP BY 1",
+            "SELECT date_trunc('day', ts + INTERVAL 1 HOUR) AS dd, avg(qty) FROM s.t GROUP BY 1",
+            "SELECT grp, avg(qty) FROM s.t GROUP BY grp ORDER BY date_trunc('day', max(ts))",
         };
-        assertNull(AverageMerge.of("SELECT date_trunc('day', ts) AS d, avg(qty) FROM s.t GROUP BY 1"));
         for (String query : refused) {
             AverageMerge rewrite = AverageMerge.of(query);
             boolean merges = rewrite != null
