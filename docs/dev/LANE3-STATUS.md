@@ -850,3 +850,5 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
   opt-in for 55(a) (`distributedCompleteScans=local`, Dev CI 44114130596 green) before seeing the maintainer's split
   (55(a) -> lane 5, 55(c) -> lane 6): not merged, parked on `lane/distributed-55a-scans` for lane 5. Rebased onto
   `main` (CHANGELOG conflict with items 52/53: both kept) and fast-forwarded. Open: Q5 (default).
+  Package run (Dev CI `package=true` on `main` 28ebd7e5): 44118413074, running at session end - next session: confirm
+  green and the pre-release `server-1.0.0-28ebd7e5...` exists, else dispatch again.
