@@ -53,9 +53,52 @@ class DistributedCompleteMergeableTest {
         assertEquals("HAVING", DistributedComplete.unmergedAggregateReason(
                 "SELECT event_type, count(*) FROM ev.events GROUP BY event_type HAVING count(*) > 1"));
         assertTrue(DistributedComplete.unmergedAggregateReason(
-                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY id % 6").contains("GROUP BY expression"));
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY id % 5").contains("GROUP BY expression"));
         assertNull(DistributedComplete.unmergedAggregateReason("SELECT * FROM ev.events"));
         assertNull(DistributedComplete.unmergedAggregateReason("not sql"));
+    }
+
+    /**
+     * Item 55 (c) step 2: a GROUP BY on a selected, deterministic expression is merged (every
+     * endpoint computes the key, the merge groups by its output column); partial mode still
+     * refuses it, and other expressions keep the single-node path with their reason.
+     */
+    @Test
+    void groupByOnASelectedExpressionIsMerged() {
+        for (String query : List.of(
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY g",
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY 1 ORDER BY 1",
+                "SELECT id % 6, count(*) FROM ev.events GROUP BY id % 6",
+                "SELECT event_type, floor(id / 100) AS b, sum(v) FROM ev.events GROUP BY event_type, b",
+                "SELECT upper(substring(name, 1, 2)) AS p, min(v) FROM ev.events GROUP BY 1",
+                "SELECT extract(year FROM ts) AS y, count(*) AS n FROM ev.events GROUP BY y ORDER BY n DESC",
+                "SELECT cast(coalesce(v, -1) AS INTEGER) % 4 AS q, max(id) FROM ev.events GROUP BY q")) {
+            ParquetQueryParser parsed = DistributedComplete.mergeable(query);
+            assertNotNull(parsed, query);
+            assertNull(DistributedComplete.unmergedAggregateReason(query), query);
+            // Partial mode is unchanged: its clients cannot merge computed keys.
+            assertNotNull(parsed.completeAnswerReason, query);
+            ParquetQueryParser.SelectExpr key = parsed.selectExprs.stream().filter(e -> e.computed)
+                    .findFirst().orElseThrow();
+            assertNull(parsed.sourceColumnOf(key.outputName), query);
+        }
+        assertEquals(List.of("g"), ParquetQueryParser.parse(
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY g").aliasGroupKeys);
+        assertEquals(List.of(), ParquetQueryParser.parse(
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY 1").aliasGroupKeys);
+        for (String query : List.of(
+                // jOOQ renders date_trunc('day', ts) as trunc("ts", null): not accepted.
+                "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1",
+                "SELECT random() AS r, count(*) FROM ev.events GROUP BY 1",
+                "SELECT extract(isodow FROM ts) AS w, count(*) FROM ev.events GROUP BY 1",
+                "SELECT count(*) AS n, id % 6 AS g FROM ev.events GROUP BY 1",
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY id % 5",
+                "SELECT id AS g, count(*) FROM ev.events GROUP BY g",
+                "SELECT id % 6 AS g, count(*) FROM ev.events GROUP BY g HAVING count(*) > 2",
+                "SELECT id % 6 AS g, v + 1 AS w, count(*) FROM ev.events GROUP BY g")) {
+            assertNull(DistributedComplete.mergeable(query), query);
+            assertNotNull(DistributedComplete.unmergedAggregateReason(query), query);
+        }
     }
 
     /** Item 43: point lookups and small LIMITs start on probation; scans and ORs do not. */

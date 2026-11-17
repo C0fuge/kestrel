@@ -63,6 +63,12 @@ public class ParquetQueryParser {
         public final String outputName;
         /** True for {@code count(DISTINCT x)} and {@code sum(DISTINCT x)}. */
         public final boolean distinct;
+        /**
+         * True for a computed GROUP BY key (item 55 (c)): a {@link AggFunc#COLUMN} item whose
+         * value is {@link #inputExpression} (quoted SQL over the table's columns), named
+         * {@link #outputName}; {@link #inputColumn} is the output name, not a table column.
+         */
+        public final boolean computed;
 
         /**
          * @param func aggregation function type
@@ -109,6 +115,28 @@ public class ParquetQueryParser {
         SelectExpr(AggFunc func, String inputColumn, String inputExpression,
                 List<String> inputColumns, Integer decimalScale, Integer decimalPrecision,
                 String outputName, boolean distinct) {
+            this(func, inputColumn, inputExpression, inputColumns, decimalScale, decimalPrecision,
+                    outputName, distinct, false);
+        }
+
+        /**
+         * Creates a computed GROUP BY key: its value is a deterministic expression of the
+         * table's columns, its name the output name.
+         *
+         * @param expression quoted SQL expression used by DuckDB
+         * @param outputName output column name
+         * @return the select item
+         */
+        static SelectExpr computedKey(String expression, String outputName) {
+            return new SelectExpr(AggFunc.COLUMN, outputName, expression, referencedColumns(expression),
+                    null, null, outputName, false, true);
+        }
+
+        @SuppressWarnings("java:S107") // Mirrors the fields of one immutable value object.
+        private SelectExpr(AggFunc func, String inputColumn, String inputExpression,
+                List<String> inputColumns, Integer decimalScale, Integer decimalPrecision,
+                String outputName, boolean distinct, boolean computed) {
+            this.computed = computed;
             this.distinct = distinct;
             this.func = func;
             this.inputColumn = inputColumn;
@@ -157,6 +185,20 @@ public class ParquetQueryParser {
      * per-endpoint values of most of them.
      */
     public final String completeAnswerReason;
+    /**
+     * Why the endpoint answers of this query cannot be merged on one node (distributed complete
+     * mode), or null when they can. The same as {@link #completeAnswerReason}, except that
+     * computed GROUP BY keys ({@link SelectExpr#computed}) are no reason: every endpoint computes
+     * them, and the merge groups by their output columns (item 55 (c)). The partial result mode
+     * keeps refusing them (its clients merge the endpoint answers themselves).
+     */
+    public final String mergeReason;
+    /**
+     * Output names of computed GROUP BY keys named in the GROUP BY clause by their select alias
+     * ({@code GROUP BY g} for {@code id % 6 AS g}). DuckDB binds such a name to a table column
+     * of that name first: a merge must check that the table has none.
+     */
+    public final List<String> aliasGroupKeys;
 
     /**
      * @param schema table schema name
@@ -170,7 +212,8 @@ public class ParquetQueryParser {
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs) {
         this(schema, table, columns, filter, hasAggregation, groupByColumnNames, selectExprs,
-                false, Collections.emptyList(), null, null, null, null, false, null, null, null);
+                false, Collections.emptyList(), null, null, null, null, false, null, null, null, null,
+                Collections.emptyList());
     }
 
     /**
@@ -191,13 +234,18 @@ public class ParquetQueryParser {
      * @param having HAVING condition as executable SQL, or null
      * @param completeAnswerReason why endpoints cannot answer for their own files, or null
      * @param where the WHERE condition the filter was rendered from, or null
+     * @param mergeReason why endpoint answers cannot be merged on one node, or null
+     * @param aliasGroupKeys computed GROUP BY keys named by their select alias
      */
     @SuppressWarnings("java:S107") // One immutable value object built in a single place.
     private ParquetQueryParser(String schema, String table, List<String> columns, String filter,
             boolean hasAggregation, List<String> groupByColumnNames, List<SelectExpr> selectExprs,
             boolean isJoin, List<JoinTable> joinTables, String duckDbSql,
             String orderBy, Long limit, Long offset, boolean distinct, String having,
-            String completeAnswerReason, Condition where) {
+            String completeAnswerReason, Condition where, String mergeReason,
+            List<String> aliasGroupKeys) {
+        this.mergeReason = mergeReason;
+        this.aliasGroupKeys = List.copyOf(aliasGroupKeys);
         this.schema = schema;
         this.table = table;
         this.columns = List.copyOf(columns);
@@ -249,7 +297,7 @@ public class ParquetQueryParser {
         }
         return new ParquetQueryParser(schema, table, columns, filter, hasAggregation,
                 groupByColumnNames, selectExprs, isJoin, joinTables, duckDbSql, null, null, offset,
-                distinct, having, completeAnswerReason, where);
+                distinct, having, completeAnswerReason, where, mergeReason, aliasGroupKeys);
     }
 
     /**
@@ -265,7 +313,7 @@ public class ParquetQueryParser {
                 ? condition : "(" + filter + ") AND (" + condition + ")";
         return new ParquetQueryParser(schema, table, columns, narrowed, hasAggregation,
                 groupByColumnNames, selectExprs, isJoin, joinTables, duckDbSql, orderBy, limit,
-                offset, distinct, having, completeAnswerReason, where);
+                offset, distinct, having, completeAnswerReason, where, mergeReason, aliasGroupKeys);
     }
 
     /**
@@ -284,7 +332,7 @@ public class ParquetQueryParser {
                     ? expr.outputName : expr.inputColumn;
             if (outputName.equals(name)) {
                 if (found != null || expr.func != SelectExpr.AggFunc.COLUMN
-                        || expr.inputColumn == null) {
+                        || expr.inputColumn == null || expr.computed) {
                     return null;
                 }
                 found = quoted(expr.inputColumn);
@@ -594,6 +642,172 @@ public class ParquetQueryParser {
             item = alias.$field();
         }
         return item instanceof TableField<?, ?> column ? column : gf;
+    }
+
+    /**
+     * Finds the select item a GROUP BY element names when that item is a computed key every
+     * endpoint can compute for its own rows (item 55 (c)): {@code GROUP BY 1}, {@code GROUP BY g}
+     * for {@code ... AS g}, or the same expression as a select item, where the item is a
+     * {@link #computable} expression of the table's columns.
+     *
+     * @param listed the GROUP BY element as written
+     * @param gf the element after {@link #groupByOrdinal}
+     * @param selectList the select list
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @return the select position of the key, or -1
+     */
+    static int computedGroupKey(GroupField listed, GroupField gf,
+            List<? extends SelectFieldOrAsterisk> selectList, DSLContext quotedCtx) {
+        if (listed instanceof org.jooq.Param<?> param && param.getValue() instanceof Number n
+                && gf == listed) {
+            long position = n.longValue();
+            if (n instanceof Double || n instanceof Float || position < 1 || position > selectList.size()
+                    || n instanceof java.math.BigDecimal decimal && decimal.scale() > 0) {
+                return -1;
+            }
+            return computedItem(selectList.get((int) position - 1)) ? (int) position - 1 : -1;
+        }
+        if (gf instanceof TableField<?, ?> named) {
+            if (named.getQualifiedName().getName().length != 1) {
+                return -1;
+            }
+            int found = -1;
+            for (int i = 0; i < selectList.size(); i++) {
+                if (selectList.get(i) instanceof org.jooq.impl.QOM.FieldAlias<?> alias
+                        && alias.getName().equalsIgnoreCase(named.getName())) {
+                    if (found >= 0 || !computedItem(alias)) {
+                        return -1;
+                    }
+                    found = i;
+                }
+            }
+            return found;
+        }
+        if (!(gf instanceof org.jooq.Field<?> expression) || !computable(expression)) {
+            return -1;
+        }
+        String text = quotedCtx.renderInlined(expression).trim();
+        for (int i = 0; i < selectList.size(); i++) {
+            SelectFieldOrAsterisk item = selectList.get(i);
+            org.jooq.Field<?> field = item instanceof org.jooq.impl.QOM.FieldAlias<?> alias ? alias.$field()
+                    : item instanceof org.jooq.Field<?> plain ? plain : null;
+            if (field != null && computedItem(item) && text.equals(quotedCtx.renderInlined(field).trim())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Tells whether a select item is a computed expression (not a plain column) that
+     * {@link #computable} accepts.
+     *
+     * @param item select item
+     * @return true for such an item
+     */
+    private static boolean computedItem(SelectFieldOrAsterisk item) {
+        org.jooq.Field<?> field = item instanceof org.jooq.impl.QOM.FieldAlias<?> alias ? alias.$field()
+                : item instanceof org.jooq.Field<?> plain ? plain : null;
+        return field != null && !(field instanceof TableField<?, ?>) && computable(field);
+    }
+
+    /** Date parts whose {@code extract} jOOQ renders as DuckDB reads them. */
+    private static final Set<DatePart> KEY_DATE_PARTS = Set.of(DatePart.YEAR, DatePart.MONTH,
+            DatePart.DAY, DatePart.HOUR);
+
+    /**
+     * Tells whether an expression can be a computed GROUP BY key that every endpoint computes as
+     * the client's DuckDB would: only columns, literals, arithmetic ({@code + - * / %}),
+     * {@code CAST}, {@code extract} of year / month / day / hour, {@code lower}, {@code upper},
+     * {@code floor}, {@code ceil}, {@code abs}, {@code substring} and {@code coalesce}. These are
+     * deterministic, and jOOQ renders them back unchanged in meaning; other functions it may
+     * translate (it renders {@code date_trunc('day', ts)} as {@code trunc("ts", null)}) or they
+     * are not deterministic ({@code random()}), so they keep the single-node path.
+     *
+     * @param field expression
+     * @return true when the expression is accepted
+     */
+    static boolean computable(org.jooq.Field<?> field) {
+        if (field instanceof TableField<?, ?>) {
+            return true;
+        }
+        if (field instanceof org.jooq.Param<?> param) {
+            return param.getValue() != null;
+        }
+        List<?> args = operatorArguments(field);
+        if (args != null) {
+            return computableArguments(args);
+        }
+        if (field instanceof org.jooq.impl.QOM.Cast<?> cast) {
+            return computable(cast.$field());
+        }
+        if (field instanceof org.jooq.impl.QOM.Extract extract) {
+            return KEY_DATE_PARTS.contains(extract.$datePart()) && computable(extract.$field());
+        }
+        return false;
+    }
+
+    /**
+     * Returns the arguments of an operator {@link #computable} accepts.
+     *
+     * @param field expression
+     * @return its arguments, or null when it is no accepted operator
+     */
+    private static List<?> operatorArguments(org.jooq.Field<?> field) {
+        return switch (field) {
+            case org.jooq.impl.QOM.Add<?> op -> op.$args();
+            case org.jooq.impl.QOM.Sub<?> op -> op.$args();
+            case org.jooq.impl.QOM.Mul<?> op -> op.$args();
+            case org.jooq.impl.QOM.Div<?> op -> op.$args();
+            case org.jooq.impl.QOM.Mod<?> op -> op.$args();
+            case org.jooq.impl.QOM.Neg<?> op -> op.$args();
+            case org.jooq.impl.QOM.Lower op -> op.$args();
+            case org.jooq.impl.QOM.Upper op -> op.$args();
+            case org.jooq.impl.QOM.Floor<?> op -> op.$args();
+            case org.jooq.impl.QOM.Ceil<?> op -> op.$args();
+            case org.jooq.impl.QOM.Abs<?> op -> op.$args();
+            case org.jooq.impl.QOM.Substring op -> op.$args();
+            case org.jooq.impl.QOM.Coalesce<?> op -> op.$args();
+            default -> null;
+        };
+    }
+
+    /**
+     * Tells whether every argument of an accepted operator is {@link #computable}.
+     *
+     * @param args operator arguments: fields, lists of fields, or null for omitted ones
+     * @return true when all are accepted
+     */
+    private static boolean computableArguments(List<?> args) {
+        for (Object arg : args) {
+            if (arg == null) {
+                continue;
+            }
+            if (arg instanceof org.jooq.Field<?> f) {
+                if (!computable(f)) {
+                    return false;
+                }
+            } else if (arg instanceof List<?> list) {
+                if (!computableArguments(list)) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Names a select item's output column as the parsed select items name it.
+     *
+     * @param selected select item
+     * @param noQuoteCtx renderer with quoted names disabled
+     * @return its alias, or its rendered text
+     */
+    private static String outputName(org.jooq.Field<?> selected, DSLContext noQuoteCtx) {
+        return selected instanceof org.jooq.impl.QOM.FieldAlias<?> ? selected.getName()
+                : noQuoteCtx.renderInlined(selected).trim();
     }
 
     private static final Pattern FROM_PAREN = Pattern.compile("(?i)\\bfrom\\s*\\(");
@@ -930,7 +1144,7 @@ public class ParquetQueryParser {
         return new ParquetQueryParser(primary.schema, primary.table, columns, filter,
                 false, Collections.emptyList(), exprs, true, joinTables, duckDbSql,
                 renderOrderBy(select, quotedCtx, null), rowCount(select.$limit()),
-                rowCount(select.$offset()), false, null, null, where);
+                rowCount(select.$offset()), false, null, null, where, null, Collections.emptyList());
     }
 
     /**
@@ -951,24 +1165,46 @@ public class ParquetQueryParser {
         String schema = Optional.ofNullable(fromTables.get(0).getSchema()).map(Schema::getName).orElse(null);
         String table = fromTables.get(0).getName();
 
+        DSLContext quotedCtx = DSL.using(SQLDialect.DEFAULT,
+                new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
         List<String> gbCols = new ArrayList<>();
         String completeAnswerReason = null;
+        String mergeReason = null;
+        // Select positions of computed GROUP BY keys (item 55 (c)), and those named by alias.
+        Set<Integer> computedKeys = new HashSet<>();
+        List<String> aliasGroupKeys = new ArrayList<>();
         for (GroupField listed : select.$groupBy()) {
             GroupField gf = groupByOrdinal(listed, select.$select());
-            gbCols.add(noQuoteCtx.render(gf).trim());
-            if (completeAnswerReason == null && !(gf instanceof TableField<?, ?>)) {
-                completeAnswerReason = "The GROUP BY expression '" + noQuoteCtx.renderInlined(gf).trim()
-                        + "' is not a column";
+            int key = computedGroupKey(listed, gf, select.$select(), quotedCtx);
+            String rendered = noQuoteCtx.renderInlined(gf).trim();
+            if (key >= 0) {
+                computedKeys.add(key);
+                String keyName = outputName((org.jooq.Field<?>) select.$select().get(key), noQuoteCtx);
+                gbCols.add(keyName);
+                if (gf instanceof TableField<?, ?>) {
+                    aliasGroupKeys.add(keyName);
+                }
+            } else {
+                gbCols.add(noQuoteCtx.render(gf).trim());
+            }
+            if (!(gf instanceof TableField<?, ?>)) {
+                String reason = "The GROUP BY expression '" + rendered + "' is not a column";
+                if (completeAnswerReason == null) {
+                    completeAnswerReason = reason;
+                }
+                if (mergeReason == null && key < 0) {
+                    mergeReason = reason;
+                }
             }
         }
 
         List<String> columns = new ArrayList<>();
         List<SelectExpr> exprs = new ArrayList<>();
         boolean hasAgg = !gbCols.isEmpty();
-        DSLContext quotedCtx = DSL.using(SQLDialect.DEFAULT,
-                new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
+        int position = -1;
 
         for (SelectFieldOrAsterisk sfoa : select.$select()) {
+            position++;
             if (!(sfoa instanceof org.jooq.Field<?>)) {
                 continue;
             }
@@ -980,11 +1216,18 @@ public class ParquetQueryParser {
                 outputName = selected.getName();
             }
             columns.add(selected.getName());
+            String itemReason = completeAnswerReason(f, noQuoteCtx);
             if (completeAnswerReason == null) {
-                completeAnswerReason = completeAnswerReason(f, noQuoteCtx);
+                completeAnswerReason = itemReason;
+            }
+            boolean computedKey = computedKeys.contains(position);
+            if (mergeReason == null && !computedKey) {
+                mergeReason = itemReason;
             }
 
-            if (f instanceof org.jooq.impl.QOM.Count count) {
+            if (computedKey) {
+                exprs.add(SelectExpr.computedKey(quotedCtx.renderInlined(f).trim(), outputName));
+            } else if (f instanceof org.jooq.impl.QOM.Count count) {
                 hasAgg = true;
                 org.jooq.Field<?> arg = count.$field();
                 if (arg == null || arg instanceof org.jooq.Param<?>) {
@@ -1019,7 +1262,8 @@ public class ParquetQueryParser {
                 false, Collections.emptyList(), null,
                 renderOrderBy(select, quotedCtx, exprs), rowCount(select.$limit()),
                 rowCount(select.$offset()), select.$distinct(),
-                having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason, where);
+                having == null ? null : quotedCtx.renderInlined(having), completeAnswerReason, where,
+                mergeReason, aliasGroupKeys);
     }
 
     /**

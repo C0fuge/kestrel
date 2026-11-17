@@ -121,7 +121,13 @@ class DistributedCompleteIntegrationTest {
             "SELECT avg(v) AS a FROM s.t",
             "SELECT k, avg(amount) AS aa, count(*) AS n, avg(v), avg(d) AS ad FROM s.t"
                     + " GROUP BY k ORDER BY aa DESC",
-            "SELECT k, avg(CASE WHEN k < 5 THEN amount END) AS half FROM s.t GROUP BY k ORDER BY 1");
+            "SELECT k, avg(CASE WHEN k < 5 THEN amount END) AS half FROM s.t GROUP BY k ORDER BY 1",
+            // Item 55 (c) step 2: computed GROUP BY keys.
+            "SELECT v % 6 AS g, count(*) AS n, sum(d) AS sd, max(name) AS hi FROM s.t GROUP BY g ORDER BY g",
+            "SELECT k % 4, count(*) FROM s.t GROUP BY k % 4 ORDER BY 1",
+            "SELECT upper(name) AS un, floor(v / 1000) AS b, min(amount) AS lo FROM s.t GROUP BY 1, 2"
+                    + " ORDER BY 1, 2",
+            "SELECT v % 5 AS g, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY g ORDER BY g");
 
     /**
      * Verifies merged answers equal the answers the node computes alone.
@@ -263,7 +269,9 @@ class DistributedCompleteIntegrationTest {
     void refusedShapeKeepsSingleNodePath() throws Exception {
         for (String query : List.of("SELECT k, count(*) AS n FROM s.t GROUP BY k ORDER BY k LIMIT 3",
                 "SELECT avg(DISTINCT v) AS a FROM s.t",
-                "SELECT k, avg(v) FROM s.t GROUP BY k ORDER BY avg(v)")) {
+                "SELECT k, avg(v) FROM s.t GROUP BY k ORDER BY avg(v)",
+                // Item 55 (c): DuckDB groups by the column k, not by the alias of k % 3.
+                "SELECT k % 3 AS k, count(*) AS n FROM s.t GROUP BY k ORDER BY 1, 2")) {
             String alone = answer(query);
             useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
             assertEquals(alone, answer(query), query);

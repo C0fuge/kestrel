@@ -46,8 +46,9 @@ public final class CompleteAnswerMerge {
         if (parsed.singleNodeFeature() != null) {
             return parsed.singleNodeFeature();
         }
-        if (parsed.completeAnswerReason != null) {
-            return parsed.completeAnswerReason;
+        if (parsed.mergeReason != null) {
+            // Computed GROUP BY keys are no reason here: every endpoint computes them (item 55 (c)).
+            return parsed.mergeReason;
         }
         String orderRefusal = orderRefusal(parsed);
         if (orderRefusal != null) {

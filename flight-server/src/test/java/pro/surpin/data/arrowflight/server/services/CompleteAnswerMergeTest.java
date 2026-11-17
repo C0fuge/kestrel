@@ -103,6 +103,54 @@ class CompleteAnswerMergeTest {
         }
     }
 
+    /**
+     * Item 55 (c) step 2: computed GROUP BY keys, with endpoint answers as the endpoints compute
+     * them (SQL built from the parsed query), merge into exactly the complete answer.
+     *
+     * @throws SQLException when DuckDB fails
+     */
+    @Test
+    void computedGroupKeysMergeIntoTheCompleteAnswer() throws SQLException {
+        String[] queries = {
+            "SELECT id % 6 AS g, count(*) AS c, sum(qty) FROM s.t GROUP BY g",
+            "SELECT id % 6 AS g, count(*) FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT id % 6, count(*) AS c FROM s.t GROUP BY id % 6",
+            "SELECT upper(grp) AS ug, min(price) AS lo, max(name) FROM s.t GROUP BY upper(grp)",
+            "SELECT grp, floor(id / 50) AS bucket, count(*) AS c FROM s.t GROUP BY grp, bucket"
+                    + " ORDER BY c DESC, 1, 2",
+            "SELECT substring(name, 1, 2) AS p, count(*) AS c FROM s.t GROUP BY 1",
+            "SELECT coalesce(qty, -1) % 4 AS q4, count(*) AS c FROM s.t GROUP BY q4",
+            "SELECT cast(id / 100 AS INTEGER) AS h, sum(price) AS sp FROM s.t GROUP BY h",
+            "SELECT -id % 7 AS n7, abs(id - 150) % 3 AS a3, ceil(id / 40) AS c40, count(*) AS c FROM s.t"
+                    + " GROUP BY 1, 2, 3",
+            "SELECT extract(year FROM DATE '2020-12-25' + id) AS y, extract(month FROM DATE '2020-12-25' + id) AS m,"
+                    + " count(*) AS c FROM s.t GROUP BY y, m",
+            "SELECT lower(grp) AS lg, count(*) AS c FROM s.t WHERE id > 33 GROUP BY lg",
+        };
+        for (String query : queries) {
+            ParquetQueryParser parsed = ParquetQueryParser.parse(query);
+            assertNull(CompleteAnswerMerge.refusal(parsed), query);
+            assertNotNull(parsed.completeAnswerReason, query);
+            String endpointSql = pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter.buildDuckSql(
+                    parsed, "s.t");
+            List<String> columns = endpointAnswers(endpointSql);
+            Answer expected = answer(query, "src");
+            List<String> names = new ArrayList<>();
+            for (String column : expected.header) {
+                names.add(column.substring(0, column.lastIndexOf(':')));
+            }
+            String merge = CompleteAnswerMerge.mergeSql(parsed, "parts", columns, names);
+            Answer merged = answer(merge, null);
+            String context = query + " -> " + endpointSql + " -> " + merge;
+            assertEquals(expected.header, merged.header, context);
+            if (parsed.orderBy != null) {
+                assertEquals(expected.rows, merged.rows, context);
+            } else {
+                assertEquals(sorted(expected.rows), sorted(merged.rows), context);
+            }
+        }
+    }
+
     /** Verifies a LIMIT without ORDER BY keeps the row count and only rows of the answer. */
     @Test
     void limitWithoutOrderKeepsRowsOfTheAnswer() throws SQLException {

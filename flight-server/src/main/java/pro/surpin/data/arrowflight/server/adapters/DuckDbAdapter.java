@@ -2793,7 +2793,11 @@ public final class DuckDbAdapter implements AutoCloseable {
                     sql.append(", ");
                 }
                 first = false;
-                sql.append('"').append(gbCol).append('"');
+                sql.append(groupKey(pq, gbCol));
+                ParquetQueryParser.SelectExpr computed = computedKey(pq, gbCol);
+                if (computed != null) {
+                    sql.append(" AS ").append(quoteIdentifier(computed.outputName));
+                }
             }
         }
 
@@ -2812,11 +2816,12 @@ public final class DuckDbAdapter implements AutoCloseable {
                 case SUM -> sql.append(renderSum(expr));
                 case MIN -> sql.append("min(").append(aggregateInput(expr)).append(")");
                 case MAX -> sql.append("max(").append(aggregateInput(expr)).append(")");
-                case COLUMN -> sql.append('"').append(expr.inputColumn).append('"');
+                case COLUMN -> sql.append(expr.computed ? expr.inputExpression
+                        : '"' + expr.inputColumn + '"');
                 default -> { }
             }
             boolean renamed = expr.func != ParquetQueryParser.SelectExpr.AggFunc.COLUMN
-                    || !expr.outputName.equals(expr.inputColumn);
+                    || expr.computed || !expr.outputName.equals(expr.inputColumn);
             if (renamed && expr.outputName != null && !expr.outputName.isBlank()) {
                 sql.append(" AS ").append(quoteIdentifier(expr.outputName));
             }
@@ -2832,7 +2837,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 if (i > 0) {
                     sql.append(", ");
                 }
-                sql.append('"').append(pq.groupByColumnNames.get(i)).append('"');
+                sql.append(groupKey(pq, pq.groupByColumnNames.get(i)));
             }
         }
         if (pq.having != null) {
@@ -2840,6 +2845,36 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
         sql.append(pq.orderAndLimitSql());
         return sql.toString();
+    }
+
+    /**
+     * Renders one GROUP BY key: a computed key (item 55 (c)) as its expression, which DuckDB
+     * binds unambiguously (a select alias of the same name as a table column would bind to the
+     * column), a column as its quoted name.
+     *
+     * @param pq parsed query
+     * @param name GROUP BY name
+     * @return SQL of the key
+     */
+    private static String groupKey(ParquetQueryParser pq, String name) {
+        ParquetQueryParser.SelectExpr computed = computedKey(pq, name);
+        return computed != null ? computed.inputExpression : '"' + name + '"';
+    }
+
+    /**
+     * Finds the computed GROUP BY key of a name.
+     *
+     * @param pq parsed query
+     * @param name GROUP BY name
+     * @return the computed key's select item, or null for a column
+     */
+    private static ParquetQueryParser.SelectExpr computedKey(ParquetQueryParser pq, String name) {
+        for (ParquetQueryParser.SelectExpr expr : pq.selectExprs) {
+            if (expr.computed && expr.inputColumn.equals(name)) {
+                return expr;
+            }
+        }
+        return null;
     }
 
     /**
@@ -2929,7 +2964,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             case SUM -> sql.append(renderSum(expr));
             case MIN -> sql.append("min(").append(aggregateInput(expr)).append(")");
             case MAX -> sql.append("max(").append(aggregateInput(expr)).append(")");
-            case COLUMN -> sql.append(quoteIdentifier(expr.inputColumn));
+            case COLUMN -> sql.append(expr.computed ? expr.inputExpression : quoteIdentifier(expr.inputColumn));
             default -> { }
         }
         if (expr.outputName != null && !expr.outputName.isBlank()) {

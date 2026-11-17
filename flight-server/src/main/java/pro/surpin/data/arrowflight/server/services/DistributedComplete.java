@@ -243,6 +243,12 @@ public final class DistributedComplete implements AutoCloseable {
                 return false;
             }
         }
+        String shadowed = shadowedAliasKey(parsed);
+        if (shadowed != null) {
+            LOGGER.info("node={} distributedComplete=single reason='{}' query='{}'", LogUtil.node(), shadowed,
+                    LogUtil.oneLine(query));
+            return false;
+        }
         long parsedAt = System.nanoTime();
         if (aggregatesOnlyMinBytes > 0) {
             String reason = notBigAggregate(parsed, readQuery, partQuery);
@@ -1058,6 +1064,39 @@ public final class DistributedComplete implements AutoCloseable {
             return null;
         }
         return parsed;
+    }
+
+    /**
+     * Tells why a computed GROUP BY key named by its select alias ({@code GROUP BY g} for
+     * {@code id % 6 AS g}) cannot be merged: DuckDB binds a GROUP BY name to a table column of
+     * that name before a select alias, so when the table has such a column the client's query
+     * groups by the column, not by the expression the endpoints would group by.
+     *
+     * @param parsed parsed query the endpoints answer
+     * @return reason, or null when no such key names a table column
+     */
+    String shadowedAliasKey(ParquetQueryParser parsed) {
+        if (parsed.aliasGroupKeys.isEmpty()) {
+            return null;
+        }
+        Schema table;
+        try {
+            table = execution.footerTableSchema(parsed.schema, parsed.table);
+        } catch (RuntimeException e) {
+            table = null;
+        }
+        if (table == null) {
+            return "The columns of " + parsed.schema + "." + parsed.table
+                    + " are unknown, so a GROUP BY alias may name one";
+        }
+        for (String key : parsed.aliasGroupKeys) {
+            for (org.apache.arrow.vector.types.pojo.Field field : table.getFields()) {
+                if (field.getName().equalsIgnoreCase(key)) {
+                    return "The GROUP BY name '" + key + "' is a select alias and a column of the table";
+                }
+            }
+        }
+        return null;
     }
 
     /**
