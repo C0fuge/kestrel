@@ -25,6 +25,18 @@
 
 > **Maintainer, 2026-11-17 19:20 - split:** item 52(b) (why a streaming aggregate over the 1.27 TB table needs > 48 GB; cap it) moved to lane 6; the core lane keeps 52(a) (`memoryBudgetBytes`, WARN). Package once 52(a)/(b), 53, 54, 55(a)/(b)/(c) are each DONE.
 
+> **ITEM 52(a) DONE 183a1775 (2026-11-17, core lane; Dev CI 44111204306 green).** New setting `memoryBudgetBytes`
+> (`arrowflight.memoryBudgetBytes`, env `FLIGHT_MEMORY_BUDGET`; `48g`, `48GiB`, `50GB` or bytes) replaces host / cgroup
+> detection in `HostLimits.detect()`, so balanced and speed size DuckDB (and its external file cache) from it; start line
+> `memoryBudget source=setting`; `source=host` above 64 GiB logs one WARN `memoryBudget=unset`; malformed / 0 fails the
+> start. RSS question reproduced with DuckDB 1.5.6 + httpfs over a local range HTTP server (13 GB of Parquet, 300 M
+> rows, count/min/max/sum, 4 threads): the external file cache fills to ~88 % of `memory_limit` and stays after the query
+> (memory_limit 6GB: cache 5250 MiB, peak RSS 8743 MiB; 1GB: cache 910 MiB, RSS 1331 MiB; cache off: RSS 186 MiB; local
+> files are not cached). So the cache is already bounded by `memory_limit` per connection; balanced's 160188MiB x 4
+> connections on the 754 GB host simply let it reach 48 / 96 GB. With `memoryBudgetBytes=48g`, -Xmx8g, direct 8g the 4
+> connections share ~27 GiB. RSS ran ~1.45x `memory_limit` - documented in README; no separate cache cap added (DuckDB
+> has none; see Q-52a). These measurements are input for 52(b) in lane 6.
+
 > **Maintainer, 2026-11-17 18:10 - ITEM 52 (core): explicit memory budget.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Balanced sized DuckDB from the host: `duckdb=sizing threads=4 memoryLimit=160188MiB connections=4 budgetMiB=653041`, and its RSS grew to the bench's 48 GB (then 96 GB) watchdog on `SELECT count(id), min(id), max(id), sum(id) FROM <1.27 TB table>` (killed both times; speed with an explicit duckDbMemoryLimit=56 GiB stayed at 66.7 GB and answered). Add a setting `memoryBudgetBytes` (env `FLIGHT_MEMORY_BUDGET`, accepts `48g`) that overrides host / cgroup detection (start line `memoryBudget source=setting`), so every profile sizes DuckDB, Arrow and caches from it; and when the source is `host` and the host has > 64 GiB, log one WARN that no budget is set. Also check why a full-table count/min/max/sum over 1.27 TB needs > 48 GB RSS in balanced at all (streaming aggregate should be small): reproduce on a big generated table with a low memoryLimit; if DuckDB's buffer pool / external file cache retains read blocks, cap the external file cache within the budget. Write `ITEM 52 DONE <sha>`; package after 52-55 are each DONE.
 
 > **ITEM 51 DONE 6f0aa5a0 (2026-11-16 20:50Z, core lane).** marten's SF10 compare on `server-1.0.0-6f0aa5a026fa`
@@ -2071,6 +2083,11 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **(Q-52a, 2026-11-17, core lane) Default budget on big hosts without a cgroup limit.** Item 52 only warns when
+  balanced sizes from a > 64 GiB host. Options: (1) keep (operator sets `memoryBudgetBytes`); (2) cap the detected host
+  budget by default, e.g. at 4 GiB per available core (16 cores -> 64 GiB), which changes existing defaults; (3) also
+  budget ~1.5x `memory_limit` per connection for RSS (measured overshoot) when splitting the budget. Maintainer's call.
 
 - **(Q-51a, 2026-11-16, core lane) Runtime filters in complete mode and bloom filters.** Item 51 applies the block only
   to partial-mode tickets (a complete ticket runs the whole query on one node, distributed complete included; wrapping
@@ -4423,3 +4440,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-16 20:50Z (core lane): ITEM 51 DONE - marten SF10 ours vs ours_rf numbers on 6f0aa5a026fa written into
   Next steps (runs 43899589063 / 43899594632, 22/22, ~3 % order-corrected gain; q21 / q11 best). No code change, no CI
   run. Q-51a open. Lock released.
+- 2026-11-17 15:30Z (core lane): ITEM 52(a) DONE 183a1775 - `memoryBudgetBytes` / `FLIGHT_MEMORY_BUDGET` overrides memory
+  detection (`source=setting`), WARN `memoryBudget=unset` on host-sized starts > 64 GiB; HostLimitsBudgetTest (6).
+  External file cache measured: fills to ~88 % of `memory_limit`, RSS ~1.45x it (numbers in Next steps). Dev CI
+  44111204306 green. Q-52a added. No package (after 53-55). Lock released.
