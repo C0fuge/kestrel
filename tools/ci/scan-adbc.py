@@ -8,7 +8,9 @@ Measures, after one unmeasured pass, <rounds> passes of
 - ``export``: one client streams it into a Parquet file (zstd), the way an export job does.
 Prints one line per shape and pass: ``x1 r1 12.34 s rows 59986052 mb 9876.5 mbs 800.3 batches 123 sum <hex>``
 (mb = Arrow buffer bytes of all batches in MiB, mbs = mb per second over all clients, sum = order-independent
-checksum of the rows' first column and row count, equal across configurations when the answers are equal).
+checksum of the rows' first column and row count, equal across configurations when the answers are equal),
+and after it ``cpu x1 r1 client 97 %``: CPU time of this client process (all threads, incl. the Go driver's) over the
+pass's wall time, in % of one core, to tell a client-bound pass from a server-bound one (item 54).
 Exits non-zero when a pass fails or two passes disagree on rows or sum.
 """
 import os
@@ -84,7 +86,7 @@ def main():
                 shapes.append((f"x{clients}", lambda: parallel(conns, sql)))
             shapes.append(("export", lambda: [scan(conns[0], sql, export)]))
             for name, run in shapes:
-                t0 = time.perf_counter()
+                t0, c0 = time.perf_counter(), time.process_time()
                 try:
                     results = run()
                 except Exception as e:  # noqa: BLE001 - one failed pass fails the run
@@ -92,6 +94,7 @@ def main():
                     failed = True
                     continue
                 seconds = time.perf_counter() - t0
+                cpu = 100 * (time.process_time() - c0) / seconds
                 for rows, _, _, total in results:
                     answer = (rows, total)
                     if seen.setdefault("answer", answer) != answer:
@@ -102,6 +105,7 @@ def main():
                 warm = " (warm-up)" if r == 0 else ""
                 print(f"{name} r{r} {seconds:.2f} s rows {rows} mb {mb:.1f} mbs {mb / seconds:.1f} batches {batches}"
                       f" sum {total:016x}{warm}", flush=True)
+                print(f"cpu {name} r{r} client {cpu:.0f} %", flush=True)
             if os.path.exists(export):
                 os.remove(export)
     finally:

@@ -201,7 +201,10 @@ if [ -n "${SCAN_ROUNDS:-}" ]; then
   # Best pass per shape (MB/s), the line the summary compares.
   for shape in x1 "x${SCAN_CLIENTS:-4}" export; do
     best=$(grep -E "^$shape r[1-9]" "$work/client-scan.log" | grep -v error | awk '{ print $10 }' | sort -n | tail -n 1)
-    echo "${LABEL:-$profile}|best $shape ${best:-?} MB/s" | tee -a "$res"
+    # Client CPU (% of one core, all client threads) of the measured passes: near 100 x the client's
+    # CPU count means the client, not the server, caps the shape.
+    cpu=$(grep -E "^cpu $shape r[1-9] " "$work/client-scan.log" | awk '{ print $5 }' | sort -n | tr '\n' ' ')
+    echo "${LABEL:-$profile}|best $shape ${best:-?} MB/s (client cpu ${cpu:-?}% on ${CLIENT_CPUS:-2,3})" | tee -a "$res"
   done
   peak=$(cat "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' srv).scope/memory.peak" 2>/dev/null || true)
   [ -n "$peak" ] && echo "${LABEL:-$profile}|server memory peak $(( peak / 1048576 )) MiB" | tee -a "$res"
