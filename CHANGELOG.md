@@ -41,7 +41,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Kerberos and SASL data-transfer protection (every block over SASL TCP).
   `tools/ci/scan-adbc.py` prints the client's CPU per pass (`cpu x1 r1 client 97 %`), the cell adds it to its best-pass lines.
   Input `upstream` (a ref of the upstream repository) builds the upstream server in the same run; variants of profile
-  `upstream` measure it on the same runner as speed / balanced.
+  `upstream` measure it on the same runner as speed / balanced (hadoopfs through upstream's `duckDbHdfsExtension`); a server
+  that dies during the scan passes leaves its exit state and last errors in the result lines.
 
 - Item 55 (b) (lane 3): new setting `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 =
   off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
