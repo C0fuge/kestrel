@@ -163,8 +163,8 @@ jobs:
                 if [ "$TIMING" = true ] && [ "$merged" -gt 0 ]; then
                   # Item 55 (a): count, p50 / p99 / sum ms per Timing tag, the 12 largest sums.
                   grep -oE 'durationUs=[0-9]+ tag=[^ ]+' <<< "$log" | sed -E 's/durationUs=([0-9]+) tag=(.*)/\2 \1/' | sort -k1,1 -k2,2n | awk '
-                    function out() { if (n) printf "%s n=%d p50=%.1f p99=%.1f sumMs=%d\n", k, n, a[int(n * 0.5) + (n * 0.5 > int(n * 0.5))] / 1000, a[int(n * 0.99) + (n * 0.99 > int(n * 0.99))] / 1000, s / 1000 }
-                    $1 != k { out(); k = $1; n = 0; s = 0 } { a[++n] = $2; s += $2 } END { out() }' | sort -t= -k5,5nr | head -n 12 | sed "s/^/$name $cls timing /" | tee -a "$out"
+                    function out() { if (n) printf "%d %s n=%d p50=%.1f p99=%.1f sumMs=%d\n", s / 1000, k, n, a[int(n * 0.5) + (n * 0.5 > int(n * 0.5))] / 1000, a[int(n * 0.99) + (n * 0.99 > int(n * 0.99))] / 1000, s / 1000 }
+                    $1 != k { out(); k = $1; n = 0; s = 0 } { a[++n] = $2; s += $2 } END { out() }' | sort -k1,1nr | head -n 12 | cut -d' ' -f2- | sed "s/^/$name $cls timing /" | tee -a "$out"
                 fi
               done
             done
