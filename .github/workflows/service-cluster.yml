@@ -554,7 +554,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
           n=$(ls "$RUNNER_TEMP"/results/*/result.txt 2>/dev/null | wc -l)
-          [ "$n" -eq 12 ] || { echo "only $n of 12 cells reported"; exit 1; }
+          [ "$n" -eq 15 ] || { echo "only $n of 15 cells reported"; exit 1; }
           ! grep -h '|fail|' "$RUNNER_TEMP"/results/*/result.txt || exit 1
           [ ! -s "$RUNNER_TEMP/point-warn.txt" ] || while read -r l; do echo "::warning title=item 43 point q/s::$l"; done < "$RUNNER_TEMP/point-warn.txt"
           if [ -s "$RUNNER_TEMP/point-verdict.txt" ]; then
