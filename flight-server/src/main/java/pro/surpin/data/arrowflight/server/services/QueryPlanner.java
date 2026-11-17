@@ -299,6 +299,15 @@ public final class QueryPlanner {
 
     private QueryPlan planInScope(String query, boolean plannerAsBackup, int maxEndpointsPerNode,
             boolean mergeInternal) throws IOException {
+        // The endpoints' load writes run side by side when the plan is made, not one per
+        // endpoint while it is made (item 55 (a)); a mocked cluster service returns no batch.
+        try (ClusterService.WriteBatch writes = clusterService.writeBatch()) {
+            return planEndpoints(query, plannerAsBackup, maxEndpointsPerNode, mergeInternal);
+        }
+    }
+
+    private QueryPlan planEndpoints(String query, boolean plannerAsBackup, int maxEndpointsPerNode,
+            boolean mergeInternal) throws IOException {
         long t = LogUtil.mark();
         TravelledTable travelled = null;
         if (TimeTravelClause.present(query)) {

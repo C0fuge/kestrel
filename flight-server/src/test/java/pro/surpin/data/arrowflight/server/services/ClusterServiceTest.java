@@ -232,6 +232,71 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /**
+     * Verifies a plan's write batch holds its load writes until it closes, then writes one
+     * load change per node (the sum) and every reservation (item 55 (a)).
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void writeBatchWritesSummedLoadsAndReservationsOnClose() {
+        ClusterService cs = createService("s1");
+        HandleState state = HandleState.forServerFiles(
+                "SELECT * FROM s.t", new String[]{"s/t/f.parquet"}, "s2", 50L, true);
+        ClusterService.WriteBatch batch = cs.writeBatch();
+        cs.addLoad("s2", 50);
+        cs.addLoad("s2", 30);
+        cs.addLoad("s3", 10);
+        cs.createEndpointHandle(state);
+        verify(serverRegistry, never()).compute(anyString(), any());
+        verify(statementCache, never()).putIfAbsent(anyString(), any(), anyLong(), any());
+
+        batch.close();
+
+        ArgumentCaptor<java.util.function.BiFunction<? super String, ? super Long, ? extends Long>> s2 =
+                ArgumentCaptor.forClass(java.util.function.BiFunction.class);
+        verify(serverRegistry).compute(eq("s2"), s2.capture());
+        assertEquals(80L, s2.getValue().apply("s2", null));
+        assertEquals(100L, s2.getValue().apply("s2", 20L));
+        verify(serverRegistry, times(1)).compute(eq("s3"), any());
+        verify(statementCache).putIfAbsent(startsWith("__arrowflight-ticket-load-v1:"), eq(state),
+                anyLong(), any());
+
+        cs.addLoad("s3", 5);
+        verify(serverRegistry, times(2)).compute(eq("s3"), any());
+        cs.close();
+    }
+
+    /** Verifies a failed write of a batch fails its close, after the other writes ran. */
+    @Test
+    void writeBatchFailureSurfacesAfterAllWrites() {
+        ClusterService cs = createService("s1");
+        when(serverRegistry.compute(eq("s2"), any())).thenThrow(new IllegalStateException("down"));
+        ClusterService.WriteBatch batch = cs.writeBatch();
+        cs.addLoad("s2", 50);
+        cs.addLoad("s3", 10);
+        cs.addLoad("s4", 10);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, batch::close);
+        assertEquals("down", e.getMessage());
+        verify(serverRegistry).compute(eq("s3"), any());
+        verify(serverRegistry).compute(eq("s4"), any());
+        cs.close();
+    }
+
+    /** Verifies a batch opened inside another leaves the writes to the outer one. */
+    @Test
+    void nestedWriteBatchLeavesWritesToOuter() {
+        ClusterService cs = createService("s1");
+        try (ClusterService.WriteBatch outer = cs.writeBatch()) {
+            try (ClusterService.WriteBatch inner = cs.writeBatch()) {
+                cs.addLoad("s2", 50);
+            }
+            verify(serverRegistry, never()).compute(anyString(), any());
+        }
+        verify(serverRegistry).compute(eq("s2"), any());
+        cs.close();
+    }
+
     // ── handle lifecycle ──────────────────────────────────────────────────
 
     @Test

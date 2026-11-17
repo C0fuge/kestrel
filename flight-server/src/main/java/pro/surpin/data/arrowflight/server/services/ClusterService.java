@@ -67,6 +67,8 @@ public final class ClusterService implements AutoCloseable {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     /** Synchronous backups of the registry, heartbeat and statement maps (Hazelcast's default). */
     private static final int MAP_BACKUP_COUNT = 1;
+    /** Threads that run the cluster writes of plans side by side. */
+    private static final int BATCH_WRITE_THREADS = 8;
 
     private final HazelcastAdapter hazelcast;
     private final AppConfig appConfig;
@@ -80,6 +82,10 @@ public final class ClusterService implements AutoCloseable {
     // Writes whose key lives on a member that stopped answering run here, one after the other,
     // so that neither a query nor the heartbeat waits for that member (item D3).
     private final ExecutorService deferredWriteExecutor;
+    // Runs the load writes of one plan side by side ({@link #writeBatch()}); the plan waits for them.
+    private final ExecutorService batchWriteExecutor;
+    /** The plan writes being collected on this thread, or null. */
+    private final ThreadLocal<WriteBatch> currentBatch = new ThreadLocal<>();
     /** Lists the data directory again now and then (item 49 (d)); started by {@link #refreshInventory}. */
     private ScheduledExecutorService inventoryExecutor;
     /** Lists this node's files for {@link #refreshFileInventory()}; null until a refresh is set up. */
@@ -175,6 +181,11 @@ public final class ClusterService implements AutoCloseable {
         });
         this.deferredWriteExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "flight-cluster-write");
+            t.setDaemon(true);
+            return t;
+        });
+        this.batchWriteExecutor = Executors.newFixedThreadPool(BATCH_WRITE_THREADS, r -> {
+            Thread t = new Thread(r, "flight-plan-write");
             t.setDaemon(true);
             return t;
         });
@@ -771,6 +782,96 @@ public final class ClusterService implements AutoCloseable {
     }
 
     /**
+     * Starts collecting this thread's load writes of one plan: the endpoints' load reservations
+     * ({@link #createEndpointHandle}) and the nodes' added load ({@link #addLoad}, one write per
+     * node). {@link WriteBatch#close()} runs them side by side and returns once all are done, so
+     * a plan returns its endpoints, as before, only after their load is written, and a release
+     * cannot come before its reservation. Writes whose key lives on a member that stopped
+     * answering are deferred as before. A batch started while one is open does nothing.
+     *
+     * @return the batch; close it before the plan returns its endpoints
+     */
+    public WriteBatch writeBatch() {
+        if (currentBatch.get() != null) {
+            return new WriteBatch(false);
+        }
+        WriteBatch batch = new WriteBatch(true);
+        currentBatch.set(batch);
+        return batch;
+    }
+
+    /**
+     * Load writes of one plan, collected on the planning thread; see {@link #writeBatch()}.
+     */
+    public final class WriteBatch implements AutoCloseable {
+        private final boolean owner;
+        private final Map<String, Long> loads = new LinkedHashMap<>();
+        private final List<Runnable> writes = new ArrayList<>();
+
+        private WriteBatch(boolean owner) {
+            this.owner = owner;
+        }
+
+        /**
+         * Runs the collected writes side by side and waits for them.
+         *
+         * @throws RuntimeException the first write's failure, after every write ended
+         */
+        @Override
+        public void close() {
+            if (!owner) {
+                return;
+            }
+            currentBatch.remove();
+            List<Runnable> all = new ArrayList<>(writes);
+            for (Map.Entry<String, Long> load : loads.entrySet()) {
+                String uri = load.getKey();
+                long delta = load.getValue();
+                all.add(() -> addLoad(uri, delta));
+            }
+            if (all.isEmpty()) {
+                return;
+            }
+            long t = LogUtil.mark();
+            List<CompletableFuture<Void>> others = new ArrayList<>();
+            RuntimeException failure = null;
+            try {
+                for (int i = 1; i < all.size(); i++) {
+                    others.add(CompletableFuture.runAsync(all.get(i), batchWriteExecutor));
+                }
+            } catch (RejectedExecutionException e) {
+                // Closing: what was not handed over runs here.
+                for (int i = others.size() + 1; i < all.size(); i++) {
+                    failure = runCollecting(all.get(i), failure);
+                }
+            }
+            failure = runCollecting(all.get(0), failure);
+            for (CompletableFuture<Void> other : others) {
+                try {
+                    other.join();
+                } catch (java.util.concurrent.CompletionException e) {
+                    if (failure == null) {
+                        failure = e.getCause() instanceof RuntimeException r ? r : e;
+                    }
+                }
+            }
+            LogUtil.logTiming(t, "hazelcast.planWrites", "writes=" + all.size());
+            if (failure != null) {
+                throw failure;
+            }
+        }
+
+        private RuntimeException runCollecting(Runnable write, RuntimeException failure) {
+            try {
+                write.run();
+                return failure;
+            } catch (RuntimeException e) {
+                return failure != null ? failure : e;
+            }
+        }
+    }
+
+    /**
      * Adds delta bytes to server's tracked load.
      *
      * @param uri   server URI
@@ -800,7 +901,12 @@ public final class ClusterService implements AutoCloseable {
             return updated <= 0 ? 0L : updated;
         });
         if (!mustDefer(uri)) {
-            write.run();
+            WriteBatch batch = currentBatch.get();
+            if (create && batch != null) {
+                batch.loads.merge(uri, delta, Long::sum);
+            } else {
+                write.run();
+            }
             return;
         }
         pendingLoad.merge(uri, delta, Long::sum);
@@ -900,7 +1006,12 @@ public final class ClusterService implements AutoCloseable {
         byte[] handle = endpointTicketCodec.encode(state);
         if (state.loadTracked()) {
             String key = loadReservationKey(handle);
-            writeOrDefer(key, "reserve endpoint load", () -> reserve(key, state));
+            WriteBatch batch = currentBatch.get();
+            if (batch != null && !mustDefer(key, MAP_BACKUP_COUNT)) {
+                batch.writes.add(() -> reserve(key, state));
+            } else {
+                writeOrDefer(key, "reserve endpoint load", () -> reserve(key, state));
+            }
         }
         return handle;
     }
@@ -1316,6 +1427,7 @@ public final class ClusterService implements AutoCloseable {
         deregister();
         loadClaimExecutor.shutdownNow();
         deferredWriteExecutor.shutdownNow();
+        batchWriteExecutor.shutdownNow();
         localHandles.clear();
         try {
             hazelcast.close();
