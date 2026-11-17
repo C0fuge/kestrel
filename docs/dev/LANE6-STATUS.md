@@ -7,9 +7,9 @@
 > averages next to them through `AverageMerge`). New guard: an alias GROUP BY key is accepted only when the table's footer
 > columns are known and none has that name (`CopyBatchMerge.shadowedAliasKey`, `ExecutionService.copyBatchMerge`); the
 > static `notBatchableReason` / `mergeable` know no columns, so the complete-mode batched path declines alias keys (with the
-> reason) - ordinals / expressions go. Full Dev CI 44175118886 (924baf8f) was green; fast tier 44179162271 green; full run
-> on main for 5b751015 dispatched by the push.
-> **Next session:** (0) read the full Dev CI of main 5b751015 (red = fix first). (1) If the maintainer gave the exact
+> reason) - ordinals / expressions go. Full Dev CI 44175118886 (924baf8f) was green; fast tier 44179162271 green; full Dev CI
+> on main: run 44179759902 (head 8025e7f5, includes 5b751015).
+> **Next session:** (0) read full Dev CI 44179759902 (red = fix first). (1) If the maintainer gave the exact
 > GROUP BY / the INFO `distributedComplete=single reason=` line, handle that shape. (2) `date_trunc` / `strftime` keys:
 > keep the client's own select-item text (jOOQ renders `date_trunc` wrongly, cannot parse `strftime`), with a DuckDB
 > equivalence test in `CompleteAnswerMergeTest.computedGroupKeysMergeIntoTheCompleteAnswer`. (3) Optional: let
@@ -118,4 +118,4 @@
 - 2026-11-17 21:16-21:50Z (lane 6): full Dev CI 44175118886 (924baf8f) green. ITEM 55(c) step 3: batches of copies merge
   computed GROUP BY keys, alias keys guarded against shadowing a table column (see Next steps). Tests: CopyBatchMergeTest
   (DuckDB equivalence incl. avg + LIMIT), ExecutionServiceTest (mergeable lists; end-to-end batches with alias and ordinal
-  keys). Fast tier 44179162271 green; merged into main 5b751015; full Dev CI on main pending.
+  keys). Fast tier 44179162271 green; merged into main 5b751015; full Dev CI 44179759902 (8025e7f5) pending.
