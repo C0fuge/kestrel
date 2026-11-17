@@ -563,6 +563,79 @@ class DuckDbSharedDatabaseTest {
     }
 
     /**
+     * Q54-1 (item 54): with the insertion order dropped (balanced on a remote data dir) the shared
+     * DuckDB gives the same answers as with it kept: the same rows of a scan without ORDER BY (in
+     * any order), the same counts, aggregates and ORDER BY answers.
+     */
+    @Test
+    void droppedInsertionOrderGivesTheSameAnswers(@TempDir Path dir) throws Exception {
+        Path data = Files.createDirectories(dir.resolve("data"));
+        try (Connection free = DriverManager.getConnection("jdbc:duckdb:");
+                Statement s = free.createStatement()) {
+            for (int f = 0; f < 4; f++) {
+                s.execute("COPY (SELECT " + f + " * 50000 + i AS id, (i * 7) % 101 AS k, i * 0.25 AS v"
+                        + " FROM range(50000) t(i)) TO '" + data.resolve("part" + f + ".parquet")
+                        + "' (FORMAT parquet, ROW_GROUP_SIZE 4096)");
+            }
+        }
+        String files = "read_parquet('" + data.resolve("*.parquet") + "')";
+        List<String> queries = List.of(
+                "SELECT count(*), sum(id), sum(v) FROM " + files,
+                "SELECT k, count(*), sum(v) FROM " + files + " GROUP BY k ORDER BY k",
+                "SELECT id, k, v FROM " + files + " ORDER BY v DESC, id LIMIT 25",
+                "SELECT id, k, v FROM " + files + " WHERE k = 13");
+        List<List<String>> ordered = answers(config(), data, queries);
+        List<List<String>> unordered = answers(config().withDuckDbScanOrder(false, null), data, queries);
+        assertEquals("true", ordered.get(0).get(0));
+        assertEquals("false", unordered.get(0).get(0));
+        for (int q = 1; q <= queries.size(); q++) {
+            List<String> a = new ArrayList<>(ordered.get(q));
+            List<String> b = new ArrayList<>(unordered.get(q));
+            if (!queries.get(q - 1).contains("ORDER BY")) {
+                // Without ORDER BY the rows may come in any order: compare them as a multiset.
+                a.sort(null);
+                b.sort(null);
+            }
+            assertFalse(a.isEmpty(), queries.get(q - 1));
+            assertEquals(a, b, queries.get(q - 1));
+        }
+    }
+
+    /**
+     * Runs queries in a session of a shared DuckDB over a data directory.
+     *
+     * @param config  configuration
+     * @param data    data directory
+     * @param queries queries
+     * @return the session's preserve_insertion_order setting, then each query's rows as text
+     * @throws Exception on query failure
+     */
+    private static List<List<String>> answers(AppConfig config, Path data, List<String> queries) throws Exception {
+        List<List<String>> out = new ArrayList<>();
+        try (DuckDbAdapter adapter = new DuckDbAdapter(config, Executors.newSingleThreadExecutor(),
+                DuckDbSetupPlan.of(List.of(data.toString()), List.of()), 0, 0, 2,
+                ProducingStreamGate.OFF, false, SHARED)) {
+            Connection conn = adapter.connection();
+            out.add(List.of(single(conn, "SELECT current_setting('preserve_insertion_order')")));
+            for (String sql : queries) {
+                List<String> rows = new ArrayList<>();
+                try (Statement s = conn.createStatement(); ResultSet rs = s.executeQuery(sql)) {
+                    int columns = rs.getMetaData().getColumnCount();
+                    while (rs.next()) {
+                        StringBuilder row = new StringBuilder();
+                        for (int c = 1; c <= columns; c++) {
+                            row.append(rs.getString(c)).append('|');
+                        }
+                        rows.add(row.toString());
+                    }
+                }
+                out.add(rows);
+            }
+        }
+        return out;
+    }
+
+    /**
      * Builds an adapter on a shared DuckDB.
      *
      * @param roots      readable roots; empty disables the lockdown

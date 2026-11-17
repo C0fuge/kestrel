@@ -102,13 +102,15 @@ class ResourceProfileTest {
         ResourceProfile profile = ResourceProfile.resolve(hdfs, () -> {
             throw new AssertionError("host read for balanced");
         });
-        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbExternalFileCache=true", profile.describe());
+        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbExternalFileCache=true"
+                + " duckDbPreserveInsertionOrder=false", profile.describe());
         assertTrue(ConfigAdapter.getConfig(effective(hdfs, MEDIUM), MEDIUM).duckDbExternalFileCache());
         assertNotNull(ConfigAdapter.duckDbShared(effective(hdfs, MEDIUM), MEDIUM));
 
         ConfigSource off = raw(Map.of("dataDir", "hdfs://nn:8020/data"),
                 Map.of("DUCKDB_EXTERNAL_FILE_CACHE", "false"), file);
-        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbExternalFileCache=false(explicit)",
+        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbPreserveInsertionOrder=false"
+                + " duckDbExternalFileCache=false(explicit)",
                 ResourceProfile.resolve(off, () -> MEDIUM).describe());
         assertFalse(ConfigAdapter.getConfig(effective(off, MEDIUM), MEDIUM).duckDbExternalFileCache());
 
@@ -121,6 +123,39 @@ class ResourceProfileTest {
                 "duckDbSharedDatabase", "false"), Map.of(), file);
         assertTrue(ConfigAdapter.getConfig(effective(speedPerConnection, MEDIUM), MEDIUM)
                 .duckDbExternalFileCache());
+    }
+
+    /**
+     * Q54-1 (item 54): balanced drops the insertion order on a remote data dir (HDFS, S3, a plugin's
+     * scheme) and the startup line shows it; a local path, a file:// URI or no data dir keep the
+     * file order (item 16), and an operator's value given as a system property or in the
+     * environment wins.
+     */
+    @Test
+    void balancedDropsTheInsertionOrderOnRemoteDataDirsOnly() {
+        for (String dir : List.of("hdfs://nn:8020/data", "s3://bucket/data", "S3A://bucket/d", "lakefs://repo/main/d")) {
+            ConfigSource remote = raw(Map.of("dataDir", dir), Map.of(), Map.of());
+            assertTrue(ResourceProfile.resolve(remote, () -> MEDIUM).describe()
+                    .contains(" duckDbPreserveInsertionOrder=false"), dir);
+            assertFalse(ConfigAdapter.getConfig(effective(remote, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder(), dir);
+        }
+        for (String dir : List.of("/data/parquet", "file:///data/parquet", "data", "C:\\data")) {
+            ConfigSource local = raw(Map.of("dataDir", dir), Map.of(), Map.of());
+            assertFalse(ResourceProfile.resolve(local, () -> MEDIUM).describe().contains("duckDbPreserveInsertionOrder"),
+                    dir);
+            assertTrue(ConfigAdapter.getConfig(effective(local, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder(), dir);
+        }
+        ConfigSource none = raw(Map.of(), Map.of(), Map.of());
+        assertTrue(ConfigAdapter.getConfig(effective(none, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+
+        ConfigSource env = raw(Map.of("dataDir", "s3://bucket/data"), Map.of("DUCKDB_PRESERVE_INSERTION_ORDER", "true"),
+                Map.of());
+        assertTrue(ResourceProfile.resolve(env, () -> MEDIUM).describe()
+                .contains(" duckDbPreserveInsertionOrder=true(explicit)"));
+        assertTrue(ConfigAdapter.getConfig(effective(env, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
+        ConfigSource property = raw(Map.of("dataDir", "hdfs://nn/d", "arrowflight.duckdb.preserveInsertionOrder", "true"),
+                Map.of(), Map.of());
+        assertTrue(ConfigAdapter.getConfig(effective(property, MEDIUM), MEDIUM).duckDbPreserveInsertionOrder());
     }
 
     /** A typo is refused instead of running balanced silently; the name ignores case. */

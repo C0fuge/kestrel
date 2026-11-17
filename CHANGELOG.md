@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 54 / Q54-1 (lane 4): `resourceProfile=balanced` now defaults `duckDbPreserveInsertionOrder=false` on a remote
+  data dir (`hdfs://`, `s3://`, `s3a://`, `lakefs://` or any other scheme but `file://`): rows of a query without ORDER
+  BY may come in any order there (counts, aggregates and ORDER BY answers are unchanged); one full HDFS scan +0-33 %.
+  Local data dirs keep the file order. `-DduckDbPreserveInsertionOrder=true` (or `DUCKDB_PRESERVE_INSERTION_ORDER=true`)
+  restores it; the startup line `resourceProfile profile=balanced ... duckDbPreserveInsertionOrder=false` shows it.
 - Item 55 (a) (lane 5, maintainer's answers Q-55a-nl / Q-55a-mc): defaults changed - `distributedCompleteMergeLoadTracking`
   is now false (the plans of a distributed-complete merge write no load to the cluster maps; true restores the old
   behaviour) and `distributedCompleteMemberCheckMillis` is now 250 (an admitted member address of a node-to-node call is
