@@ -4480,6 +4480,6 @@ S3 slowdown item below stays open for then).
   on its one node; full Dev CI 44162578438 on main 4662fa4f green), `phasesUs=` on `distributedComplete=merged` lines,
   core `QueryPlanner`: on shared storage a member's published inventory is looked up once per member, not per plan
   (item 55 (a); fast tier 44163831594 green). Details in `LANE5-STATUS.md`.
-- 2026-11-17T21:30Z (lane 6): item 55(c) step 1 merged (72edab3d + e3d14331): `ORDER BY <selected aggregate>` is rendered as
+- 2026-11-17T20:25Z (lane 6): item 55(c) step 1 merged (72edab3d + e3d14331): `ORDER BY <selected aggregate>` is rendered as
   its position, so dc and batches of copies merge such GROUP BYs (before: one node alone); aggregates kept on one node log
   `distributedComplete=single reason=...` at INFO. Full Dev CI 44169154810 pending. Details in LANE6-STATUS.md.

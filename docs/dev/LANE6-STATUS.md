@@ -2,7 +2,7 @@
 
 ## Next steps
 
-> **Lane 6, 2026-11-17 21:30 - ITEM 55(c) step 1 merged into main 72edab3d + e3d14331 (not DONE).** Finding: dc's 890 s vs
+> **Lane 6, 2026-11-17 20:25 - ITEM 55(c) step 1 merged into main 72edab3d + e3d14331 (not DONE).** Finding: dc's 890 s vs
 > speed's 1001 s means that GROUP BY was most likely never merged, so one node computed it alone as under speed (count/min/max/sum
 > got 20x because it *was* merged). `DistributedComplete.mergeable` silently refuses (DEBUG only) these GROUP BY shapes:
 > `ORDER BY <aggregate>` (e.g. `ORDER BY count(*) DESC`), a GROUP BY expression (`id % 6`, `date_trunc(...)`, `GROUP BY 1`
@@ -73,7 +73,7 @@
   query's slot; Q-52b), unit tests (DuckDbAdapterTest, DuckDbSizingTest, ConfigAdapterTest) and S3IntegrationTest with
   real httpfs + lockdown (25 MiB cached, share 12 MiB -> replaced, fresh cache 0). Fast tier 44156451682 green; merged
   into main bdeda437; full Dev CI 44158521271 pending. Next: check it, then 55(c).
-- 2026-11-17 20:12-21:30Z (lane 6): full Dev CI 44158521271 (bdeda437) was red in the item 35 step - lane 5's, fixed by
+- 2026-11-17 20:12-20:25Z (lane 6): full Dev CI 44158521271 (bdeda437) was red in the item 35 step - lane 5's, fixed by
   them (44162578438 green). ITEM 55(c) step 1: probe of the GROUP BY shapes dc refuses (see Next steps); ORDER BY a
   selected aggregate now merges (dc and batches of copies), INFO reason for unmerged aggregates. Tests: CompleteAnswerMergeTest,
   CopyBatchMergeTest, DistributedCompleteMergeableTest, ExecutionServiceTest. Fast tier 44167850389, 44168551211 green;
