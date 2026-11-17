@@ -255,7 +255,9 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 ## Resource profile `speed` (item 23)
 
 `-DresourceProfile=speed` (or `FLIGHT_RESOURCE_PROFILE=speed`) turns on, as defaults, what was measured as faster;
-`balanced` (default) changes nothing, except `duckDbExternalFileCache=true` on an `hdfs://` data dir (Q11, item 39;
+`balanced` (default) supplies `duckDbSharedDatabase=true` (item 53: one DuckDB per node, threads capped by
+`duckDbSharedMaxThreads` (8), one node-wide memory limit within the budget; `-DduckDbSharedDatabase=false` restores a
+DuckDB per connection) and `duckDbExternalFileCache=true` on an `hdfs://` data dir (Q11, item 39;
 also under `speed` without the shared DuckDB). A setting given as `-D` or in the environment (or in a plugin's
 `<ns>.properties`) wins over the profile; the profile wins over the bundled `arrowflight.properties`. Startup line
 `resourceProfile profile=speed <key>=<value> ...` (operator values marked `(explicit)`).

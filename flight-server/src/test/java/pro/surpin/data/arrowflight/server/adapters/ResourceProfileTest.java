@@ -2,6 +2,7 @@ package pro.surpin.data.arrowflight.server.adapters;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -58,23 +59,36 @@ class ResourceProfileTest {
         return ResourceProfile.resolve(raw, () -> host).applyTo(raw);
     }
 
-    /** Without the setting nothing changes and the host is not even read. */
+    /**
+     * Item 53: balanced runs the node's shared DuckDB (over the bundled file's false), sized from
+     * the host, without reading the host itself; other settings stay unchanged, and the operator's
+     * duckDbSharedDatabase=false restores a DuckDB per connection.
+     */
     @Test
-    void balancedIsTheDefaultAndChangesNothing() {
+    void balancedIsTheDefaultAndSharesOneDuckDb() {
         ConfigSource raw = raw(Map.of(), Map.of(), Map.of("duckDbSharedDatabase", "false"));
         ResourceProfile profile = ResourceProfile.resolve(raw, () -> {
             throw new AssertionError("host read for balanced");
         });
         assertEquals(ResourceProfile.BALANCED, profile.name());
-        assertTrue(profile.defaults().isEmpty());
-        assertSame(raw, profile.applyTo(raw));
-        assertEquals("profile=balanced", profile.describe());
+        assertEquals(Map.of("duckDbSharedDatabase", "true"), profile.defaults());
+        assertEquals("profile=balanced duckDbSharedDatabase=true", profile.describe());
         AppConfig config = ConfigAdapter.getConfig(effective(raw, MEDIUM), MEDIUM);
         assertEquals(AppConfig.DEFAULT_ENDPOINTS_PER_SERVER, config.endpointsPerServer());
-        assertNull(ConfigAdapter.duckDbShared(effective(raw, MEDIUM), MEDIUM));
+        DuckDbSizing.Shared shared = ConfigAdapter.duckDbShared(effective(raw, MEDIUM), MEDIUM);
+        assertNotNull(shared);
+        assertEquals(DuckDbSizing.DEFAULT_SHARED_MAX_THREADS, shared.threads());
+        assertEquals(DuckDbSizing.shared(MEDIUM, 0, null).memoryLimit(), shared.memoryLimit());
         assertFalse(ConfigAdapter.flightZeroCopyWrites(effective(raw, MEDIUM)));
         assertFalse(config.duckDbExternalFileCache());
         assertTrue(config.duckDbPreserveInsertionOrder());
+
+        ConfigSource perConnection = raw(Map.of("duckDbSharedDatabase", "false"), Map.of(), Map.of());
+        ResourceProfile off = ResourceProfile.resolve(perConnection, () -> MEDIUM);
+        assertEquals("profile=balanced duckDbSharedDatabase=false(explicit)", off.describe());
+        assertNull(ConfigAdapter.duckDbShared(effective(perConnection, MEDIUM), MEDIUM));
+        ConfigSource env = raw(Map.of(), Map.of("DUCKDB_SHARED_DATABASE", "false"), Map.of());
+        assertNull(ConfigAdapter.duckDbShared(effective(env, MEDIUM), MEDIUM));
     }
 
     /**
@@ -88,18 +102,19 @@ class ResourceProfileTest {
         ResourceProfile profile = ResourceProfile.resolve(hdfs, () -> {
             throw new AssertionError("host read for balanced");
         });
-        assertEquals("profile=balanced duckDbExternalFileCache=true", profile.describe());
+        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbExternalFileCache=true", profile.describe());
         assertTrue(ConfigAdapter.getConfig(effective(hdfs, MEDIUM), MEDIUM).duckDbExternalFileCache());
-        assertNull(ConfigAdapter.duckDbShared(effective(hdfs, MEDIUM), MEDIUM));
+        assertNotNull(ConfigAdapter.duckDbShared(effective(hdfs, MEDIUM), MEDIUM));
 
         ConfigSource off = raw(Map.of("dataDir", "hdfs://nn:8020/data"),
                 Map.of("DUCKDB_EXTERNAL_FILE_CACHE", "false"), file);
-        assertEquals("profile=balanced duckDbExternalFileCache=false(explicit)",
+        assertEquals("profile=balanced duckDbSharedDatabase=true duckDbExternalFileCache=false(explicit)",
                 ResourceProfile.resolve(off, () -> MEDIUM).describe());
         assertFalse(ConfigAdapter.getConfig(effective(off, MEDIUM), MEDIUM).duckDbExternalFileCache());
 
         ConfigSource local = raw(Map.of("dataDir", "/data/parquet"), Map.of(), file);
-        assertEquals("profile=balanced", ResourceProfile.resolve(local, () -> MEDIUM).describe());
+        assertEquals("profile=balanced duckDbSharedDatabase=true",
+                ResourceProfile.resolve(local, () -> MEDIUM).describe());
         assertFalse(ConfigAdapter.getConfig(effective(local, MEDIUM), MEDIUM).duckDbExternalFileCache());
 
         ConfigSource speedPerConnection = raw(Map.of("resourceProfile", "speed", "dataDir", "hdfs://nn/d",

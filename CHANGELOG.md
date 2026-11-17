@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 53: `resourceProfile=balanced` (the default) now runs the node's shared DuckDB (`duckDbSharedDatabase=true`):
+  one instance with one thread pool (at most `duckDbSharedMaxThreads`, 8) and one node-wide memory limit within the
+  budget, instead of a DuckDB per Flight thread whose count, threads and caches grew with the clients (real cluster:
+  point load 142 q/s at c8, 28 at c128, RSS 22 GB). HDFS point cell (16-core sizing): c32 90 -> 117 q/s, p99
+  1.1-1.3 -> 0.8 s, fd requests per query 0.3 -> 0. `-DduckDbSharedDatabase=false` restores the old mode, where
+  `duckDbThreads` / `duckDbMemoryLimit` are per connection; with the shared DuckDB they are node-wide.
 - Pre-release `server-1.0.0-6f0aa5a026fa` (2026-11-16): `main` 6f0aa5a0 with item 51.
 - Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
   `flight.runtime_filters.max_keys`) may append a block to a statement ticket (protobuf field 15 of its `Any`; `ARF1`
