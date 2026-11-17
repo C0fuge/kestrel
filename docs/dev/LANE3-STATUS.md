@@ -6,7 +6,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 > **Maintainer, 2026-11-17 19:20 - split:** item 55(a) (dc tails) moved to lane 5 and 55(c) (dc GROUP BY over the big table) to lane 6; this lane keeps 55(b) (already started).
 
-ITEM 55 (b) DONE b5c677a9 (2026-11-17, see Log; not yet measured at scale; pre-release pending: package run 44143892740 on `pkg/f4feb0d5`). New `distributedAggregateMinBytes`
+ITEM 55 (b) DONE b5c677a9 (2026-11-17, see Log; not yet measured at scale; pre-release `server-1.0.0-f4feb0d5e404`, package run 44143892740 green). New `distributedAggregateMinBytes`
 (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 = off, see Q5): with `distributedComplete=false`, an aggregate
 (one-row or GROUP BY, also avg) whose table's files after footer pruning total >= the setting is merged across the
 nodes exactly as under dc; every other query (no aggregate, smaller, joins, catalog tables) stays on the receiving node,
@@ -859,3 +859,6 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
   `main` dispatch 44143776793 was cancelled). Next session: confirm it is green and the pre-release
   `server-1.0.0-f4feb0d5...` exists (else read the failed job's tail and dispatch again on the `pkg/` branch), then
   name it in `ITEM 55 (b) DONE` for the stand. No other open lane 3 item.
+- 2026-11-17 19:04-19:08Z (lane 3 session): package run 44143892740 (`pkg/f4feb0d5`) green; pre-release
+  `server-1.0.0-f4feb0d5e404` carries item 55 (b), named in `ITEM 55 (b) DONE` for the stand. No other open lane 3
+  item (55(a) lane 5, 55(c) lane 6); waiting for the stand's numbers.
