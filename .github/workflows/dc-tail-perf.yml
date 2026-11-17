@@ -2,8 +2,8 @@
 # scan rate go. Three servers of this ref on the runner's host network (one Hazelcast cluster, each
 # limited to <cpus> CPUs, one shared data dir of TPC-H SF<sf>, lineitem / orders in <files> key-range
 # files), resource profile speed, in three variants: speed (distributedComplete=false), dc (true) and
-# dc-noforward (true, distributedCompleteForwardScans=false: plain scans merged through DuckDB as before
-# item 55 (a)). Per variant:
+# dc-4ep (true, distributedCompleteSmallAnswerEndpointsPerNode=0: merged one-row aggregates and small
+# LIMITs with endpointsPerServer endpoints per node, as before item 55 (a)). Per variant:
 # - small queries: each class of tools/ci/point-query-load.py alone, closed loop, at the client counts
 #   given, against node 1 (p50 / p95 / p99 / max per class), and node 1's distributedComplete decision
 #   lines per class (local reason / merged, with elapsedMs), so a class whose tail comes from the
@@ -46,7 +46,7 @@ on:
         type: string
         default: "1MiB"
       variants:
-        description: "variants name=distributedComplete:options separated by ';' (empty = speed, dc, dc-noforward)"
+        description: "variants name=distributedComplete:options separated by ';' (empty = speed, dc, dc-4ep)"
         type: string
         default: ""
   push:
@@ -96,7 +96,7 @@ jobs:
 
       - name: Measure
         env:
-          VARIANTS: ${{ inputs.variants || 'speed=false:;dc=true:;dc-noforward=true:-DdistributedCompleteForwardScans=false' }}
+          VARIANTS: ${{ inputs.variants || 'speed=false:;dc=true:;dc-4ep=true:-DdistributedCompleteSmallAnswerEndpointsPerNode=0' }}
           CLIENTS: ${{ inputs.clients || '1,8' }}
           SECONDS_PER: ${{ inputs.seconds || '15' }}
           STREAMS: ${{ inputs.streams || '4,8' }}

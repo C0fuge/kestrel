@@ -199,11 +199,36 @@ public final class QueryPlanner {
         // One read scope: every table of the plan comes from the same data version (lakeFS commit).
         try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
                 : store.readScope()) {
-            return planInScope(query, plannerAsBackup);
+            return planInScope(query, plannerAsBackup, 0);
         }
     }
 
-    private QueryPlan planInScope(String query, boolean plannerAsBackup) throws IOException {
+    /**
+     * Plans endpoints like {@link #plan(String)}, with at most {@code maxEndpointsPerNode}
+     * endpoints per node: a merge on the planning node of answers that are small whatever the
+     * number of files (a one-row aggregate, a small LIMIT) gains nothing from splitting a node's
+     * files into several endpoints and pays a peer call and a DuckDB statement for each (item 55 (a)).
+     *
+     * @param query SQL query
+     * @param maxEndpointsPerNode the bound, at least 1; 0 for the configured endpoints per node
+     * @return endpoints with byte and row estimates
+     * @throws IOException on file-system or cluster metadata failure
+     * @throws IllegalArgumentException for a negative bound, or if the query needs one node to see
+     *         all rows and several nodes serve the table
+     */
+    public QueryPlan plan(String query, int maxEndpointsPerNode) throws IOException {
+        if (maxEndpointsPerNode < 0) {
+            throw new IllegalArgumentException("maxEndpointsPerNode must be 0 or more: " + maxEndpointsPerNode);
+        }
+        DataStore store = parquetAdapter.dataStore();
+        try (DataStore.ReadScope scope = store == null ? DataStore.ReadScope.NONE
+                : store.readScope()) {
+            return planInScope(query, false, maxEndpointsPerNode);
+        }
+    }
+
+    private QueryPlan planInScope(String query, boolean plannerAsBackup, int maxEndpointsPerNode)
+            throws IOException {
         long t = LogUtil.mark();
         TravelledTable travelled = null;
         if (TimeTravelClause.present(query)) {
@@ -229,16 +254,17 @@ public final class QueryPlanner {
         }
         if (travelled != null) {
             return planCatalogTable(query, travelled.ticketQuery(), parsed, travelled.resolved(),
-                    cluster, plannerAsBackup);
+                    cluster, plannerAsBackup, maxEndpointsPerNode);
         }
         if (!parsed.isJoin && parquetAdapter.isCatalogSchema(parsed.schema)) {
             CatalogTables.Resolved resolved = parquetAdapter.catalogTables()
                     .current(parsed.schema, parsed.table)
                     .orElseThrow(() -> new IOException("No distributed Parquet files found for query: "
                             + "no table " + parsed.schema + "." + parsed.table + " in its catalog"));
-            return planCatalogTable(query, query, parsed, resolved, cluster, plannerAsBackup);
+            return planCatalogTable(query, query, parsed, resolved, cluster, plannerAsBackup,
+                    maxEndpointsPerNode);
         }
-        int parts = endpointsPerNode(parsed);
+        int parts = endpointsPerNode(parsed, maxEndpointsPerNode);
         long tPaths = LogUtil.mark();
         Map<String, FileAssignment> pathLocations = validatedPathLocations(parsed, allServerUris);
         LogUtil.logTiming(tPaths, "planning.fileLocations", "files=" + pathLocations.size());
@@ -434,12 +460,13 @@ public final class QueryPlanner {
      * @param resolved the snapshot to read
      * @param cluster live nodes and their loads
      * @param plannerAsBackup whether this node may be listed as a backup
+     * @param maxEndpointsPerNode bound of the endpoints per node, 0 for none
      * @return plan
      * @throws IOException when the catalog cannot be read
      */
     private QueryPlan planCatalogTable(String query, String ticketQuery, ParquetQueryParser parsed,
-            CatalogTables.Resolved resolved, ClusterSnapshot cluster, boolean plannerAsBackup)
-            throws IOException {
+            CatalogTables.Resolved resolved, ClusterSnapshot cluster, boolean plannerAsBackup,
+            int maxEndpointsPerNode) throws IOException {
         long t = LogUtil.mark();
         String reason = CatalogTables.completeReason(resolved);
         if (reason != null) {
@@ -484,7 +511,7 @@ public final class QueryPlanner {
         Backups backups = new Backups(files, loads, resolved.entry().shared(),
                 plannerAsBackup ? null : clusterService.serverUri(), backupLocations);
         List<FlightEndpoint> endpoints = distributeEndpointsWithoutLocality(ticketQuery, files, loads,
-                loadTracked, backups, endpointsPerNode(parsed));
+                loadTracked, backups, endpointsPerNode(parsed, maxEndpointsPerNode));
         long totalBytes = files.values().stream().mapToLong(FileAssignment::size).sum();
         LogUtil.logTiming(t, "planning.catalogTable", "table=" + snapshot.name() + " snapshot="
                 + snapshot.snapshotId() + " endpoints=" + endpoints.size() + " files=" + files.size());
@@ -963,10 +990,14 @@ public final class QueryPlanner {
      * per-endpoint answers of such a query cannot be combined.
      *
      * @param parsed parsed query
+     * @param max bound of the endpoints per node, 0 for none
      * @return endpoints per node, at least 1
      */
-    private int endpointsPerNode(ParquetQueryParser parsed) {
-        return parsed.singleNodeFeature() == null ? endpointsPerServer : 1;
+    private int endpointsPerNode(ParquetQueryParser parsed, int max) {
+        if (parsed.singleNodeFeature() != null) {
+            return 1;
+        }
+        return max > 0 ? Math.min(max, endpointsPerServer) : endpointsPerServer;
     }
 
     private List<FlightEndpoint> distributeEndpoints(String query,

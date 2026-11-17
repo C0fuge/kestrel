@@ -559,6 +559,10 @@ public class HadoopArrowFlightServer {
         distributedComplete.localScanMaxBytes(scanBytes);
         boolean forwardScans = ConfigAdapter.distributedCompleteForwardScans(ConfigSource.system());
         distributedComplete.forwardScans(forwardScans);
+        int smallEndpoints = ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(ConfigSource.system());
+        distributedComplete.smallAnswerEndpointsPerNode(smallEndpoints);
+        LOGGER.info("distributedComplete one-row aggregates and small LIMITs: {} endpoints per node",
+                smallEndpoints == 0 ? "endpointsPerServer" : Integer.toString(smallEndpoints));
         LOGGER.info("distributedComplete plain scans: {}", forwardScans
                 ? "endpoint batches forwarded as they are" : "merged through DuckDB");
         LOGGER.info("distributedComplete point lookups: {}", pointLookupsLocal

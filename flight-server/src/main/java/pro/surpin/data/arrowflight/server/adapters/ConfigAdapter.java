@@ -802,6 +802,29 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteSmallAnswerEndpointsPerNode}
+     * ({@code arrowflight.cluster.distributedCompleteSmallAnswerEndpointsPerNode},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_SMALL_ANSWER_ENDPOINTS_PER_NODE}): at most this many
+     * endpoints per node when distributed complete merges a one-row aggregate or a LIMIT query of
+     * at most 10 000 rows without aggregation (item 55 (a)); default 1, 0 = {@code endpointsPerServer}
+     * as for every other query.
+     *
+     * @param props configuration source
+     * @return the bound, 0 for none
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int distributedCompleteSmallAnswerEndpointsPerNode(ConfigSource props) {
+        int value = getIntWithEnv("distributedCompleteSmallAnswerEndpointsPerNode",
+                "arrowflight.cluster.distributedCompleteSmallAnswerEndpointsPerNode",
+                "FLIGHT_DISTRIBUTED_COMPLETE_SMALL_ANSWER_ENDPOINTS_PER_NODE", 1, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("distributedCompleteSmallAnswerEndpointsPerNode must be 0 or more: "
+                    + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteLocalScanMaxBytes}
      * ({@code arrowflight.cluster.distributedCompleteLocalScanMaxBytes},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_LOCAL_SCAN_MAX_BYTES}): with

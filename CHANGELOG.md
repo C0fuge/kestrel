@@ -30,6 +30,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `forwarded=true`. New setting `distributedCompleteForwardScans` (`FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS`,
   default true; false = the DuckDB merge as before).
 
+- Item 55 (a) (lane 5): distributed complete plans a merged one-row aggregate or small LIMIT (<= 10 000 rows, no
+  aggregate) with one endpoint per node instead of `endpointsPerServer` (speed: 4): each endpoint cost a peer call and
+  a DuckDB statement although the answers are a few rows whatever the files. Plain scans and grouped aggregates keep
+  their endpoints. New setting `distributedCompleteSmallAnswerEndpointsPerNode`
+  (`FLIGHT_DISTRIBUTED_COMPLETE_SMALL_ANSWER_ENDPOINTS_PER_NODE`, default 1; 0 = as before).
+
 - Item 55 (a) (lane 5): distributed complete no longer lists a table's files on the storage for every one-row
   aggregate / small LIMIT / unfiltered `count(*)` it considers computing on the planning node (item 50's size rule):
   the sizes come from the catalog views' file list (refreshed as before), the listing only for a table without one.

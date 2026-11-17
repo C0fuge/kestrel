@@ -177,6 +177,52 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies a one-row aggregate or small LIMIT is planned with one endpoint per node by
+     * default when merged, other queries with every configured endpoint (item 55 (a)), and that
+     * on this single node such a query is then computed here alone, answering the same.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void smallAnswersMergeOneEndpointPerNode() throws Exception {
+        String aggregate = "SELECT count(*) AS n, sum(v) AS total FROM s.t WHERE v > 10";
+        String limit = "SELECT v, name FROM s.t WHERE v % 7 = 0 ORDER BY v DESC LIMIT 5";
+        String grouped = "SELECT k, count(*) AS n FROM s.t GROUP BY k";
+        String scan = "SELECT v, k FROM s.t WHERE v < 40";
+        assertEquals(FILES, helper.queryPlanner.plan(aggregate).endpoints().size());
+        assertEquals(1, helper.queryPlanner.plan(aggregate, 1).endpoints().size());
+        assertEquals(2, helper.queryPlanner.plan(aggregate, 2).endpoints().size());
+        assertEquals(FILES, helper.queryPlanner.plan(aggregate, 0).endpoints().size());
+        assertThrows(IllegalArgumentException.class, () -> helper.queryPlanner.plan(aggregate, -1));
+        DistributedComplete defaults = new DistributedComplete(helper.queryPlanner, helper.clusterService,
+                helper.executionService, peerAllocator, DistributedComplete.clientFactory(peerAllocator, null),
+                new PeerStreamAdmission(64, PeerStreamAdmission.DEFAULT_WAIT_MILLIS));
+        try {
+            assertEquals(1, defaults.mergeEndpointsPerNode(
+                    pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(aggregate)));
+            assertEquals(1, defaults.mergeEndpointsPerNode(
+                    pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(limit)));
+            assertEquals(0, defaults.mergeEndpointsPerNode(
+                    pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(grouped)));
+            assertEquals(0, defaults.mergeEndpointsPerNode(
+                    pro.surpin.data.arrowflight.server.services.ParquetQueryParser.parse(scan)));
+            assertThrows(IllegalArgumentException.class, () -> defaults.smallAnswerEndpointsPerNode(-1));
+        } finally {
+            defaults.close();
+        }
+        String alone = answer(aggregate);
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
+        distributed.pointLookupsLocal(false);
+        distributed.smallAnswerEndpointsPerNode(1);
+        assertEquals(alone, answer(aggregate));
+        assertEquals(0, distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        distributed.smallAnswerEndpointsPerNode(0);
+        assertEquals(alone, answer(aggregate));
+        assertEquals(1, distributed.mergedAnswers());
+    }
+
+    /**
      * Verifies the size rule's file list comes from the catalog views, as the storage lists the
      * table, so that a local decision lists nothing per query (item 55 (a)).
      *
@@ -629,6 +675,8 @@ class DistributedCompleteIntegrationTest {
         if (factory != null) {
             distributed = new DistributedComplete(helper.queryPlanner, helper.clusterService,
                     helper.executionService, peerAllocator, factory, admission);
+            // One node: one endpoint per node would compute the one-row merges here alone.
+            distributed.smallAnswerEndpointsPerNode(0);
             helper.flightSqlProducer.useDistributedComplete(distributed);
         }
     }

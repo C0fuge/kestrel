@@ -135,6 +135,8 @@ public final class DistributedComplete implements AutoCloseable {
     private final AtomicLong notBigEnough = new AtomicLong();
     /** Whether plain scans send the endpoint batches on as they are (item 55 (a)). */
     private volatile boolean forwardScans = true;
+    /** Endpoints per node of a merged small answer, 0 for the configured endpointsPerServer (item 55 (a)). */
+    private volatile int smallAnswerEndpointsPerNode = 1;
 
     /**
      * Creates the distributed path of complete answers.
@@ -266,7 +268,7 @@ public final class DistributedComplete implements AutoCloseable {
         }
         QueryPlan plan;
         try {
-            plan = planner.plan(partQuery);
+            plan = planner.plan(partQuery, mergeEndpointsPerNode(parsed));
         } catch (IOException | RuntimeException e) {
             LOGGER.info("node={} distributedComplete=fallback reason='planning: {}' query='{}'",
                     LogUtil.node(), e.getMessage(), query);
@@ -398,6 +400,33 @@ public final class DistributedComplete implements AutoCloseable {
             releaseLoads(unopened(endpoints, streams));
             admitted.close();
         }
+    }
+
+    /**
+     * Bounds the endpoints per node of a merge whose endpoints answer few rows whatever the
+     * number of files, a one-row aggregate or a small LIMIT (item 55 (a)): each endpoint costs a
+     * peer call and a DuckDB statement, and one statement per node reads its files with all of
+     * DuckDB's threads. Plain scans and grouped aggregates keep their endpoints, which stream
+     * their rows in parallel.
+     *
+     * @param parsed the part query
+     * @return the bound, 0 for none
+     */
+    public int mergeEndpointsPerNode(ParquetQueryParser parsed) {
+        return oneRow(parsed) || smallLimit(parsed) ? smallAnswerEndpointsPerNode : 0;
+    }
+
+    /**
+     * Sets the endpoints per node of a merged one-row aggregate or small LIMIT (item 55 (a)).
+     *
+     * @param endpoints the bound, at least 1; 0 for the configured endpoints per node
+     * @throws IllegalArgumentException for a negative value
+     */
+    public void smallAnswerEndpointsPerNode(int endpoints) {
+        if (endpoints < 0) {
+            throw new IllegalArgumentException("smallAnswerEndpointsPerNode must be 0 or more: " + endpoints);
+        }
+        this.smallAnswerEndpointsPerNode = endpoints;
     }
 
     /**

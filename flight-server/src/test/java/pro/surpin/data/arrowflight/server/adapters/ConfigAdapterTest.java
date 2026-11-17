@@ -486,6 +486,18 @@ class ConfigAdapterTest {
                 source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS", "false"))));
     }
 
+    /** Item 55 (a): merged small answers use one endpoint per node unless set otherwise. */
+    @Test
+    void distributedCompleteSmallAnswerEndpointsPerNodeDefaultsToOne() throws IOException {
+        assertEquals(1, ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(
+                source(Map.of("distributedCompleteSmallAnswerEndpointsPerNode", "0"), Map.of())));
+        assertEquals(2, ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_SMALL_ANSWER_ENDPOINTS_PER_NODE", "2"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(
+                source(Map.of("distributedCompleteSmallAnswerEndpointsPerNode", "-1"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));
