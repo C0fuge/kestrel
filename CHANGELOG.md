@@ -18,6 +18,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   day / hour, lower, upper, floor, ceil, abs, substring, coalesce; anything else (e.g. `date_trunc`, which the SQL
   parser would render as `trunc(ts, null)`) keeps the single-node path. A GROUP BY alias that is also a table column
   stays single-node (DuckDB groups by the column). The partial result mode is unchanged (still a complete answer).
+- Item 55 (a) (lane 5): the plans of a distributed-complete merge reuse the live servers and loads read from the
+  cluster maps for `distributedCompleteClusterSnapshotMillis` (`FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS`,
+  default 250 ms; 0 = read them for every plan as before), plus the load this node planned since, instead of two
+  cluster-map reads per plan (most of a merged small query's planning tail on a loaded node). Client plans unchanged.
 - Item 55 (c) (lane 6): distributed complete mode (and batches of copies) now merge an aggregate whose ORDER BY names
   an aggregate it selects (`GROUP BY t ORDER BY count(*) DESC`), ordered by that item's position; before, such a
   GROUP BY ran on one node alone. An aggregate that still keeps the single-node path logs why at INFO
