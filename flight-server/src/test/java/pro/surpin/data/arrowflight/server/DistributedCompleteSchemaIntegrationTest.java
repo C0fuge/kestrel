@@ -203,6 +203,8 @@ class DistributedCompleteSchemaIntegrationTest {
                     helper.executionService, peerAllocator,
                     DistributedComplete.clientFactory(peerAllocator, null),
                     new PeerStreamAdmission(64, PeerStreamAdmission.DEFAULT_WAIT_MILLIS));
+            // One node: one endpoint per node would compute the one-row merges here alone (item 55 (a)).
+            distributed.smallAnswerEndpointsPerNode(0);
             helper.flightSqlProducer.useDistributedComplete(distributed);
         }
     }
