@@ -50,6 +50,8 @@ import pro.surpin.data.arrowflight.server.LogUtil;
 public final class QueryPlanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryPlanner.class);
+    /** Age, in snapshot times, up to which plans reuse a snapshot while another plan renews it. */
+    private static final long STALE_SNAPSHOT_FACTOR = 4;
     private static final long FILE_PLAN_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
     /** Default time before a file plan expires in which one plan reloads it (item 55 (a)). */
     private static final long FILE_PLAN_REFRESH_AHEAD_NANOS = TimeUnit.SECONDS.toNanos(3);
@@ -74,6 +76,11 @@ public final class QueryPlanner {
     private volatile long mergeClusterSnapshotNanos;
     /** Cluster snapshot that merge-internal plans reuse, null until one is taken (item 55 (a)). */
     private volatile CachedCluster cachedCluster;
+    /** Whether a merge-internal plan reads the cluster maps for a new snapshot now. */
+    private final java.util.concurrent.atomic.AtomicBoolean refreshingCluster =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    /** Load added while that read runs, for the new snapshot; null without a read. */
+    private volatile Map<String, Long> pendingAddedLoad;
 
     /**
      * Stores immutable table file assignments until the inventory refresh deadline.
@@ -768,7 +775,8 @@ public final class QueryPlanner {
 
     /**
      * Returns the cluster snapshot of a merge-internal plan: the cached one while it is younger
-     * than {@link #mergeClusterSnapshotMillis(long)}, otherwise a fresh read that is cached.
+     * than {@link #mergeClusterSnapshotMillis(long)}, otherwise a fresh read that is cached. While
+     * one plan reads, the others reuse the older snapshot up to four times that age.
      *
      * @return live servers and loads
      * @throws IOException as {@link #validatedCluster()}
@@ -783,14 +791,28 @@ public final class QueryPlanner {
         if (cached != null && now - cached.takenAtNanos() < maxAge) {
             return cached.withAddedLoad();
         }
-        // Added load is counted from before the read: load added while it runs may count twice,
-        // which only spreads the next plans a little more.
-        Map<String, Long> addedSince = new ConcurrentHashMap<>();
-        cachedCluster = cached == null ? null
-                : new CachedCluster(cached.snapshot(), cached.takenAtNanos(), addedSince);
-        ClusterSnapshot fresh = validatedCluster();
-        cachedCluster = new CachedCluster(fresh, now, addedSince);
-        return fresh;
+        boolean refresher = refreshingCluster.compareAndSet(false, true);
+        if (!refresher && cached != null && now - cached.takenAtNanos() < maxAge * STALE_SNAPSHOT_FACTOR) {
+            // Another plan reads the cluster maps now: all plans that found the snapshot old
+            // read them together before, each waiting for CPU on a loaded node.
+            return cached.withAddedLoad();
+        }
+        try {
+            // Added load is counted from before the read: load added while it runs may count
+            // twice, which only spreads the next plans a little more.
+            Map<String, Long> addedSince = new ConcurrentHashMap<>();
+            if (refresher) {
+                pendingAddedLoad = addedSince;
+            }
+            ClusterSnapshot fresh = validatedCluster();
+            cachedCluster = new CachedCluster(fresh, now, addedSince);
+            return fresh;
+        } finally {
+            if (refresher) {
+                pendingAddedLoad = null;
+                refreshingCluster.set(false);
+            }
+        }
     }
 
     /**
@@ -805,6 +827,10 @@ public final class QueryPlanner {
         CachedCluster cached = cachedCluster;
         if (cached != null) {
             cached.addedSince().merge(server, bytes, Long::sum);
+        }
+        Map<String, Long> pending = pendingAddedLoad;
+        if (pending != null && (cached == null || pending != cached.addedSince())) {
+            pending.merge(server, bytes, Long::sum);
         }
     }
 
