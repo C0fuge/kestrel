@@ -34,7 +34,25 @@
 > integration test with httpfs from ci-assets serving a generated file (as the probe does) showing the cache stays under
 > the share. Then 55(c).
 
+> **Lane 6, 2026-11-17 19:30 - ITEM 52(b) fix on `fix/52b` (steps 1 and 3 of the plan above).** New setting
+> `duckDbExternalFileCacheMaxBytes` (`DUCKDB_EXTERNAL_FILE_CACHE_MAX`; default min(DuckDB budget / 4, 8 GiB), `0` = no
+> cap; Q-52b in STATUS.md) split over the expected connections; when a query's slot closes (owner thread, nothing
+> running, nobody holds the connection), a DuckDB-per-connection session whose `EXTERNAL_FILE_CACHE` exceeds the share
+> (checked at most once a second) is closed and the next query opens a fresh one (`duckdb=fileCacheRecycled`). Shared
+> DuckDB (balanced default since item 53) unchanged - its one memory limit bounds the cache. Step (2) (no-cache session
+> for scans above the share) not done: during a query `memory_limit` already bounds the cache; judge after a cluster run.
+> **Merged into main bdeda437** (fast tier 44156451682 green; full Dev CI 44158521271 on main dispatched by the push -
+> **next session: read it first, a red run is the first thing to fix**). Not yet `ITEM 52(b) DONE`: needs the
+> maintainer's real-cluster numbers (RSS with `duckDbSharedDatabase=false` + cache on HDFS) or a CI HDFS cell run.
+> **Next step:** if the full run is green, start ITEM 55(c) on branch `fix/55c` (dc GROUP BY over the 1.27 TB table 890 s
+> vs speed 1001 s while count/min/max/sum got 20x): read `DistributedComplete` merge planning for GROUP BY (one merge
+> node? partial aggregates pushed? threads per endpoint scan), reproduce on `service-cluster.yml` at the smallest sf.
+
 ## Log
 - 2026-11-17 15:15-16:00Z (lane 6): ITEM 52(b) diagnosis (see Next steps): the external file cache, filled by one scan up to
   `memory_limit` per connection; runtime toggle blocked by the lockdown; probe f17d006d on `fix/52b` ([skip ci], no CI run;
   local runs only). No code change yet, no merge. Next: the lockdown-safe cap (recycle + no-cache session for big scans).
+- 2026-11-17 19:06-19:45Z (lane 6): ITEM 52(b) cap implemented (`duckDbExternalFileCacheMaxBytes`, recycle after the
+  query's slot; Q-52b), unit tests (DuckDbAdapterTest, DuckDbSizingTest, ConfigAdapterTest) and S3IntegrationTest with
+  real httpfs + lockdown (25 MiB cached, share 12 MiB -> replaced, fresh cache 0). Fast tier 44156451682 green; merged
+  into main bdeda437; full Dev CI 44158521271 pending. Next: check it, then 55(c).

@@ -4470,3 +4470,6 @@ S3 slowdown item below stays open for then).
   one-row aggregates / small LIMITs with one endpoint per node (`distributedCompleteSmallAnswerEndpointsPerNode`);
   `QueryPlanner.plan(query, maxEndpointsPerNode)` added. Full Dev CI 44154760020, package 44154778833 pending.
   Details in LANE5-STATUS.md.
+- 2026-11-17 19:45Z (lane 6): item 52(b) merged (bdeda437): new setting `duckDbExternalFileCacheMaxBytes` caps the
+  external file cache of the DuckDB-per-connection mode (recycles a connection above its share after a query); shared
+  DuckDB unchanged. Default in Q-52b. Fast tier 44156451682 green, full Dev CI 44158521271 pending.
