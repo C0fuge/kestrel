@@ -11,7 +11,7 @@
 #   CI tables merge the classes the real cluster's SF10 tables merge (orders > 256 MiB there).
 # - scans: tools/ci/scan-adbc.py full lineitem reads, 1 stream and <streams> concurrent streams, MB/s.
 # The numbers are reported, not checked (runners differ); the job fails only when a load or scan failed
-# or two scans disagree on rows / checksum. Manual, and on push to a fix/55a* branch touching its files.
+# or two scans disagree on rows / checksum. Manual (once on main), and on push to a fix/55a* branch touching it.
 name: DC tail perf
 
 on:
