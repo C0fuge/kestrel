@@ -239,6 +239,8 @@ jobs:
               c.execute(f\"COPY (SELECT * FROM lineitem WHERE l_orderkey % 8 = {f}) TO '{sys.argv[1]}/part-{f}.parquet' (FORMAT PARQUET)\")
           " "$work/data/tpch/lineitem"
           ./mvnw -B -q -pl flight-server dependency:build-classpath -Dmdep.outputFile="$work/cp.txt" -Dmdep.includeScope=runtime
+          # One node: one endpoint per node would compute the one-row answers here alone (item 55 (a)),
+          # SmallAnswerEndpointsPerNode=0 keeps them merged as this check counts them.
           # 8g: the maintainer's cluster (item 39 (d)) - 64 streams were admitted into a 2 GiB allocator (Q3: now 6 GiB).
           for direct in 2g 8g; do
             FLIGHT_ALLOW_INSECURE=true LANG=C.UTF-8 java -Xmx2g -XX:MaxDirectMemorySize="$direct" \
@@ -246,7 +248,7 @@ jobs:
               --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
               -Dio.netty.tryReflectionSetAccessible=true -Dhazelcast.phone.home.enabled=false \
               -DresourceProfile=speed -DdistributedComplete=true -DresultMode=complete \
-              -DdistributedCompletePointLookups=merge \
+              -DdistributedCompletePointLookups=merge -DdistributedCompleteSmallAnswerEndpointsPerNode=0 \
               -cp "flight-server/target/arrow-flight-server-1.0.0-shaded.jar:$(cat "$work/cp.txt")" \
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$work/data" \
               --localhost 127.0.0.1 --port 32010 --hazelcast-port 5701 --hosts 127.0.0.1:5701 \
