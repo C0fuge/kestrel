@@ -514,6 +514,18 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteSmallAnswerEndpointsPerNode", "-1"), Map.of())));
     }
 
+    /** Item 55 (a): internal calls check the member address every time unless set otherwise. */
+    @Test
+    void distributedCompleteMemberCheckMillisDefaultsToZero() throws IOException {
+        assertEquals(0, ConfigAdapter.distributedCompleteMemberCheckMillis(source(Map.of(), Map.of())));
+        assertEquals(250, ConfigAdapter.distributedCompleteMemberCheckMillis(
+                source(Map.of("distributedCompleteMemberCheckMillis", "250"), Map.of())));
+        assertEquals(500, ConfigAdapter.distributedCompleteMemberCheckMillis(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS", "500"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteMemberCheckMillis(
+                source(Map.of("distributedCompleteMemberCheckMillis", "-1"), Map.of())));
+    }
+
     /** Item 55 (a): merge plans reuse the cluster snapshot for 250 ms unless set otherwise. */
     @Test
     void distributedCompleteClusterSnapshotMillisDefaultsTo250() throws IOException {

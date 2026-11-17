@@ -825,6 +825,28 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteMemberCheckMillis}
+     * ({@code arrowflight.cluster.distributedCompleteMemberCheckMillis},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS}): how long a node remembers that a
+     * node-to-node call came from the address of a live member, instead of reading the live
+     * servers from the cluster maps for every such call (item 55 (a)); default 0 = every call.
+     *
+     * @param props configuration source
+     * @return milliseconds, 0 for none
+     * @throws IllegalArgumentException for a negative value
+     */
+    public static int distributedCompleteMemberCheckMillis(ConfigSource props) {
+        int value = getIntWithEnv("distributedCompleteMemberCheckMillis",
+                "arrowflight.cluster.distributedCompleteMemberCheckMillis",
+                "FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS", 0, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("distributedCompleteMemberCheckMillis must be 0 or more: "
+                    + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteClusterSnapshotMillis}
      * ({@code arrowflight.cluster.distributedCompleteClusterSnapshotMillis},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS}): how long the plans of a

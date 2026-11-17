@@ -297,8 +297,13 @@ public class HadoopArrowFlightServer {
             if (ConfigAdapter.distributedComplete() || aggregateMinBytes > 0) {
                 internal = startDistributedComplete(aggregateMinBytes);
                 ClusterService cluster = component.clusterService();
-                grpc = grpc.andThen(builder -> builder.intercept(
-                        InternalCallAuthenticator.memberAddressCheck(cluster::liveServerUris)));
+                int memberCheckMillis = ConfigAdapter.distributedCompleteMemberCheckMillis(ConfigSource.system());
+                if (memberCheckMillis > 0) {
+                    LOGGER.info("distributedComplete internal calls: a live member's address is remembered for {} ms",
+                            memberCheckMillis);
+                }
+                grpc = grpc.andThen(builder -> builder.intercept(InternalCallAuthenticator.memberAddressCheck(
+                        cluster::liveServerUris, memberCheckMillis)));
             }
             boolean plainCommands = ConfigAdapter.plainFlightCommands();
             component.producer().acceptPlainCommands(plainCommands);
