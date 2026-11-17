@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       tier:
-        description: "fast = intermediate check of a branch: build + tests of the named modules only, Checkstyle, no SpotBugs, no item 35 / 39 (b) / 40(a) steps; full = everything (always used for main pushes and package=true)"
+        description: "fast = intermediate check of a branch: build everything without tests, then tests of the named modules (optionally only -Dtest=<tests>), Checkstyle, no SpotBugs, no item 35 / 39 (b) / 40(a) steps; full = everything (always used for main pushes and package=true)"
         type: choice
         options: [ "full", "fast" ]
         default: "full"
@@ -28,6 +28,10 @@ on:
         description: "fast tier only: comma-separated Maven modules to build and test (with -am), e.g. flight-server or flight-server,flight-plugin-s3"
         type: string
         default: "flight-server"
+      tests:
+        description: "fast tier only: Surefire -Dtest pattern, e.g. 'HostLimits*,DuckDbSizing*' (empty = every test of the modules)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -185,8 +189,11 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ env.HADOOPFS_LIBS }}
           MODULES: ${{ inputs.modules }}
+          TESTS: ${{ inputs.tests }}
         run: >
-          ./mvnw clean verify checkstyle:check -pl "$MODULES" -am
+          ./mvnw -q clean install -DskipTests -Dcheckstyle.skip -Dspotbugs.skip &&
+          ./mvnw verify checkstyle:check -pl "$MODULES"
+          ${TESTS:+-Dtest="$TESTS" -Dsurefire.failIfNoSpecifiedTests=false}
           -DexcludedGroups=perf,real-services
           -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"

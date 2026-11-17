@@ -49,7 +49,8 @@ backlog, decisions, history pointers). The change record of earlier local work i
 
 To save runner time and session tokens, every lane checks intermediate states cheaply and keeps the full set for the end:
 - **Intermediate (each push of a work branch):** `gh workflow run dev-ci.yml --ref <branch> -f tier=fast -f modules=<the
-  modules you touched, e.g. flight-server>` (build + tests of those modules with `-am`, Checkstyle; no SpotBugs, no item
+  modules you touched, e.g. flight-server> [-f tests='<YourTest*,RelatedTest*>']` (everything built without tests,
+  then tests of those modules - only the named test classes if `tests` is given - and Checkstyle; no SpotBugs, no item
   35 / 39 (b) / 40(a) steps). If the item needs a service check, run **only the one** service workflow that covers it
   (e.g. `service-hdfs.yml` for HDFS reads, `service-cluster.yml` for distributed work) at the smallest `sf`, not all four.
   Local `./mvnw -pl <module> -Dtest=<Class>` runs in the session are fine and cheaper still.
