@@ -14,7 +14,7 @@
 > lookups, a periodic stall such as the 30 s file inventory refresh?) with per-query timing on the CI cluster cell (3 servers,
 > HDFS SASL) and fix it; goal p99 <= 1.5x speed and scans >= 0.9x speed. Branch `fix/55a`. Write `ITEM 55(a) DONE <sha>` with numbers.
 
-> **Lane 5 next step (2026-11-17T20:10Z):** the merged-shape tail is planning, then opening the endpoints. DC tail perf
+> **Lane 5 next step (2026-11-17T20:10Z):** FIRST read full Dev CI 44166060698 (push, `main` cf9f2d29, the inventory cache); red = fix it first. Then: the merged-shape tail is planning, then opening the endpoints. DC tail perf
 > 44163827273 (`variants=dc=true:`, `timing=true`, 3 x 1 CPU, SF1): at c8 the merged line's phases (p50/p99 ms) are
 > plan 102/1175, open 119/285, merge 11/168, everything else < 1 ms; inside plan `planning.validateServers` 48/178
 > (was 88/251 before this session's inventory cache), `hazelcast.allServerLoads` 16/111, `hazelcast.filterLiveServers`
