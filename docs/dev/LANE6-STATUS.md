@@ -12,4 +12,29 @@
 > (31.7 s vs 638 s): find why (one merge node, partial aggregates not pushed, single-threaded scan per node?) and fix.
 > Branch `fix/52b` then `fix/55c`. Write `ITEM 52(b) DONE <sha>` / `ITEM 55(c) DONE <sha>` with numbers.
 
+> **Lane 6, 2026-11-17 - ITEM 52(b) diagnosed, fix not yet written (branch `fix/52b` f17d006d holds the probe only).**
+> Cause: balanced turns `duckDbExternalFileCache=true` on for an `hdfs://` data dir (item 39), and DuckDB keeps every block
+> read through an extension file system (httpfs, hadoopfs; not local files) in that cache, evicting only at `memory_limit`.
+> So one streaming aggregate fills its connection's cache up to `memory_limit` (160188 MiB in the cluster run), and an idle
+> connection keeps it until its thread ends. Probe `tools/file-cache-probe.py` (DuckDB 1.5.6, httpfs from ci-assets, 2.6 GiB
+> file over local HTTP, limit 2 GB, separate processes): count/min/max/sum(id) cache 153 MiB / RSS 345 MiB with the cache vs
+> 0 / 147 without; wide scan cache 942-1257 MiB (fills to the limit) / RSS 2502 vs 1214 MiB. With limit 3 GB RSS peaked at
+> 3945 MiB (above the limit). A DuckDB's cache drops at once with `SET enable_external_file_cache=false` (then `true`), also
+> concurrently with a running query (3 scans exact, 41 trims, peak cache 736 MiB, RSS 2599 vs 3945 MiB) - BUT
+> `duckDbLockdown=true` (default) sets `lock_configuration`, which refuses that SET, so a runtime toggle is no fix.
+> With 52(a)'s `memoryBudgetBytes=48g` the per-connection limits already add up within the budget (RSS ~ budget).
+> **Next step (52(b) fix, lockdown-safe), in this order:** (1) new setting `duckDbExternalFileCacheMaxBytes`
+> (`DUCKDB_EXTERNAL_FILE_CACHE_MAX`, node-wide, split over the expected connections; proposed default min(DuckDB budget / 4,
+> 8 GiB), `0` = today's unbounded behaviour - write the default into Open questions of STATUS.md); in `DuckDbAdapter.session()`
+> (owner thread, no query running) at most once per second per own-DuckDB session read `duckdb_memory()` tag
+> `EXTERNAL_FILE_CACHE` and, above the share, close the session and open a fresh one (log `duckdb=fileCacheRecycled
+> cacheMiB=`); the shared DuckDB is one instance - there recycle nothing, just log. (2) In-query bound: run a query whose
+> local scan bytes (`QueryPlanner.localScanBytes`) exceed the share on a per-thread session opened with `fileCache=false`
+> (as `openPrivateSession` does), so a big scan never fills the cache. (3) Unit tests for the share/decision; an
+> integration test with httpfs from ci-assets serving a generated file (as the probe does) showing the cache stays under
+> the share. Then 55(c).
+
 ## Log
+- 2026-11-17 15:15-16:00Z (lane 6): ITEM 52(b) diagnosis (see Next steps): the external file cache, filled by one scan up to
+  `memory_limit` per connection; runtime toggle blocked by the lockdown; probe f17d006d on `fix/52b` ([skip ci], no CI run;
+  local runs only). No code change yet, no merge. Next: the lockdown-safe cap (recycle + no-cache session for big scans).
