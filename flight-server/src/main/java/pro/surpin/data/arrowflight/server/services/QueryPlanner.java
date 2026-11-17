@@ -570,8 +570,28 @@ public final class QueryPlanner {
      */
     public long localScanBytes(String query) {
         try {
+            if (!answerableHere(query)) {
+                return -1;
+            }
+        } catch (RuntimeException e) {
+            LOGGER.debug("node={} planning=localScanSkipped reason='{}'", LogUtil.node(), e.toString());
+            return -1;
+        }
+        return tableBytes(query);
+    }
+
+    /**
+     * Sums the sizes of the files of a single-table query's directory table from this node's
+     * listing, wherever they are held (item 55: big aggregates are merged across the nodes).
+     *
+     * @param query client SQL, its table qualified
+     * @return bytes of the table's files, or -1 for a join, a table without listed files (a
+     *         catalog table, an empty table) or a query the parser does not take
+     */
+    public long tableBytes(String query) {
+        try {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);
-            if (parsed.isJoin || parsed.table == null || !answerableHere(query)) {
+            if (parsed.isJoin || parsed.table == null) {
                 return -1;
             }
             long total = 0;

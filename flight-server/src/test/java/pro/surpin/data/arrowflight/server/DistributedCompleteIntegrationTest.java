@@ -424,6 +424,60 @@ class DistributedCompleteIntegrationTest {
     }
 
     /**
+     * Verifies item 55: when only big aggregates are merged ({@code distributedAggregateMinBytes}
+     * without distributedComplete), aggregates over at least that many bytes after footer pruning
+     * are merged, smaller ones (also by pruning) and queries without aggregate are computed here,
+     * and every answer equals the node's own.
+     *
+     * @throws Exception on failure
+     */
+    @Test
+    void onlyBigAggregatesAreMergedWhenAsked() throws Exception {
+        List<String> aggregates = List.of(
+                "SELECT count(*) AS n, sum(v) AS total, min(d) AS lo, max(name) AS hi FROM s.t",
+                "SELECT k, count(*) AS n, sum(v) AS total FROM s.t GROUP BY k ORDER BY k",
+                "SELECT k, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY k ORDER BY aa DESC",
+                "SELECT sum(v) AS total FROM s.t WHERE k > 2");
+        String scan = "SELECT v, k FROM s.t WHERE v < 40 ORDER BY 1";
+        String distinct = "SELECT DISTINCT name FROM s.t ORDER BY name";
+        // No file holds v >= 1 000 000: footer pruning keeps none, so the aggregate reads 0 bytes.
+        String prunedAway = "SELECT count(*) AS n, sum(v) AS total FROM s.t WHERE v >= 1000000";
+        List<String> others = List.of(scan, distinct, prunedAway);
+        List<String> aloneAggregates = new ArrayList<>();
+        for (String query : aggregates) {
+            aloneAggregates.add(answer(query));
+        }
+        List<String> aloneOthers = new ArrayList<>();
+        for (String query : others) {
+            aloneOthers.add(answer(query));
+        }
+        useDistributed(DistributedComplete.clientFactory(peerAllocator, null));
+        distributed.aggregatesOnly(1);
+        for (int i = 0; i < aggregates.size(); i++) {
+            assertEquals(aloneAggregates.get(i), answer(aggregates.get(i)), aggregates.get(i));
+            assertEquals(i + 1, distributed.mergedAnswers(), "merged: " + aggregates.get(i));
+        }
+        for (int i = 0; i < others.size(); i++) {
+            assertEquals(aloneOthers.get(i), answer(others.get(i)), others.get(i));
+        }
+        assertEquals(aggregates.size(), distributed.mergedAnswers(), "no aggregate or 0 bytes: computed here");
+        assertEquals(others.size(), distributed.notBigEnough());
+        // The table is far below 1 TiB: nothing is merged.
+        distributed.aggregatesOnly(1L << 40);
+        for (int i = 0; i < aggregates.size(); i++) {
+            assertEquals(aloneAggregates.get(i), answer(aggregates.get(i)), aggregates.get(i));
+        }
+        assertEquals(aggregates.size(), distributed.mergedAnswers());
+        assertEquals(others.size() + aggregates.size(), distributed.notBigEnough());
+        // 0: distributedComplete again, every mergeable shape merged.
+        distributed.aggregatesOnly(0);
+        assertEquals(aloneOthers.get(0), answer(scan));
+        assertEquals(aggregates.size() + 1, distributed.mergedAnswers());
+        assertEquals(0, distributed.fallbacks());
+        assertThrows(IllegalArgumentException.class, () -> distributed.aggregatesOnly(-1));
+    }
+
+    /**
      * Verifies a merge started on probation whose answer turns out large takes its room once it
      * has read more than the probation bytes, waits for it while other merges hold it, and still
      * answers exactly (item 43: a wrong guess costs no correctness and keeps the item 35 bound).

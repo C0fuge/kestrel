@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (b) (lane 3): new setting `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 =
+  off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
+  footer pruning total at least this size are merged from endpoint answers on the nodes, as under distributedComplete;
+  all other queries stay on the receiving node. Unset, nothing changes.
+
 - Pre-release `server-1.0.0-6f0aa5a026fa` (2026-11-16): `main` 6f0aa5a0 with item 51.
 - Item 51: join runtime filters sent with the ticket. A client (marten's StarRocks connector, opt-in
   `flight.runtime_filters.max_keys`) may append a block to a statement ticket (protobuf field 15 of its `Any`; `ARF1`

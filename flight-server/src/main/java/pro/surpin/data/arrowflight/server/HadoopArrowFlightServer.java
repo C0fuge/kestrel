@@ -292,8 +292,10 @@ public class HadoopArrowFlightServer {
             java.util.function.Consumer<io.grpc.netty.NettyServerBuilder> grpc = grpcOptions(outboundBudget)
                     .andThen(builder -> builder.intercept(stopGate));
             InternalCallIdentity internal = null;
-            if (ConfigAdapter.distributedComplete()) {
-                internal = startDistributedComplete();
+            long aggregateMinBytes = ConfigAdapter.distributedComplete() ? 0
+                    : ConfigAdapter.distributedAggregateMinBytes(ConfigSource.system());
+            if (ConfigAdapter.distributedComplete() || aggregateMinBytes > 0) {
+                internal = startDistributedComplete(aggregateMinBytes);
                 ClusterService cluster = component.clusterService();
                 grpc = grpc.andThen(builder -> builder.intercept(
                         InternalCallAuthenticator.memberAddressCheck(cluster::liveServerUris)));
@@ -523,11 +525,14 @@ public class HadoopArrowFlightServer {
     /**
      * Lets the producer merge complete answers from endpoint answers read from the nodes
      * (distributedComplete); peer clients trust distributedCompleteTrustedCertificates, else this
-     * node's own certificate.
+     * node's own certificate. With distributedAggregateMinBytes alone only big aggregates are
+     * merged (item 55).
      *
+     * @param aggregateMinBytes 0 under distributedComplete, else the least bytes after pruning of
+     *        a merged aggregate
      * @return checker of the signed identities of node-to-node calls
      */
-    private InternalCallIdentity startDistributedComplete() {
+    private InternalCallIdentity startDistributedComplete(long aggregateMinBytes) {
         String trusted = ConfigAdapter.distributedCompleteTrustedCertificates(ConfigSource.system());
         File certificates = trusted != null ? new File(trusted) : flightSecurity.certificate();
         int configured = ConfigAdapter.distributedCompletePeerStreams(ConfigSource.system());
@@ -558,10 +563,17 @@ public class HadoopArrowFlightServer {
                         + "; one-row aggregates and LIMIT <= 10000 queries: local when their files after"
                         + " pruning have <= " + (scanBytes >> 20) + " MiB; unfiltered count(*): local"
                 : "merge (on probation: no permits until 16 MiB read)");
+        distributedComplete.aggregatesOnly(aggregateMinBytes);
+        if (aggregateMinBytes > 0) {
+            LOGGER.info("distributedAggregateMinBytes={} MiB: complete answers of aggregates over at least"
+                    + " this many bytes after footer pruning are merged across the nodes, all other queries"
+                    + " computed on the receiving node", aggregateMinBytes >> 20);
+        }
         component.producer().useDistributedComplete(distributedComplete);
-        LOGGER.warn("distributedComplete=true: complete answers are merged from endpoint answers read"
+        LOGGER.warn("{}: complete answers are merged from endpoint answers read"
                 + " from the nodes as the client's user; the cluster's ticket secret now allows"
-                + " impersonating any user from a live member's address - protect it like a keytab");
+                + " impersonating any user from a live member's address - protect it like a keytab",
+                aggregateMinBytes > 0 ? "distributedAggregateMinBytes" : "distributedComplete=true");
         return component.clusterService().internalCallIdentity();
     }
 

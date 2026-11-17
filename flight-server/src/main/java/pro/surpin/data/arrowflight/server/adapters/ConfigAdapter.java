@@ -817,6 +817,36 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedAggregateMinBytes}
+     * ({@code arrowflight.cluster.distributedAggregateMinBytes},
+     * {@code FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES}): with {@code distributedComplete=false}, a
+     * complete answer of an aggregate (with or without GROUP BY) whose table's files after footer
+     * pruning add up to at least this size is merged from endpoint answers computed on the nodes,
+     * as under distributedComplete; every other query is computed on the node that received it
+     * (item 55). Sizes take DuckDB's units ({@code 8GiB}) or plain bytes; default 0 = off.
+     *
+     * @param props configuration source
+     * @return bytes, 0 for off
+     * @throws IllegalArgumentException for a negative or malformed value
+     */
+    public static long distributedAggregateMinBytes(ConfigSource props) {
+        String value = getStringWithEnv("distributedAggregateMinBytes",
+                "arrowflight.cluster.distributedAggregateMinBytes",
+                "FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES", "0", props).trim();
+        Long bytes;
+        try {
+            bytes = value.matches("\\d+") ? Long.valueOf(value) : DuckDbSizing.parseBytes(value);
+        } catch (RuntimeException e) {
+            bytes = null;
+        }
+        if (bytes == null || bytes < 0) {
+            throw new IllegalArgumentException("distributedAggregateMinBytes must be a size such as"
+                    + " 8GiB or 0: " + value);
+        }
+        return bytes;
+    }
+
+    /**
      * Resolves {@code distributedCompleteTrustedCertificates}
      * ({@code FLIGHT_DISTRIBUTED_COMPLETE_TRUSTED_CERTS}): the PEM file of certificates a node
      * trusts when it reads endpoint answers from its peers over TLS; empty means the node's own

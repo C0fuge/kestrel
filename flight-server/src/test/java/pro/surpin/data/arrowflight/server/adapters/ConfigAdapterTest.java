@@ -462,6 +462,20 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteLocalScanMaxBytes", "lots"), Map.of())));
     }
 
+    /** Item 55: merging big aggregates without distributedComplete is off by default and takes sizes. */
+    @Test
+    void distributedAggregateMinBytesDefaultsToOff() throws IOException {
+        assertEquals(0L, ConfigAdapter.distributedAggregateMinBytes(source(Map.of(), Map.of())));
+        assertEquals(8L << 30, ConfigAdapter.distributedAggregateMinBytes(
+                source(Map.of("distributedAggregateMinBytes", "8GiB"), Map.of())));
+        assertEquals(4096L, ConfigAdapter.distributedAggregateMinBytes(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES", "4096"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedAggregateMinBytes(
+                source(Map.of("distributedAggregateMinBytes", "-1"), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedAggregateMinBytes(
+                source(Map.of("distributedAggregateMinBytes", "big"), Map.of())));
+    }
+
     @Test
     void hdfsLocalCopiesDefaultTo32GiBAndTakeSizes() throws IOException {
         assertEquals(32L << 30, ConfigAdapter.hdfsLocalCopyMaxBytes(source(Map.of(), Map.of())));
