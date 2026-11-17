@@ -4459,3 +4459,8 @@ S3 slowdown item below stays open for then).
   55(a) (lane 5); 53 and 55(b) DONE. Full run green: package Dev CI 44143892740 on `pkg/f4feb0d5` + Service cluster
   44146698684, hdfs 44146705728, security 44146711823, stores 44146719328 (main since then: CI tooling / docs only).
   Stopped early.
+- 2026-11-17T19:10Z (lane 5, item 55 (a), core changes): merged into main dfaac51c - dc forwards plain-scan endpoint
+  batches (`distributedCompleteForwardScans`), sizes its local decisions from the views' file list, and plans merged
+  one-row aggregates / small LIMITs with one endpoint per node (`distributedCompleteSmallAnswerEndpointsPerNode`);
+  `QueryPlanner.plan(query, maxEndpointsPerNode)` added. Full Dev CI 44154760020, package 44154778833 pending.
+  Details in LANE5-STATUS.md.
