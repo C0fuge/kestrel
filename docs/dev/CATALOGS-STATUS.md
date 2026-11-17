@@ -6,7 +6,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 54 (maintainer exception): single-stream scan slower than upstream on HDFS.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Raw Flight full scan of tpch.lineitem (MB/s): 1 stream - upstream 1032, speed 722, balanced 329, dc 646; 4 streams 1377 / 1975 / 1088 / 1154; 8 streams 1993 / 2171 / 1679 / 964. Upstream (DuckDB through its own reader, no SASL wrap negotiated) wins the single stream by 1.4x over speed and 3.1x over balanced. Find where one stream loses (read-ahead / hadoopfs block size, DuckDB threads per stream, Arrow batch size, flightBackpressureThresholdBytes, zero-copy writes, compression off?) - profile one stream on the HDFS CI cell with SASL `authentication,privacy`; goal: one stream >= upstream in speed and >= 0.8 of it in balanced. Write `ITEM 54 DONE <sha>` with numbers.
 
-ITEM 54 IN PROGRESS (2026-11-17, sessions 100-101) - steps 1 and 2 of 3 done (plain HDFS profile; SASL / TCP ruled out).
+ITEM 54 IN PROGRESS (2026-11-17, sessions 100-102) - steps 1 and 2 of 3 done, step 3 part 1 done (plain HDFS profile; SASL / TCP ruled out).
 `hdfs-point-perf.yml` has a scan mode (inputs `scanRounds`, `scanClients`, `serverCpus`; `tools/ci/hdfs-point-cell.sh`
 with `SCAN_ROUNDS`, `tools/ci/thread-cpu.py` per-thread server CPU, streamTiming lines): single-node HDFS, short-circuit,
 TPC-H SF5 lineitem (4 files, 4.8 GiB Arrow), server on 2 CPUs / 6 GiB, client on 1, `SELECT *` complete mode, best of 2.
@@ -36,11 +36,27 @@ Runs 44110283975 (8 variants), 44111414923 (prefetch), 44116044127 (streaming bu
   server CPU 140-180 % of 2), runner b 110-125 %; x4 adds only 1.1-1.4x over x1 on 2 cores, so the runner's 2 cores
   cap the cell: the 16-core stand's 0.7x of upstream cannot show here at 2 cores. Per stream `duckMs` is 90+ % of
   the time, in balanced one thread (flight-server-d, 80-95 %) runs the scan.
-- **Next (step 3):** run 44159553651 (dispatched 19:4xZ: `serverCpus=0,1,2/3`, modes plain,sasl, speed / balanced /
-  balanced-noorder) - read whether x1 grows with a third core (speed: DuckDB workers; balanced: one thread). Then build
-  upstream in the cell (as `scan-perf.yml` does) for a same-runner ratio, and check that the 1-CPU client is not the
-  cap (client CPU of x1). If x1 does not grow with cores, the per-stream serial path (Arrow export of the DuckDB
-  chunk + VectorSchemaRoot fill on the stream thread) is the target; then decide Q54-1.
+- **Step 3, part 1 (session 102): a third server core does not lift one stream; x4 grows.** Run 44159553651
+  (`serverCpus=0,1,2/3`, SF5, best x1 / x4 MB/s, runner a / b): speed plain 801 / 639, x4 1075 / 832; sasl 750 / 627;
+  balanced plain 635 / 559, sasl 657 / 545; balanced-noorder plain 721 / 557, sasl 698 / 568. With 2 cores (44147368932)
+  x1 was speed 787 / 548, balanced 701 / 540: within runner noise, so x1 is serial, not core-bound. x1 server CPU
+  120-195 % of 3, no thread saturated in speed (`flight-server-d` stream thread 60-73 %, DuckDB workers ~15 % each,
+  gRPC 30-40 %); balanced: stream thread 81-98 %. The client ran on 1 CPU (CPU 3) and its CPU was not measured.
+- **Upstream difference found (read-only look at upstream HEAD 1a57765):** upstream gives each serving thread its own
+  in-memory DuckDB with `SET threads = duckDbThreads`, default **1**, and streams with the same `arrowExportStream`
+  + `putNext` loop (no zero-copy). One stream there is one DuckDB thread scanning and converting with no hand-off;
+  ours runs the scan on 3-4 DuckDB threads feeding the stream thread through DuckDB's streaming result.
+- **Next (step 3, part 2):** read run **44167354107** (dispatched 20:15Z on main 83f1e853: `serverCpus=0,1,2/3`,
+  plain, SF5, `-DstreamTimingLog=true`; variants speed, balanced, speed-own-t1 = `-DduckDbSharedDatabase=false
+  -DduckDbThreads=1` (upstream-like), speed-own-t2 (threads 2), speed-t1 (shared DuckDB, threads 1),
+  balanced-own-t1). New in this run: `cpu x1 r1 client N %` lines and `(client cpu ...% on 3)` on the best lines
+  (scan-adbc.py, 83f1e853) - near 100 % means the 1-CPU client caps x1 and the cell must give the client 2 CPUs
+  (`serverCpus=0,1/2,3`) before any server conclusion. If own-t1 x1 >= speed x1 on the same runner: the hand-off
+  between DuckDB workers and the stream thread is what one stream loses; then test it on the 16-core shape
+  (`serverCpus` cannot show it on a 4-core runner beyond this) and propose a per-stream thread count for a lone stream
+  (e.g. `duckDbThreadsWhenIdle` style) as an Open question - a default change needs the maintainer. If not: build
+  upstream in the cell (as `scan-perf.yml` does, plus its hadoopfs `duckDbHdfsExtension` settings) for a same-runner
+  ratio. Then decide Q54-1.
 
 > **Maintainer, 2026-11-16 01:40 - FIRST: ITEM 49(c) (maintainer exception to the lane scope).** upstream `VadimSurpin/arrow-flight-server` branch `feat/starrocks-native-integration` at `28d6ea713b8e`: `b85c78487f4f` + `9e8bcf5cd51d` (table-statistics / estimateRowCount Parquet footers read in parallel). Full split of item 49 at the top of `STATUS.md` Next steps. Rule (memory: ours vs theirs per feature): read the upstream commit, compare with what kestrel already does, keep the more effective one (measure where it is about speed; equality tests where it touches answers); never weaken our own features; own branch `fix/49x`, merge into `main` when its CI is green, then write `ITEM 49(x) DONE <sha>` here. If kestrel already does it as well or better, write `ITEM 49(x) NOT NEEDED` with the reason (one line per upstream commit). Upstream is read-only: never push there.
 
@@ -1178,3 +1194,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-17T14:22Z (session 99): no open item (item 49(c) DONE df3dae71 and packaged; C3 step 2 / C4 (b) / (d) backlog per the 2026-10-29 finish-mode note; Q11 unanswered; no new maintainer note for this lane since session 98). No code change, lock not taken.
 - 2026-11-17T16:10Z (session 100): ITEM 54 step 1 (maintainer note 18:10): scan mode of `hdfs-point-perf.yml` (e35bfe51, 0485f5ac); runs 44110283975, 44111414923, 44116044127 (plain HDFS, 2 CPUs): Flight send is 1-3 % of one stream, balanced loses 18-33 % to `preserve_insertion_order` (Q54-1), read-ahead prefetch / streaming buffer give nothing (`fix/54-prefetch` not merged, Dev CI 44111452525), balanced OOM at 4 scans in 6 GiB (for 52 / 53). Note for the plugins lane: I cancelled its HDFS point perf run 44109875188 (fix/53-balanced) by mistake at 15:04Z and re-ran it at once with the same inputs (attempt 2). Next: step 2 (SASL privacy scan cell).
 - 2026-11-17T19:45Z (session 101): ITEM 54 step 2: `hdfsModes` (tcp / sasl / sasl-auth / sasl-privacy) in `hdfs-point-perf.yml` (ea9c3c2b); run 44147368932 (SF5, 2 CPUs): one stream equal within 0-4 % on short-circuit, TCP, SASL authentication and SASL privacy (speed 787 / 769 / 773 / 754 MB/s on runner b), balanced (shared DuckDB) 0.89-0.99 of speed; the 2-core cell is CPU-bound. Step 3 run 44159553651 (3 server CPUs) dispatched, result for the next session. No server change.
+- 2026-11-17T20:20Z (session 102): ITEM 54 step 3 part 1: run 44159553651 read (3 server CPUs: one stream not faster than with 2, x4 is; serial per-stream path); upstream HEAD 1a57765 streams on a thread-local DuckDB with threads=1. Client CPU per scan pass in `scan-adbc.py` / HDFS cell (83f1e853, perf tooling only, [skip ci]; CHANGELOG line). Run 44167354107 dispatched (own DuckDB threads 1 / 2 vs shared, client CPU), still running at session end (its cancelled predecessor 44167065420 had a subset). Next: read 44167354107 (see Next steps, step 3 part 2).

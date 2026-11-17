@@ -29,6 +29,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   N-stream and export reads of `tpch.lineitem` on HDFS with per-thread server CPU (`tools/ci/thread-cpu.py`). No server change.
   Input `hdfsModes` (plain, tcp, sasl, sasl-auth, sasl-privacy): the same reads on HDFS without short-circuit or with
   Kerberos and SASL data-transfer protection (every block over SASL TCP).
+  `tools/ci/scan-adbc.py` prints the client's CPU per pass (`cpu x1 r1 client 97 %`), the cell adds it to its best-pass lines.
 
 - Item 55 (b) (lane 3): new setting `distributedAggregateMinBytes` (`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 =
   off). With `distributedComplete=false`, complete answers of aggregates (one-row or GROUP BY) whose table's files after
