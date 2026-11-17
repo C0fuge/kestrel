@@ -4447,3 +4447,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-17 15:45Z (plugins lane, core-lane note): item 53 changed a core default in `ResourceProfile` -
   `resourceProfile=balanced` now supplies `duckDbSharedDatabase=true` (7f53357e; numbers and Q-53 in PLUGINS-STATUS.md).
   `-DduckDbSharedDatabase=false` restores a DuckDB per connection.
+- 2026-11-17 15:58Z (lane 3, core-lane note): item 55 (b) merged (b5c677a9): new opt-in `distributedAggregateMinBytes`
+  (default 0 = off) - with `distributedComplete=false`, aggregates over >= that many bytes of files after footer pruning
+  are merged across the nodes like dc; the server then starts the dc path (`DistributedComplete.aggregatesOnly`) and its
+  internal-call authenticator. New Service cluster cell `speed-agg`. Default question: LANE3-STATUS Q5.

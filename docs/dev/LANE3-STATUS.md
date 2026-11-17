@@ -6,6 +6,23 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 > **Maintainer, 2026-11-17 19:20 - split:** item 55(a) (dc tails) moved to lane 5 and 55(c) (dc GROUP BY over the big table) to lane 6; this lane keeps 55(b) (already started).
 
+ITEM 55 (b) DONE b5c677a9 (2026-11-17, see Log; not yet measured at scale). New `distributedAggregateMinBytes`
+(`FLIGHT_DISTRIBUTED_AGGREGATE_MIN_BYTES`, default 0 = off, see Q5): with `distributedComplete=false`, an aggregate
+(one-row or GROUP BY, also avg) whose table's files after footer pruning total >= the setting is merged across the
+nodes exactly as under dc; every other query (no aggregate, smaller, joins, catalog tables) stays on the receiving node,
+so items 48/50's small queries are untouched. Set it on every node (it turns on the dc node-to-node calls). CI: new
+Service cluster cell `speed-agg` (speed + `distributedAggregateMinBytes=1MiB`), 3 stores, 22 TPC-H answers exact,
+>= 1 merged aggregate required. **For the stand** (pre-release of this merge): speed profile +
+`-DdistributedAggregateMinBytes=8GiB` on the 1.27 TB table: expect count/min/max/sum and filtered sums near dc's 31.7 /
+65 s, the GROUP BY near dc's 890 s (lane 6 / 55(c) works on that), TPC-H SF10 and the small mix unchanged vs speed
+(start line `distributedAggregateMinBytes=8192 MiB`; debug `distributedAggregate=local reason=...`). Write the numbers
+under `ITEM 55 (b) DONE`. Lane 3 has no other open item.
+Note for lane 5 (55(a)): branch `lane/distributed-55a-scans` (one commit on top of b5c677a9's parent line, Dev CI
+44114130596 green) has an opt-in `distributedCompleteScans=local` (default `merge`): under dc a plain scan (no aggregate /
+DISTINCT / ORDER BY / LIMIT) is computed on the planning node when it can read every file, skipping the peer hop and
+the item 35 admission - a candidate for the raw-scan gap (1154 / 964 vs 1975 / 2171 MB/s). Not merged: 55(a) is lane 5's;
+take it, change it or drop the branch.
+
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 55: dc tails and big-table speed.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. (a) dc vs speed: same q/s on point load (0.94-1.10), but small-query p99 c1 287 ms vs 36, c8 1125 vs 85, c32 4825 vs 755, and raw scans 4 / 8 streams 1154 / 964 vs 1975 / 2171 MB/s - find the tail source (merge queue, peer stream setup, admission?) and fix it. (b) The win: 1.27 TB table, 96 GB budget: count/min/max/sum dc 31.7 s vs speed 638 s, filtered sums 65 vs 959 s, GROUP BY 890 vs 1001 s, same checksums. Speed scans the whole big table on one node. Make the planner distribute full-table aggregates over a big table automatically (threshold in bytes after pruning, e.g. > 8 GiB, setting) even without distributedComplete, while small queries stay local (items 48/50). (c) GROUP BY over the big table is barely faster under dc (890 s) - check why (one merge node? partial aggregates too big?). Write `ITEM 55 DONE <sha>` with numbers.
 
 ITEM 50 DONE d2e27119 (2026-11-16, see Log; commits 7648bc7a, d2e27119, fast-forwarded into `main`). With
@@ -265,6 +282,13 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
     (`count(*) ... WHERE l_returnflag = 'R'` on a large table) runs on one node instead of all. Answers are unchanged
     either way. Keep `local` as the default, or default to `merge` (then the stand / clients set `local`)? Implemented
     as `local` because item 43's acceptance (dc within ~20 % of speed) needs it; flipping is a one-word change.
+
+Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.** The
+    maintainer asked for big aggregates to be distributed "automatically ... even without distributedComplete" (e.g.
+    > 8 GiB). Implemented with default 0 (off), because turning it on also turns on the node-to-node calls with
+    impersonation by ticket secret (the `distributedComplete=true` security warning) on clusters that never opted into
+    dc. (a) default `8GiB` (every node then accepts signed internal calls from live members), (b) keep 0 and set it in
+    the speed profile (`resourceProfile=speed`) only, (c) keep 0 (deployments set it). No default change until answered.
 
 ## Log
 
@@ -815,3 +839,14 @@ Q4. (2026-11-10, lane 3, item 43; **answered by the maintainer 2026-11-11: keep 
   on `main` since 12:04Z. Lock not taken (no code). Next: the stand's item 50 rerun of the dc small-query mix at c32.
 - 2026-11-17 14:04-14:07Z (lane 3 session): no open item; no lane-3 maintainer note since item 50, only status commits
   on `main` since 13:04Z. Lock not taken (no code). Next: the stand's item 50 rerun of the dc small-query mix at c32.
+- 2026-11-17 14:59-15:58Z (lane 3 session): lock 14:59Z; branch reset to `origin/main` (all its commits were on
+  `main` already, rebased there), then item 55 (b): `distributedAggregateMinBytes` (b5c677a9, was d9c0e602 before the
+  rebase; `QueryPlanner.tableBytes`, `DistributedComplete.aggregatesOnly` / `notBigEnough`, the server starts the dc path
+  with it when dc is off), Service cluster cell `speed-agg` (a088c338, 1bdbbae1: summary expects 15 cells). Tests:
+  `DistributedCompleteIntegrationTest.onlyBigAggregatesAreMergedWhenAsked`, `ConfigAdapterTest` (new); local 12/12 +
+  69/69. CI on the branch: Dev CI 44110253483 green (d9c0e602); Service cluster 44110470719: 15/15 cells pass (speed-agg
+  1 merged aggregate per store, answers exact), summary red only on its hardcoded 12-cell count, rerun 44113741833 green
+  (15/15 + summary). Point q/s dc / speed (cross-runner) hdfs 0.96, hdfs-ha 0.75, s3 0.55 (warn only). Also wrote an
+  opt-in for 55(a) (`distributedCompleteScans=local`, Dev CI 44114130596 green) before seeing the maintainer's split
+  (55(a) -> lane 5, 55(c) -> lane 6): not merged, parked on `lane/distributed-55a-scans` for lane 5. Rebased onto
+  `main` (CHANGELOG conflict with items 52/53: both kept) and fast-forwarded. Open: Q5 (default).
