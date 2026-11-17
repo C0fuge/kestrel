@@ -5,7 +5,7 @@ written 20:50Z (items 26 / 27 DONE 2026-11-03); marten ITEM 51 item (2) measured
 m4 S3 1-9 with RF PASS), default switch proposed to the maintainer; heron UPSTREAM 2026-11 DONE a11a36c (series
 frozen); egret FRESH on the newest pre-release `server-1.0.0-6f0aa5a026fa` DONE.
 
-Status as of **2026-11-17T07:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-17T08:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **marten proposal (STATUS Open questions, 2026-11-16 20:10):** make runtime filters the default (FE-only: 0002
