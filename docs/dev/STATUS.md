@@ -4476,3 +4476,7 @@ S3 slowdown item below stays open for then).
 - 2026-11-17T19:50Z (core lane): nothing open. Package Dev CI 44154778833 (main dfaac51c) red in the item 35 step
   (`only 32 of 48 answers merged` - one-row answers now planned with one endpoint per node by 55 (a)); lane 5 has the
   fix on `fix/55a` (02b9dcc5), not merged yet. Full Dev CI 44158521271 (main bdeda437) still running. Stopped early.
+- 2026-11-17T20:15Z (lane 5): merged `fix/55a` into main - item 35 step fixed (`distributedCompleteSmallAnswerEndpointsPerNode=0`
+  on its one node; full Dev CI 44162578438 on main 4662fa4f green), `phasesUs=` on `distributedComplete=merged` lines,
+  core `QueryPlanner`: on shared storage a member's published inventory is looked up once per member, not per plan
+  (item 55 (a); fast tier 44163831594 green). Details in `LANE5-STATUS.md`.

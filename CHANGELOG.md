@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (a) (lane 5): on shared storage (HDFS, object stores, `dataDirShared`) planning remembers that a cluster
+  member published its file inventory instead of looking every node's inventory up in the cluster map per plan (a
+  restarted node is a new member and is looked up again; local data directories unchanged). DC tail perf, 3 x 1 CPU,
+  8 clients: `planning.validateServers` p50 88 -> 48 ms for merged one-row aggregates.
+
 - Item 55 (a) (lane 5, logging only): the `distributedComplete=merged` line gains `phasesUs=parse:..,decide:..,plan:..,
   admit:..,open:..,schema:..,merge:..` (microseconds per phase), and a query planned to a single endpoint logs
   `distributedComplete=local reason='1 endpoints'` at DEBUG; `dc-tail-perf.yml` prints the phases' p50 / p99 per class.
