@@ -14,7 +14,8 @@
 # extensions of ci-assets (HDFS: hadoopfs from -Darrowflight.duckdb.extensionDir only, as the
 # maintainer's cluster runs; the HDFS notes have each DataNode's TCP block reads from JMX). Cells per store:
 # balanced, speed (-DresourceProfile=speed), speed-dc
-# (speed + -DdistributedComplete=true), and loss (speed-dc under a load of 3 clients while the third
+# (speed + -DdistributedComplete=true), speed-agg (speed + -DdistributedAggregateMinBytes=1MiB: only
+# aggregates over >= 1 MiB of files merged, item 55 (b)), and loss (speed-dc under a load of 3 clients while the third
 # server is killed: every answer exact or a retryable UNAVAILABLE whose retry is exact, never a
 # partial answer; one more client streams a merged scan of lineitem slowly, so the kill lands inside
 # a merged answer and exercises the "peer lost ... retry" UNAVAILABLE, D13 c). Each non-loss cell runs the 22 queries (answers compared with in-process DuckDB
@@ -151,7 +152,7 @@ jobs:
       fail-fast: false
       matrix:
         store: [hdfs, hdfs-ha, s3]
-        cell: [balanced, speed, speed-dc, loss]
+        cell: [balanced, speed, speed-dc, speed-agg, loss]
     name: ${{ matrix.store }} ${{ matrix.cell }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -331,6 +332,8 @@ jobs:
           case "$CELL" in
             balanced) opts="" ;;
             speed) opts="-DresourceProfile=speed" ;;
+            # Item 55 (b): no distributedComplete, only aggregates over >= 1 MiB of files merged.
+            speed-agg) opts="-DresourceProfile=speed -DdistributedAggregateMinBytes=1MiB" ;;
             *) opts="-DresourceProfile=speed -DdistributedComplete=true" ;;
           esac
           note "server ${{ needs.prepare.outputs.server }}, options: ${opts:-(defaults)} -DendpointsPerServer=2 ${extOpts:-DUCKDB_HTTPFS_EXTENSION}; 3 nodes, 1 CPU / 3 GB each"
@@ -443,6 +446,16 @@ jobs:
               note "short-circuit: supported by the layout (Java probe) but unused by the servers (all block reads over TCP)"
               echo "::warning title=short-circuit unused::$STORE $CELL: the servers read every block over TCP although the Java client reads short-circuit in the same layout"
             fi
+          fi
+          # Item 55 (b): with distributedAggregateMinBytes alone, big aggregates must have been merged.
+          if [ "$CELL" = speed-agg ]; then
+            aggMerged=0
+            for i in 1 2 3; do
+              aggMerged=$((aggMerged + $(docker logs "srv$i" 2>&1 | grep -c 'distributedComplete=merged')))
+            done
+            docker logs srv1 2>&1 | grep -q 'distributedAggregateMinBytes=1 MiB' || finish fail "srv1: no distributedAggregateMinBytes start line"
+            [ "$aggMerged" -gt 0 ] || finish fail "distributedAggregateMinBytes=1MiB: no aggregate was merged"
+            note "speed-agg: $aggMerged merged aggregates on 3 nodes"
           fi
           # Item 43: point queries on node 1 (tools/ci/service-cluster-point.sh); the summary compares q/s.
           if [ "$CELL" = speed ] || [ "$CELL" = speed-dc ]; then
