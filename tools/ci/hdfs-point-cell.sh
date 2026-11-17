@@ -234,6 +234,13 @@ if [ -n "${SCAN_ROUNDS:-}" ]; then
   peak=$(cat "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' srv).scope/memory.peak" 2>/dev/null || true)
   [ -n "$peak" ] && echo "${LABEL:-$profile}|server memory peak $(( peak / 1048576 )) MiB" | tee -a "$res"
   for c in kdc nn1 dn1 srv; do docker logs "$c" > "$work/$c.log" 2>&1 || true; done
+  # A server that died during the passes (run 44175802249: upstream refused connections after its warm-up):
+  # its exit state and last errors go into the result, the artifact is not always reachable.
+  if [ "$(docker inspect -f '{{.State.Running}}' srv 2>/dev/null)" != true ]; then
+    echo "${LABEL:-$profile}|server exited: $(docker inspect -f 'code={{.State.ExitCode}} oomKilled={{.State.OOMKilled}} error={{.State.Error}}' srv 2>&1)" | tee -a "$res"
+    grep -v -E '^\s+at ' "$work/srv.log" | grep -iE 'exception|error|outofmemory|fatal|sigsegv' | tail -n 6 | cut -c1-250 \
+      | sed "s/^/${LABEL:-$profile}|srv /" | tee -a "$res"
+  fi
   # DataNode-side transfer of the run (TCP block reads; short-circuit reads do not count here).
   echo "${LABEL:-$profile}|datanode $(grep -c 'op: HDFS_READ' "$work/dn1.log") TCP block reads (clienttrace op: HDFS_READ)" | tee -a "$res"
   # With -DstreamTimingLog=true: where each stream's time went (DuckDB / send / backpressure).
