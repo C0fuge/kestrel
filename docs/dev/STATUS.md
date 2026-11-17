@@ -4473,3 +4473,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-17 19:45Z (lane 6): item 52(b) merged (bdeda437): new setting `duckDbExternalFileCacheMaxBytes` caps the
   external file cache of the DuckDB-per-connection mode (recycles a connection above its share after a query); shared
   DuckDB unchanged. Default in Q-52b. Fast tier 44156451682 green, full Dev CI 44158521271 pending.
+- 2026-11-17T19:50Z (core lane): nothing open. Package Dev CI 44154778833 (main dfaac51c) red in the item 35 step
+  (`only 32 of 48 answers merged` - one-row answers now planned with one endpoint per node by 55 (a)); lane 5 has the
+  fix on `fix/55a` (02b9dcc5), not merged yet. Full Dev CI 44158521271 (main bdeda437) still running. Stopped early.
