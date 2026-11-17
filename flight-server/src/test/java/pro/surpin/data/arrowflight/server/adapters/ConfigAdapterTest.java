@@ -526,6 +526,16 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteMemberCheckMillis", "-1"), Map.of())));
     }
 
+    /** Item 55 (a): merge plans write their load to the cluster maps unless set otherwise. */
+    @Test
+    void distributedCompleteMergeLoadTrackingDefaultsToTrue() throws IOException {
+        assertTrue(ConfigAdapter.distributedCompleteMergeLoadTracking(source(Map.of(), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompleteMergeLoadTracking(
+                source(Map.of("distributedCompleteMergeLoadTracking", "false"), Map.of())));
+        assertFalse(ConfigAdapter.distributedCompleteMergeLoadTracking(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", "false"))));
+    }
+
     /** Item 55 (a): merge plans reuse the cluster snapshot for 250 ms unless set otherwise. */
     @Test
     void distributedCompleteClusterSnapshotMillisDefaultsTo250() throws IOException {

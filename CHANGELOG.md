@@ -12,6 +12,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Item 55 (c) step 5 (lane 6): an aliased `date_trunc` GROUP BY key next to `avg` now merges too (distributed complete
   mode): the part query (`sum`/`count` per average) renders the key from the parse instead of jOOQ's `trunc(x, null)`.
   A `date_trunc` elsewhere (WHERE, unaliased, nested, other parts) keeps the query on one node as before.
+- Item 55 (a) (lane 5): new optional `distributedCompleteMergeLoadTracking` (`FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING`,
+  default true = unchanged): false makes the plans of a distributed-complete merge write no load reservations or added
+  load to the cluster maps (and no releases after the merge); their load counts only in this node's cluster snapshot.
+  A plan's per-endpoint load changes collected by its write batch now log as `batch.addLoad`, so `hazelcast.addLoad`
+  timings count cluster writes only.
 - Item 55 (c) step 4 (lane 6): distributed complete mode and batches of copies now merge a GROUP BY on an aliased
   `date_trunc('<part>', <column or CAST of a column>)` (year, quarter, month, week, day, hour, minute, second), rendered
   for the endpoints as written (jOOQ's default dialect renders it as `trunc(x, null)`, dropping the part). An unaliased

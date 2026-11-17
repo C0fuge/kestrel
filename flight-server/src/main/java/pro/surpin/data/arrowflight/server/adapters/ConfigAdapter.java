@@ -847,6 +847,22 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteMergeLoadTracking}
+     * ({@code arrowflight.cluster.distributedCompleteMergeLoadTracking},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING}): whether the plans of a
+     * distributed-complete merge write their endpoints' load to the cluster maps as client plans
+     * do (item 55 (a)); default true, false keeps that load in this node's cluster snapshot only.
+     *
+     * @param props configuration source
+     * @return whether merge plans write their load
+     */
+    public static boolean distributedCompleteMergeLoadTracking(ConfigSource props) {
+        return getBooleanWithEnv("distributedCompleteMergeLoadTracking",
+                "arrowflight.cluster.distributedCompleteMergeLoadTracking",
+                "FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", true, props);
+    }
+
+    /**
      * Resolves {@code distributedCompleteClusterSnapshotMillis}
      * ({@code arrowflight.cluster.distributedCompleteClusterSnapshotMillis},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_CLUSTER_SNAPSHOT_MILLIS}): how long the plans of a

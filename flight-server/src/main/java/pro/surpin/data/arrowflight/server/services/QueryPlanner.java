@@ -81,6 +81,10 @@ public final class QueryPlanner {
             new java.util.concurrent.atomic.AtomicBoolean();
     /** Load added while that read runs, for the new snapshot; null without a read. */
     private volatile Map<String, Long> pendingAddedLoad;
+    /** Whether merge-internal plans write their endpoints' load to the cluster maps. */
+    private volatile boolean mergeLoadTracking = true;
+    /** Set while this thread makes a merge-internal plan whose load stays on this node. */
+    private final ThreadLocal<Boolean> localLoadOnly = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     /**
      * Stores immutable table file assignments until the inventory refresh deadline.
@@ -227,6 +231,21 @@ public final class QueryPlanner {
     }
 
     /**
+     * Sets whether the plans of a distributed-complete merge ({@link #plan(String, int)}) write
+     * their endpoints' load reservations and added load to the cluster maps, as client plans
+     * do. Without, those endpoints carry no tracked load: no reservation is written when the
+     * plan is made and no release when the merge has read them, which saves the cluster map
+     * writes of each small merged query (item 55 (a)); their load then counts only in this node's
+     * cached cluster snapshot ({@link #mergeClusterSnapshotMillis(long)}), not in the plans of
+     * the other nodes.
+     *
+     * @param tracking true (the default) to write it as for client plans
+     */
+    public void mergeLoadTracking(boolean tracking) {
+        this.mergeLoadTracking = tracking;
+    }
+
+    /**
      * Determines Flight endpoints for a SQL query, distributing files across live servers.
      * Handles JOIN queries only when one node owns every required shard.
      *
@@ -301,8 +320,12 @@ public final class QueryPlanner {
             boolean mergeInternal) throws IOException {
         // The endpoints' load writes run when the plan is made, one load change per node instead
         // of one per endpoint (item 55 (a)); a mocked cluster service returns no batch.
+        Boolean outer = localLoadOnly.get();
+        localLoadOnly.set(outer || mergeInternal && !mergeLoadTracking);
         try (ClusterService.WriteBatch writes = clusterService.writeBatch()) {
             return planEndpoints(query, plannerAsBackup, maxEndpointsPerNode, mergeInternal);
+        } finally {
+            localLoadOnly.set(outer);
         }
     }
 
@@ -825,14 +848,17 @@ public final class QueryPlanner {
     }
 
     /**
-     * Counts bytes planned for a server in the cluster's loads, and in the cached snapshot of
-     * merge-internal plans.
+     * Counts bytes planned for a server in the cluster's loads (not for a merge-internal plan
+     * without {@link #mergeLoadTracking(boolean)}), and in the cached snapshot of merge-internal
+     * plans.
      *
      * @param server server URI
      * @param bytes bytes added
      */
     private void addLoad(String server, long bytes) {
-        clusterService.addLoad(server, bytes);
+        if (!localLoadOnly.get()) {
+            clusterService.addLoad(server, bytes);
+        }
         CachedCluster cached = cachedCluster;
         if (cached != null) {
             cached.addedSince().merge(server, bytes, Long::sum);
@@ -1621,7 +1647,7 @@ public final class QueryPlanner {
         }
         HandleState state = HandleState.forServerFiles(
                 query, filePaths.toArray(new String[0]),
-                serverUri, bytes, loadTracked);
+                serverUri, bytes, loadTracked && !localLoadOnly.get());
         ByteString serverHandle = ByteString.copyFrom(
                 clusterService.createEndpointHandle(state));
         Ticket serverTicket = new Ticket(Any.pack(

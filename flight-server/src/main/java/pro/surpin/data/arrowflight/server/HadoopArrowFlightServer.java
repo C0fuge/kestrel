@@ -568,6 +568,11 @@ public class HadoopArrowFlightServer {
         distributedComplete.smallAnswerEndpointsPerNode(smallEndpoints);
         int snapshotMillis = ConfigAdapter.distributedCompleteClusterSnapshotMillis(ConfigSource.system());
         component.queryPlanner().mergeClusterSnapshotMillis(snapshotMillis);
+        boolean mergeLoad = ConfigAdapter.distributedCompleteMergeLoadTracking(ConfigSource.system());
+        component.queryPlanner().mergeLoadTracking(mergeLoad);
+        if (!mergeLoad) {
+            LOGGER.info("distributedComplete merge plans keep their load on this node (not in the cluster maps)");
+        }
         LOGGER.info("distributedComplete merge plans reuse the cluster's live servers and loads for {} ms",
                 snapshotMillis);
         LOGGER.info("distributedComplete one-row aggregates and small LIMITs: {} endpoints per node",

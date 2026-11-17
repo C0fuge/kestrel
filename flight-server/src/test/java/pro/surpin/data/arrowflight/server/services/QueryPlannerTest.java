@@ -8,6 +8,7 @@ import pro.surpin.data.arrowflight.server.model.QueryPlan;
 import org.apache.arrow.flight.FlightEndpoint;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -1237,6 +1238,42 @@ class QueryPlannerTest {
         planner.plan(join, 1);
         planner.plan(join, 1);
         verify(clusterService, times(4)).allServerLoads();
+    }
+
+    /**
+     * Item 55 (a): without merge load tracking, merge-internal plans write no load and create
+     * untracked endpoints, but still count their load in the reused snapshot, so the next plan
+     * goes to the other node; client plans still write their load.
+     *
+     * @throws Exception never
+     */
+    @Test
+    void mergePlansWithoutLoadTrackingKeepTheirLoadLocal() throws Exception {
+        stubListing();
+        when(clusterService.allServerLoads()).thenReturn(Map.of(S1, 0L, S2, 50L));
+        when(clusterService.filterLiveServers(anySet())).thenReturn(Set.of(S1, S2));
+        when(clusterService.hasFileInventory(anyString())).thenReturn(true);
+        when(clusterService.createEndpointHandle(any())).thenReturn(new byte[]{1});
+        when(parquetAdapter.sharedStorage()).thenReturn(true);
+        QueryPlanner planner = new QueryPlanner(parquetAdapter, clusterService);
+        String join = "SELECT l.a FROM tpch.lineitem l JOIN tpch.nation n ON l.a = n.a";
+        planner.mergeClusterSnapshotMillis(60_000);
+        planner.mergeLoadTracking(false);
+
+        QueryPlan first = planner.plan(join, 1);
+        QueryPlan second = planner.plan(join, 1);
+
+        assertEquals(S1, first.endpoints().get(0).getLocations().get(0).getUri().toString());
+        assertEquals(S2, second.endpoints().get(0).getLocations().get(0).getUri().toString());
+        verify(clusterService, never()).addLoad(anyString(), anyLong());
+        ArgumentCaptor<HandleState> states = ArgumentCaptor.forClass(HandleState.class);
+        verify(clusterService, times(2)).createEndpointHandle(states.capture());
+        assertTrue(states.getAllValues().stream().noneMatch(HandleState::loadTracked));
+
+        planner.plan(join);
+        verify(clusterService).addLoad(anyString(), anyLong());
+        verify(clusterService, times(3)).createEndpointHandle(states.capture());
+        assertTrue(states.getValue().loadTracked());
     }
 
     /** Verifies a table missing from the listing fails like a table without files. */

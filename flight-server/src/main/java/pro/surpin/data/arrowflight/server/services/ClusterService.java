@@ -854,8 +854,9 @@ public final class ClusterService implements AutoCloseable {
      */
     public void addLoad(String uri, long delta) {
         long t = LogUtil.mark();
-        changeLoad(uri, delta, true);
-        LogUtil.logTiming(t, "hazelcast.addLoad", "uri=" + uri + " delta=" + delta);
+        boolean collected = changeLoad(uri, delta, true);
+        // A change collected by a plan's write batch is written, and timed as such, when it closes.
+        LogUtil.logTiming(t, collected ? "batch.addLoad" : "hazelcast.addLoad", "uri=" + uri + " delta=" + delta);
     }
 
     /**
@@ -866,8 +867,9 @@ public final class ClusterService implements AutoCloseable {
      * @param delta bytes to add (positive or negative)
      * @param create whether a missing entry is created; a node no longer in the registry (stale
      *        and removed) must not come back by a release, or it would count as just started
+     * @return true when the change was collected by this thread's write batch, not written yet
      */
-    private void changeLoad(String uri, long delta, boolean create) {
+    boolean changeLoad(String uri, long delta, boolean create) {
         Runnable write = () -> hazelcast.serverRegistry().compute(uri, (k, v) -> {
             if (v == null) {
                 return create ? delta : null;
@@ -879,10 +881,10 @@ public final class ClusterService implements AutoCloseable {
             WriteBatch batch = currentBatch.get();
             if (create && batch != null) {
                 batch.loads.merge(uri, delta, Long::sum);
-            } else {
-                write.run();
+                return true;
             }
-            return;
+            write.run();
+            return false;
         }
         pendingLoad.merge(uri, delta, Long::sum);
         writeOrDefer(uri, "load " + uri, () -> {
@@ -892,6 +894,7 @@ public final class ClusterService implements AutoCloseable {
                 pendingLoad.computeIfPresent(uri, (k, v) -> v - delta == 0L ? null : v - delta);
             }
         });
+        return false;
     }
 
     /**

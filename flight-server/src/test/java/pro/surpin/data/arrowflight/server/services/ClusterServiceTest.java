@@ -266,6 +266,22 @@ class ClusterServiceTest {
         cs.close();
     }
 
+    /**
+     * Verifies a load change tells whether a write batch collected it, so that its timing is not
+     * counted as a cluster write (item 55 (a)).
+     */
+    @Test
+    void loadChangeTellsWhetherABatchCollectedIt() {
+        ClusterService cs = createService("s1");
+        assertFalse(cs.changeLoad("s2", 10, true));
+        try (ClusterService.WriteBatch batch = cs.writeBatch()) {
+            assertTrue(cs.changeLoad("s2", 10, true));
+            assertFalse(cs.changeLoad("s2", -10, false));
+        }
+        verify(serverRegistry, times(3)).compute(eq("s2"), any());
+        cs.close();
+    }
+
     /** Verifies a failed write of a batch fails its close, after the other writes ran. */
     @Test
     void writeBatchFailureSurfacesAfterAllWrites() {
