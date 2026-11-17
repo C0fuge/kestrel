@@ -73,3 +73,13 @@ More parallel sessions, same rules as the second lane unless said otherwise:
   pre-release from `main`. Keep steps small so merges stay easy; the core lane may touch the same files.
 - **Lane 4 "catalogs and sources"**: new plugin modules only (catalogs, data sources), on `main`. Lock
   `docs/dev/LOCK-CATALOGS`, backlog/Log `docs/dev/CATALOGS-STATUS.md`. Same SPI/core limits as the second lane.
+
+## Fifth and sixth lanes (temporary, maintainer 2026-11-17)
+
+Two more parallel sessions while items 52-55 are open, same rules as lane 3 except the branch: each works on its own
+branch `fix/<item>` (rebased on `origin/main` each session, `--force-with-lease` on that branch only) and merges into
+`main` when CI is green (rebase-merge, `git pull --rebase` first, CHANGELOG line, Log line in its status file and a line
+in `STATUS.md` Log). Core / SPI changes are allowed for their item (maintainer exception), keep them small.
+- **Lane 5**: lock `docs/dev/LOCK-LANE5`, backlog/Log `docs/dev/LANE5-STATUS.md`.
+- **Lane 6**: lock `docs/dev/LOCK-LANE6`, backlog/Log `docs/dev/LANE6-STATUS.md`.
+When its backlog is empty the lane writes "LANE n DONE" in its status file and stops early in later sessions.
