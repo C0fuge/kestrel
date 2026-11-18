@@ -17,6 +17,7 @@ store kind=hdfs roots=[hdfs://hdfs-ns1/data/parquet]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET allowed_paths = ARRAY['hdfs://hdfs-ns1/data/parquet']
 LOAD '/ext/hadoopfs.duckdb_extension'
 SET hdfs_default_namenode = 'hdfs-ns1'
@@ -43,6 +44,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET allowed_paths = ARRAY['hdfs://hdfs-ns1/data/parquet']
 LOAD '/ext/hadoopfs.duckdb_extension'
 SET hdfs_default_namenode = 'hdfs-ns1'
@@ -82,6 +84,7 @@ store kind=hdfs roots=[hdfs://hdfs-ns1/data/parquet]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET allowed_paths = ARRAY['hdfs://hdfs-ns1/data/parquet']
 LOAD '/ext/hadoopfs.duckdb_extension'
 SET hdfs_default_namenode = 'hdfs-ns1'
@@ -107,6 +110,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET allowed_paths = ARRAY['hdfs://hdfs-ns1/data/parquet']
 LOAD '/ext/hadoopfs.duckdb_extension'
 SET hdfs_default_namenode = 'hdfs-ns1'
@@ -177,6 +181,7 @@ store kind=s3 roots=[s3://lake/parquet/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -209,6 +214,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -250,6 +256,7 @@ store kind=s3 roots=[s3://lake/parquet/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3a://lake/parquet/']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -283,6 +290,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3a://lake/parquet/']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -324,6 +332,7 @@ store kind=s3 roots=[s3://lake/parquet/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -358,6 +367,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -400,6 +410,7 @@ store kind=s3 roots=[s3://lake/parquet/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -433,6 +444,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -474,6 +486,7 @@ store kind=s3 roots=[s3://lake/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3n://lake']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -504,6 +517,7 @@ QUERY SELECT name, unnest(scope) FROM duckdb_secrets()
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3n://lake']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -542,6 +556,7 @@ store kind=s3 roots=[s3://lake/parquet/]
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c1'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
@@ -564,6 +579,7 @@ QUERY SELECT extension_name, extension_version, (SELECT library_version FROM pra
 SET threads = 2
 SET memory_limit = '1GB'
 SET temp_directory = '<TMP>/duckdb-tmp/<RUN>/c2'
+SET preserve_insertion_order = false
 SET enable_external_file_cache = false
 SET allowed_paths = ARRAY['s3://lake/parquet']
 LOAD '<TMP>/httpfs.duckdb_extension'
