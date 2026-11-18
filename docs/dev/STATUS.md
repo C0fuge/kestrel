@@ -23,7 +23,10 @@
 
 ## Next steps (one per session)
 
-> **ITEM 57 FIXED 06d6468b (2026-11-18T13:40Z, core lane) - packaging; write `ITEM 57 DONE` once the pre-release is out.**
+> **ITEM 57 DONE 06d6468b (2026-11-18T13:53Z, core lane).** Main full Dev CI 44311547842 green; package 44311669381
+> (`pkg/06d6468b`) green with Service cluster 44314762330, hdfs 44314767562, security 44314772794, stores 44314777714 ->
+> pre-release **`server-1.0.0-06d6468b17c5`** (7 assets, 13:52Z). Next: marten reruns q14/q15/q04 on it; Q-57a open;
+> no other open core item until the maintainer's next note. Branch `pkg/06d6468b` can be deleted. Details of the fix:
 > Cause: Q54-1 (f1ad5b22, balanced `duckDbPreserveInsertionOrder=false` on remote data dirs). DuckDB 1.5.6 runs a
 > selective filter over remote Parquet up to 1.7x slower without the insertion order (plain DuckDB + httpfs, same S3
 > endpoint, 3 threads, warm: q14's month of lineitem 0.52 vs 1.55 s with the external file cache, 1.79 vs 3.07 s without;
@@ -4617,3 +4620,6 @@ S3 slowdown item below stays open for then).
   `balancedKeepsTheInsertionOrderOnEveryDataDir`; local ResourceProfileTest / golden / DuckDbSharedDatabaseTest +
   Checkstyle green. Main full Dev CI 44311547842 and package 44311669381 (`pkg/06d6468b`) in progress at session end.
   New Q-57a (speed's order).
+- 2026-11-18T13:40-13:55Z (core lane): item 57 packaged - main full Dev CI 44311547842 and package 44311669381 green
+  (services 44314762330 / 44314767562 / 44314772794 / 44314777714) -> pre-release `server-1.0.0-06d6468b17c5`;
+  `ITEM 57 DONE`. No code change; no open core item.
