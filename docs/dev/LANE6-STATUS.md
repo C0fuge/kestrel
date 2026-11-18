@@ -12,8 +12,8 @@
 > text is no DuckDB SQL); refused: 3-arg time_bucket, mixed months+time, sub-second, non-literal format. `AverageMerge`
 > and `CopyBatchMerge` use `parseStatement` too. Tests: CompleteAnswerMergeTest (9 DuckDB-equivalence shapes),
 > AverageMergeTest (+3 / 3 refused), CopyBatchMergeTest (+2), DistributedCompleteMergeableTest (+3 merged, 11 refused),
-> DistributedCompleteIntegrationTest (+2 merged). Fast tier 44206897995 green; full Dev CI on main pending (push of 8ac047b3).
-> **Next session:** (0) read the full Dev CI on main for 8ac047b3 (red = fix first). (1) If the maintainer gave the exact
+> DistributedCompleteIntegrationTest (+2 merged). Fast tier 44206897995 green; full Dev CI on main: run 44207492475 (dispatched, head f06e6f25).
+> **Next session:** (0) read full Dev CI 44207492475 (red = fix first). (1) If the maintainer gave the exact
 > GROUP BY / INFO `distributedComplete=single reason=` line, handle that shape. (2) Optional: alias keys in the
 > complete-mode batched path (`notBatchableReason` with footer columns). (3) Per-node endpoints for big GROUP BYs if
 > still slow at scale. Otherwise 55(c) waits for a cluster run to be marked DONE.
@@ -174,4 +174,4 @@
   by the next push). ITEM 55(c) step 5: `date_trunc` keys next to `avg` (see Next steps). Fast tier 44202134874 green;
   merged into main da895086; full Dev CI 44202588350 pending.
 - 2026-11-18 00:11-00:45Z (lane 6): full Dev CI 44203849956 (9866bb15, includes da895086) green. ITEM 55(c) step 6:
-  `strftime` / `time_bucket` GROUP BY keys (see Next steps). Fast tier 44206897995 green; merged into main 8ac047b3.
+  `strftime` / `time_bucket` GROUP BY keys (see Next steps). Fast tier 44206897995 green; merged into main 8ac047b3; full Dev CI 44207492475 pending.
