@@ -4,7 +4,7 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
-ITEM 56 DONE 36f33023 (2026-11-18, see Log; rebase-merged into `main`; not yet measured on the stand). A merged plain scan
+ITEM 56 DONE 36f33023 (2026-11-18, see Log; rebase-merged into `main`; pre-release `server-1.0.0-36f3302321ba`, package run 44253203263 green; not yet measured on the stand). A merged plain scan
 opened all its endpoint streams at once although the merge reads them one after the other, so every endpoint not read
 yet held a running DuckDB scan waiting for its reader; concurrent full scans filled the shared DuckDB's memory. Now a
 node keeps at most `distributedCompleteScanStreamsPerNode` (default 2, 0 = all at once as before) endpoint streams of
@@ -888,3 +888,6 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
 - 2026-11-18 06:04-06:08Z (lane 3 session): full Dev CI on `main` 44246657183 (221da38f, item 56) green (build, all
   tests, Checkstyle, SpotBugs, items 35 / 39 (b) / 40(a) steps). No open lane 3 item; waiting for the stand's numbers
   for 55 (b) and 56.
+- 2026-11-18 10:03-10:10Z (lane 3 session): no open lane 3 item. Main Dev CI 44246657183 (item 56) still the newest
+  and green; the core lane's package 44253203263 published `server-1.0.0-36f3302321ba` carrying item 56, now named in
+  `ITEM 56 DONE` for the stand. No code change; waiting for the stand's numbers for 55 (b) and 56.
