@@ -3,15 +3,17 @@
 ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55; items 56 and 57 added 2026-11-18. Done: 52(a), 53, 54
 (f1ad5b22), 55(b), 55(c) (e8afe351, LANE 6 DONE), 56 (36f33023), 57 (06d6468b). Still waiting for the maintainer's
 real-cluster rerun: 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029). Remaining for ALL DONE:
-marten/heron confirm 06d6468b17c5 (running now) and egret FRESH on 06d6468b17c5.
+marten/heron finish confirming 06d6468b17c5 (default switch) and egret FRESH on 06d6468b17c5 (running).
 
-Status as of **2026-11-18T14:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T16:00Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- `06d6468b17c5` is now in marten `m4-assets` and heron `e2e-assets` (your 17:29 MSK notes "confirm, regress,
-  default"). marten session (lock 14:30Z) dispatched compare sf=10 default+speed 6f0aa5a026fa vs 06d6468b17c5 and m4 S3
-  1-9 on 06d6468b17c5 (bba5755); heron session active (lock 14:30Z). Results next hour.
-- egret has not yet run on `06d6468b17c5` (last idle commit 13:28Z, before the release).
+- **marten confirms the q14 fix:** compare 44326063071 (SF10, same EPYC 9V74 job, 22/22 correct in all four runs):
+  default q14 1.42 -> 1.39 s on 06d6468b17c5 vs 6f0aa5a026fa (36f3302321ba was ~2x), q15 +4.5 %, q04 -2 %; sums
+  default -0.6 %, speed -4.0 %; no query > 10 % slower. m4 on 06d6468b17c5: S3 1-9 PASS 44326069040, iceberg 1,11,12
+  PASS 44330978160, lakefs 1,3,4,10 (44335633098) and check 13 (44339957571) running. Default switch follows.
+- heron session active (lock 14:30Z), connector-compare 44338448083 running on the 06d6468b17c5 note.
+- egret: ACCEPT 44321703096 and FRESH 44335959845 on 06d6468b17c5 running (wave fresh-up-06d6468b17c5).
 - Q-57a (core): `speed` still drops the insertion order (options: leave / keep order / per-query second connection;
   lane recommends leave).
 - Open questions otherwise unchanged: lane 3 Q5, Q54-2 (stand numbers), Q-46, catalogs Q11, plugins Q-40a follow-up,
@@ -24,14 +26,15 @@ Points for the maintainer:
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 57 DONE 06d6468b; nothing open (Q-57a) | 13:53Z | free | main 44311547842 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 14:15Z (note) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 14:21Z (note) | free | - |
+| plugins (`PLUGINS-STATUS.md`) | nothing open | 15:13Z (note) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 15:21Z (note) | free | - |
 | lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE; nothing open | 14:04Z (note) | free | - |
 | lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun | 04:36Z | free | - |
 | lane 6 (`LANE6-STATUS.md`) | LANE 6 DONE; 52(b) waits for cluster numbers | 03:37Z | free | - |
 
 Main CI: newest Dev CI on main 44311547842 (06d6468b) green; no new runs since. No stale locks (kestrel locks empty;
-marten/heron locks 14:30Z, active sessions). No new bug-first notes in the paused lanes.
+marten/heron locks 14:30Z, ~1.5 h, active sessions with commits/runs at 15:48Z / 15:41Z). No new bug-first notes in
+the paused lanes.
 
 ## Service matrix (newest run per workflow)
 
@@ -44,23 +47,24 @@ marten/heron locks 14:30Z, active sessions). No new bug-first notes in the pause
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-06d6468b17c5` (2026-11-18 13:52Z): item 57 (balanced keeps insertion order); in m4/e2e assets; egret not yet.
+- `server-1.0.0-06d6468b17c5` (2026-11-18 13:52Z): item 57 (balanced keeps insertion order); marten q14 fix confirmed; egret ACCEPT + FRESH running.
 - `server-1.0.0-36f3302321ba` (2026-11-18 07:17Z): egret ACCEPT SHIP 44258093085, no FRESH; has the q14 regression.
 - `server-1.0.0-5f02e5b35611` (2026-11-18 04:09Z): egret ACCEPT SHIP + FRESH DONE; first build with the q14 regression.
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). Now confirming 06d6468b17c5 (compare sf=10 default+speed vs 6f0aa5a026fa,
-  m4 S3 1-9; bba5755 14:33Z), lock 14:30Z.
-- heron: IMPROVEMENTS DONE (session 98). Default 36f3302321ba; session active (lock 14:30Z) on the maintainer's
-  06d6468b17c5 confirm/regress/default note.
+- marten: IMPROVEMENTS DONE (2026-11-03). Confirming 06d6468b17c5: compare 44326063071 done (q14 fixed, no > 10 %
+  regression), m4 S3 + iceberg PASS, lakefs + check 13 running (3662767 15:48Z), lock 14:30Z.
+- heron: IMPROVEMENTS DONE (session 98). Default 36f3302321ba; session active (lock 14:30Z), connector-compare
+  44338448083 running on 06d6468b17c5.
 
 ## egret
 
-- FRESH 5f02e5b35611 DONE (speed/balanced 22/22, 0 errors; upstream native `d05bf9c52129` 0/22 ADBC / 1/22 JDBC).
-- ACCEPT 36f3302321ba SHIP; nothing yet on 06d6468b17c5 (last idle 13:28Z). README 'In progress': nothing running.
+- Newest FRESH: 5f02e5b35611 (speed/balanced 22/22, 0 errors; upstream native `d05bf9c52129` 0/22 ADBC / 1/22 JDBC).
+- 06d6468b17c5: ACCEPT 44321703096 and FRESH 44335959845 running (24e2fec 15:28Z).
 
 ## History
+- 2026-11-18T16:00Z: marten confirms ITEM 57 fix (compare 44326063071: default q14 1.42 -> 1.39 s vs 6f0aa5a026fa, 22/22, no query > 10 % slower; m4 S3/iceberg PASS, lakefs + check 13 running); heron connector-compare 44338448083 running; egret ACCEPT 44321703096 + FRESH 44335959845 on 06d6468b17c5 running; kestrel only lane no-open-item notes, main green, no new CI or pre-releases; no stale locks.
 - 2026-11-18T14:58Z: 06d6468b17c5 in marten m4-assets / heron e2e-assets (maintainer 17:29 MSK); marten dispatched compare + m4 S3 on it (bba5755), heron session active (both locks 14:30Z); kestrel only lane no-open-item notes, main green, no new CI or pre-releases; egret not yet on 06d6468b17c5; no stale locks.
 - 2026-11-18T13:58Z: **ITEM 57 DONE 06d6468b** (cause Q54-1 insertion order; balanced keeps file order again), main Dev CI 44311547842 + package 44311669381 + 4 service runs green -> pre-release server-1.0.0-06d6468b17c5 (13:52Z); marten bisect agrees (5f02e5b35611, cd26b0e), waits for m4-assets; new Q-57a (speed's order); no stale locks.
 - 2026-11-18T12:58Z: maintainer added **ITEM 57** (core, 15:50 MSK): TPC-H q14 +102 % in balanced via StarRocks on 36f3302321ba vs 6f0aa5a026fa (marten 44300586688, same EPYC 7763); core lane lock 12:53Z active; marten told to wait (6f0aa5a026fa stays default) and bisect over f4feb0d5e404 / 5f02e5b35611 (lock 12:53Z); no new CI runs or pre-releases, main green; no stale locks.
@@ -100,4 +104,3 @@ marten/heron locks 14:30Z, active sessions). No new bug-first notes in the pause
 - 2026-11-16T09:00Z: maintainer 11:15 MSK notes taken: core ITEM 51 (runtime join filters from the ticket) implemented e2a3838f/6f0aa5a0, main Dev CI 43830148409 red -> 43831943883 green, package Dev CI 43834254344 on pkg/6f0aa5a0 running (core lock 08:08Z active); marten running d2e27119fda4 default-switch regression (m4 43829097466/43829093697 green, lock 08:08Z); heron patched-Trino measurement (connector-compare 43829210540 / 43835156106, e2e 43834715534 running, lock 08:51Z); ALL DONE still withdrawn; no stale locks.
 - 2026-11-16T07:58Z: heron patched-Trino item progressing (80ebbbf..a11a36c; patched-trino 43825784443 green, e2e 43826068308 red, lane iterating; lock 06:51Z active); marten finish mode (07:41Z); catalogs session 76 nothing open; ALL DONE still withdrawn; kestrel unchanged, no new CI runs or pre-releases, no stale locks.
 - 2026-11-16T07:00Z: marten UPSTREAM 2026-11 DONE flbcef73 (runtime filters no gain, opt-in); heron took maintainer's patched-Trino correction (80ebbbf Trino 483 patch series, CI running, lock 06:51Z); ALL DONE still withdrawn (waits for heron); kestrel unchanged, no new CI runs or pre-releases, no stale locks.
-- 2026-11-16T05:57Z: egret FRESH d2e27119fda4 DONE (43798340706; speed/balanced 22/22, 0 errors; local small c1 p50 speed/balanced 1.15 ADBC / 1.12 JDBC carried over; load +42-43 %; upstream 28d6ea713b8e still 0-1/22); maintainer unblocked marten/heron with d2e27119fda4: marten compare sf=1,10 ours vs ours_rf running (43809296573/43809299659), heron pinned it (e2e 43808937358/43808940518 green), connector-compare 43808943657 SF10 running; ALL DONE still withdrawn; kestrel unchanged, locks free (marten/heron locks 05:13Z active).
