@@ -77,7 +77,11 @@ class DistributedCompleteMergeableTest {
                 "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1",
                 "SELECT date_trunc('month', ts) AS m, sum(v) FROM ev.events GROUP BY m ORDER BY m",
                 "SELECT date_trunc('hour', cast(ts AS TIMESTAMP)) AS h, count(*) FROM ev.events"
-                        + " GROUP BY date_trunc('hour', cast(ts AS TIMESTAMP))")) {
+                        + " GROUP BY date_trunc('hour', cast(ts AS TIMESTAMP))",
+                // Step 6: strftime / time_bucket keys, rendered from the parse.
+                "SELECT strftime(ts, '%Y-%m') AS ym, count(*) FROM ev.events GROUP BY ym ORDER BY ym",
+                "SELECT time_bucket(INTERVAL '1 hour', ts) AS b, sum(v) FROM ev.events GROUP BY 1",
+                "SELECT time_bucket('1 day', ts) AS b, count(*) FROM ev.events GROUP BY time_bucket('1 day', ts)")) {
             ParquetQueryParser parsed = DistributedComplete.mergeable(query);
             assertNotNull(parsed, query);
             assertNull(DistributedComplete.unmergedAggregateReason(query), query);
@@ -101,6 +105,20 @@ class DistributedCompleteMergeableTest {
                 "SELECT date_trunc('day', ts) AS d, count(*) FROM ev.events GROUP BY 1"
                         + " ORDER BY date_trunc('day', ts)",
                 "SELECT extract(year FROM date_trunc('month', ts)) AS y, count(*) FROM ev.events GROUP BY 1",
+                // Step 6: strftime / time_bucket without alias, outside a key, with other arguments,
+                // and other functions jOOQ does not know.
+                "SELECT strftime(ts, '%Y'), count(*) FROM ev.events GROUP BY 1",
+                "SELECT strftime(ts, '%Y') AS y, count(*) FROM ev.events WHERE strftime(ts, '%m') = '01' GROUP BY 1",
+                "SELECT strftime(ts, '%Y') AS y, count(*) FROM ev.events GROUP BY 1 ORDER BY strftime(ts, '%Y')",
+                "SELECT strftime(ts, '%Y') AS y, max(strftime(ts, '%m')) FROM ev.events GROUP BY 1",
+                "SELECT strftime(ts, event_type) AS y, count(*) FROM ev.events GROUP BY 1",
+                "SELECT strftime(ts + INTERVAL 1 HOUR, '%Y') AS y, count(*) FROM ev.events GROUP BY 1",
+                "SELECT time_bucket(INTERVAL '1 hour', ts, TIMESTAMP '2020-01-01 00:30:00') AS b, count(*)"
+                        + " FROM ev.events GROUP BY 1",
+                "SELECT time_bucket(INTERVAL '1 month 2 days', ts) AS b, count(*) FROM ev.events GROUP BY 1",
+                "SELECT time_bucket(INTERVAL '0.5' SECOND, ts) AS b, count(*) FROM ev.events GROUP BY 1",
+                "SELECT time_bucket(INTERVAL 1 HOUR, ts) AS b, my_udf(v) AS u, count(*) FROM ev.events GROUP BY 1",
+                "SELECT strftime(ts, '%Y') AS y, count(*) FROM ev.events GROUP BY 1 HAVING my_udf(1) > 0",
                 "SELECT random() AS r, count(*) FROM ev.events GROUP BY 1",
                 "SELECT extract(isodow FROM ts) AS w, count(*) FROM ev.events GROUP BY 1",
                 "SELECT count(*) AS n, id % 6 AS g FROM ev.events GROUP BY 1",

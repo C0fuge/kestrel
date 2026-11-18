@@ -172,6 +172,9 @@ class CopyBatchMergeTest {
             "SELECT date_trunc('month', ts) AS mo, max(name) FROM s.t GROUP BY mo",
             "SELECT date_trunc('week', ts) AS w, k % 2, min(price) FROM s.t GROUP BY date_trunc('week', ts), k % 2"
                     + " ORDER BY 1, 2 LIMIT 5",
+            // Step 6: strftime / time_bucket keys.
+            "SELECT strftime(ts, '%Y-%m-%d') AS d, count(*) AS c FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT time_bucket(INTERVAL '12 hours', ts) AS b, avg(price) AS ap FROM s.t GROUP BY b ORDER BY b",
         };
         for (String query : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);

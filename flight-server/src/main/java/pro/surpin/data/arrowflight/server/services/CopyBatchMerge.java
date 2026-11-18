@@ -187,9 +187,8 @@ public final class CopyBatchMerge {
                 return null;
             }
         }
-        DSLContext parser = DSL.using(SQLDialect.DEFAULT,
-                new Settings().withParseNameCase(ParseNameCase.AS_IS));
-        Query statement = parser.parser().parseQuery(ParquetQueryParser.normalized(query));
+        Query statement = ParquetQueryParser.parseStatement(
+                new Settings().withParseNameCase(ParseNameCase.AS_IS), ParquetQueryParser.normalized(query));
         if (!(statement instanceof Select<?> select) || select.$select().size() != parsed.selectExprs.size()) {
             return null;
         }

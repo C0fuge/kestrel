@@ -1125,7 +1125,9 @@ public final class DistributedComplete implements AutoCloseable {
         try {
             parsed = ParquetQueryParser.parse(query);
         } catch (RuntimeException e) {
-            return null;
+            // Item 55 (c): such calls are parsed only as aliased GROUP BY keys of accepted arguments.
+            return ParquetQueryParser.holdsKeyFunction(query) ? "a strftime / time_bucket call that is not an"
+                    + " aliased GROUP BY key of a column with a literal format / width" : null;
         }
         if (parsed.isJoin || !parsed.hasAggregation) {
             return null;

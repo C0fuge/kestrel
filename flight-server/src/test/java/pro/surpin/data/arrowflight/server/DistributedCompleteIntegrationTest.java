@@ -135,7 +135,10 @@ class DistributedCompleteIntegrationTest {
             "SELECT date_trunc('week', ts) AS w, min(amount) AS lo FROM s.t GROUP BY date_trunc('week', ts)"
                     + " ORDER BY w",
             // Step 5: date_trunc keys next to avg.
-            "SELECT date_trunc('day', ts) AS dd, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY 1 ORDER BY 1");
+            "SELECT date_trunc('day', ts) AS dd, avg(amount) AS aa, count(*) AS n FROM s.t GROUP BY 1 ORDER BY 1",
+            // Step 6: strftime / time_bucket keys (also next to avg).
+            "SELECT strftime(ts, '%Y-%m') AS ym, count(*) AS n, sum(v) AS sv FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT time_bucket(INTERVAL '6 hours', ts) AS b, avg(amount) AS aa FROM s.t GROUP BY b ORDER BY b");
 
     /**
      * Verifies merged answers equal the answers the node computes alone.

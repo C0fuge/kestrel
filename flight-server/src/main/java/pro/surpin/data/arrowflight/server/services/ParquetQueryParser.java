@@ -589,11 +589,15 @@ public class ParquetQueryParser {
         DSLContext ctx = DSL.using(SQLDialect.DEFAULT, settings);
 
         try {
-            Query parsedQuery = ctx.parser().parseQuery(query);
+            Query parsedQuery = parseStatement(ctx.settings(), query);
 
             if (parsedQuery instanceof Select<?> select) {
                 LOGGER.debug("Parsing SQL query: {}", query);
                 ParquetQueryParser parser = parseSelect(select, query);
+                if (holdsKeyFunction(query) && !keyFunctionsOnlyInKeys(parser)) {
+                    throw new IllegalArgumentException("A " + KEY_FUNCTIONS
+                            + " call is not an aliased GROUP BY key: " + query);
+                }
                 if (!QueryCacheLimits.cacheable(query)) {
                     CacheMetrics.oversize(CacheMetrics.Cache.PARSE);
                 } else {
@@ -616,6 +620,94 @@ public class ParquetQueryParser {
             LOGGER.debug("Error parsing SQL query", e);
             throw new RuntimeException("Invalid SQL query: " + query, e);
         }
+    }
+
+    /** Functions jOOQ's parser does not know that a computed GROUP BY key may call (item 55 (c)). */
+    static final Set<String> KEY_FUNCTIONS = Set.of("strftime", "time_bucket");
+
+    /** A call of a {@link #KEY_FUNCTIONS} function in SQL text, quoted or not. */
+    private static final Pattern KEY_FUNCTION_CALL = Pattern.compile(
+            "(?i)(?<![\\w$])\"?(?:strftime|time_bucket)\"?\\s*\\(");
+
+    /** A call of a function jOOQ does not know, as rendered with every name quoted. */
+    private static final Pattern UNKNOWN_FUNCTION_CALL = Pattern.compile("\"((?:[^\"]|\"\")+)\"\\s*\\(");
+
+    /**
+     * Parses one SQL statement with jOOQ. jOOQ refuses functions it does not know; a statement
+     * that calls {@link #KEY_FUNCTIONS} ({@code strftime}, {@code time_bucket}) is parsed again
+     * with unknown functions allowed, and accepted only when every function jOOQ did not know is
+     * one of them (item 55 (c)). Callers must still make sure those calls end up only where they
+     * render them themselves ({@link #keyText}).
+     *
+     * @param settings parse settings (name case and so on)
+     * @param sql statement text
+     * @return the parsed statement
+     * @throws org.jooq.impl.ParserException when jOOQ cannot parse it
+     */
+    static Query parseStatement(Settings settings, String sql) {
+        DSLContext ctx = DSL.using(SQLDialect.DEFAULT, settings);
+        try {
+            return ctx.parser().parseQuery(sql);
+        } catch (org.jooq.impl.ParserException e) {
+            if (!holdsKeyFunction(sql)) {
+                throw e;
+            }
+            Settings lenient = ((Settings) settings.clone())
+                    .withParseUnknownFunctions(org.jooq.conf.ParseUnknownFunctions.IGNORE);
+            Query parsed;
+            try {
+                parsed = DSL.using(SQLDialect.DEFAULT, lenient).parser().parseQuery(sql);
+            } catch (org.jooq.impl.ParserException again) {
+                throw e;
+            }
+            Matcher call = UNKNOWN_FUNCTION_CALL.matcher(KEY_CTX.renderInlined(parsed));
+            while (call.find()) {
+                if (!KEY_FUNCTIONS.contains(call.group(1).toLowerCase(Locale.ROOT))) {
+                    throw e;
+                }
+            }
+            return parsed;
+        }
+    }
+
+    /**
+     * Tells whether SQL text may call one of the {@link #KEY_FUNCTIONS}.
+     *
+     * @param sql SQL text
+     * @return true when it may
+     */
+    static boolean holdsKeyFunction(String sql) {
+        return sql != null && KEY_FUNCTION_CALL.matcher(sql).find();
+    }
+
+    /**
+     * Tells whether every {@link #KEY_FUNCTIONS} call of a parsed query is inside a computed
+     * GROUP BY key, the one place rendered from the parse by {@link #keyText}; everywhere else
+     * (WHERE, HAVING, ORDER BY, aggregates, other select items) jOOQ would render it, and its
+     * rendering of an INTERVAL is no DuckDB SQL.
+     *
+     * @param parsed parsed query
+     * @return true when the calls are only in computed keys
+     */
+    private static boolean keyFunctionsOnlyInKeys(ParquetQueryParser parsed) {
+        if (holdsKeyFunction(parsed.filter) || holdsKeyFunction(parsed.having)
+                || holdsKeyFunction(parsed.orderBy)) {
+            return false;
+        }
+        Set<String> keyNames = new HashSet<>();
+        for (SelectExpr expr : parsed.selectExprs) {
+            if (expr.computed) {
+                keyNames.add(expr.outputName.toLowerCase(Locale.ROOT));
+            } else if (holdsKeyFunction(expr.inputColumn) || holdsKeyFunction(expr.inputExpression)) {
+                return false;
+            }
+        }
+        for (String group : parsed.groupByColumnNames) {
+            if (!keyNames.contains(group.toLowerCase(Locale.ROOT)) && holdsKeyFunction(group)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -741,7 +833,100 @@ public class ParquetQueryParser {
             }
             return "date_trunc('" + part.group(1) + "', " + argument.group(1) + ")";
         }
+        if (keyFunction(field)) {
+            return keyFunctionText((org.jooq.impl.QOM.Function<?>) field, quotedCtx);
+        }
         return computable(field) ? quotedCtx.renderInlined(field).trim() : null;
+    }
+
+    /** jOOQ's parse node of a function it does not know. */
+    private static final String UNKNOWN_FUNCTION_CLASS = "org.jooq.impl.Function";
+
+    /**
+     * Tells whether an expression is a call of one of the {@link #KEY_FUNCTIONS}, which jOOQ
+     * parses only as an unknown function ({@link #parseStatement}).
+     *
+     * @param field expression
+     * @return true for such a call
+     */
+    static boolean keyFunction(org.jooq.Field<?> field) {
+        return field instanceof org.jooq.impl.QOM.Function<?> function
+                && field.getClass().getName().equals(UNKNOWN_FUNCTION_CLASS)
+                && function.$name().getName().length == 1
+                && KEY_FUNCTIONS.contains(function.$name().last().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Renders a {@code strftime} or {@code time_bucket} key from its parse (item 55 (c)). Accepted:
+     * {@code strftime(x, '<format>')} and {@code time_bucket(<width>, x)}, where {@code x} is a
+     * column or a CAST of a column and the width is a string literal (passed to DuckDB as written)
+     * or an INTERVAL of months only or of whole seconds (days and time) only (rendered as
+     * {@code INTERVAL '<n> months'} or {@code INTERVAL '<n> seconds'}, which DuckDB buckets alike; jOOQ's
+     * own rendering of an INTERVAL is no DuckDB SQL). Anything else, such as {@code time_bucket}'s
+     * origin or offset argument, is refused.
+     *
+     * @param function the call
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @return the key's SQL, or null when no endpoint may compute it
+     */
+    private static String keyFunctionText(org.jooq.impl.QOM.Function<?> function, DSLContext quotedCtx) {
+        List<? extends org.jooq.Field<?>> args = function.$args();
+        String name = function.$name().last().toLowerCase(Locale.ROOT);
+        if (args.size() != 2) {
+            return null;
+        }
+        boolean strftime = name.equals("strftime");
+        String argument = quotedCtx.renderInlined(args.get(strftime ? 0 : 1)).trim();
+        if (!TRUNC_DATE_ARGUMENT.matcher(argument).matches()) {
+            return null;
+        }
+        org.jooq.Field<?> other = args.get(strftime ? 1 : 0);
+        Object value = other instanceof org.jooq.Param<?> param ? param.getValue() : null;
+        if (strftime) {
+            return value instanceof String format && !format.isEmpty()
+                    ? "strftime(" + argument + ", " + quotedCtx.renderInlined(other).trim() + ")" : null;
+        }
+        String width = bucketWidth(value, quotedCtx, other);
+        return width == null ? null : "time_bucket(" + width + ", " + argument + ")";
+    }
+
+    /** Microseconds per day. */
+    private static final long MICROS_PER_DAY = 86_400_000_000L;
+
+    /**
+     * Renders a {@code time_bucket} width as DuckDB SQL.
+     *
+     * @param value parsed literal value
+     * @param quotedCtx renderer for executable DuckDB SQL
+     * @param literal the literal itself
+     * @return the width, or null when it is refused
+     */
+    static String bucketWidth(Object value, DSLContext quotedCtx, org.jooq.Field<?> literal) {
+        if (value instanceof String text) {
+            return text.isBlank() ? null : quotedCtx.renderInlined(literal).trim();
+        }
+        org.jooq.types.YearToMonth months = null;
+        org.jooq.types.DayToSecond time = null;
+        if (value instanceof org.jooq.types.YearToSecond both) {
+            months = both.getYearToMonth();
+            time = both.getDayToSecond();
+        } else if (value instanceof org.jooq.types.YearToMonth only) {
+            months = only;
+        } else if (value instanceof org.jooq.types.DayToSecond only) {
+            time = only;
+        } else {
+            return null;
+        }
+        long monthCount = months == null ? 0 : (long) months.getYears() * 12 + months.getMonths();
+        long micros = time == null ? 0 : time.getDays() * MICROS_PER_DAY + time.getHours() * 3_600_000_000L
+                + time.getMinutes() * 60_000_000L + time.getSeconds() * 1_000_000L + time.getNano() / 1000;
+        boolean negative = months != null && months.getSign() < 0 || time != null && time.getSign() < 0;
+        // Whole seconds only: jOOQ parses '<n> seconds' back (a part query is parsed again), not microseconds.
+        if (negative || time != null && time.getNano() != 0 || (monthCount > 0) == (micros > 0)) {
+            return null;
+        }
+        return monthCount > 0 ? "INTERVAL '" + monthCount + " months'"
+                : "INTERVAL '" + micros / 1_000_000L + " seconds'";
     }
 
     /**
@@ -772,7 +957,8 @@ public class ParquetQueryParser {
             return false;
         }
         // An unaliased date_trunc would be named after jOOQ's wrong rendering, not as DuckDB names it.
-        boolean truncDate = field.getClass().getName().equals(TRUNC_DATE_CLASS);
+        // So would a strftime / time_bucket key, named after jOOQ's rendering of an unknown function.
+        boolean truncDate = field.getClass().getName().equals(TRUNC_DATE_CLASS) || keyFunction(field);
         return (!truncDate || item instanceof org.jooq.impl.QOM.FieldAlias<?>)
                 && keyText(field, KEY_CTX) != null;
     }

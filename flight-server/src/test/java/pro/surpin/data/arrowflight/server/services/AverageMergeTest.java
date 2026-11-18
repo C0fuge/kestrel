@@ -80,6 +80,11 @@ class AverageMergeTest {
             "SELECT date_trunc('month', ts) AS m, grp, avg(price) FROM s.t GROUP BY m, grp ORDER BY m, grp",
             "SELECT date_trunc('week', CAST(ts AS DATE)) AS w, avg(rate) AS ar FROM s.t"
                     + " GROUP BY date_trunc('week', CAST(ts AS DATE)) ORDER BY w",
+            // Step 6: strftime / time_bucket keys (jOOQ would render the INTERVAL as its own text).
+            "SELECT strftime(ts, '%Y-%m') AS ym, avg(qty) AS aq, count(*) AS n FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT time_bucket(INTERVAL '1 hour', ts) AS b, grp, avg(price) FROM s.t GROUP BY b, grp ORDER BY b, grp",
+            "SELECT time_bucket(INTERVAL 1 MONTH, ts) AS b, avg(rate) AS ar FROM s.t"
+                    + " GROUP BY time_bucket(INTERVAL 1 MONTH, ts) ORDER BY b",
         };
         for (String query : queries) {
             AverageMerge rewrite = AverageMerge.of(query);
@@ -142,6 +147,9 @@ class AverageMergeTest {
             "SELECT date_trunc('millennium', ts) AS dd, avg(qty) FROM s.t GROUP BY 1",
             "SELECT date_trunc('day', ts + INTERVAL 1 HOUR) AS dd, avg(qty) FROM s.t GROUP BY 1",
             "SELECT grp, avg(qty) FROM s.t GROUP BY grp ORDER BY date_trunc('day', max(ts))",
+            "SELECT time_bucket(INTERVAL 1 HOUR, ts), avg(qty) FROM s.t GROUP BY 1",
+            "SELECT grp, avg(qty) FROM s.t WHERE time_bucket(INTERVAL 1 HOUR, ts) > ts GROUP BY grp",
+            "SELECT strftime(ts, '%Y') AS y, avg(qty), my_udf(qty) AS u FROM s.t GROUP BY 1",
         };
         for (String query : refused) {
             AverageMerge rewrite = AverageMerge.of(query);

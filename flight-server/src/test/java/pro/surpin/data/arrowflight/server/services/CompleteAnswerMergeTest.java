@@ -133,6 +133,17 @@ class CompleteAnswerMergeTest {
             "SELECT date_trunc('week', ts) AS w, count(*) AS c FROM s.t GROUP BY date_trunc('week', ts)",
             "SELECT date_trunc('quarter', cast(ts AS DATE)) AS q, max(name) FROM s.t GROUP BY q",
             "SELECT date_trunc('hour', ts) AS h, count(*) AS c FROM s.t GROUP BY h ORDER BY c DESC, h",
+            // Step 6: strftime / time_bucket keys, which jOOQ parses only as unknown functions.
+            "SELECT strftime(ts, '%Y-%m') AS ym, count(*) AS c, sum(qty) FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT STRFTIME(cast(ts AS DATE), '%d') AS dd, grp, max(name) FROM s.t GROUP BY dd, grp",
+            "SELECT strftime(ts, '%H') AS h, min(price) AS lo FROM s.t GROUP BY strftime(ts, '%H') ORDER BY h",
+            "SELECT time_bucket(INTERVAL '1 hour', ts) AS b, count(*) AS c FROM s.t GROUP BY b ORDER BY b",
+            "SELECT time_bucket(INTERVAL 2 DAY, ts) AS b, sum(qty) AS s FROM s.t GROUP BY 1 ORDER BY 1",
+            "SELECT time_bucket(INTERVAL '15 minutes', ts) AS b, count(*) AS c FROM s.t"
+                    + " GROUP BY time_bucket(INTERVAL '15 minutes', ts) ORDER BY c DESC, b",
+            "SELECT time_bucket(INTERVAL 1 MONTH, cast(ts AS DATE)) AS b, count(*) AS c FROM s.t GROUP BY b",
+            "SELECT time_bucket('6 hours', ts) AS b, grp, count(*) AS c FROM s.t GROUP BY 1, 2 ORDER BY 1, 2",
+            "SELECT time_bucket(INTERVAL 2 WEEK, ts) AS b, count(*) AS c FROM s.t GROUP BY b ORDER BY b",
         };
         for (String query : queries) {
             ParquetQueryParser parsed = ParquetQueryParser.parse(query);

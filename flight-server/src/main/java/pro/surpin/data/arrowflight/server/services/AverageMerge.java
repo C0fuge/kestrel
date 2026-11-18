@@ -15,6 +15,7 @@ import pro.surpin.data.arrowflight.server.adapters.DuckDbAdapter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Lets distributed complete mode merge plain {@code avg} items (lane 3, D10). Endpoints cannot
@@ -62,9 +63,8 @@ public final class AverageMerge {
         Select<?> select;
         ParquetQueryParser original;
         try {
-            DSLContext parser = DSL.using(SQLDialect.DEFAULT,
-                    new Settings().withParseNameCase(ParseNameCase.AS_IS));
-            Query parsed = parser.parser().parseQuery(ParquetQueryParser.normalized(query));
+            Query parsed = ParquetQueryParser.parseStatement(
+                    new Settings().withParseNameCase(ParseNameCase.AS_IS), ParquetQueryParser.normalized(query));
             if (!(parsed instanceof Select<?> s)) {
                 return null;
             }
@@ -110,20 +110,26 @@ public final class AverageMerge {
         String partSql = DSL.using(SQLDialect.DEFAULT,
                 new Settings().withRenderQuotedNames(RenderQuotedNames.EXPLICIT_DEFAULT_QUOTED))
                 .renderInlined(part);
-        if (ParquetQueryParser.holdsDefaultTruncDate(partSql)) {
+        if (ParquetQueryParser.holdsDefaultTruncDate(partSql) || UNREPLACED_KEY_FUNCTION.matcher(
+                KEY_CTX.renderInlined(part)).find()) {
             // jOOQ renders date_trunc('day', ts) as trunc("ts", null), which loses the part (item 55 (c));
-            // only an aliased select item or a whole GROUP BY key is rendered from the parse.
+            // only an aliased select item or a whole GROUP BY key is rendered from the parse. jOOQ
+            // renders strftime / time_bucket as unknown functions (quoted names, its own INTERVAL text).
             return null;
         }
         return new AverageMerge(original, partSql, averages);
     }
+
+    /** A {@code strftime} / {@code time_bucket} call left as jOOQ's node, rendered with quoted names. */
+    private static final Pattern UNREPLACED_KEY_FUNCTION = Pattern.compile("(?i)\"(?:strftime|time_bucket)\"\\s*\\(");
 
     /** Renderer of a {@code date_trunc} key's text, quoting every name as the part query does. */
     private static final DSLContext KEY_CTX = DSL.using(SQLDialect.DEFAULT,
             new Settings().withRenderQuotedNames(RenderQuotedNames.ALWAYS));
 
     /**
-     * Replaces a {@code date_trunc} that is a whole select item or GROUP BY key by its executable
+     * Replaces a {@code date_trunc}, {@code strftime} or {@code time_bucket} that is a whole select
+     * item or GROUP BY key by its executable
      * text ({@link ParquetQueryParser#keyText}), since jOOQ's default dialect would render it as
      * {@code trunc(x, null)} (item 55 (c)). For any other expression, and a {@code date_trunc}
      * whose part or argument the key text refuses, the caller keeps jOOQ's node, so the rendered
@@ -134,7 +140,7 @@ public final class AverageMerge {
      */
     private static org.jooq.Field<?> truncDateKey(org.jooq.Field<?> field) {
         String text = field.getClass().getName().equals("org.jooq.impl.TruncDate")
-                ? ParquetQueryParser.keyText(field, KEY_CTX) : null;
+                || ParquetQueryParser.keyFunction(field) ? ParquetQueryParser.keyText(field, KEY_CTX) : null;
         return text == null ? null : DSL.field(text);
     }
 

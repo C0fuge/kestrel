@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) step 6 (lane 6): distributed complete mode and batches of copies now merge a GROUP BY on an aliased
+  `strftime(<column>, '<format>')` or `time_bucket(<width>, <column>)` key (also next to `avg`; a CAST of a column works
+  too). jOOQ knows neither function: a query calling them is parsed with unknown functions allowed only when every
+  unknown function is one of the two and each call is an aliased GROUP BY key, rendered from the parse (`time_bucket`'s
+  INTERVAL as `INTERVAL '<n> months'` / `'<n> seconds'`; a string width as written). Any other call (WHERE, ORDER BY,
+  aggregates, unaliased, origin/offset argument, mixed or sub-second widths) keeps the query unparsed and on one node as
+  before, now with an INFO `distributedComplete=single` reason.
 - Item 55 (c) step 5 (lane 6): an aliased `date_trunc` GROUP BY key next to `avg` now merges too (distributed complete
   mode): the part query (`sum`/`count` per average) renders the key from the parse instead of jOOQ's `trunc(x, null)`.
   A `date_trunc` elsewhere (WHERE, unaliased, nested, other parts) keeps the query on one node as before.
