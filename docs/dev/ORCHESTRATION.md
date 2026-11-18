@@ -4,31 +4,33 @@ ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55 (maintainer notes 2026-11-1
 52(a), 53, 54 (f1ad5b22), 55(b), 55(c) (e8afe351, LANE 6 DONE), 56 (36f33023, not yet measured). Open, waiting for the
 maintainer's real-cluster rerun: 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-18T06:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T07:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- **Item 56 package in progress:** main full Dev CI 44246657183 (221da38f) green. Core lane dispatched `package=true`
-  on `pkg/36f33023` (Dev CI 44253203263, started 06:41Z, build job running). Green -> pre-release
-  `server-1.0.0-36f33023...` = 52(b), 54 + Q54-1, 55(a) defaults, 55(c), Q-52a **and 56**; that one supersedes
-  5f02e5b35611 for the stand rerun. Item 56 changes the default dc scan stream behaviour
-  (`distributedCompleteScanStreamsPerNode` default 2; `0` = old); lane 3 asks to compare dc raw-scan MB/s on the stand
-  (try `3` or `0` if it drops).
-- Until then the rerun build is `server-1.0.0-5f02e5b35611` (egret ACCEPT: SHIP, run 44238913491).
+- **New pre-release `server-1.0.0-36f3302321ba`** (published 07:17Z; package Dev CI 44253203263 + Service cluster
+  44255135230, hdfs 44255139047, security 44255142307, stores 44255146545 all green) = 52(b), 54 + Q54-1, 55(a)
+  defaults, 55(c), Q-52a **and 56**. It supersedes 5f02e5b35611 as the build for the stand rerun. Item 56 changes the
+  dc scan stream default (`distributedCompleteScanStreamsPerNode` = 2; `0` = old); lane 3 asks to compare dc raw-scan
+  MB/s on the stand (try `3` or `0` if it drops). egret ACCEPT on it (44258093085) running since 07:20Z.
+- egret FRESH 5f02e5b35611 DONE: speed/balanced 22/22, upstream native `d05bf9c52129` still 0/22 ADBC / 1/22 JDBC.
+  Watch points flagged by egret (one run, other CPU types): balanced S3 ADBC export 429 MB/s = 0.66 of upstream (was
+  0.86), balanced S3 TPC-H SF1 ADBC +20 % (36.0 vs 30.1 s, same CPU type); Q54-1 improved balanced S3 multi-stream scans
+  (speed/balanced x4 1.13, was 1.26) at +28 % RSS. egret re-checks on the next run.
 - Lane 6 note (unchanged): `Distributed perf` (44210800053 / 44211990773) stays red by design of its check; not a main
   Dev CI failure; its expectation may need your call.
 - Open questions otherwise unchanged: lane 3 Q5, Q54-2 (stand numbers), Q-46, catalogs Q11, plugins Q-40a follow-up,
   Q-53 stand check; stand checks of items 44 (2) / 46 / 50 / 51 / 55(b) / 56.
-- Branches `pkg/f4feb0d5`, `pkg/6f0aa5a0`, `pkg/d2e27119`, `pkg/7ab48cd6`, `pkg/2c169a53`, `pkg/74464701`, `pkg/29f1267b`,
-  `pkg/2ff22144`, `pkg/37bf9401` can be deleted.
+- Branches `pkg/36f33023`, `pkg/f4feb0d5`, `pkg/6f0aa5a0`, `pkg/d2e27119`, `pkg/7ab48cd6`, `pkg/2c169a53`, `pkg/74464701`,
+  `pkg/29f1267b`, `pkg/2ff22144`, `pkg/37bf9401` can be deleted (sessions' deletes are refused).
 
 ## Lanes
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | read package 44253203263 -> pre-release for item 56 | 06:41Z | free | package 44253203263 running |
+| core (`STATUS.md`) | none open (pre-release 36f3302321ba published) | 07:42Z | free | package 44253203263 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open | 06:12Z (note) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 06:20Z (note) | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE 36f33023; nothing open | 06:03Z | free | main Dev CI 44246657183 green |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 07:21Z (note) | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE 36f33023; nothing open | 06:04Z | free | main Dev CI 44246657183 green |
 | lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun | 04:36Z | free | package 44231671868 green |
 | lane 6 (`LANE6-STATUS.md`) | **LANE 6 DONE**; 52(b) waits for cluster numbers | 01:01Z | free | Distributed perf red by its check |
 
@@ -39,32 +41,33 @@ No stale locks (all kestrel locks empty; marten / heron empty). No bug-first not
 
 | Workflow | Newest run | Commit | Result |
 |---|---|---|---|
-| service-cluster.yml | 44243265348 | lane/distributed (item 56) | pass |
-| service-hdfs.yml | 44233401931 | pkg/5f02e5b3 | pass |
-| service-security.yml | 44233407122 | pkg/5f02e5b3 | pass |
-| service-stores.yml | 44233410601 | pkg/5f02e5b3 | pass |
-
-(Service runs for pkg/36f33023 start through the package gate after its build.)
+| service-cluster.yml | 44255135230 | pkg/36f33023 | pass |
+| service-hdfs.yml | 44255139047 | pkg/36f33023 | pass |
+| service-security.yml | 44255142307 | pkg/36f33023 | pass |
+| service-stores.yml | 44255146545 | pkg/36f33023 | pass |
 
 ## Pre-releases (newest 3)
 
-- `server-1.0.0-5f02e5b35611` (2026-11-18 04:09Z): 52(b), 54 + Q54-1, 55(a) defaults, 55(c), Q-52a; egret ACCEPT SHIP
-  (44238913491), FRESH 44244388077 running. Does not contain item 56 (package for it running).
+- `server-1.0.0-36f3302321ba` (2026-11-18 07:17Z): 52(b), 54 + Q54-1, 55(a) defaults, 55(c), Q-52a, 56; egret ACCEPT
+  44258093085 running, no FRESH yet.
+- `server-1.0.0-5f02e5b35611` (2026-11-18 04:09Z): same without 56; egret ACCEPT SHIP (44238913491) + FRESH DONE
+  (44244388077 + rereport 44260893565).
 - `server-1.0.0-f4feb0d5e404` (2026-11-17 18:38Z): items 52(a), 53, 55(b); egret ACCEPT SHIP + FRESH DONE.
-- `server-1.0.0-d2e27119fda4` (2026-11-16 02:03Z).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; session 06:40Z nothing to do. Lock free.
-- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa; session 328 idle (06:51Z). Lock free.
+- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; session 07:40Z nothing to do. Lock free.
+- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa (newest in e2e-assets); session 329 idle
+  (07:51Z). Lock free.
 
 ## egret
 
-- ACCEPT 5f02e5b35611 DONE: **SHIP** (HDFS acceptance run 44238913491, `results/ACCEPT-5f02e5b35611.md`).
-- Newest FRESH still **f4feb0d5e404** (speed/balanced 22/22, 0 errors; upstream native `d05bf9c52129` 0/22 ADBC /
-  1/22 JDBC). FRESH 5f02e5b35611 still running (44244388077, started 05:29Z). README 'In progress': no other task.
+- FRESH 5f02e5b35611 DONE (`results/FRESH-5f02e5b35611.md`): speed/balanced 22/22, 0 errors; upstream native
+  `d05bf9c52129` (unchanged) 0/22 ADBC / 1/22 JDBC; watch points above.
+- ACCEPT 36f3302321ba running (44258093085); FRESH 36f3302321ba not started. README 'In progress': no other task.
 
 ## History
+- 2026-11-18T07:57Z: package pkg/36f33023 green (44253203263 + 4 service runs) -> pre-release server-1.0.0-36f3302321ba (07:17Z, first with item 56) for the stand rerun; egret FRESH 5f02e5b35611 DONE (balanced S3 ADBC export 0.66 of upstream, SF1 +20 % flagged), ACCEPT 36f3302321ba 44258093085 running; main CI green; lanes nothing open; marten/heron idle; no stale locks.
 - 2026-11-18T06:56Z: item 56 main full Dev CI 44246657183 green; core lane dispatched package pkg/36f33023 (Dev CI 44253203263 running) for the first pre-release with item 56; egret FRESH 5f02e5b35611 (44244388077) still running; lanes nothing open; marten/heron idle; no stale locks.
 - 2026-11-18T05:58Z: maintainer added ITEM 56 (dc scan stream fails under memory pressure, lane 3, low priority); lane 3 fixed it same hour: ITEM 56 DONE 36f33023 (merged plain scans open 2 endpoint streams per node, `distributedCompleteScanStreamsPerNode`, 0 = old), branch fast CI 44243247868 + service cluster 44243265348 green; full Dev CI on main 44246657183 running; needs a package for the stand; egret ACCEPT 5f02e5b35611 SHIP, FRESH 44244388077 running; marten/heron idle; no stale locks.
 - 2026-11-18T04:58Z: package pkg/5f02e5b3 green (Dev CI 44231671868 + 4 service runs) -> pre-release server-1.0.0-5f02e5b35611 published 04:09Z, the build for the maintainer's rerun (52(b)/55(a)/Q54-2); main CI 44215691965 green, no new code; lanes nothing open; marten/heron idle; egret FRESH 5f02e5b35611 pending; no stale locks.
@@ -103,4 +106,3 @@ No stale locks (all kestrel locks empty; marten / heron empty). No bug-first not
 - 2026-11-15T20:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T14:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T13:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-15T11:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
