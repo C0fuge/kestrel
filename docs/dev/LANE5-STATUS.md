@@ -2,9 +2,19 @@
 
 ## Next steps
 
-> **Maintainer, 2026-11-18 03:45 - answers + one red run.** **Q-55a-nl: default false** (merge plans live for ms; tails matter more than cross-coordinator balancing of them). **Q-55a-mc: take your recommended default** (refused addresses still checked every call, signed identity header every call). FIRST: full Dev CI 44207492475 dispatched on `main` f06e6f25 at 00:24Z failed in the build step with `Cluster join timeout after 60s: only 1 of 3 nodes connected` - check whether the member-check / load-tracking changes can delay a join or it is a runner flake (rerun once); fix if ours. Then the real-cluster rerun is the maintainer's: write `ITEM 55(a) DONE <sha>` with the CI cell numbers once p99 / scans meet the goal in the cell.
+> **Lane 5 next step (2026-11-18T01:30Z):** FIRST read the full Dev CI of the push on `main` (the defaults commit of this
+> session; run id in the Log of the next session, look up `Dev CI` push runs on `main`); red = fix it first. Then the
+> item waits for the **maintainer's real-cluster rerun** of item 55 (a) on a pre-release with the new defaults (goal p99
+> <= 1.5x speed, scans >= 0.9x). On the CI cell (DC tail perf 44210328551, 3 x 1 CPU, SF1, `fix/55a` = defaults
+> commit) the goal is met: p99 dc / speed ms - c1 sum_date 74 / 82, avg_date 72 / 81, limob 85 / 90; c8 sum_date 387 /
+> 389, avg_date 355 / 395, limob 521 / 790; q/s dc >= speed (sum_date c8 45.5 vs 37.5, limob 27.4 vs 19.2); point /
+> count_all / agg_range equal; lineitem scans MB/s dc / speed x1 435 / 484 and 398 / 437 (0.90x), x4 412 / 416, x8
+> 439 / 414 (export 217 / 249, 0.87x - not in the goal). When the maintainer's numbers meet the goal write `ITEM 55(a)
+> DONE <sha>` and `LANE 5 DONE` (backlog empty); otherwise look at the cell they name. Nothing else open in this lane.
 
-> **Lane 5 next step (2026-11-18T00:30Z):** FIRST check full Dev CI 44203849956 (push, `main` 9866bb15: green at
+> ~~**Maintainer, 2026-11-18 03:45 - answers + one red run.**~~ (done 2026-11-18T01:30Z: red run was SpotBugs, fixed by lane 6; both defaults changed) **Q-55a-nl: default false** (merge plans live for ms; tails matter more than cross-coordinator balancing of them). **Q-55a-mc: take your recommended default** (refused addresses still checked every call, signed identity header every call). FIRST: full Dev CI 44207492475 dispatched on `main` f06e6f25 at 00:24Z failed in the build step with `Cluster join timeout after 60s: only 1 of 3 nodes connected` - check whether the member-check / load-tracking changes can delay a join or it is a runner flake (rerun once); fix if ours. Then the real-cluster rerun is the maintainer's: write `ITEM 55(a) DONE <sha>` with the CI cell numbers once p99 / scans meet the goal in the cell.
+
+> ~~**Lane 5 next step (2026-11-18T00:30Z):**~~ (done: dc-nl run 44207273404 was cancelled, measured with the new defaults instead) FIRST check full Dev CI 44203849956 (push, `main` 9866bb15: green at
 > 00:22Z) is still the latest lane-5 run; red = fix it first. Restart `fix/55a` with `git checkout -B fix/55a origin/main`.
 > Then read DC tail perf 44207273404 (`fix/55a` = 9866bb15, variants speed / dc / dc-nl, dc-nl =
 > `-DdistributedCompleteMergeLoadTracking=false`): if dc-nl's c8 p99 of sum_date / avg_date / limob is clearly below dc's
@@ -121,3 +131,10 @@
   reservations / added load and release nothing, the load counts in this node's snapshot only; Q-55a-nl). Fast tier
   44201981927 green; DC tail perf 44203845486 (speed / dc / dc-4ep, numbers in Next steps); dc-nl run 44207273404
   pending. Merged into `main` 9866bb15; full Dev CI 44203849956 green. Item 55 (a) not done.
+- 2026-11-18T00:42-01:30Z (lane 5): full Dev CI 44207492475 on `main` f06e6f25 was red in SpotBugs (NP in lane 6's
+  `ParquetQueryParser` key functions; the "Cluster join timeout" there is an expected test exception, not a join
+  problem); fixed on `fix/55a`, lane 6 pushed the same fix (6c8f66de) meanwhile, so theirs was kept. Defaults per the
+  maintainer: `distributedCompleteMergeLoadTracking` false, `distributedCompleteMemberCheckMillis` 250. Full tier on
+  `fix/55a` 44210325758 green (before the rebase), fast tier on the rebased tip 44212641334, DC tail perf 44210328551
+  (speed / dc, timing; goal met on the CI cell, numbers in Next steps). Merged into `main` a3a7f029; package pre-release dispatched from `main` (see Next steps). Item 55 (a) waits for the
+  real-cluster rerun.
