@@ -23,7 +23,7 @@
 
 ## Next steps (one per session)
 
-> **Q-52a DONE e8e59e49 (2026-11-18, core lane).** Without `memoryBudgetBytes` or a cgroup limit, `HostLimits.detect()`
+> **Q-52a DONE c9d9b4f4 (2026-11-18, core lane).** Without `memoryBudgetBytes` or a cgroup limit, `HostLimits.detect()`
 > caps the machine memory at 4 GiB per available core (`memoryBudget source=host-capped ... cores=16`: 754 GB host,
 > 16 pinned cores -> 64 GiB); the WARN `memoryBudget=unset` fires for `host` / `host-capped` above 64 GiB only.
 > Per-connection DuckDB limits are budget / connections / 1.5 (`DuckDbSizing.RSS_OVERSHOOT_PERCENT`); the 1 GiB /
@@ -2121,7 +2121,7 @@ S3 slowdown item below stays open for then).
 - **(Q-52a, 2026-11-17, core lane) Default budget on big hosts without a cgroup limit.** Item 52 only warns when
   balanced sizes from a > 64 GiB host. Options: (1) keep (operator sets `memoryBudgetBytes`); (2) cap the detected host
   budget by default, e.g. at 4 GiB per available core (16 cores -> 64 GiB), which changes existing defaults; (3) also
-  budget ~1.5x `memory_limit` per connection for RSS (measured overshoot) when splitting the budget. Maintainer's call. **Answered 2026-11-18: (2) + (3); done e8e59e49.**
+  budget ~1.5x `memory_limit` per connection for RSS (measured overshoot) when splitting the budget. Maintainer's call. **Answered 2026-11-18: (2) + (3); done c9d9b4f4.**
 
 - **(Q-51a, 2026-11-16, core lane) Runtime filters in complete mode and bloom filters.** Item 51 applies the block only
   to partial-mode tickets (a complete ticket runs the whole query on one node, distributed complete included; wrapping
