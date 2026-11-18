@@ -2,7 +2,14 @@
 
 ## Next steps
 
-> **Lane 5 next step (2026-11-18T01:20Z):** FIRST read the package run 44214383193 (`package=true`, `main` 55adfbfa,
+> **Lane 5 next step (2026-11-18T03:40Z):** FIRST read the package run 44231671868 (`package=true` on branch
+> `pkg/5f02e5b3` = `main` 5f02e5b3, the newest code commit; includes the 55 (a) defaults a3a7f029). The earlier package
+> run 44214383193 was cancelled at 01:25Z by lane 4's push to `main` (same concurrency group), hence the `pkg/` branch;
+> `main`'s push run 44215691965 on 5f02e5b3 is green. Red = fix it first; green = its pre-release is the one for the
+> maintainer's real-cluster rerun of 55 (a) - say so in a `STATUS.md` Log line so the core lane / maintainer see it.
+> The rest of the 01:20Z note below still holds.
+
+> ~~**Lane 5 next step (2026-11-18T01:20Z):**~~ (package run cancelled, redone as 44231671868) FIRST read the package run 44214383193 (`package=true`, `main` 55adfbfa,
 > includes the defaults commit a3a7f029; its push run was skipped by a `[skip ci]` head); red = fix it first, green =
 > its pre-release is the one for the maintainer's rerun. Then the
 > item waits for the **maintainer's real-cluster rerun** of item 55 (a) on a pre-release with the new defaults (goal p99
@@ -139,3 +146,6 @@
   `fix/55a` 44210325758 green (before the rebase), fast tier on the rebased tip 44212641334, DC tail perf 44210328551
   (speed / dc, timing; goal met on the CI cell, numbers in Next steps). Merged into `main` a3a7f029; package run 44214383193 dispatched on `main` 55adfbfa (pre-release for the real-cluster rerun). Item 55 (a) waits for the
   real-cluster rerun.
+- 2026-11-18T03:36-03:40Z (lane 5): package run 44214383193 was cancelled by lane 4's push to `main`; `main`'s push
+  run 44215691965 (5f02e5b3, includes 55 (a)) green. Re-dispatched `package=true` on `pkg/5f02e5b3` as 44231671868
+  (pending). Item 55 (a) waits for that pre-release and the maintainer's real-cluster rerun.
