@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (c) (lane 6): `distributed-perf.yml` measures four small GROUP BYs (ORDER BY count(*), a computed key,
+  `date_trunc` next to `avg`, `strftime`) and takes an optional `before_ref` measured under dc as a third
+  configuration; it also lists the `distributedComplete=single` reasons. Fixed a SpotBugs null dereference in
+  `ParquetQueryParser` key functions (a function without a name is refused).
 - Q-52a (core, maintainer's answer 2026-11-18; changes defaults): without `memoryBudgetBytes` or a cgroup memory limit
   the detected machine memory is capped at 4 GiB per core available to the JVM (startup line `memoryBudget
   source=host-capped`; 16 pinned cores of a 754 GB host size from 64 GiB); the WARN `memoryBudget=unset` now fires

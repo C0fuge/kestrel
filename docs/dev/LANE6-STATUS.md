@@ -2,6 +2,32 @@
 
 ## Next steps
 
+> **LANE 6 DONE (2026-11-18).** Backlog empty: 52(b) waits only for the maintainer's real-cluster numbers (see its
+> entry below); 55(c) is DONE. Later sessions stop early.
+
+> **ITEM 55(c) DONE e8afe351 (lane 6, 2026-11-18 01:20).** Distributed perf 44210800053 (`fix/55c` fd92044e, TPC-H SF5
+> lineitem, 24 files, 3 nodes x 1 CPU / 4g, best of 2 passes): `off` = speed, `on` = dc on this build, `before` = dc on
+> c8896332 (main just before step 1). Answers identical in all three (rows + checksum).
+>
+> | query | off ms | on ms | on/off | before ms |
+> |---|---|---|---|---|
+> | g1 `GROUP BY l_shipmode ORDER BY count(*) DESC` (7 groups) | 300.9 | 235.8 | 0.78 | 281.1 |
+> | g2 `l_orderkey % 6 AS g`, count/min/max/sum (6 groups) | 512.7 | 329.5 | 0.64 | 504.4 |
+> | g3 `date_trunc('year', l_shipdate) AS y`, count + avg (7) | 1266.2 | 809.8 | 0.64 | 1268.3 |
+> | g4 `strftime(l_shipdate, '%Y') AS y` (7) | 303.8 | 266.2 | 0.88 | 310.6 |
+> | q01 (reference, merged before too) | 1732.0 | 914.1 | 0.53 | 970.8 |
+>
+> Before: 18 merged answers (6 queries x 3 passes; none of g1-g4) - dc ran these GROUP BYs on one node, as fast as
+> speed, which is the real-cluster 890 s vs 1001 s. Now 30 (10 queries; all g1-g4 merged). On 1-CPU nodes the merged
+> GROUP BY gets 1.5x; at the cluster's scale expect the count/min/max/sum ratio (~20x) when the shape merges.
+> The workflow's own check stays red for a reason outside this item: one of the 7 older queries (two at SF1, run
+> 44211990773) is kept on one node by design (DEBUG `distributedAggregate=local` / `distributedComplete=local`: small
+> aggregate or point lookup, core lane), and the check still expects every `on` answer merged - the same 18/21 as
+> run 44113641802 on 2026-11-17 before any lane 6 change. **Follow-up (not lane 6):** let the check accept those local
+> decisions (log them at INFO with the query name) or drop the expectation. No common TPC-H / real-cluster GROUP BY
+> shape is known to still stay single-node; if a stand run shows `distributedComplete=single reason=` at INFO, that
+> line names the shape.
+
 > **Maintainer, 2026-11-18 03:45 - wrap up 55(c).** Enough GROUP BY key shapes (steps 1-6). Next session: measure the cluster cell (service-cluster / distributed-perf at the smallest sf that shows it) dc GROUP BY vs speed before/after, then write `ITEM 55(c) DONE <sha>` with numbers; further shapes only if a common TPC-H / real-cluster query still stays single-node (list them as a follow-up instead). Then `LANE 6 DONE`.
 
 > **Lane 6, 2026-11-18 00:45 - ITEM 55(c) step 6 merged into main 8ac047b3 (not DONE).** `strftime(<col>, '<fmt>')` and
@@ -177,3 +203,8 @@
   merged into main da895086; full Dev CI 44202588350 pending.
 - 2026-11-18 00:11-00:45Z (lane 6): full Dev CI 44203849956 (9866bb15, includes da895086) green. ITEM 55(c) step 6:
   `strftime` / `time_bucket` GROUP BY keys (see Next steps). Fast tier 44206897995 green; merged into main 8ac047b3; full Dev CI 44207492475 pending.
+- 2026-11-18 00:42-01:20Z (lane 6): full Dev CI 44207492475 (f06e6f25) was red in SpotBugs only (2 NP in my step-6
+  `ParquetQueryParser.keyFunction*`; all 1395 tests green, the "Cluster join timeout" line is a logged exception of a
+  passing test): fixed in 6c8f66de (SpotBugs clean locally); its Dev CI 44210472790 was cancelled by the next push, full
+  Dev CI 44211784971 (f2f7832f, includes the fix) pending at session end. Distributed perf extended (c24c9b1d..e8afe351,
+  [skip ci] merge) and run: 44210800053 (SF5, numbers above), 44211990773 (SF1). ITEM 55(c) DONE e8afe351; LANE 6 DONE.
