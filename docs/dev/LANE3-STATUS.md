@@ -4,6 +4,8 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+> **Maintainer, 2026-11-18 08:40 - ITEM 56 (low priority, not blocking): a dc scan stream fails under memory pressure instead of waiting.** Package rehearsal, one node in a 7 GB container (-Xmx2g, direct 2g, duckDbMemoryLimit 1280 MiB), speed + distributedComplete, raw Flight full scans of SF1 lineitem with 4 concurrent clients: DuckDB logs `duckdb=outOfMemoryRetry on=privateDatabase ... (1.2 GiB/1.2 GiB used)` and sometimes one endpoint stream ends with `INTERNAL: Query execution failed: IOException: CDataJniException ... INTERRUPT Error: Interrupted!` (client error, no wrong answer). Seen on 5f02e5b35611 and on d2e27119fda4 (1 of 2 runs each), so not new. Expected: concurrent dc scan endpoints wait for memory (admission) or spill, never fail a stream. Reproduce in the CI cluster/dc cell with a small duckDbMemoryLimit and 4-8 concurrent full scans; fix; write `ITEM 56 DONE <sha>`.
+
 > **Maintainer, 2026-11-17 19:20 - split:** item 55(a) (dc tails) moved to lane 5 and 55(c) (dc GROUP BY over the big table) to lane 6; this lane keeps 55(b) (already started).
 
 ITEM 55 (b) DONE b5c677a9 (2026-11-17, see Log; not yet measured at scale; pre-release `server-1.0.0-f4feb0d5e404`, package run 44143892740 green). New `distributedAggregateMinBytes`
