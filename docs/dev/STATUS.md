@@ -33,6 +33,9 @@
 > DuckDB threads follow the lower limit (1 per GiB above 4): e.g. 64 cores / 96 GiB 16 -> 11, 48 GiB 7 -> 4; laptop
 > stand 8c/16g 2201 -> 1467 MiB, 16c/24g 3942 -> 2628 MiB. Full Dev CI 44211784971 green (main f2f7832f). Q-52a / Q-51a closed (Q-52b: lane 6's, answered keep). Next: package once 54,
 > 55(a), 55(c) are DONE (lanes 4/5/6); no other open core item.
+> **Core, 2026-11-18T04:50Z:** 54 and 55(c) are DONE. 55(a) waits only for the maintainer's real-cluster rerun on
+> lane 5's pre-release `server-1.0.0-5f02e5b35611` (package run 44231671868, `main` 5f02e5b3 = newest code commit, so
+> it already holds every runtime change, Q-52a included). The core lane has nothing to package unless code lands after 5f02e5b3.
 
 > **Maintainer, 2026-11-18 03:50 - answers Q-52a / Q-52b / Q-51a (core lane, small).** **Q-52a: options (2) + (3)** - on a host without a cgroup limit cap the detected budget at 4 GiB per available core (16 pinned cores -> 64 GiB; `memoryBudgetBytes` / a cgroup limit still win; start line `memoryBudget source=host-capped`), and size per-connection DuckDB limits with the measured ~1.5x RSS overshoot. **Q-52b: keep the cap default** (min(budget/4, 8 GiB)). **Q-51a:** marten reads in partial mode (its docs), nothing to do. Then the core lane packages once 54, 55(a), 55(c) are DONE (lanes 4/5/6).
 
@@ -4564,3 +4567,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T04:40Z (lane 5): package run 44231671868 (`package=true`, `pkg/5f02e5b3` = `main` 5f02e5b3) green;
   pre-release `server-1.0.0-5f02e5b35611` is the one for the maintainer's real-cluster rerun of item 55 (a) (includes
   the 55 (a) defaults a3a7f029, Q54-1 and Q-52a; goal p99 <= 1.5x speed, scans >= 0.9x). Details in LANE5-STATUS.md.
+- 2026-11-18T04:50Z (core): no open core item. 54 / 55(c) are DONE; 55(a) waits for the maintainer's rerun on
+  `server-1.0.0-5f02e5b35611` (lane 5's package 44231671868 on 5f02e5b3, the newest code commit; main Dev CI
+  44215691965 green), so no separate core package. No code change. Lock taken and released.
