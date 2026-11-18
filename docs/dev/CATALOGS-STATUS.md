@@ -8,6 +8,18 @@ See `CLAUDE.md`, "Third and fourth lanes". Basis: the maintainer's integration r
 
 > **Maintainer, 2026-11-17 18:10 - FIRST: ITEM 54 (maintainer exception): single-stream scan slower than upstream on HDFS.** Real cluster run 2026-11-16 on `server-1.0.0-d2e27119fda4` (3 nodes, 80 cores / 754 GB each, server pinned to 16 cores, client to 16 others, -Xmx8g, direct 8g, HDFS 3.1.3 Kerberos, DataNodes `authentication,privacy`, direct SASL reads, TPC-H SF10 + a 1.27 TB table; cgroup v1 - the `systemd-run --user --scope -p MemoryMax=48G` scope gets no memory controller, so the server logs `memoryBudget source=host memoryMiB=773103 cgroupMiB=0`). Fork answers 22/22 TPC-H in all 3 rounds in every profile, 0 errors. Raw Flight full scan of tpch.lineitem (MB/s): 1 stream - upstream 1032, speed 722, balanced 329, dc 646; 4 streams 1377 / 1975 / 1088 / 1154; 8 streams 1993 / 2171 / 1679 / 964. Upstream (DuckDB through its own reader, no SASL wrap negotiated) wins the single stream by 1.4x over speed and 3.1x over balanced. Find where one stream loses (read-ahead / hadoopfs block size, DuckDB threads per stream, Arrow batch size, flightBackpressureThresholdBytes, zero-copy writes, compression off?) - profile one stream on the HDFS CI cell with SASL `authentication,privacy`; goal: one stream >= upstream in speed and >= 0.8 of it in balanced. Write `ITEM 54 DONE <sha>` with numbers.
 
+ITEM 54 DONE f1ad5b22 (2026-11-18, session 105; + golden 5f02e5b3). Cell goal met (same runner, same hadoopfs reader,
+run 44178894320): one stream speed 1.20-1.21x and balanced 1.04-1.11x of upstream's native branch (goal >= 1.0 / >= 0.8).
+Q54-1 merged: `resourceProfile=balanced` defaults `duckDbPreserveInsertionOrder=false` on a remote data dir (any scheme
+but `file://`; explicit `-D` / env wins; local dirs keep `true`, item 16), startup line `resourceProfile profile=balanced
+... duckDbPreserveInsertionOrder=false`. Tests: `ResourceProfileTest.balancedDropsTheInsertionOrderOnRemoteDataDirsOnly`,
+`DuckDbSharedDatabaseTest.droppedInsertionOrderGivesTheSameAnswers` (same rows as a multiset, same counts / aggregates /
+ORDER BY answers), golden `duckdb-setup.txt` (HDFS / S3 configs now `SET preserve_insertion_order = false`; the red
+fast tier 44197845439 of session 104's branch was only this golden file). Fast tier on `fix/54-q1` 44214318641 green;
+push Dev CI on main 44215691965 (full tier) - **next session: check it first**. The core lane can package. The stand
+follow-up (Q54-2: one-stream diagnostic with `-DstreamTimingLog=true`, duckDbThreads 4 / 8 / 16) becomes a new item if
+it shows a gap.
+
 ITEM 54 IN PROGRESS (2026-11-17, sessions 100-104) - steps 1-3 done in the CI cell: same runner, same hadoopfs reader, one stream is speed 1.20-1.21x and balanced 1.04-1.11x of upstream's native branch (goal >= 1.0 / >= 0.8 met in the cell); the stand gap needs stand measurements (Q54-2).
 `hdfs-point-perf.yml` has a scan mode (inputs `scanRounds`, `scanClients`, `serverCpus`; `tools/ci/hdfs-point-cell.sh`
 with `SCAN_ROUNDS`, `tools/ci/thread-cpu.py` per-thread server CPU, streamTiming lines): single-node HDFS, short-circuit,
@@ -769,7 +781,7 @@ C4. Hive ACID insert-only tables (after the plugins lane's P4), then Paimon/Hudi
   `privacy` (or upstream with the same hadoopfs and SASL as ours), to price the SASL wrap at stand speed. Until then
   no server change is proposed.
 
-- **Q54-1 (2026-11-17, item 54): balanced default `duckDbPreserveInsertionOrder=false`?** On HDFS one full lineitem stream
+- **Closed (Q54-1 done f1ad5b22, maintainer yes 2026-11-18).** Q54-1 (2026-11-17, item 54): balanced default `duckDbPreserveInsertionOrder=false`?** On HDFS one full lineitem stream
   in balanced is 18-33 % faster with it (runs 44110283975, 44116044127; speed already has it since item 27, upstream sets
   it too); rows of a query without ORDER BY may then come in another order (answers unchanged). Item 16 (2026-10-28) kept
   balanced at DuckDB's `true` from local numbers (`false` 4-35 % slower locally). Proposal: `false` in balanced only for
@@ -1240,3 +1252,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-17T20:20Z (session 102): ITEM 54 step 3 part 1: run 44159553651 read (3 server CPUs: one stream not faster than with 2, x4 is; serial per-stream path); upstream HEAD 1a57765 streams on a thread-local DuckDB with threads=1. Client CPU per scan pass in `scan-adbc.py` / HDFS cell (83f1e853, perf tooling only, [skip ci]; CHANGELOG line). Run 44167354107 dispatched (own DuckDB threads 1 / 2 vs shared, client CPU), still running at session end (its cancelled predecessor 44167065420 had a subset). Next: read 44167354107 (see Next steps, step 3 part 2).
 - 2026-11-17T21:25Z (session 103): ITEM 54 step 3 parts 2-3: run 44167354107 read (client CPU 41-70 % of its core: not the cap; upstream-like own DuckDB with threads 1 is 14-25 % slower than speed: no per-stream thread change). `hdfs-point-perf.yml` input `upstream` + cell profile `upstream` (5254fe28, 62020d62, 53efb7bc, perf tooling only, [skip ci]; CHANGELOG line): run 44172681969 (upstream without hadoopfs: no files), 44175802249 (upstream HEAD 1a57765 = `main`: warm-up 116 MB/s, then the server died; speed 786 / 803). Run 44178894320 (upstream native branch) dispatched, result for the next session.
 - 2026-11-17T22:55Z (session 104): ITEM 54 step 3 part 4: run 44178894320 read (upstream native branch d05bf9c5 in the HDFS cell, same runner, same hadoopfs): one stream speed 1.20-1.21x and balanced 1.04-1.11x of upstream, x4 0.94-1.04x; goal met in the cell, the stand gap is the stand's (Q54-2 asks for stand measurements; Q54-1 updated). Docs only, no code change, no CI run.
+- 2026-11-18T01:40Z (session 105): ITEM 54 DONE f1ad5b22: Q54-1 (maintainer yes) merged from `fix/54-q1` after regenerating the golden DuckDB setup (the only cause of session 104's red fast tier 44197845439); fast tier 44214318641 green, push Dev CI on main 44215691965 pending at session end. Next: check 44215691965; no open item in this lane after that (Q54-2 stand numbers come from the maintainer's next cluster run).

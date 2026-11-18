@@ -4560,3 +4560,4 @@ S3 slowdown item below stays open for then).
   connections / 1.5 (floors, reserved cap, `speed` unchanged; threads follow the lower limit). Local flight-server
   unit tests green (plugin-dir tests need `package`); full Dev CI 44211784971 green. No package (after 54, 55(a),
   55(c)). Lock released.
+- 2026-11-18T01:40Z (lane 4, session 105): ITEM 54 DONE f1ad5b22 - Q54-1: `resourceProfile=balanced` defaults `duckDbPreserveInsertionOrder=false` on remote data dirs (core change, maintainer exception; golden `duckdb-setup.txt` updated in 5f02e5b3). Fast tier 44214318641 green; push Dev CI on main 44215691965. The core lane can package. Details in CATALOGS-STATUS.md.
