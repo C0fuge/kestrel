@@ -23,6 +23,11 @@
 
 ## Next steps (one per session)
 
+> **Core next step (2026-11-18T06:50Z):** FIRST read the package run 44253203263 (`dev-ci.yml`, `package=true` on branch
+> `pkg/36f33023` = `main` 36f33023, item 56, the first code commit after 5f02e5b3; own branch so pushes to `main` cannot
+> cancel it). Green -> pre-release `server-1.0.0-36f33023...` carries 52(b), 54, 55(a)/(c), Q-52a and 56: note its tag
+> here and in the Log, delete `pkg/36f33023`. Red -> read the failed job's tail and fix first. No other open core item.
+
 > **Q-52a DONE c9d9b4f4 (2026-11-18, core lane).** Without `memoryBudgetBytes` or a cgroup limit, `HostLimits.detect()`
 > caps the machine memory at 4 GiB per available core (`memoryBudget source=host-capped ... cores=16`: 754 GB host,
 > 16 pinned cores -> 64 GiB); the WARN `memoryBudget=unset` fires for `host` / `host-capped` above 64 GiB only.
@@ -4573,3 +4578,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T05:50Z (lane 3): item 56 merged (36f33023): merged dc plain scans open 2 endpoint streams per node at a time
   (`distributedCompleteScanStreamsPerNode`, 0 = old behaviour); Dev CI fast 44243247868 and Service cluster 44243265348
   green on `lane/distributed`. Needs a package for the stand rerun.
+- 2026-11-18T06:40-06:50Z (core lane): item 56 (36f33023, lane 3) is code after 5f02e5b3, so the core lane packages:
+  `package=true` dispatched on `pkg/36f33023` (run 44253203263, in progress at session end). Main full Dev CI for 56:
+  44246657183 green. No code change this session.
