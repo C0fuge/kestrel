@@ -4,9 +4,12 @@ ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55 (maintainer notes 2026-11-1
 52(a), 53, 54 (f1ad5b22), 55(b), 55(c) (e8afe351, LANE 6 DONE), 56 (36f33023, not yet measured). Open, waiting for the
 maintainer's real-cluster rerun: 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-18T08:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T09:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
+- marten and heron took your 12:20 MSK note (full regression on `36f3302321ba`, then default if 22/22 and no
+  regression > 10 %): marten m4 S3 1-9 PASS 44274880025, lakefs 1,3,4,10 dispatched 09:43Z (lock 09:18Z active); heron
+  session started 09:18Z (lock active). No result to act on yet.
 - **New pre-release `server-1.0.0-36f3302321ba`** (published 07:17Z; package Dev CI 44253203263 + Service cluster
   44255135230, hdfs 44255139047, security 44255142307, stores 44255146545 all green) = 52(b), 54 + Q54-1, 55(a)
   defaults, 55(c), Q-52a **and 56**. It supersedes 5f02e5b35611 as the build for the stand rerun. Item 56 changes the
@@ -30,13 +33,13 @@ Points for the maintainer:
 |---|---|---|---|---|
 | core (`STATUS.md`) | none open (pre-release 36f3302321ba published) | 07:42Z | free | package 44253203263 green |
 | plugins (`PLUGINS-STATUS.md`) | nothing open | 08:12Z (note) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 08:21Z (note) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 09:21Z (note) | free | - |
 | lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE 36f33023; nothing open | 06:04Z | free | main Dev CI 44246657183 green |
 | lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun | 04:36Z | free | package 44231671868 green |
 | lane 6 (`LANE6-STATUS.md`) | **LANE 6 DONE**; 52(b) waits for cluster numbers | 01:01Z | free | Distributed perf red by its check |
 
 Main CI: newest Dev CI on main 44246657183 (221da38f, item 56) green; newest push run 44215691965 (5f02e5b3) green.
-No stale locks (all kestrel locks empty; marten / heron empty). No bug-first notes open.
+No stale locks (all kestrel locks empty; marten / heron locks 09:18Z, active). No bug-first notes open.
 
 ## Service matrix (newest run per workflow)
 
@@ -57,9 +60,10 @@ No stale locks (all kestrel locks empty; marten / heron empty). No bug-first not
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; session 08:41Z nothing to do. Lock free.
-- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa (newest in e2e-assets); session 330 idle
-  (08:51Z). Lock free.
+- marten: IMPROVEMENTS DONE (2026-11-03). New maintainer task: full regression on 36f3302321ba then default switch;
+  m4 S3 1-9 + iceberg 1,11,12 dispatched 09:19Z (S3 1-9 PASS 44274880025), lakefs 1,3,4,10 dispatched 09:43Z. Lock 09:18Z.
+- heron: IMPROVEMENTS DONE (session 98). New maintainer task: full regression on 36f3302321ba then default switch;
+  session started 09:18Z (lock active), no result committed yet.
 
 ## egret
 
@@ -68,6 +72,7 @@ No stale locks (all kestrel locks empty; marten / heron empty). No bug-first not
 - ACCEPT 36f3302321ba DONE, SHIP (44258093085, 08:20Z); no FRESH for it (item 56 DC only). README 'In progress': nothing running.
 
 ## History
+- 2026-11-18T09:58Z: maintainer note (12:20 MSK) in marten + heron: full regression on 36f3302321ba then default switch; marten m4 S3 1-9 PASS 44274880025, lakefs dispatched; heron session active; kestrel no new CI runs or pre-releases (only catalogs note 09:21Z), main green; no stale locks.
 - 2026-11-18T08:58Z: egret ACCEPT 36f3302321ba SHIP (44258093085), no FRESH (DC-only change); no new CI runs, commits only lane no-open-item notes; main green (44246657183); 52(b)/55(a) wait for stand rerun; marten/heron idle; no stale locks.
 - 2026-11-18T07:57Z: package pkg/36f33023 green (44253203263 + 4 service runs) -> pre-release server-1.0.0-36f3302321ba (07:17Z, first with item 56) for the stand rerun; egret FRESH 5f02e5b35611 DONE (balanced S3 ADBC export 0.66 of upstream, SF1 +20 % flagged), ACCEPT 36f3302321ba 44258093085 running; main CI green; lanes nothing open; marten/heron idle; no stale locks.
 - 2026-11-18T06:56Z: item 56 main full Dev CI 44246657183 green; core lane dispatched package pkg/36f33023 (Dev CI 44253203263 running) for the first pre-release with item 56; egret FRESH 5f02e5b35611 (44244388077) still running; lanes nothing open; marten/heron idle; no stale locks.
@@ -107,4 +112,3 @@ No stale locks (all kestrel locks empty; marten / heron empty). No bug-first not
 - 2026-11-15T21:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T20:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T14:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-15T13:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
