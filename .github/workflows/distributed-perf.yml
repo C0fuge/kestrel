@@ -9,6 +9,10 @@
 # count DuckDB gave at generation time), or when an "on" query was not merged from the endpoints
 # (the planning node's `distributedComplete=merged` log lines). The times are reported, not
 # checked. Not part of Dev CI.
+# Item 55 (c): g1..g4 are small GROUP BYs (6-7 groups) of the shapes dc kept on one node before
+# 2026-11-17 (ORDER BY an aggregate, a computed key, date_trunc / strftime keys, avg next to other
+# aggregates). With `before_ref` set (a commit of this repository), that commit is built too and
+# measured under dc as a third configuration "before" (times and merged counts reported, not checked).
 name: Distributed perf
 
 on:
@@ -38,6 +42,10 @@ on:
         description: "endpointsPerServer"
         type: string
         default: "2"
+      before_ref:
+        description: "optional commit to measure under dc as 'before' (empty = off / on only)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -62,6 +70,20 @@ jobs:
           distribution: temurin
           cache: maven
 
+      - name: Build the before ref (no tests)
+        if: inputs.before_ref != ''
+        env:
+          BEFORE_REF: ${{ inputs.before_ref }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$BEFORE_REF"
+          git worktree add -q "$RUNNER_TEMP/before-src" FETCH_HEAD
+          (cd "$RUNNER_TEMP/before-src" && ./mvnw -q install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+          mkdir -p "$RUNNER_TEMP/jars-before"
+          cp -r "$RUNNER_TEMP/before-src/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" \
+            "$RUNNER_TEMP/before-src/flight-server/target/libs" "$RUNNER_TEMP/jars-before/"
+
+      # After the before ref, so the local repository holds this ref's modules for the test client.
       - name: Build this ref (no tests)
         run: |
           set -euo pipefail
@@ -112,6 +134,14 @@ jobs:
               "w3_distinct": "SELECT DISTINCT l_suppkey FROM lineitem WHERE l_quantity > 45 ORDER BY l_suppkey",
               "w4_order_limit": "SELECT l_orderkey, l_extendedprice FROM lineitem WHERE l_shipmode = 'AIR'"
                      " ORDER BY l_extendedprice DESC, l_orderkey LIMIT 100",
+              "g1_order_by_count": "SELECT l_shipmode, count(*) AS n, sum(l_quantity) AS qty FROM lineitem"
+                     " GROUP BY l_shipmode ORDER BY count(*) DESC, l_shipmode",
+              "g2_computed_key": "SELECT l_orderkey % 6 AS g, count(l_orderkey) AS n, min(l_orderkey) AS lo,"
+                     " max(l_orderkey) AS hi, sum(l_orderkey) AS s FROM lineitem GROUP BY g ORDER BY g",
+              "g3_date_trunc_avg": "SELECT date_trunc('year', l_shipdate) AS y, count(*) AS n, avg(l_extendedprice) AS p"
+                     " FROM lineitem GROUP BY y ORDER BY y",
+              "g4_strftime": "SELECT strftime(l_shipdate, '%Y') AS y, count(*) AS n, sum(l_quantity) AS qty"
+                     " FROM lineitem GROUP BY y ORDER BY y",
           }
           for name, q in shapes.items():
               rows = len(db.execute(q).fetchall())
@@ -131,11 +161,11 @@ jobs:
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
           seeds=127.0.0.1:5701,127.0.0.1:5702,127.0.0.1:5703
-          measure() { # label, distributedComplete
-            local label=$1 dc=$2 i
+          measure() { # label, distributedComplete[, jar directory]
+            local label=$1 dc=$2 jars=${3:-$RUNNER_TEMP/jars} i
             for i in 0 1 2; do
               docker run -d --name "srv$i" --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
-                -v "$RUNNER_TEMP/jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
+                -v "$jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
                 eclipse-temurin:21-jre \
                 java -Xmx1g -XX:MaxDirectMemorySize=1g --add-opens=java.base/java.lang=ALL-UNNAMED \
                 --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
@@ -181,6 +211,7 @@ jobs:
           }
           measure off false
           measure on true
+          [ -d "$RUNNER_TEMP/jars-before" ] && measure before true "$RUNNER_TEMP/jars-before"
           cat "$out"
 
       - name: Check
@@ -205,11 +236,12 @@ jobs:
           # Best measured time per query, off vs on, and lineitem rows/s.
           rows=$(cat "$RUNNER_TEMP/lineitem.rows")
           best() { grep -E "^$1: $2 r[1-9]" "$out" | awk '{print $4}' | sort -n | head -n 1; }
-          printf '%-18s %10s %10s %7s %14s %14s\n' query off_ms on_ms on/off off_rows/s on_rows/s > "$RUNNER_TEMP/table.txt"
+          printf '%-18s %10s %10s %7s %14s %14s %10s\n' query off_ms on_ms on/off off_rows/s on_rows/s before_ms > "$RUNNER_TEMP/table.txt"
           for f in "$RUNNER_TEMP"/queries/*.sql; do
-            q=$(basename "$f" .sql); a=$(best off "$q"); b=$(best on "$q")
-            awk -v q="$q" -v a="${a:-0}" -v b="${b:-0}" -v r="$rows" 'BEGIN { printf "%-18s %10.1f %10.1f %7.2f %14.0f %14.0f\n", q, a, b, a ? b / a : 0, a ? r / a * 1000 : 0, b ? r / b * 1000 : 0 }' >> "$RUNNER_TEMP/table.txt"
+            q=$(basename "$f" .sql); a=$(best off "$q"); b=$(best on "$q"); c=$(best before "$q")
+            awk -v q="$q" -v a="${a:-0}" -v b="${b:-0}" -v c="${c:--}" -v r="$rows" 'BEGIN { printf "%-18s %10.1f %10.1f %7.2f %14.0f %14.0f %10s\n", q, a, b, a ? b / a : 0, a ? r / a * 1000 : 0, b ? r / b * 1000 : 0, c }' >> "$RUNNER_TEMP/table.txt"
           done
+          grep -E '^before: (merged|fallback) ' "$out" >> "$RUNNER_TEMP/table.txt" || true
           cat "$RUNNER_TEMP/table.txt"
           exit "$fail"
 
