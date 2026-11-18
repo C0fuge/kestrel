@@ -2,6 +2,22 @@
 
 ## Next steps
 
+> **Lane 6, 2026-11-18 00:45 - ITEM 55(c) step 6 merged into main 8ac047b3 (not DONE).** `strftime(<col>, '<fmt>')` and
+> `time_bucket(<width>, <col>)` (a CAST of a column too) as aliased GROUP BY keys now merge under dc and in batches of
+> copies, also next to `avg`. jOOQ knows neither: `ParquetQueryParser.parseStatement` re-parses with unknown functions
+> allowed only when every unknown function (quoted name + `(` in jOOQ's ALWAYS-quoted rendering) is one of the two, and
+> `keyFunctionsOnlyInKeys` then requires every call to be inside a computed key (else the parse fails as before ->
+> single node; new INFO reason in `unmergedAggregateReason`). Key text rendered from the parse (`keyFunctionText`):
+> string format / width as written; INTERVAL widths as `INTERVAL '<n> months'` or `'<n> seconds'` (jOOQ's own INTERVAL
+> text is no DuckDB SQL); refused: 3-arg time_bucket, mixed months+time, sub-second, non-literal format. `AverageMerge`
+> and `CopyBatchMerge` use `parseStatement` too. Tests: CompleteAnswerMergeTest (9 DuckDB-equivalence shapes),
+> AverageMergeTest (+3 / 3 refused), CopyBatchMergeTest (+2), DistributedCompleteMergeableTest (+3 merged, 11 refused),
+> DistributedCompleteIntegrationTest (+2 merged). Fast tier 44206897995 green; full Dev CI on main pending (push of 8ac047b3).
+> **Next session:** (0) read the full Dev CI on main for 8ac047b3 (red = fix first). (1) If the maintainer gave the exact
+> GROUP BY / INFO `distributedComplete=single reason=` line, handle that shape. (2) Optional: alias keys in the
+> complete-mode batched path (`notBatchableReason` with footer columns). (3) Per-node endpoints for big GROUP BYs if
+> still slow at scale. Otherwise 55(c) waits for a cluster run to be marked DONE.
+
 > **Lane 6, 2026-11-17 23:58 - ITEM 55(c) step 5 merged into main da895086 (not DONE).** An aliased `date_trunc` GROUP BY
 > key next to `avg` now merges under dc: `AverageMerge` replaces an aliased `date_trunc` select item and a whole
 > `date_trunc` GROUP BY key by `ParquetQueryParser.keyText` (plain SQL) before rendering the part query; any other
@@ -157,3 +173,5 @@
 - 2026-11-17 23:41-23:58Z (lane 6): full Dev CI 44196365448 (49f44a18, includes 8044fe75) green (44194423955 cancelled
   by the next push). ITEM 55(c) step 5: `date_trunc` keys next to `avg` (see Next steps). Fast tier 44202134874 green;
   merged into main da895086; full Dev CI 44202588350 pending.
+- 2026-11-18 00:11-00:45Z (lane 6): full Dev CI 44203849956 (9866bb15, includes da895086) green. ITEM 55(c) step 6:
+  `strftime` / `time_bucket` GROUP BY keys (see Next steps). Fast tier 44206897995 green; merged into main 8ac047b3.

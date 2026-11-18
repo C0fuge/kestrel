@@ -4518,3 +4518,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-17T23:58Z (lane 6): item 55(c) step 5 merged (da895086, core `AverageMerge`): an aliased `date_trunc` GROUP BY
   key next to `avg` merges under dc (key rendered from the parse in the part query). Full Dev CI 44202588350 pending.
   Details in LANE6-STATUS.md.
+- 2026-11-18T00:45Z (lane 6): item 55(c) step 6 merged (8ac047b3, core `ParquetQueryParser`, `AverageMerge`, `CopyBatchMerge`):
+  aliased `strftime` / `time_bucket` GROUP BY keys merge under dc; jOOQ re-parses with unknown functions allowed only for
+  these two, only inside computed keys (else unparsed as before). Details in LANE6-STATUS.md.
