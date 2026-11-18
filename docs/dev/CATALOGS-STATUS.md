@@ -16,7 +16,7 @@ but `file://`; explicit `-D` / env wins; local dirs keep `true`, item 16), start
 `DuckDbSharedDatabaseTest.droppedInsertionOrderGivesTheSameAnswers` (same rows as a multiset, same counts / aggregates /
 ORDER BY answers), golden `duckdb-setup.txt` (HDFS / S3 configs now `SET preserve_insertion_order = false`; the red
 fast tier 44197845439 of session 104's branch was only this golden file). Fast tier on `fix/54-q1` 44214318641 green;
-push Dev CI on main 44215691965 (full tier) - **next session: check it first**. The core lane can package. The stand
+push Dev CI on main 44215691965 (full tier) green (session 106). The core lane can package. The stand
 follow-up (Q54-2: one-stream diagnostic with `-DstreamTimingLog=true`, duckDbThreads 4 / 8 / 16) becomes a new item if
 it shows a gap.
 
@@ -1253,3 +1253,4 @@ ITEM 39(c) DONE bf72114c (parts 1-4 on `main`: b0f82a47, 32ebda26, 34b7911a and 
 - 2026-11-17T21:25Z (session 103): ITEM 54 step 3 parts 2-3: run 44167354107 read (client CPU 41-70 % of its core: not the cap; upstream-like own DuckDB with threads 1 is 14-25 % slower than speed: no per-stream thread change). `hdfs-point-perf.yml` input `upstream` + cell profile `upstream` (5254fe28, 62020d62, 53efb7bc, perf tooling only, [skip ci]; CHANGELOG line): run 44172681969 (upstream without hadoopfs: no files), 44175802249 (upstream HEAD 1a57765 = `main`: warm-up 116 MB/s, then the server died; speed 786 / 803). Run 44178894320 (upstream native branch) dispatched, result for the next session.
 - 2026-11-17T22:55Z (session 104): ITEM 54 step 3 part 4: run 44178894320 read (upstream native branch d05bf9c5 in the HDFS cell, same runner, same hadoopfs): one stream speed 1.20-1.21x and balanced 1.04-1.11x of upstream, x4 0.94-1.04x; goal met in the cell, the stand gap is the stand's (Q54-2 asks for stand measurements; Q54-1 updated). Docs only, no code change, no CI run.
 - 2026-11-18T01:40Z (session 105): ITEM 54 DONE f1ad5b22: Q54-1 (maintainer yes) merged from `fix/54-q1` after regenerating the golden DuckDB setup (the only cause of session 104's red fast tier 44197845439); fast tier 44214318641 green, push Dev CI on main 44215691965 pending at session end. Next: check 44215691965; no open item in this lane after that (Q54-2 stand numbers come from the maintainer's next cluster run).
+- 2026-11-18T03:21Z (session 106): push Dev CI on main 44215691965 (full tier, 5f02e5b3) green - ITEM 54 DONE f1ad5b22 stands, the core lane can package. No open item in this lane (Q54-2 stand numbers come from the maintainer's next cluster run; C3 step 2 / C4 (b) / (d) backlog; Q11 unanswered). No code change, lock not taken.
