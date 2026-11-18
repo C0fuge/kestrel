@@ -2,8 +2,9 @@
 
 ## Next steps
 
-> **Lane 5 next step (2026-11-18T01:30Z):** FIRST read the full Dev CI of the push on `main` (the defaults commit of this
-> session; run id in the Log of the next session, look up `Dev CI` push runs on `main`); red = fix it first. Then the
+> **Lane 5 next step (2026-11-18T01:20Z):** FIRST read the package run 44214383193 (`package=true`, `main` 55adfbfa,
+> includes the defaults commit a3a7f029; its push run was skipped by a `[skip ci]` head); red = fix it first, green =
+> its pre-release is the one for the maintainer's rerun. Then the
 > item waits for the **maintainer's real-cluster rerun** of item 55 (a) on a pre-release with the new defaults (goal p99
 > <= 1.5x speed, scans >= 0.9x). On the CI cell (DC tail perf 44210328551, 3 x 1 CPU, SF1, `fix/55a` = defaults
 > commit) the goal is met: p99 dc / speed ms - c1 sum_date 74 / 82, avg_date 72 / 81, limob 85 / 90; c8 sum_date 387 /
@@ -136,5 +137,5 @@
   problem); fixed on `fix/55a`, lane 6 pushed the same fix (6c8f66de) meanwhile, so theirs was kept. Defaults per the
   maintainer: `distributedCompleteMergeLoadTracking` false, `distributedCompleteMemberCheckMillis` 250. Full tier on
   `fix/55a` 44210325758 green (before the rebase), fast tier on the rebased tip 44212641334, DC tail perf 44210328551
-  (speed / dc, timing; goal met on the CI cell, numbers in Next steps). Merged into `main` a3a7f029; package pre-release dispatched from `main` (see Next steps). Item 55 (a) waits for the
+  (speed / dc, timing; goal met on the CI cell, numbers in Next steps). Merged into `main` a3a7f029; package run 44214383193 dispatched on `main` 55adfbfa (pre-release for the real-cluster rerun). Item 55 (a) waits for the
   real-cluster rerun.
