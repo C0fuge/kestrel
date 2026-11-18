@@ -4,6 +4,19 @@ See `CLAUDE.md`, "Third and fourth lanes". Moved here from `STATUS.md` stage 3 o
 
 ## Next steps
 
+ITEM 56 DONE 36f33023 (2026-11-18, see Log; rebase-merged into `main`; not yet measured on the stand). A merged plain scan
+opened all its endpoint streams at once although the merge reads them one after the other, so every endpoint not read
+yet held a running DuckDB scan waiting for its reader; concurrent full scans filled the shared DuckDB's memory. Now a
+node keeps at most `distributedCompleteScanStreamsPerNode` (default 2, 0 = all at once as before) endpoint streams of
+a plain scan open, the next opened once one is read. Reproduced in-JVM (`DistributedCompleteMemoryPressureIntegrationTest`:
+one node, 8 endpoints, shared DuckDB 40 MiB, 8 clients x 8 rounds of `SELECT *`): before 500 `outOfMemoryRetry`, 2
+merges fell back, 10 endpoint statements interrupted (the `INTERRUPT Error: Interrupted!` lines: the cancel of the
+other endpoints after a merge fails), 48.7 s; after 381 retries, 0 fallbacks, 0 interrupts, 37.5 s. The stand's
+client-visible INTERRUPT was not reproduced as a client error; most likely the same chain (endpoint fails after its
+first batch -> merge cancels the others). **For the stand** (next pre-release carrying 36f33023): rerun the 4-client
+raw dc full scans in the 7 GB container; expect start line `...; endpoint streams per node: 2 at a time`, far fewer
+`outOfMemoryRetry`, no failed stream; also compare dc raw-scan MB/s (lane 5's 55(a)) - if it drops, try `3` or `0`.
+
 > **Maintainer, 2026-11-18 08:40 - ITEM 56 (low priority, not blocking): a dc scan stream fails under memory pressure instead of waiting.** Package rehearsal, one node in a 7 GB container (-Xmx2g, direct 2g, duckDbMemoryLimit 1280 MiB), speed + distributedComplete, raw Flight full scans of SF1 lineitem with 4 concurrent clients: DuckDB logs `duckdb=outOfMemoryRetry on=privateDatabase ... (1.2 GiB/1.2 GiB used)` and sometimes one endpoint stream ends with `INTERNAL: Query execution failed: IOException: CDataJniException ... INTERRUPT Error: Interrupted!` (client error, no wrong answer). Seen on 5f02e5b35611 and on d2e27119fda4 (1 of 2 runs each), so not new. Expected: concurrent dc scan endpoints wait for memory (admission) or spill, never fail a stream. Reproduce in the CI cluster/dc cell with a small duckDbMemoryLimit and 4-8 concurrent full scans; fix; write `ITEM 56 DONE <sha>`.
 
 > **Maintainer, 2026-11-17 19:20 - split:** item 55(a) (dc tails) moved to lane 5 and 55(c) (dc GROUP BY over the big table) to lane 6; this lane keeps 55(b) (already started).
@@ -864,3 +877,10 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
 - 2026-11-17 19:04-19:08Z (lane 3 session): package run 44143892740 (`pkg/f4feb0d5`) green; pre-release
   `server-1.0.0-f4feb0d5e404` carries item 55 (b), named in `ITEM 55 (b) DONE` for the stand. No other open lane 3
   item (55(a) lane 5, 55(c) lane 6); waiting for the stand's numbers.
+- 2026-11-18 05:03-05:50Z (lane 3 session): lock 05:03Z. **ITEM 56 DONE 36f33023** (branch commit 612bc302, rebased and
+  merged into `main`). Cause, fix, numbers: see `ITEM 56 DONE`. Behaviour change for the fix: merged plain scans now
+  open 2 endpoint streams per node at a time (`distributedCompleteScanStreamsPerNode=0` restores the old behaviour).
+  Tests: `DistributedCompleteMemoryPressureIntegrationTest` (new, integration), `DistributedCompleteOneStreamPerNodeTest`
+  (+1), `ConfigAdapterTest` (+1); local Distributed*/ClusterMemberLoss*/PeerStream*/SharedDatabase* green. CI on the
+  branch: Dev CI fast 44243247868 green, Service cluster 44243265348 green. No `package=true` yet (low-priority item,
+  the core lane / next package carries it). Next: stand numbers for 56; no other open lane 3 item.

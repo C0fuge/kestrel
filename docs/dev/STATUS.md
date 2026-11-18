@@ -4570,3 +4570,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T04:50Z (core): no open core item. 54 / 55(c) are DONE; 55(a) waits for the maintainer's rerun on
   `server-1.0.0-5f02e5b35611` (lane 5's package 44231671868 on 5f02e5b3, the newest code commit; main Dev CI
   44215691965 green), so no separate core package. No code change. Lock taken and released.
+- 2026-11-18T05:50Z (lane 3): item 56 merged (36f33023): merged dc plain scans open 2 endpoint streams per node at a time
+  (`distributedCompleteScanStreamsPerNode`, 0 = old behaviour); Dev CI fast 44243247868 and Service cluster 44243265348
+  green on `lane/distributed`. Needs a package for the stand rerun.
