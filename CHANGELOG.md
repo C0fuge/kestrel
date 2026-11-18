@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 55 (a) (lane 5, maintainer's answers Q-55a-nl / Q-55a-mc): defaults changed - `distributedCompleteMergeLoadTracking`
+  is now false (the plans of a distributed-complete merge write no load to the cluster maps; true restores the old
+  behaviour) and `distributedCompleteMemberCheckMillis` is now 250 (an admitted member address of a node-to-node call is
+  remembered for 250 ms; refused addresses and the signed identity header are still checked on every call; 0 restores
+  the old behaviour).
 - Item 55 (c) (lane 6): `distributed-perf.yml` measures four small GROUP BYs (ORDER BY count(*), a computed key,
   `date_trunc` next to `avg`, `strftime`) and takes an optional `before_ref` measured under dc as a third
   configuration; it also lists the `distributedComplete=single` reasons. Fixed a SpotBugs null dereference in

@@ -838,7 +838,7 @@ public class ConfigAdapter {
     public static int distributedCompleteMemberCheckMillis(ConfigSource props) {
         int value = getIntWithEnv("distributedCompleteMemberCheckMillis",
                 "arrowflight.cluster.distributedCompleteMemberCheckMillis",
-                "FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS", 0, props);
+                "FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS", 250, props);
         if (value < 0) {
             throw new IllegalArgumentException("distributedCompleteMemberCheckMillis must be 0 or more: "
                     + value);
@@ -851,7 +851,8 @@ public class ConfigAdapter {
      * ({@code arrowflight.cluster.distributedCompleteMergeLoadTracking},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING}): whether the plans of a
      * distributed-complete merge write their endpoints' load to the cluster maps as client plans
-     * do (item 55 (a)); default true, false keeps that load in this node's cluster snapshot only.
+     * do (item 55 (a)); default false (Q-55a-nl): that load counts in this node's cluster snapshot
+     * only; true writes it as before.
      *
      * @param props configuration source
      * @return whether merge plans write their load
@@ -859,7 +860,7 @@ public class ConfigAdapter {
     public static boolean distributedCompleteMergeLoadTracking(ConfigSource props) {
         return getBooleanWithEnv("distributedCompleteMergeLoadTracking",
                 "arrowflight.cluster.distributedCompleteMergeLoadTracking",
-                "FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", true, props);
+                "FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", false, props);
     }
 
     /**

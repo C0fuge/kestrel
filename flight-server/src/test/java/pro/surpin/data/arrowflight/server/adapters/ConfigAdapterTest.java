@@ -514,26 +514,26 @@ class ConfigAdapterTest {
                 source(Map.of("distributedCompleteSmallAnswerEndpointsPerNode", "-1"), Map.of())));
     }
 
-    /** Item 55 (a): internal calls check the member address every time unless set otherwise. */
+    /** Item 55 (a), Q-55a-mc: internal calls remember an admitted member address for 250 ms by default. */
     @Test
-    void distributedCompleteMemberCheckMillisDefaultsToZero() throws IOException {
-        assertEquals(0, ConfigAdapter.distributedCompleteMemberCheckMillis(source(Map.of(), Map.of())));
-        assertEquals(250, ConfigAdapter.distributedCompleteMemberCheckMillis(
-                source(Map.of("distributedCompleteMemberCheckMillis", "250"), Map.of())));
+    void distributedCompleteMemberCheckMillisDefaultsTo250() throws IOException {
+        assertEquals(250, ConfigAdapter.distributedCompleteMemberCheckMillis(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.distributedCompleteMemberCheckMillis(
+                source(Map.of("distributedCompleteMemberCheckMillis", "0"), Map.of())));
         assertEquals(500, ConfigAdapter.distributedCompleteMemberCheckMillis(
                 source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_MEMBER_CHECK_MILLIS", "500"))));
         assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteMemberCheckMillis(
                 source(Map.of("distributedCompleteMemberCheckMillis", "-1"), Map.of())));
     }
 
-    /** Item 55 (a): merge plans write their load to the cluster maps unless set otherwise. */
+    /** Item 55 (a), Q-55a-nl: merge plans write no load to the cluster maps unless set otherwise. */
     @Test
-    void distributedCompleteMergeLoadTrackingDefaultsToTrue() throws IOException {
-        assertTrue(ConfigAdapter.distributedCompleteMergeLoadTracking(source(Map.of(), Map.of())));
-        assertFalse(ConfigAdapter.distributedCompleteMergeLoadTracking(
-                source(Map.of("distributedCompleteMergeLoadTracking", "false"), Map.of())));
-        assertFalse(ConfigAdapter.distributedCompleteMergeLoadTracking(
-                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", "false"))));
+    void distributedCompleteMergeLoadTrackingDefaultsToFalse() throws IOException {
+        assertFalse(ConfigAdapter.distributedCompleteMergeLoadTracking(source(Map.of(), Map.of())));
+        assertTrue(ConfigAdapter.distributedCompleteMergeLoadTracking(
+                source(Map.of("distributedCompleteMergeLoadTracking", "true"), Map.of())));
+        assertTrue(ConfigAdapter.distributedCompleteMergeLoadTracking(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_MERGE_LOAD_TRACKING", "true"))));
     }
 
     /** Item 55 (a): merge plans reuse the cluster snapshot for 250 ms unless set otherwise. */
