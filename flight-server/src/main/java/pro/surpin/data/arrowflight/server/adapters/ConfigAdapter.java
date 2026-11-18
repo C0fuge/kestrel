@@ -1305,6 +1305,21 @@ public class ConfigAdapter {
      * @throws IllegalArgumentException for a negative thread or connection count
      */
     public static DuckDbSizing duckDbSizing(ConfigSource props, HostLimits host) {
+        return duckDbSizing(props, host, DuckDbSizing.RSS_OVERSHOOT_PERCENT);
+    }
+
+    /**
+     * Resolves the DuckDB threads and memory limit per connection with a given allowance for
+     * resident memory above each connection's limit (Q-52a; {@code speed} passes 100 for its
+     * node-wide DuckDB).
+     *
+     * @param props      configuration source
+     * @param host       cores and memory of the host
+     * @param rssPercent resident memory per connection in percent of its limit, at least 100
+     * @return sizing
+     * @throws IllegalArgumentException for a negative thread or connection count
+     */
+    public static DuckDbSizing duckDbSizing(ConfigSource props, HostLimits host, int rssPercent) {
         int threads = getInt("duckDbThreads", "arrowflight.duckdb.threads", 0, props);
         if (threads < 0) {
             throw new IllegalArgumentException("duckDbThreads must not be negative: " + threads);
@@ -1317,7 +1332,7 @@ public class ConfigAdapter {
         }
         String memoryLimit = getString("duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null, props);
         String dataDir = getString("dataDir", null, "/data/parquet", props);
-        return DuckDbSizing.compute(host, isObjectStore(dataDir), threads, memoryLimit, connections);
+        return DuckDbSizing.compute(host, isObjectStore(dataDir), threads, memoryLimit, connections, rssPercent);
     }
 
     /**

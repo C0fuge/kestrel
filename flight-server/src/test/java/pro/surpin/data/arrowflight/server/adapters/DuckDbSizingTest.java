@@ -76,7 +76,8 @@ class DuckDbSizingTest {
     /**
      * Regression for the laptop stand p19b (2026-10-28): under container limits 4c/8g, 8c/16g and
      * 16c/24g (-Xmx3g, direct 2g) item 19b chose 2/2/3 threads and TPC-H SF10 ran 1.35-1.7x slower
-     * than with 4; the thread floor is 4 and the memory limits stay the measured 1024/2201/3942 MiB.
+     * than with 4; the thread floor is 4. The memory limits were the measured 1024/2201/3942 MiB;
+     * since Q-52a each connection's share leaves room for ~1.5x resident memory: 1024/1467/2628 MiB.
      */
     @Test
     void standContainersGetFourThreadsAndKeepTheirMemoryLimits() {
@@ -88,12 +89,12 @@ class DuckDbSizingTest {
         DuckDbSizing c8 = DuckDbSizing.compute(new HostLimits(8, 16 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertEquals(4, c8.threads(), c8.describe());
-        assertEquals("2201MiB", c8.memoryLimit());
+        assertEquals("1467MiB", c8.memoryLimit());
         assertEquals(4, c8.connections());
         DuckDbSizing c16 = DuckDbSizing.compute(new HostLimits(16, 24 * GIB, 3 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertEquals(4, c16.threads(), c16.describe());
-        assertEquals("3942MiB", c16.memoryLimit());
+        assertEquals("2628MiB", c16.memoryLimit());
         assertEquals(4, c16.connections());
     }
 
@@ -130,9 +131,9 @@ class DuckDbSizingTest {
                 false, 0, null, 0);
         assertEquals(4, s.threads());
         assertEquals(2, s.connections());
-        // 16 - 4 - 4 - 2.4 = 5.6 GiB over 2
+        // 16 - 4 - 4 - 2.4 = 5.6 GiB over 2, with room for 1.5x RSS (Q-52a): 1.87 GiB
         long limit = limitBytes(s);
-        assertTrue(limit > 2 * GIB && limit < 3 * GIB, s.describe());
+        assertTrue(limit > 3 * GIB / 2 && limit < 2 * GIB, s.describe());
     }
 
     @Test
@@ -145,7 +146,7 @@ class DuckDbSizingTest {
                 false, 0, null, 0);
         assertEquals(16, s64.threads());
         assertEquals(4, s64.connections());
-        assertTrue(limitBytes(s64) > 90 * GIB, s64.describe());
+        assertTrue(limitBytes(s64) > 60 * GIB && limitBytes(s64) < 70 * GIB, s64.describe());
     }
 
     @Test
@@ -157,12 +158,12 @@ class DuckDbSizingTest {
         assertEquals(4, s.threads());
         DuckDbSizing roomy = DuckDbSizing.compute(new HostLimits(64, 96 * GIB, 8 * GIB, 4 * GIB),
                 false, 0, null, 0);
-        // 96 - 8 - 4 - 14.4 = 69.6 GiB over 4 = 17.4 GiB -> 16 threads
-        assertEquals(16, roomy.threads());
+        // 96 - 8 - 4 - 14.4 = 69.6 GiB over 4 = 17.4 GiB, / 1.5 for RSS (Q-52a) = 11.6 GiB -> 11 threads
+        assertEquals(11, roomy.threads());
         DuckDbSizing mid = DuckDbSizing.compute(new HostLimits(64, 48 * GIB, 8 * GIB, 4 * GIB),
                 false, 0, null, 0);
-        // 48 - 8 - 4 - 7.2 = 28.8 GiB over 4 = 7.2 GiB -> 7 threads
-        assertEquals(7, mid.threads());
+        // 48 - 8 - 4 - 7.2 = 28.8 GiB over 4 = 7.2 GiB, / 1.5 for RSS (Q-52a) = 4.8 GiB -> 4 threads
+        assertEquals(4, mid.threads());
         DuckDbSizing tiny = DuckDbSizing.compute(new HostLimits(64, 8 * GIB, 4 * GIB, 2 * GIB),
                 false, 0, null, 0);
         assertEquals(4, tiny.threads());
@@ -265,6 +266,38 @@ class DuckDbSizingTest {
         assertTrue(warning.contains("duckDbMemoryConnections"), warning);
         assertNull(DuckDbSizing.aboveJvmLimitsWarning(tight.memoryLimit(), tight.connections(),
                 tight.reservedBudgetBytes(), true));
+    }
+
+    /**
+     * Regression for Q-52a (real cluster 2026-11-16: DuckDB's RSS ran ~1.45x its memory limits):
+     * the connections' default limits together leave room for 1.5x resident memory within the
+     * budget wherever the 1 GiB floor does not apply, and the small-container floors stay.
+     */
+    @Test
+    void connectionSharesLeaveRoomForResidentMemoryAboveTheLimit() {
+        HostLimits pinned = new HostLimits(16, 64 * GIB, 8 * GIB, 8 * GIB);
+        DuckDbSizing s = DuckDbSizing.compute(pinned, false, 0, null, 0);
+        assertEquals(4, s.connections());
+        assertEquals("6553MiB", s.memoryLimit(), s.describe());
+        assertTrue(limitBytes(s) * s.connections() * DuckDbSizing.RSS_OVERSHOOT_PERCENT / 100 <= s.budgetBytes(),
+                s.describe());
+        for (int cores = 4; cores <= 128; cores *= 2) {
+            for (long gib = 16; gib <= 1024; gib *= 2) {
+                DuckDbSizing d = DuckDbSizing.compute(new HostLimits(cores, gib * GIB, gib * GIB / 8, gib * GIB / 8),
+                        false, 0, null, 0);
+                if (limitBytes(d) > DuckDbSizing.MIN_CONNECTION_BYTES) {
+                    assertTrue(limitBytes(d) * d.connections() * DuckDbSizing.RSS_OVERSHOOT_PERCENT / 100
+                            <= d.budgetBytes(), d.describe());
+                }
+            }
+        }
+        assertEquals(-200L, DuckDbSizing.connectionShare(-600, 2, 150));
+        assertEquals(1000L, DuckDbSizing.connectionShare(3000, 2, 150));
+        assertEquals(1500L, DuckDbSizing.connectionShare(3000, 2, 100), "speed: no allowance");
+        assertEquals(1500L, DuckDbSizing.connectionShare(3000, 2, 50), "never below 100 %");
+        assertEquals("1024MiB", DuckDbSizing.compute(new HostLimits(2, 6 * GIB, 3 * GIB, 2 * GIB), false, 0, null, 0)
+                .memoryLimit(), "the harness container keeps its 1 GiB (item 44)");
+        assertEquals("16g", DuckDbSizing.compute(pinned, false, 0, "16g", 0).memoryLimit(), "explicit values win");
     }
 
     @Test
@@ -379,7 +412,8 @@ class DuckDbSizingTest {
                 new DuckDbSizing.Shared(8, null).describe());
         DuckDbSizing.Shared withFallback = new DuckDbSizing.Shared(8, "12GiB", 0)
                 .withFallback(DuckDbSizing.compute(new HostLimits(16, 32 * GIB, 8 * GIB, 4 * GIB), false, 0, null, 0));
-        assertEquals(new DuckDbSizing.Shared(8, "12GiB", 0, 4, "3891MiB"), withFallback);
+        // one connection of the DuckDB-per-connection mode, with room for 1.5x RSS (Q-52a; 3891 MiB before)
+        assertEquals(new DuckDbSizing.Shared(8, "12GiB", 0, 4, "2594MiB"), withFallback);
         assertEquals(withFallback, withFallback.withBufferedConnections(0));
     }
 

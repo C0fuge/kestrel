@@ -683,14 +683,14 @@ class ConfigAdapterTest {
     void duckDbMemoryLimitDefaultsToTheHostBudgetPerConnection() throws IOException {
         HostLimits host = new HostLimits(16, 64L << 30, 8L << 30, 4L << 30);
         AppConfig auto = ConfigAdapter.getConfig(source(Map.of(), Map.of()), host);
-        // 64 - 8 - 4 - 15 % of 64 = ~42.4 GiB over 16 / 4 = 4 connections
-        assertEquals("10854MiB", auto.duckDbMemoryLimit());
+        // 64 - 8 - 4 - 15 % of 64 = ~42.4 GiB over 16 / 4 = 4 connections, / 1.5 for RSS (Q-52a)
+        assertEquals("7236MiB", auto.duckDbMemoryLimit());
         assertEquals(4, auto.duckDbThreads());
         assertEquals("8GB", ConfigAdapter.getConfig(
                 source(Map.of("duckDbMemoryLimit", "8GB"), Map.of()), host).duckDbMemoryLimit());
         assertNull(ConfigAdapter.getConfig(
                 source(Map.of("duckDbMemoryLimit", "none"), Map.of()), host).duckDbMemoryLimit());
-        assertEquals("2713MiB", ConfigAdapter.getConfig(
+        assertEquals("1809MiB", ConfigAdapter.getConfig(
                 source(Map.of("duckDbMemoryConnections", "16"), Map.of()), host).duckDbMemoryLimit());
         assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.getConfig(
                 source(Map.of("duckDbMemoryConnections", "-1"), Map.of()), host));

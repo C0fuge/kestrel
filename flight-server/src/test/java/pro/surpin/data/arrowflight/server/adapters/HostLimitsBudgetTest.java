@@ -95,6 +95,34 @@ class HostLimitsBudgetTest {
         assertNull(HostLimits.noBudgetWarning(HostLimits.SOURCE_CGROUP, 754L << 30));
     }
 
+    /**
+     * Regression for Q-52a (real cluster 2026-11-16: a server pinned to 16 cores of a 754 GB
+     * host without a cgroup memory limit sized DuckDB from the whole machine and was killed at
+     * 48 GB): the detected host memory is capped at 4 GiB per available core; a setting or a
+     * cgroup limit still wins, and a host below the cap keeps {@code source=host}.
+     */
+    @Test
+    void capsTheHostMemoryPerAvailableCore() {
+        long host = 754L << 30;
+        assertEquals(64L << 30, HostLimits.hostCap(16));
+        assertEquals(4L << 30, HostLimits.hostCap(0));
+        assertEquals(HostLimits.SOURCE_HOST_CAPPED, HostLimits.memorySource(0, host, 0, 16));
+        assertEquals(HostLimits.SOURCE_HOST, HostLimits.memorySource(0, 64L << 30, 0, 16),
+                "exactly at the cap stays host");
+        assertEquals(HostLimits.SOURCE_HOST, HostLimits.memorySource(0, 32L << 30, 0, 16));
+        assertEquals(HostLimits.SOURCE_SETTING, HostLimits.memorySource(96L << 30, host, 0, 16),
+                "an explicit budget wins over the cap");
+        assertEquals(HostLimits.SOURCE_CGROUP, HostLimits.memorySource(0, host, 128L << 30, 16),
+                "a cgroup limit wins over the cap");
+        assertEquals(HostLimits.SOURCE_HOST_CAPPED, HostLimits.memorySource(0, host, 1L << 62, 16),
+                "a cgroup limit above the host is none");
+        assertNull(HostLimits.noBudgetWarning(HostLimits.SOURCE_HOST_CAPPED, 64L << 30),
+                "16 pinned cores: 64 GiB is not warned about");
+        String warning = HostLimits.noBudgetWarning(HostLimits.SOURCE_HOST_CAPPED, 320L << 30);
+        assertNotNull(warning, "80 unpinned cores still size from 320 GiB: warn");
+        assertTrue(warning.startsWith("source=host-capped memoryMiB=327680 "), warning);
+    }
+
     /** Verifies detect() takes the budget as the memory, so the DuckDB sizing follows it. */
     @Test
     void detectUsesBudgetForSizing() {

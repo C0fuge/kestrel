@@ -49,6 +49,15 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
     /** Memory source: the machine. */
     static final String SOURCE_HOST = "host";
 
+    /** Memory source: the machine, capped at {@link #HOST_BYTES_PER_CORE} per available core (Q-52a). */
+    static final String SOURCE_HOST_CAPPED = "host-capped";
+
+    /**
+     * Most memory per available core a budget detected from the machine gets (Q-52a): a server
+     * pinned to 16 cores of a 754 GB host sizes DuckDB from 64 GiB, not from the whole machine.
+     */
+    static final long HOST_BYTES_PER_CORE = 4L << 30;
+
     /** A JVM-style size: digits and an optional k, m, g or t (binary units). */
     private static final Pattern JVM_SIZE = Pattern.compile("(\\d+)\\s*([kmgt]?)");
 
@@ -77,7 +86,8 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
     /**
      * Reads the limits of the running process (item 52): {@code memoryBudgetBytes}
      * ({@code FLIGHT_MEMORY_BUDGET}, e.g. {@code 48g}) replaces the detected memory when set, so
-     * every profile sizes DuckDB and its caches from it; else the cgroup limit, else the host's.
+     * every profile sizes DuckDB and its caches from it; else the cgroup limit, else the host's,
+     * at most {@link #HOST_BYTES_PER_CORE} per available core (Q-52a, source {@code host-capped}).
      *
      * @param props configuration source
      * @return host limits
@@ -88,22 +98,25 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
         long host = physicalMemory();
         List<String> ownCgroup = procSelfCgroup();
         long cgroup = cgroupMemoryLimit(Path.of("/sys/fs/cgroup"), ownCgroup);
-        String source = memorySource(budget, host, cgroup);
+        int cores = Runtime.getRuntime().availableProcessors();
+        String source = memorySource(budget, host, cgroup, cores);
         long memory = switch (source) {
             case SOURCE_SETTING -> budget;
             case SOURCE_CGROUP -> cgroup;
+            case SOURCE_HOST_CAPPED -> hostCap(cores);
             default -> host;
         };
         long usedHeap = usedHeap();
         if (LOGGED.compareAndSet(false, true)) {
-            LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={} usedHeapMiB={}",
-                    source, memory >> 20, host >> 20, cgroup >> 20, String.join(";", ownCgroup), usedHeap >> 20);
+            LOGGER.info("memoryBudget source={} memoryMiB={} hostMiB={} cgroupMiB={} cgroup={} usedHeapMiB={}"
+                    + " cores={}", source, memory >> 20, host >> 20, cgroup >> 20, String.join(";", ownCgroup),
+                    usedHeap >> 20, cores);
             String warning = noBudgetWarning(source, memory);
             if (warning != null) {
                 LOGGER.warn("memoryBudget=unset {}", warning);
             }
         }
-        return new HostLimits(Runtime.getRuntime().availableProcessors(), memory,
+        return new HostLimits(cores, memory,
                 Runtime.getRuntime().maxMemory(), OutboundBudget.maxDirectMemory(), usedHeap);
     }
 
@@ -123,20 +136,46 @@ public record HostLimits(int cores, long memoryBytes, long maxHeapBytes, long ma
     }
 
     /**
+     * Chooses where the memory budget comes from, capping the machine's memory at
+     * {@link #HOST_BYTES_PER_CORE} per available core (Q-52a); a setting or a cgroup limit wins.
+     *
+     * @param budget {@code memoryBudgetBytes}, 0 when unset
+     * @param host   memory of the machine, 0 when unknown
+     * @param cgroup smallest cgroup limit, 0 when none
+     * @param cores  processors available to the JVM
+     * @return {@code setting}, {@code cgroup}, {@code host-capped} or {@code host}
+     */
+    static String memorySource(long budget, long host, long cgroup, int cores) {
+        String source = memorySource(budget, host, cgroup);
+        return SOURCE_HOST.equals(source) && host > hostCap(cores) ? SOURCE_HOST_CAPPED : source;
+    }
+
+    /**
+     * Returns the most memory a budget detected from the machine gets with the given cores.
+     *
+     * @param cores processors available to the JVM
+     * @return {@link #HOST_BYTES_PER_CORE} times the cores, at least one core's worth
+     */
+    static long hostCap(int cores) {
+        return HOST_BYTES_PER_CORE * Math.max(1, cores);
+    }
+
+    /**
      * Returns the warning for a big host without a budget: a server pinned to a few cores of a
      * large machine (a systemd scope on cgroup v1 gets no memory controller) would otherwise size
      * DuckDB from the whole machine.
      *
      * @param source where the memory came from
-     * @param memory memory in bytes
+     * @param memory memory in bytes (after the per-core cap for {@code host-capped})
      * @return key=value pairs with a hint, or null when there is nothing to warn about
      */
     static String noBudgetWarning(String source, long memory) {
-        if (!SOURCE_HOST.equals(source) || memory <= BIG_HOST_BYTES) {
+        boolean fromHost = SOURCE_HOST.equals(source) || SOURCE_HOST_CAPPED.equals(source);
+        if (!fromHost || memory <= BIG_HOST_BYTES) {
             return null;
         }
-        return "source=host memoryMiB=" + (memory >> 20) + " thresholdMiB=" + (BIG_HOST_BYTES >> 20)
-                + " hint=DuckDB and its caches are sized from the whole machine;"
+        return "source=" + source + " memoryMiB=" + (memory >> 20) + " thresholdMiB=" + (BIG_HOST_BYTES >> 20)
+                + " hint=DuckDB and its caches are sized from the machine's memory;"
                 + " set memoryBudgetBytes (FLIGHT_MEMORY_BUDGET, e.g. 48g) or run the server in a cgroup"
                 + " with a memory limit";
     }

@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Q-52a (core, maintainer's answer 2026-11-18; changes defaults): without `memoryBudgetBytes` or a cgroup memory limit
+  the detected machine memory is capped at 4 GiB per core available to the JVM (startup line `memoryBudget
+  source=host-capped`; 16 pinned cores of a 754 GB host size from 64 GiB); the WARN `memoryBudget=unset` now fires
+  when that still exceeds 64 GiB. The default per-connection DuckDB `memory_limit` is the budget / connections / 1.5,
+  leaving room for the measured ~1.45x resident memory (e.g. 16 cores / 64 GiB / -Xmx8g / direct 4g: 7236 instead of
+  10854 MiB; DuckDB threads follow the lower limit, 1 per GiB above 4). The 1 GiB / 512 MiB floors, the reserved-budget
+  cap and `speed`'s node-wide limit are unchanged; explicit `duckDbMemoryLimit` still wins.
 - Item 55 (c) step 6 (lane 6): distributed complete mode and batches of copies now merge a GROUP BY on an aliased
   `strftime(<column>, '<format>')` or `time_bucket(<width>, <column>)` key (also next to `avg`; a CAST of a column works
   too). jOOQ knows neither function: a query calling them is parsed with unknown functions allowed only when every

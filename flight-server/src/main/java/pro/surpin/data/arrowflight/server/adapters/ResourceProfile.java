@@ -122,7 +122,9 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
             // Sized with the heap and direct memory the JVM really uses, not their limits (Q-40a): with
             // -Xmx3g / direct 2g in 8 GB the limit held no S3 file cache, warm TPC-H SF10 75.8 vs 15.9 s.
             HostLimits reserved = speedReservation(host);
-            long mib = speedMemoryBytes(reserved, ConfigAdapter.duckDbSizing(raw, reserved)) >> 20;
+            // One DuckDB, not one per connection: sized from the split without the per-connection
+            // allowance for resident memory above the limits (Q-52a), as measured on the stand.
+            long mib = speedMemoryBytes(reserved, ConfigAdapter.duckDbSizing(raw, reserved, 100)) >> 20;
             b.offer(mib + "MiB", "duckDbMemoryLimit", "arrowflight.duckdb.memoryLimit", null);
         }
         if (shared || hdfsDataDir(raw)) {

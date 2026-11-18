@@ -293,9 +293,10 @@ Key properties (see `AppConfig.java` / `ConfigAdapter.java` for the full list):
 
 Every worker connection is a DuckDB instance of its own. Unless set, `duckDbThreads` and
 `duckDbMemoryLimit` follow the host: the DuckDB budget is the memory of the container (cgroup
-`memory.max`) or machine minus `-Xmx`, the direct memory limit and 15 % headroom; each connection
-gets budget / `duckDbMemoryConnections` (`DUCKDB_MEMORY_CONNECTIONS`, default cores / threads, at
-least 2, where threads here count as cores / 4 between 2 and 16) as `memory_limit`, at least
+`memory.max`) or machine (at most 4 GiB per available core, see below) minus `-Xmx`, the direct memory limit
+and 15 % headroom; each connection gets budget / `duckDbMemoryConnections` / 1.5 (`DUCKDB_MEMORY_CONNECTIONS`,
+default cores / threads, at least 2, where threads here count as cores / 4 between 2 and 16; the 1.5 leaves room
+for DuckDB's resident memory above its `memory_limit`, measured ~1.45x) as `memory_limit`, at least
 1 GiB and at most 80 % of the memory, but never more than its share (budget / connections) of the budget left by
 what the JVM really uses (heap min(-Xmx, max(1 GiB, 2 x heap in use)), direct min(limit, 1 GiB + 25 %)), and never
 less than 512 MiB (items 44, 46: the connections' limits add up within that budget; only the 512 MiB floor can
@@ -309,9 +310,12 @@ inputs and the chosen values.
 may use: it replaces the cgroup / machine memory above for every resource profile, so DuckDB's limits and with them
 its external file cache are sized from it (startup line `memoryBudget source=setting`). Set it when the server shares a
 big machine without a cgroup memory limit (e.g. a `systemd-run --user --scope -p MemoryMax=...` scope on cgroup v1
-gets no memory controller): without it a start with `source=host` above 64 GiB logs one WARN `memoryBudget=unset`.
+gets no memory controller). Without a setting or a cgroup limit, the machine's memory counts as at most 4 GiB per
+core available to the JVM (16 pinned cores of a 754 GB host: 64 GiB; startup line `memoryBudget source=host-capped`);
+a start sized from more than 64 GiB that way logs one WARN `memoryBudget=unset`.
 DuckDB's resident memory can exceed the sum of its `memory_limit`s by about half again (allocator, file cache held
-in each connection's pool), so leave room for that within the budget.
+in each connection's pool): the default per-connection limits leave that room (budget / connections / 1.5); an
+explicit `memoryBudgetBytes` or `duckDbMemoryLimit` should too. `speed`'s one node-wide DuckDB is sized as before.
 
 `fileStatsPruningMaxFiles` (default 1024, 0 = off): a complete answer of a plain single-table query over a directory
 table reads only the Parquet files whose footer min/max of signed integer and date columns its WHERE clause can match

@@ -12,7 +12,10 @@ import java.util.regex.Pattern;
  * capped at one per GiB of that share. A connection gets at least 1 GiB, but never more than its
  * share of the budget left by the JVM's real reservation (item 44: the heap and direct memory the
  * JVM can really use, as under {@code speed}; item 46: the connections' limits together stay
- * within that budget), and never less than 512 MiB. Explicit settings always win.
+ * within that budget), and never less than 512 MiB. Each connection's share of the budget leaves
+ * room for the ~1.5x resident memory DuckDB was measured to use above its {@code memory_limit}
+ * (Q-52a); the 1 GiB floor and the reserved-budget cap are unchanged.
+ * Explicit settings always win.
  *
  * @param threads             DuckDB threads per connection
  * @param memoryLimit         DuckDB {@code memory_limit} per connection, null = DuckDB's default
@@ -53,6 +56,13 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
     /** Memory per DuckDB thread for joins and aggregates (DuckDB's guidance). */
     static final long BYTES_PER_THREAD = 1L << 30;
 
+    /**
+     * Resident memory of a DuckDB connection in percent of its {@code memory_limit} that the split
+     * of the budget between connections allows for (Q-52a: ~1.45x measured with httpfs and the
+     * external file cache, item 52 (a)).
+     */
+    static final int RSS_OVERSHOOT_PERCENT = 150;
+
     /** Share of the host memory kept free for the OS, metaspace, thread stacks and native libraries. */
     static final int HEADROOM_PERCENT = 15;
 
@@ -90,6 +100,24 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
      */
     public static DuckDbSizing compute(HostLimits host, boolean objectStore, int explicitThreads,
             String explicitMemoryLimit, int explicitConnections) {
+        return compute(host, objectStore, explicitThreads, explicitMemoryLimit, explicitConnections,
+                RSS_OVERSHOOT_PERCENT);
+    }
+
+    /**
+     * Computes the sizing with a given allowance for resident memory above each connection's
+     * limit: {@code speed} sizes its one node-wide DuckDB from the split without it (100).
+     *
+     * @param host                 host limits
+     * @param objectStore          whether the data directory is an object store read over HTTP
+     * @param explicitThreads      configured {@code duckDbThreads}, 0 = unset
+     * @param explicitMemoryLimit  configured {@code duckDbMemoryLimit}, null or blank = unset
+     * @param explicitConnections  configured {@code duckDbMemoryConnections}, 0 = unset
+     * @param rssPercent           resident memory per connection in percent of its limit, at least 100
+     * @return sizing
+     */
+    public static DuckDbSizing compute(HostLimits host, boolean objectStore, int explicitThreads,
+            String explicitMemoryLimit, int explicitConnections, int rssPercent) {
         int cores = Math.max(1, host.cores());
         int coreThreads = Math.min(MAX_THREADS, Math.max(MIN_THREADS, cores / 4));
         int shareThreads = Math.min(MAX_THREADS, Math.max(SHARE_MIN_THREADS, cores / 4));
@@ -113,7 +141,7 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
             memoryLimit = null;
             limitBytes = null;
         } else {
-            long perConnection = Math.max(MIN_CONNECTION_BYTES, budget / connections);
+            long perConnection = Math.max(MIN_CONNECTION_BYTES, connectionShare(budget, connections, rssPercent));
             perConnection = Math.min(perConnection, memory / 100 * MAX_CONNECTION_PERCENT);
             // Never above this connection's share of what the JVM's real reservation leaves (items
             // 44, 46), at least 512 MiB: the full -Xmx3g + direct 2g left ~100 MiB in 6 GB and the
@@ -325,6 +353,19 @@ public record DuckDbSizing(int threads, String memoryLimit, int coreThreads, int
      */
     static long withinReservedShare(long bytes, long budget, int connections) {
         return Math.min(bytes, Math.max(MIN_USABLE_BYTES, budget / Math.max(1, connections)));
+    }
+
+    /**
+     * Returns one connection's {@code memory_limit} share of a budget split between connections,
+     * leaving room for the resident memory above the limit (default {@link #RSS_OVERSHOOT_PERCENT}).
+     *
+     * @param budget      budget in bytes, may be negative
+     * @param connections connections expected at once
+     * @param rssPercent  resident memory per connection in percent of its limit, at least 100
+     * @return the share, negative when the budget is
+     */
+    static long connectionShare(long budget, int connections, int rssPercent) {
+        return budget / Math.max(1, connections) / Math.max(100, rssPercent) * 100;
     }
 
     /**
