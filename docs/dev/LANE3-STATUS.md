@@ -884,3 +884,4 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
   (+1), `ConfigAdapterTest` (+1); local Distributed*/ClusterMemberLoss*/PeerStream*/SharedDatabase* green. CI on the
   branch: Dev CI fast 44243247868 green, Service cluster 44243265348 green. No `package=true` yet (low-priority item,
   the core lane / next package carries it). Next: stand numbers for 56; no other open lane 3 item.
+  Full Dev CI on `main` dispatched: 44246657183 (running at session end; next session: confirm green, else fix first).
