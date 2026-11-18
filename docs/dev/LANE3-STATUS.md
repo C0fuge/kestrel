@@ -893,3 +893,5 @@ Q5. (2026-11-17, lane 3, item 55) **Default of `distributedAggregateMinBytes`.**
   `ITEM 56 DONE` for the stand. No code change; waiting for the stand's numbers for 55 (b) and 56.
 - 2026-11-18 14:04-14:08Z (lane 3 session): no open lane 3 item. Newest Dev CI on `main` 44311547842 (06d6468b) green.
   No code change; waiting for the stand's numbers for 55 (b) and 56 (Q5 still open).
+- 2026-11-18 18:03-18:06Z (lane 3 session): no open lane 3 item. Newest Dev CI on `main` 44311547842 (06d6468b) green;
+  item 57 (core) fixed without touching 55 (b). No code change; waiting for the stand's numbers for 55 (b) and 56.
