@@ -257,10 +257,10 @@ FLIGHT_TLS_CERT=... FLIGHT_TLS_KEY=... FLIGHT_BEARER_TOKEN=... \
 `-DresourceProfile=speed` (or `FLIGHT_RESOURCE_PROFILE=speed`) turns on, as defaults, what was measured as faster;
 `balanced` (default) supplies `duckDbSharedDatabase=true` (item 53: one DuckDB per node, threads capped by
 `duckDbSharedMaxThreads` (8), one node-wide memory limit within the budget; `-DduckDbSharedDatabase=false` restores a
-DuckDB per connection), `duckDbExternalFileCache=true` on an `hdfs://` data dir (Q11, item 39;
-also under `speed` without the shared DuckDB) and `duckDbPreserveInsertionOrder=false` on a remote data dir (any
-scheme but `file://`: HDFS, S3, lakeFS, plugins; Q54-1, item 54: one full HDFS scan +18 / +33 % with a DuckDB per
-connection, +0-4 % with the shared one; local data dirs keep the file order, item 16). A setting given as `-D` or in the environment (or in a plugin's
+DuckDB per connection) and `duckDbExternalFileCache=true` on an `hdfs://` data dir (Q11, item 39;
+also under `speed` without the shared DuckDB); it keeps the file order on every data dir (item 57: with the order
+dropped DuckDB ran selective filters over remote Parquet up to 1.7x slower, TPC-H q14 through StarRocks 2x;
+`-DduckDbPreserveInsertionOrder=false` drops it for full scans, +0-4 % with the shared DuckDB). A setting given as `-D` or in the environment (or in a plugin's
 `<ns>.properties`) wins over the profile; the profile wins over the bundled `arrowflight.properties`. Startup line
 `resourceProfile profile=speed <key>=<value> ...` (operator values marked `(explicit)`).
 
@@ -276,8 +276,8 @@ connection, +0-4 % with the shared one; local data dirs keep the file order, ite
 | `endpointsPerServer` | 4 | partial-mode clients get 4 streams per node |
 | `flightBackpressureThresholdBytes` | 16 MiB (bundled default 256 MiB) | needed with several endpoints per node (direct memory) |
 
-**Row order under `speed` (and `balanced` on a remote data dir):** a query without ORDER BY returns its rows in any
-order (they may differ from run to run and from `balanced` on a local data dir, which keeps the file order); counts, aggregates and ORDER BY answers are unchanged. Clients
+**Row order under `speed`:** a query without ORDER BY returns its rows in any order (they may differ from run to
+run and from `balanced`, which keeps the file order); counts, aggregates and ORDER BY answers are unchanged. Clients
 that rely on the file order should add ORDER BY, or start the server with `-DduckDbPreserveInsertionOrder=true` (or
 `DUCKDB_PRESERVE_INSERTION_ORDER=true`), which keeps the rest of `speed` (a full scan on S3 then reads about 20 % slower: 1118 -> 910 MB/s in item 27).
 

@@ -12,8 +12,8 @@ import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 
 /**
  * Resource profile of {@code resourceProfile} ({@code FLIGHT_RESOURCE_PROFILE}): {@code balanced}
- * (default) supplies {@code duckDbSharedDatabase=true} (item 53), {@code duckDbExternalFileCache=true}
- * on an {@code hdfs://} data dir and {@code duckDbPreserveInsertionOrder=false} on a remote data dir (Q54-1); {@code speed} trades memory and CPU for speed by supplying defaults
+ * (default) supplies {@code duckDbSharedDatabase=true} (item 53) and {@code duckDbExternalFileCache=true}
+ * on an {@code hdfs://} data dir; {@code speed} trades memory and CPU for speed by supplying defaults
  * for the settings measured as faster. A setting given as a system property or in the
  * environment always wins over the profile; the profile wins over {@code arrowflight.properties}.
  *
@@ -77,8 +77,8 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
     }
 
     /**
-     * Builds the {@code balanced} profile: the node's shared DuckDB (item 53), on HDFS its
-     * external file cache and on a remote data dir scans without the file order (Q54-1). With a DuckDB per Flight thread every client added an instance with
+     * Builds the {@code balanced} profile: the node's shared DuckDB (item 53) and, on HDFS, its
+     * external file cache. With a DuckDB per Flight thread every client added an instance with
      * its own threads, caches and memory limit: on the real cluster (16 cores) point load fell
      * from 142 q/s at c8 to 28 at c128 with RSS at 22 GB, and the HDFS point cell asked the
      * DataNode for short-circuit fds 0.14 to 0.44 times per query as clients grew; the shared
@@ -95,13 +95,10 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         if (hdfsDataDir(raw)) {
             offerHdfsFileCache(b);
         }
-        if (remoteDataDir(raw)) {
-            // Q54-1 (item 54): one full lineitem scan on HDFS with the order dropped +18 / +33 % with a
-            // DuckDB per connection (run 44110283975, 756 / 664 -> 896 / 881 MB/s), +0-4 % with the shared
-            // DuckDB (run 44147368932), same rows and checksum. A local data dir keeps the file order
-            // (item 16: no gain there).
-            offerUnorderedScan(b);
-        }
+        // Item 57: balanced keeps the file order on every data dir. Q54-1 had dropped it on remote data
+        // dirs for +0-4 % on full scans with the shared DuckDB, but DuckDB 1.5.6 then ran selective filters
+        // over remote Parquet up to 1.7x slower: TPC-H q14 through StarRocks 1.79 -> 3.62 s; q14's month of
+        // lineitem on S3 2.1 vs 3.2 s, q15's quarter 2.1 vs 3.4 s, a full 3-column scan 4.9 vs 4.1 s.
         return new ResourceProfile(BALANCED, b.defaults, b.explicit);
     }
 
@@ -144,7 +141,8 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
         // Parallel scan threads hand their batches on as they finish instead of in file order (rows of a
         // query without ORDER BY come in any order, as upstream's default): one full lineitem read on S3
         // 910 -> 1118 MB/s, same answers, same peak memory (item 27, scan-perf runs 41585815577, 41587292385).
-        offerUnorderedScan(b);
+        b.offer("false", "duckDbPreserveInsertionOrder", "arrowflight.duckdb.preserveInsertionOrder",
+                "DUCKDB_PRESERVE_INSERTION_ORDER");
         b.offer("true", "flightZeroCopyWrites", "arrowflight.flight.zeroCopyWrites", "FLIGHT_ZERO_COPY_WRITES");
         b.offer(Integer.toString(SPEED_ENDPOINTS_PER_SERVER), "endpointsPerServer",
                 "arrowflight.cluster.endpointsPerServer", "FLIGHT_ENDPOINTS_PER_SERVER");
@@ -164,34 +162,6 @@ public record ResourceProfile(String name, Map<String, String> defaults, Map<Str
      */
     static boolean hdfsDataDir(ConfigSource raw) {
         return ConfigAdapter.isHdfs(raw.lookup(List.of("dataDir"), List.of()).orElse(null));
-    }
-
-    /**
-     * Tells whether the data dir is remote: a URI with a scheme other than {@code file}, such as
-     * {@code hdfs://}, {@code s3://} or a plugin's scheme ({@code lakefs://}, ...).
-     *
-     * @param raw configuration source without profile defaults
-     * @return true for a remote data dir, false for a local path, a file:// URI or no data dir
-     */
-    static boolean remoteDataDir(ConfigSource raw) {
-        String dataDir = raw.lookup(List.of("dataDir"), List.of()).orElse(null);
-        if (dataDir == null) {
-            return false;
-        }
-        int colon = dataDir.indexOf("://");
-        return colon > 0 && !"file".equalsIgnoreCase(dataDir.substring(0, colon));
-    }
-
-    /**
-     * Supplies {@code duckDbPreserveInsertionOrder=false}: parallel scan threads hand their batches
-     * on as they finish, so rows of a query without ORDER BY come in any order (counts, aggregates
-     * and ORDER BY answers are unchanged).
-     *
-     * @param b profile builder
-     */
-    private static void offerUnorderedScan(Builder b) {
-        b.offer("false", "duckDbPreserveInsertionOrder", "arrowflight.duckdb.preserveInsertionOrder",
-                "DUCKDB_PRESERVE_INSERTION_ORDER");
     }
 
     /**

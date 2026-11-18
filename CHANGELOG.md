@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 57 (core): `resourceProfile=balanced` keeps the file order again on every data dir (Q54-1's
+  `duckDbPreserveInsertionOrder=false` on remote data dirs is no longer a default). With the order dropped DuckDB 1.5.6
+  ran selective filters over remote Parquet up to 1.7x slower: TPC-H q14 through StarRocks 1.79 -> 3.62 s (SF10), q15
+  +18 %; local repro on S3 (SF10-shaped lineitem, partial mode) q14's month 3.1 -> 2.1 s, q15's quarter 3.3 -> 2.1 s, a
+  full 3-column scan 4.1 -> 4.9 s. `-DduckDbPreserveInsertionOrder=false` still drops the order; `speed` unchanged.
 - Item 56 (lane 3): a merged plain scan under `distributedComplete` keeps at most two endpoint streams per node open at a
   time (the next opens once one has been read) instead of opening all at once: concurrent full scans no longer fill the
   shared DuckDB's memory with endpoint scans waiting for their reader (stand: an endpoint stream failed with `INTERRUPT
