@@ -23,6 +23,8 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-18 03:50 - answers Q-52a / Q-52b / Q-51a (core lane, small).** **Q-52a: options (2) + (3)** - on a host without a cgroup limit cap the detected budget at 4 GiB per available core (16 pinned cores -> 64 GiB; `memoryBudgetBytes` / a cgroup limit still win; start line `memoryBudget source=host-capped`), and size per-connection DuckDB limits with the measured ~1.5x RSS overshoot. **Q-52b: keep the cap default** (min(budget/4, 8 GiB)). **Q-51a:** marten reads in partial mode (its docs), nothing to do. Then the core lane packages once 54, 55(a), 55(c) are DONE (lanes 4/5/6).
+
 > **Maintainer, 2026-11-17 19:20 - split:** item 52(b) (why a streaming aggregate over the 1.27 TB table needs > 48 GB; cap it) moved to lane 6; the core lane keeps 52(a) (`memoryBudgetBytes`, WARN). Package once 52(a)/(b), 53, 54, 55(a)/(b)/(c) are each DONE.
 
 > **ITEM 52(a) DONE 183a1775 (2026-11-17, core lane; Dev CI 44111204306 green).** New setting `memoryBudgetBytes`
