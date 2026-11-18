@@ -76,8 +76,8 @@ jobs:
           BEFORE_REF: ${{ inputs.before_ref }}
         run: |
           set -euo pipefail
-          git fetch -q origin "$BEFORE_REF"
-          git worktree add -q "$RUNNER_TEMP/before-src" FETCH_HEAD
+          git fetch -q --unshallow origin
+          git worktree add -q --detach "$RUNNER_TEMP/before-src" "$(git rev-parse --verify "$BEFORE_REF^{commit}")"
           (cd "$RUNNER_TEMP/before-src" && ./mvnw -q install -pl flight-server -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
           mkdir -p "$RUNNER_TEMP/jars-before"
           cp -r "$RUNNER_TEMP/before-src/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" \
