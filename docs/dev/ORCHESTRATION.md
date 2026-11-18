@@ -5,7 +5,7 @@ ALL DONE 2026-11-18T17:58Z (restored; withdrawn 2026-11-17T15:58Z for items 52-5
 06d6468b17c5 as default; egret FRESH 06d6468b17c5 DONE. Still waiting only for the maintainer's real-cluster rerun:
 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-18T20:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T21:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **egret FRESH 06d6468b17c5 DONE** (44335959845 + rereport 44362838876; upstream native `47c6c7d95db0`, new head):
@@ -65,6 +65,7 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 06d6468b17c5: ACCEPT SHIP (44321703096).
 
 ## History
+- 2026-11-18T21:58Z: ALL DONE holds; only core no-open-item lock/unlock (21:41Z) and catalogs no-open-item note (21:21Z); main green (44311547842), no new CI, services or pre-releases; marten finish-mode session 21:41Z nothing new; heron/egret unchanged (egret idle 21:26Z); no stale locks.
 - 2026-11-18T20:58Z: ALL DONE holds; only catalogs no-open-item note (20:21Z); main green (44311547842), no new CI, services or pre-releases; heron session 338 nothing open; marten/egret unchanged; no stale locks.
 - 2026-11-18T19:58Z: ALL DONE holds; only lane no-open-item notes (plugins 19:11Z, catalogs 19:20Z); main green (44311547842), no new CI, services or pre-releases; heron session 337 finish mode nothing open; marten/egret unchanged; no stale locks.
 - 2026-11-18T18:58Z: ALL DONE holds; only lane no-open-item notes (plugins, catalogs, lane 3); main green (44311547842), no new CI, services or pre-releases; marten/heron/egret unchanged since 17:51Z; no stale locks.
@@ -104,4 +105,3 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 2026-11-16T14:57Z: no change: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron idle on the patched-Trino question; lane 3 / catalogs (session 83) nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T13:58Z: no change in blockers: 6f0aa5a026fa still not in marten m4-assets (no marten session since 12:41Z); heron session 305 closed the q01 watch (43870753170, no regression), 306 idle on the patched-Trino question; plugins/catalogs nothing open; no new CI runs or pre-releases; locks free; egret idle.
 - 2026-11-16T12:58Z: egret FRESH 6f0aa5a026fa DONE (43840086547 + rereport 43861228344; 22/22, 0 errors, no item 51 cost; local small ADBC c1 speed/balanced 1.26 carried over, larger); marten finish-mode session 12:41Z stopped again (6f0aa5a026fa still not in m4-assets); heron session 304 A/B: d2e27119fda4 = deafc861cce3, new session lock 12:53Z, connector-compare 43870753170 running; kestrel no code/CI change; no stale locks.
-- 2026-11-16T11:58Z: no kestrel code/CI change (catalogs session 80 nothing open); marten finish-mode session 11:42Z again stopped: 6f0aa5a026fa still not in m4-assets; heron session 304 server A/B (43852765801) still running, lock 10:51Z active; egret FRESH 6f0aa5a026fa run 43840086547 finished, raw results committed 11:49Z, FRESH-6f0aa5a026fa.md not yet written; no stale locks.
