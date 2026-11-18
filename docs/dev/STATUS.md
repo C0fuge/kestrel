@@ -23,6 +23,8 @@
 
 ## Next steps (one per session)
 
+> **Maintainer, 2026-11-18 15:50 - ITEM 57 (core): TPC-H q14 2x slower in the default profile through the StarRocks connector.** marten's same-CPU compare (EPYC 7763, SF10, partial-mode scans from StarRocks, 22/22 correct): q14 1.79 s on `6f0aa5a026fa` -> 3.62 s on `36f3302321ba` (+102 %; slower on every runner), q15 +18 %, q04 +11 %; the speed profile is on par, the sum is 3 % faster. q14 = lineitem join part, one month of l_shipdate; StarRocks sends partial-mode scans of lineitem (date range filter) and part. Suspects in the default (balanced) profile between those builds: item 53 (balanced on the node's shared DuckDB: threads / connections per scan), Q54-1 (preserve_insertion_order=false on remote dirs), 52(b) cache cap / Q-52a budget sizing (smaller per-connection memory_limit), 55(b) (distributedAggregateMinBytes). marten is bisecting over f4feb0d5e404 / 5f02e5b35611 (in its m4-assets) - read its Open questions. Reproduce with partial-mode scans of q14's shapes in balanced (S3 cell), find the cause, fix without losing the items' gains; write `ITEM 57 DONE <sha>` with numbers and package.
+
 > **Core next step (2026-11-18T07:45Z):** none open. Package run 44253203263 (`pkg/36f33023` = `main` 36f33023) green
 > with Service cluster 44255135230, hdfs 44255139047, security 44255142307, stores 44255146545 -> pre-release
 > **`server-1.0.0-36f3302321ba`** (7 assets, published 07:17Z) carries 52(b), 54, 55(a)/(c), Q-52a and 56: the build for
