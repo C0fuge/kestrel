@@ -4561,3 +4561,6 @@ S3 slowdown item below stays open for then).
   unit tests green (plugin-dir tests need `package`); full Dev CI 44211784971 green. No package (after 54, 55(a),
   55(c)). Lock released.
 - 2026-11-18T01:40Z (lane 4, session 105): ITEM 54 DONE f1ad5b22 - Q54-1: `resourceProfile=balanced` defaults `duckDbPreserveInsertionOrder=false` on remote data dirs (core change, maintainer exception; golden `duckdb-setup.txt` updated in 5f02e5b3). Fast tier 44214318641 green; push Dev CI on main 44215691965. The core lane can package. Details in CATALOGS-STATUS.md.
+- 2026-11-18T04:40Z (lane 5): package run 44231671868 (`package=true`, `pkg/5f02e5b3` = `main` 5f02e5b3) green;
+  pre-release `server-1.0.0-5f02e5b35611` is the one for the maintainer's real-cluster rerun of item 55 (a) (includes
+  the 55 (a) defaults a3a7f029, Q54-1 and Q-52a; goal p99 <= 1.5x speed, scans >= 0.9x). Details in LANE5-STATUS.md.

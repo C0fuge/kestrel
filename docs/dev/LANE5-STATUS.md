@@ -2,7 +2,13 @@
 
 ## Next steps
 
-> **Lane 5 next step (2026-11-18T03:40Z):** FIRST read the package run 44231671868 (`package=true` on branch
+> **Lane 5 next step (2026-11-18T04:40Z):** waiting for the maintainer. Package run 44231671868 green; pre-release
+> `server-1.0.0-5f02e5b35611` (`main` 5f02e5b3) is the one for the real-cluster rerun of 55 (a) (goal p99 <= 1.5x
+> speed, scans >= 0.9x; CI-cell numbers in the 01:20Z note below). When the maintainer's numbers meet the goal write
+> `ITEM 55(a) DONE <sha>` and `LANE 5 DONE`; otherwise look at the cell they name. Until then later sessions stop early
+> (first check that the latest full Dev CI on `main` touching lane 5 code is green).
+
+> ~~**Lane 5 next step (2026-11-18T03:40Z):**~~ (done: package green) FIRST read the package run 44231671868 (`package=true` on branch
 > `pkg/5f02e5b3` = `main` 5f02e5b3, the newest code commit; includes the 55 (a) defaults a3a7f029). The earlier package
 > run 44214383193 was cancelled at 01:25Z by lane 4's push to `main` (same concurrency group), hence the `pkg/` branch;
 > `main`'s push run 44215691965 on 5f02e5b3 is green. Red = fix it first; green = its pre-release is the one for the
@@ -149,3 +155,6 @@
 - 2026-11-18T03:36-03:40Z (lane 5): package run 44214383193 was cancelled by lane 4's push to `main`; `main`'s push
   run 44215691965 (5f02e5b3, includes 55 (a)) green. Re-dispatched `package=true` on `pkg/5f02e5b3` as 44231671868
   (pending). Item 55 (a) waits for that pre-release and the maintainer's real-cluster rerun.
+- 2026-11-18T04:35-04:45Z (lane 5): package run 44231671868 on `pkg/5f02e5b3` green (build, service gate,
+  package); pre-release `server-1.0.0-5f02e5b35611` is the one for the maintainer's real-cluster rerun (noted in
+  `STATUS.md` Log). Item 55 (a) waits for that rerun.
