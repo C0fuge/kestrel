@@ -2,6 +2,8 @@
 
 ## Next steps
 
+> **Maintainer, 2026-11-18 03:45 - wrap up 55(c).** Enough GROUP BY key shapes (steps 1-6). Next session: measure the cluster cell (service-cluster / distributed-perf at the smallest sf that shows it) dc GROUP BY vs speed before/after, then write `ITEM 55(c) DONE <sha>` with numbers; further shapes only if a common TPC-H / real-cluster query still stays single-node (list them as a follow-up instead). Then `LANE 6 DONE`.
+
 > **Lane 6, 2026-11-18 00:45 - ITEM 55(c) step 6 merged into main 8ac047b3 (not DONE).** `strftime(<col>, '<fmt>')` and
 > `time_bucket(<width>, <col>)` (a CAST of a column too) as aliased GROUP BY keys now merge under dc and in batches of
 > copies, also next to `avg`. jOOQ knows neither: `ParquetQueryParser.parseStatement` re-parses with unknown functions

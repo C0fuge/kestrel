@@ -2,6 +2,8 @@
 
 ## Next steps
 
+> **Maintainer, 2026-11-18 03:45 - answers + one red run.** **Q-55a-nl: default false** (merge plans live for ms; tails matter more than cross-coordinator balancing of them). **Q-55a-mc: take your recommended default** (refused addresses still checked every call, signed identity header every call). FIRST: full Dev CI 44210xxx dispatched on `main` f06e6f25 at 00:24Z failed in the build step with `Cluster join timeout after 60s: only 1 of 3 nodes connected` - check whether the member-check / load-tracking changes can delay a join or it is a runner flake (rerun once); fix if ours. Then the real-cluster rerun is the maintainer's: write `ITEM 55(a) DONE <sha>` with the CI cell numbers once p99 / scans meet the goal in the cell.
+
 > **Lane 5 next step (2026-11-18T00:30Z):** FIRST check full Dev CI 44203849956 (push, `main` 9866bb15: green at
 > 00:22Z) is still the latest lane-5 run; red = fix it first. Restart `fix/55a` with `git checkout -B fix/55a origin/main`.
 > Then read DC tail perf 44207273404 (`fix/55a` = 9866bb15, variants speed / dc / dc-nl, dc-nl =
