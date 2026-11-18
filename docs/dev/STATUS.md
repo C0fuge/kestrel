@@ -31,7 +31,7 @@
 > (sized from the split without the factor, 4402 MiB in tpch-perf's 8 GB unchanged) stay. The cluster run's shape
 > (16 cores, -Xmx8g, direct 8g) now gets 4 x 6553 MiB (~39 GiB RSS at 1.5x, under the 48 GB watchdog). Side effect:
 > DuckDB threads follow the lower limit (1 per GiB above 4): e.g. 64 cores / 96 GiB 16 -> 11, 48 GiB 7 -> 4; laptop
-> stand 8c/16g 2201 -> 1467 MiB, 16c/24g 3942 -> 2628 MiB. Q-52a / Q-51a closed (Q-52b: lane 6's, answered keep). Next: package once 54,
+> stand 8c/16g 2201 -> 1467 MiB, 16c/24g 3942 -> 2628 MiB. Full Dev CI 44211784971 green (main f2f7832f). Q-52a / Q-51a closed (Q-52b: lane 6's, answered keep). Next: package once 54,
 > 55(a), 55(c) are DONE (lanes 4/5/6); no other open core item.
 
 > **Maintainer, 2026-11-18 03:50 - answers Q-52a / Q-52b / Q-51a (core lane, small).** **Q-52a: options (2) + (3)** - on a host without a cgroup limit cap the detected budget at 4 GiB per available core (16 pinned cores -> 64 GiB; `memoryBudgetBytes` / a cgroup limit still win; start line `memoryBudget source=host-capped`), and size per-connection DuckDB limits with the measured ~1.5x RSS overshoot. **Q-52b: keep the cap default** (min(budget/4, 8 GiB)). **Q-51a:** marten reads in partial mode (its docs), nothing to do. Then the core lane packages once 54, 55(a), 55(c) are DONE (lanes 4/5/6).
@@ -4555,3 +4555,8 @@ S3 slowdown item below stays open for then).
   f06e6f25) was SpotBugs NP in `ParquetQueryParser` (lane 6 fixed it in 6c8f66de; the "Cluster join timeout" in that log
   is an expected exception of `HadoopArrowFlightServerUnitTest`). Full tier on `fix/55a` 44210325758 green, DC tail perf
   44210328551 (dc meets the item's goal on the CI cell). Details in LANE5-STATUS.md.
+- 2026-11-18T01:20Z (core lane): Q-52a done (c9d9b4f4, maintainer's answer (2) + (3)): host-detected memory capped at
+  4 GiB per available core (`memoryBudget source=host-capped`), default per-connection DuckDB limits = budget /
+  connections / 1.5 (floors, reserved cap, `speed` unchanged; threads follow the lower limit). Local flight-server
+  unit tests green (plugin-dir tests need `package`); full Dev CI 44211784971 green. No package (after 54, 55(a),
+  55(c)). Lock released.
