@@ -23,6 +23,17 @@
 
 ## Next steps (one per session)
 
+> **Q-52a DONE e8e59e49 (2026-11-18, core lane).** Without `memoryBudgetBytes` or a cgroup limit, `HostLimits.detect()`
+> caps the machine memory at 4 GiB per available core (`memoryBudget source=host-capped ... cores=16`: 754 GB host,
+> 16 pinned cores -> 64 GiB); the WARN `memoryBudget=unset` fires for `host` / `host-capped` above 64 GiB only.
+> Per-connection DuckDB limits are budget / connections / 1.5 (`DuckDbSizing.RSS_OVERSHOOT_PERCENT`); the 1 GiB /
+> 512 MiB floors, the reserved-budget cap (items 44/46: harness 6 GB keeps 1024 MiB) and `speed`'s node-wide limit
+> (sized from the split without the factor, 4402 MiB in tpch-perf's 8 GB unchanged) stay. The cluster run's shape
+> (16 cores, -Xmx8g, direct 8g) now gets 4 x 6553 MiB (~39 GiB RSS at 1.5x, under the 48 GB watchdog). Side effect:
+> DuckDB threads follow the lower limit (1 per GiB above 4): e.g. 64 cores / 96 GiB 16 -> 11, 48 GiB 7 -> 4; laptop
+> stand 8c/16g 2201 -> 1467 MiB, 16c/24g 3942 -> 2628 MiB. Q-52a / Q-51a closed (Q-52b: lane 6's, answered keep). Next: package once 54,
+> 55(a), 55(c) are DONE (lanes 4/5/6); no other open core item.
+
 > **Maintainer, 2026-11-18 03:50 - answers Q-52a / Q-52b / Q-51a (core lane, small).** **Q-52a: options (2) + (3)** - on a host without a cgroup limit cap the detected budget at 4 GiB per available core (16 pinned cores -> 64 GiB; `memoryBudgetBytes` / a cgroup limit still win; start line `memoryBudget source=host-capped`), and size per-connection DuckDB limits with the measured ~1.5x RSS overshoot. **Q-52b: keep the cap default** (min(budget/4, 8 GiB)). **Q-51a:** marten reads in partial mode (its docs), nothing to do. Then the core lane packages once 54, 55(a), 55(c) are DONE (lanes 4/5/6).
 
 > **Maintainer, 2026-11-17 19:20 - split:** item 52(b) (why a streaming aggregate over the 1.27 TB table needs > 48 GB; cap it) moved to lane 6; the core lane keeps 52(a) (`memoryBudgetBytes`, WARN). Package once 52(a)/(b), 53, 54, 55(a)/(b)/(c) are each DONE.
@@ -2110,14 +2121,14 @@ S3 slowdown item below stays open for then).
 - **(Q-52a, 2026-11-17, core lane) Default budget on big hosts without a cgroup limit.** Item 52 only warns when
   balanced sizes from a > 64 GiB host. Options: (1) keep (operator sets `memoryBudgetBytes`); (2) cap the detected host
   budget by default, e.g. at 4 GiB per available core (16 cores -> 64 GiB), which changes existing defaults; (3) also
-  budget ~1.5x `memory_limit` per connection for RSS (measured overshoot) when splitting the budget. Maintainer's call.
+  budget ~1.5x `memory_limit` per connection for RSS (measured overshoot) when splitting the budget. Maintainer's call. **Answered 2026-11-18: (2) + (3); done e8e59e49.**
 
 - **(Q-51a, 2026-11-16, core lane) Runtime filters in complete mode and bloom filters.** Item 51 applies the block only
   to partial-mode tickets (a complete ticket runs the whole query on one node, distributed complete included; wrapping
   it is possible but untested). If marten's StarRocks connector reads with `x-flight-result-mode: complete` it will see
   no gain - check its mode first. `ARF2` bloom filters are parsed and skipped; applying them needs upstream's per-row
   Java check (794ae7c, `BloomRowFilter`) after DuckDB, worth it only if the stand shows IN-sets capped at 4096 keys
-  leave much to cut. Decision for the maintainer after the SF10 numbers.
+  leave much to cut. Decision for the maintainer after the SF10 numbers. **Answered 2026-11-18: marten reads in partial mode; nothing to do.**
 
 - **(Q-43m, 2026-11-10 20:45Z, core lane; ANSWERED 2026-11-11 00:05 -> plugins-lane ITEM 44, parts (1)(3) merged 2335ddc6) balanced fails heavy TPC-H on small hosts since Q-42(a) - change the budget
   rule?** egret FRESH 42865250390 on `server-1.0.0-2ff221447b5d` (orchestrator 19:58Z): `balanced` runs with DuckDB
