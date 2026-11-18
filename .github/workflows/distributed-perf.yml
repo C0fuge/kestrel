@@ -203,6 +203,7 @@ jobs:
             fi
             echo "$label: merged $(docker logs srv0 2>&1 | grep -c 'distributedComplete=merged')" >> "$out"
             echo "$label: fallback $(docker logs srv0 2>&1 | grep -c 'distributedComplete=fallback')" >> "$out"
+            docker logs srv0 2>&1 | grep -o "distributedComplete=single reason=.*" | sort | uniq -c | sed "s/^/$label: /" >> "$out"
             docker logs srv0 2>&1 | grep 'distributedComplete=merged' \
               | sed -E 's/.*elapsedMs=([0-9]+) peerBytes=([0-9]+) peerWaitMs=([0-9]+).*/\1 \2 \3/' \
               | awk -v l="$label" '{ e += $1; b += $2; w += $3 } END { if (NR) printf "%s: peers merged %d, total %d ms, peer wait %d ms (%.0f %%), peer %.1f MB\n", l, NR, e, w, e ? 100 * w / e : 0, b / 1e6 }' >> "$out"
@@ -256,7 +257,7 @@ jobs:
             echo '```'
             cat "$RUNNER_TEMP/check.txt" 2>/dev/null || echo "(no check)"
             cat "$RUNNER_TEMP/table.txt" 2>/dev/null || true
-            grep -E ': (total|merged|fallback|peers|memory)' "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "(no result)"
+            grep -E ': (total|merged|fallback|peers|memory| +[0-9]+ distributedComplete=single)' "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "(no result)"
             echo '```'
             echo
             echo '<details><summary>per query</summary>'
