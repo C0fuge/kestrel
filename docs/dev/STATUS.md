@@ -23,10 +23,11 @@
 
 ## Next steps (one per session)
 
-> **Core next step (2026-11-18T06:50Z):** FIRST read the package run 44253203263 (`dev-ci.yml`, `package=true` on branch
-> `pkg/36f33023` = `main` 36f33023, item 56, the first code commit after 5f02e5b3; own branch so pushes to `main` cannot
-> cancel it). Green -> pre-release `server-1.0.0-36f33023...` carries 52(b), 54, 55(a)/(c), Q-52a and 56: note its tag
-> here and in the Log, delete `pkg/36f33023`. Red -> read the failed job's tail and fix first. No other open core item.
+> **Core next step (2026-11-18T07:45Z):** none open. Package run 44253203263 (`pkg/36f33023` = `main` 36f33023) green
+> with Service cluster 44255135230, hdfs 44255139047, security 44255142307, stores 44255146545 -> pre-release
+> **`server-1.0.0-36f3302321ba`** (7 assets, published 07:17Z) carries 52(b), 54, 55(a)/(c), Q-52a and 56: the build for
+> the stand rerun. Branch `pkg/36f33023` can be deleted (the session's delete was refused). No open core item until the
+> maintainer's next note.
 
 > **Q-52a DONE c9d9b4f4 (2026-11-18, core lane).** Without `memoryBudgetBytes` or a cgroup limit, `HostLimits.detect()`
 > caps the machine memory at 4 GiB per available core (`memoryBudget source=host-capped ... cores=16`: 754 GB host,
@@ -4581,3 +4582,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T06:40-06:50Z (core lane): item 56 (36f33023, lane 3) is code after 5f02e5b3, so the core lane packages:
   `package=true` dispatched on `pkg/36f33023` (run 44253203263, in progress at session end). Main full Dev CI for 56:
   44246657183 green. No code change this session.
+- 2026-11-18T07:41-07:50Z (core lane): package 44253203263 green (services 44255135230 / 44255139047 / 44255142307 /
+  44255146545) -> pre-release `server-1.0.0-36f3302321ba` (main 36f33023, item 56 + all earlier runtime changes). No
+  code change; no open core item.
