@@ -564,6 +564,8 @@ public class HadoopArrowFlightServer {
         distributedComplete.localScanMaxBytes(scanBytes);
         boolean forwardScans = ConfigAdapter.distributedCompleteForwardScans(ConfigSource.system());
         distributedComplete.forwardScans(forwardScans);
+        int scanStreams = ConfigAdapter.distributedCompleteScanStreamsPerNode(ConfigSource.system());
+        distributedComplete.scanStreamsPerNode(scanStreams);
         int smallEndpoints = ConfigAdapter.distributedCompleteSmallAnswerEndpointsPerNode(ConfigSource.system());
         distributedComplete.smallAnswerEndpointsPerNode(smallEndpoints);
         int snapshotMillis = ConfigAdapter.distributedCompleteClusterSnapshotMillis(ConfigSource.system());
@@ -577,8 +579,9 @@ public class HadoopArrowFlightServer {
                 snapshotMillis);
         LOGGER.info("distributedComplete one-row aggregates and small LIMITs: {} endpoints per node",
                 smallEndpoints == 0 ? "endpointsPerServer" : Integer.toString(smallEndpoints));
-        LOGGER.info("distributedComplete plain scans: {}", forwardScans
-                ? "endpoint batches forwarded as they are" : "merged through DuckDB");
+        LOGGER.info("distributedComplete plain scans: {}; endpoint streams per node: {}", forwardScans
+                ? "endpoint batches forwarded as they are" : "merged through DuckDB",
+                scanStreams == 0 ? "all at once" : scanStreams + " at a time");
         LOGGER.info("distributedComplete point lookups: {}", pointLookupsLocal
                 ? "local (computed on the planning node when it can read the files); filtered one-row"
                         + " aggregates: local when footer pruning keeps <= " + aggregateFiles + " files"

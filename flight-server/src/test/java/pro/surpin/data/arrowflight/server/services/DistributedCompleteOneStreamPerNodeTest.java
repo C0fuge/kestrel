@@ -57,6 +57,26 @@ class DistributedCompleteOneStreamPerNodeTest {
         assertEquals(-1, DistributedComplete.nextOnNode(nodes, opened, 4));
     }
 
+    /** Item 56: a plain scan opens the first two endpoints of each node, the next as one is read. */
+    @Test
+    void firstTwoEndpointsOfEachNodeOpenFirst() {
+        List<String> nodes = List.of("a", "b", "a", "a", "a", "b", "b", "c");
+        List<Boolean> first = new ArrayList<>();
+        for (int i = 0; i < nodes.size(); i++) {
+            first.add(DistributedComplete.amongFirstOnNode(nodes, i, 2));
+        }
+        assertEquals(List.of(true, true, true, false, false, true, false, true), first);
+        List<Boolean> opened = new ArrayList<>(first);
+        assertEquals(3, DistributedComplete.nextOnNode(nodes, opened, 0));
+        opened.set(3, true);
+        assertEquals(4, DistributedComplete.nextOnNode(nodes, opened, 2));
+        assertEquals(6, DistributedComplete.nextOnNode(nodes, opened, 1));
+        assertEquals(-1, DistributedComplete.nextOnNode(nodes, opened, 7));
+        for (int i = 0; i < nodes.size(); i++) {
+            assertTrue(DistributedComplete.amongFirstOnNode(nodes, i, nodes.size()), "all open with a large bound");
+        }
+    }
+
     /**
      * The reader opens a node's next endpoint when the node's answer before it has been read,
      * before it reads the answers in between, and reads every row in endpoint order.

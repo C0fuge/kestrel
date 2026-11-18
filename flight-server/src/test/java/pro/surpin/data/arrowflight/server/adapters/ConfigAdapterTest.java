@@ -502,6 +502,18 @@ class ConfigAdapterTest {
                 source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_FORWARD_SCANS", "false"))));
     }
 
+    /** Item 56: merged plain scans keep two endpoint streams per node open unless set otherwise. */
+    @Test
+    void distributedCompleteScanStreamsPerNodeDefaultsToTwo() throws IOException {
+        assertEquals(2, ConfigAdapter.distributedCompleteScanStreamsPerNode(source(Map.of(), Map.of())));
+        assertEquals(0, ConfigAdapter.distributedCompleteScanStreamsPerNode(
+                source(Map.of("distributedCompleteScanStreamsPerNode", "0"), Map.of())));
+        assertEquals(3, ConfigAdapter.distributedCompleteScanStreamsPerNode(
+                source(Map.of(), Map.of("FLIGHT_DISTRIBUTED_COMPLETE_SCAN_STREAMS_PER_NODE", "3"))));
+        assertThrows(IllegalArgumentException.class, () -> ConfigAdapter.distributedCompleteScanStreamsPerNode(
+                source(Map.of("distributedCompleteScanStreamsPerNode", "-1"), Map.of())));
+    }
+
     /** Item 55 (a): merged small answers use one endpoint per node unless set otherwise. */
     @Test
     void distributedCompleteSmallAnswerEndpointsPerNodeDefaultsToOne() throws IOException {

@@ -137,6 +137,15 @@ public final class DistributedComplete implements AutoCloseable {
     private volatile boolean forwardScans = true;
     /** Endpoints per node of a merged small answer, 0 for the configured endpointsPerServer (item 55 (a)). */
     private volatile int smallAnswerEndpointsPerNode = 1;
+    /**
+     * Endpoint streams per node a plain scan's merge keeps open (computing) at a time, 0 for all
+     * at once (item 56).
+     */
+    private volatile int scanStreamsPerNode = DEFAULT_SCAN_STREAMS_PER_NODE;
+    private final AtomicLong scansOpenedInTurn = new AtomicLong();
+
+    /** Default of {@code distributedCompleteScanStreamsPerNode} (item 56). */
+    public static final int DEFAULT_SCAN_STREAMS_PER_NODE = 2;
 
     /**
      * Creates the distributed path of complete answers.
@@ -319,12 +328,14 @@ public final class DistributedComplete implements AutoCloseable {
         // With local copies, an endpoint holds its copies while its answer waits to be read (the
         // merge reads one answer after the other): two endpoints of one node then wait for each
         // other's copy room until one is refused (item 36 (1)). Such a node runs them in turn.
-        List<String> nodes = oneStreamPerNode(parsed) ? nodeKeys(endpoints) : null;
+        // Item 56: a plain scan's endpoints not read yet hold DuckDB memory; a few per node at a time.
+        int perNode = streamsPerNode(parsed, averages != null);
+        List<String> nodes = perNode > 0 ? nodeKeys(endpoints) : null;
         EndpointAnswers answers = null;
         try {
             CallOption identity = identityOption(user);
             for (int i = 0; i < endpoints.size(); i++) {
-                if (nodes != null && !firstOnNode(nodes, i)) {
+                if (nodes != null && !amongFirstOnNode(nodes, i, perNode)) {
                     streams.add(null);
                     gates.add(null);
                     continue;
@@ -335,9 +346,16 @@ public final class DistributedComplete implements AutoCloseable {
                 streams.add(client(endpoint, 0).getStream(endpoint.getTicket(), identity, gate));
             }
             if (nodes != null && streams.contains(null)) {
-                LOGGER.info("node={} distributedComplete=oneStreamPerNode endpoints={} nodes={} query='{}'",
-                        LogUtil.node(), endpoints.size(), new java.util.HashSet<>(nodes).size(),
-                        LogUtil.oneLine(query));
+                if (perNode == 1) {
+                    LOGGER.info("node={} distributedComplete=oneStreamPerNode endpoints={} nodes={} query='{}'",
+                            LogUtil.node(), endpoints.size(), new java.util.HashSet<>(nodes).size(),
+                            LogUtil.oneLine(query));
+                } else {
+                    scansOpenedInTurn.incrementAndGet();
+                    LOGGER.debug("node={} distributedComplete=streamsPerNode perNode={} endpoints={} nodes={}"
+                            + " query='{}'", LogUtil.node(), perNode, endpoints.size(),
+                            new java.util.HashSet<>(nodes).size(), LogUtil.oneLine(query));
+                }
             }
             failOver(endpoints, streams, gates, identity);
             Schema schema = commonSchema(opened(streams));
@@ -457,6 +475,24 @@ public final class DistributedComplete implements AutoCloseable {
      */
     private boolean oneStreamPerNode(ParquetQueryParser parsed) {
         return !oneRow(parsed) && execution.localCopies();
+    }
+
+    /**
+     * Bounds the endpoint streams of one node that a merge keeps open at a time. A merge reads
+     * the endpoint answers one after the other; a plain scan's endpoints not read yet would each
+     * hold a running DuckDB scan waiting for its reader, so concurrent full scans filled DuckDB's
+     * memory and an endpoint failed after its first batch (item 56). Such a node runs
+     * {@link #scanStreamsPerNode(int)} of them at a time, the next one opened once one is read.
+     *
+     * @param parsed the part query
+     * @param averages whether the merge rewrites averages
+     * @return streams per node, 0 for all at once
+     */
+    private int streamsPerNode(ParquetQueryParser parsed, boolean averages) {
+        if (oneStreamPerNode(parsed)) {
+            return 1;
+        }
+        return !averages && concatenation(parsed) ? scanStreamsPerNode : 0;
     }
 
     /**
@@ -724,7 +760,26 @@ public final class DistributedComplete implements AutoCloseable {
      * @return true when no earlier endpoint has its node
      */
     static boolean firstOnNode(List<String> nodes, int index) {
-        return nodes.subList(0, index).indexOf(nodes.get(index)) < 0;
+        return amongFirstOnNode(nodes, index, 1);
+    }
+
+    /**
+     * Tells whether an endpoint is among the first endpoints of its node.
+     *
+     * @param nodes node key of each endpoint
+     * @param index the endpoint
+     * @param first how many endpoints of each node count
+     * @return true when fewer than {@code first} earlier endpoints have its node
+     */
+    static boolean amongFirstOnNode(List<String> nodes, int index, int first) {
+        String node = nodes.get(index);
+        int earlier = 0;
+        for (int i = 0; i < index; i++) {
+            if (nodes.get(i).equals(node) && ++earlier >= first) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -890,6 +945,30 @@ public final class DistributedComplete implements AutoCloseable {
      */
     public void forwardScans(boolean forward) {
         this.forwardScans = forward;
+    }
+
+    /**
+     * Sets how many endpoint streams per node a plain scan's merge keeps open at a time (item 56);
+     * the next one opens once one is read. 0 opens them all at once, as before item 56.
+     *
+     * @param perNode streams per node, 0 for all
+     * @throws IllegalArgumentException when negative
+     */
+    public void scanStreamsPerNode(int perNode) {
+        if (perNode < 0) {
+            throw new IllegalArgumentException("Scan streams per node must be 0 or more: " + perNode);
+        }
+        this.scanStreamsPerNode = perNode;
+    }
+
+    /**
+     * Counts the plain-scan merges whose endpoint streams were opened a few per node at a time
+     * because they had more endpoints on a node (item 56).
+     *
+     * @return such merges since start
+     */
+    public long scansOpenedInTurn() {
+        return scansOpenedInTurn.get();
     }
 
     /**

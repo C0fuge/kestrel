@@ -802,6 +802,28 @@ public class ConfigAdapter {
     }
 
     /**
+     * Resolves {@code distributedCompleteScanStreamsPerNode}
+     * ({@code arrowflight.cluster.distributedCompleteScanStreamsPerNode},
+     * {@code FLIGHT_DISTRIBUTED_COMPLETE_SCAN_STREAMS_PER_NODE}): how many endpoint streams per
+     * node a merged plain scan keeps open at a time; the next one opens once one has been read
+     * (item 56). Default 2; 0 opens every endpoint stream at once (before item 56).
+     *
+     * @param props configuration source
+     * @return streams per node, 0 for all at once
+     * @throws IllegalArgumentException when negative
+     */
+    public static int distributedCompleteScanStreamsPerNode(ConfigSource props) {
+        int value = getIntWithEnv("distributedCompleteScanStreamsPerNode",
+                "arrowflight.cluster.distributedCompleteScanStreamsPerNode",
+                "FLIGHT_DISTRIBUTED_COMPLETE_SCAN_STREAMS_PER_NODE",
+                2, props);
+        if (value < 0) {
+            throw new IllegalArgumentException("distributedCompleteScanStreamsPerNode must be 0 or more: " + value);
+        }
+        return value;
+    }
+
+    /**
      * Resolves {@code distributedCompleteSmallAnswerEndpointsPerNode}
      * ({@code arrowflight.cluster.distributedCompleteSmallAnswerEndpointsPerNode},
      * {@code FLIGHT_DISTRIBUTED_COMPLETE_SMALL_ANSWER_ENDPOINTS_PER_NODE}): at most this many

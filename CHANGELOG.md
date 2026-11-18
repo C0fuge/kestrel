@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Item 56 (lane 3): a merged plain scan under `distributedComplete` keeps at most two endpoint streams per node open at a
+  time (the next opens once one has been read) instead of opening all at once: concurrent full scans no longer fill the
+  shared DuckDB's memory with endpoint scans waiting for their reader (stand: an endpoint stream failed with `INTERRUPT
+  Error: Interrupted!` after `outOfMemoryRetry`). New setting `distributedCompleteScanStreamsPerNode`
+  (`FLIGHT_DISTRIBUTED_COMPLETE_SCAN_STREAMS_PER_NODE`, default 2; 0 = all at once as before); start line
+  `distributedComplete plain scans: ...; endpoint streams per node: 2 at a time`.
 - Item 54 / Q54-1 (lane 4): `resourceProfile=balanced` now defaults `duckDbPreserveInsertionOrder=false` on a remote
   data dir (`hdfs://`, `s3://`, `s3a://`, `lakefs://` or any other scheme but `file://`): rows of a query without ORDER
   BY may come in any order there (counts, aggregates and ORDER BY answers are unchanged); one full HDFS scan +0-33 %.
