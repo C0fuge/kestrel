@@ -4,16 +4,15 @@ ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55 (maintainer notes 2026-11-1
 52(a), 53, 54 (f1ad5b22), 55(b), 55(c) (e8afe351, LANE 6 DONE), 56 (36f33023, not yet measured). Open, waiting for the
 maintainer's real-cluster rerun: 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-18T10:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T11:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **Your 12:20 MSK note (full regression on `36f3302321ba`, then default):** heron DONE (session 331, 28c2447):
-  pinned 36f3302321ba as default; e2e default 44274803788 / speed 44274809554, 1 + 3 servers, all PASS, no wrong
-  answer; A/B vs 6f0aa5a026fa (connector-compare 44274814805, 22/22 exact) within noise on sums (SF10 default 333.2 vs
-  332.1/329.0 s); heron watches SF10 default q05/q07 (+18/+25 % warm, cold +3 %). marten functional part DONE, all PASS
-  (S3 1-9 44274880025, iceberg 1,11,12 44274884058, lakefs 1,3,4,10 44278549074, check 13 44281751422, 22/22 everywhere);
-  timing compare 44285073710 (SF10 ours default+speed) pending, then baseline on same CPU, then default switch if no
-  regression > 10 %.
+  pinned 36f3302321ba as default; e2e default 44274803788 / speed 44274809554 all PASS, A/B 44274814805 22/22 exact;
+  SF10 q05/q07 watch closed in session 332 (connector-compare 44289327005, within 10 %, runner noise). marten
+  functional part DONE, all PASS (44274880025, 44274884058, 44278549074, 44281751422); timing compare 44285073710 done,
+  session active since 11:40Z dispatched baseline 6f0aa5a026fa + repeat 36f3302321ba on the same CPU (36ecb52); default
+  switch follows if no regression > 10 %.
 - **New pre-release `server-1.0.0-36f3302321ba`** (published 07:17Z; package Dev CI 44253203263 + Service cluster
   44255135230, hdfs 44255139047, security 44255142307, stores 44255146545 all green) = 52(b), 54 + Q54-1, 55(a)
   defaults, 55(c), Q-52a **and 56**. It supersedes 5f02e5b35611 as the build for the stand rerun. Item 56 changes the
@@ -43,7 +42,7 @@ Points for the maintainer:
 | lane 6 (`LANE6-STATUS.md`) | **LANE 6 DONE**; 52(b) waits for cluster numbers | 01:01Z | free | Distributed perf red by its check |
 
 Main CI: newest Dev CI on main 44246657183 (221da38f, item 56) green; newest push run 44215691965 (5f02e5b3) green.
-No stale locks (all kestrel locks empty; marten / heron locks 09:18Z, active). No bug-first notes open.
+No stale locks (all kestrel locks empty; marten lock 11:40Z active; heron lock free). No bug-first notes open.
 
 ## Service matrix (newest run per workflow)
 
@@ -65,17 +64,18 @@ No stale locks (all kestrel locks empty; marten / heron locks 09:18Z, active). N
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
 - marten: IMPROVEMENTS DONE (2026-11-03). Maintainer task (36f3302321ba regression, then default): functional part
-  all PASS (44274880025, 44274884058, 44278549074, 44281751422); compare 44285073710 pending (lock free, 10:49Z).
-- heron: IMPROVEMENTS DONE (session 98). Maintainer task DONE: 36f3302321ba pinned as default (28c2447, session 331);
-  new session lock 10:51Z active.
+  all PASS; compare baseline 6f0aa5a026fa + repeat 36f3302321ba dispatched 11:41Z (lock 11:40Z active).
+- heron: IMPROVEMENTS DONE (session 98). Maintainer task DONE (pin 28c2447; q05/q07 watch closed 44289327005,
+  session 332); session 333 11:50Z: nothing open, lock free.
 
 ## egret
 
 - FRESH 5f02e5b35611 DONE (`results/FRESH-5f02e5b35611.md`): speed/balanced 22/22, 0 errors; upstream native
   `d05bf9c52129` (unchanged) 0/22 ADBC / 1/22 JDBC; watch points above.
-- ACCEPT 36f3302321ba DONE, SHIP (44258093085, 08:20Z); no FRESH for it (item 56 DC only). README 'In progress': nothing running.
+- ACCEPT 36f3302321ba DONE, SHIP (44258093085, 08:20Z); no FRESH for it (item 56 DC only). README 'In progress': nothing running (idle 11:26Z, newest tracked 36f3302321ba).
 
 ## History
+- 2026-11-18T11:57Z: heron closed SF10 q05/q07 watch (44289327005, noise), nothing open; marten dispatched same-CPU compare baseline 6f0aa5a026fa + repeat 36f3302321ba (lock 11:40Z); kestrel only no-op notes (plugins, catalogs, core lock/unlock 11:41Z), main green, no new CI or pre-releases; no stale locks.
 - 2026-11-18T10:56Z: heron pinned 36f3302321ba as default after full regression (e2e 44274803788/44274809554 PASS, A/B 44274814805 within noise, watch SF10 q05/q07); marten functional regression all PASS, compare 44285073710 pending; kestrel only lane 3 note 10:03Z, no new CI runs or pre-releases, main green; no stale locks.
 - 2026-11-18T09:58Z: maintainer note (12:20 MSK) in marten + heron: full regression on 36f3302321ba then default switch; marten m4 S3 1-9 PASS 44274880025, lakefs dispatched; heron session active; kestrel no new CI runs or pre-releases (only catalogs note 09:21Z), main green; no stale locks.
 - 2026-11-18T08:58Z: egret ACCEPT 36f3302321ba SHIP (44258093085), no FRESH (DC-only change); no new CI runs, commits only lane no-open-item notes; main green (44246657183); 52(b)/55(a) wait for stand rerun; marten/heron idle; no stale locks.
@@ -115,4 +115,3 @@ No stale locks (all kestrel locks empty; marten / heron locks 09:18Z, active). N
 - 2026-11-16T04:57Z: no change: ALL DONE still withdrawn; marten (04:41Z) / heron (session 299) blocked on the 2c169a53db3b upload; egret FRESH d2e27119fda4 (43798340706) still running; main Dev CI gate-only red, no new CI runs or pre-releases; locks free.
 - 2026-11-16T03:58Z: ALL DONE withdrawn (items 49/50, pre-releases 7ab48cd6675c and d2e27119fda4; marten/heron blocked on 2c169a53db3b upload; egret FRESH d2e27119fda4 running; main Dev CI gate-only red).
 - 2026-11-15T21:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-15T20:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
