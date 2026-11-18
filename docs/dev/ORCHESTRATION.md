@@ -4,19 +4,16 @@ ALL DONE withdrawn 2026-11-17T15:58Z for items 52-55 (maintainer notes 2026-11-1
 52(a), 53, 54 (f1ad5b22), 55(b), 55(c) (e8afe351, LANE 6 DONE), 56 (36f33023, not yet measured). Open, waiting for the
 maintainer's real-cluster rerun: 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-18T05:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-18T06:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
-- **Item 56 fixed (lane 3, 05:03-05:50Z):** `ITEM 56 DONE 36f33023`. Cause: a merged dc plain scan opened all endpoint
-  streams at once while reading them one by one, so unread endpoints held running DuckDB scans. Now at most
-  `distributedCompleteScanStreamsPerNode` (new setting, **default 2**; `0` = old all-at-once) per node. In-JVM repro
-  (40 MiB DuckDB, 8 clients): interrupts 10 -> 0, fallbacks 2 -> 0, 48.7 s -> 37.5 s. Note: this changes the default
-  stream behaviour of dc scans (lane 3 wrote it as the fix's behaviour change, not as an Open question).
-  Full Dev CI on main 44246657183 still running. **Not in any pre-release yet:** 36f33023 is the first code commit after
-  5f02e5b3, so the core lane's own rule ("package if code lands after 5f02e5b3") now applies; the stand rerun for 56
-  (and the 52(b)/55(a) rerun, if you have not started it) wants that next package. Lane 3 asks to compare dc raw-scan
-  MB/s afterwards (try `3` or `0` if it drops).
-- Build for the 52(b)/55(a)/Q54-2 rerun remains `server-1.0.0-5f02e5b35611` (egret ACCEPT: SHIP, run 44238913491).
+- **Item 56 package in progress:** main full Dev CI 44246657183 (221da38f) green. Core lane dispatched `package=true`
+  on `pkg/36f33023` (Dev CI 44253203263, started 06:41Z, build job running). Green -> pre-release
+  `server-1.0.0-36f33023...` = 52(b), 54 + Q54-1, 55(a) defaults, 55(c), Q-52a **and 56**; that one supersedes
+  5f02e5b35611 for the stand rerun. Item 56 changes the default dc scan stream behaviour
+  (`distributedCompleteScanStreamsPerNode` default 2; `0` = old); lane 3 asks to compare dc raw-scan MB/s on the stand
+  (try `3` or `0` if it drops).
+- Until then the rerun build is `server-1.0.0-5f02e5b35611` (egret ACCEPT: SHIP, run 44238913491).
 - Lane 6 note (unchanged): `Distributed perf` (44210800053 / 44211990773) stays red by design of its check; not a main
   Dev CI failure; its expectation may need your call.
 - Open questions otherwise unchanged: lane 3 Q5, Q54-2 (stand numbers), Q-46, catalogs Q11, plugins Q-40a follow-up,
@@ -28,16 +25,15 @@ Points for the maintainer:
 
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
-| core (`STATUS.md`) | nothing open; next package due (36f33023 landed after 5f02e5b3) | 04:41Z | free | main Dev CI 44246657183 running (221da38f) |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 05:11Z (note) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 05:21Z (note) | free | - |
-| lane 3 (`LANE3-STATUS.md`) | **ITEM 56 DONE 36f33023**; nothing open | 05:47Z | free | fast 44243247868 / cluster 44243265348 green |
-| lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun on 5f02e5b35611 | 04:36Z | free | package 44231671868 green |
+| core (`STATUS.md`) | read package 44253203263 -> pre-release for item 56 | 06:41Z | free | package 44253203263 running |
+| plugins (`PLUGINS-STATUS.md`) | nothing open | 06:12Z (note) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 06:20Z (note) | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE 36f33023; nothing open | 06:03Z | free | main Dev CI 44246657183 green |
+| lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun | 04:36Z | free | package 44231671868 green |
 | lane 6 (`LANE6-STATUS.md`) | **LANE 6 DONE**; 52(b) waits for cluster numbers | 01:01Z | free | Distributed perf red by its check |
 
-Main CI: last finished Dev CI on main 44215691965 (5f02e5b3) green; 44246657183 (dispatch, 221da38f = item 56) in
-progress (the push of 36f33023 ended in [skip ci] commits, so no push run). No stale locks (all kestrel locks empty;
-marten / heron empty). No bug-first notes open.
+Main CI: newest Dev CI on main 44246657183 (221da38f, item 56) green; newest push run 44215691965 (5f02e5b3) green.
+No stale locks (all kestrel locks empty; marten / heron empty). No bug-first notes open.
 
 ## Service matrix (newest run per workflow)
 
@@ -48,25 +44,28 @@ marten / heron empty). No bug-first notes open.
 | service-security.yml | 44233407122 | pkg/5f02e5b3 | pass |
 | service-stores.yml | 44233410601 | pkg/5f02e5b3 | pass |
 
+(Service runs for pkg/36f33023 start through the package gate after its build.)
+
 ## Pre-releases (newest 3)
 
 - `server-1.0.0-5f02e5b35611` (2026-11-18 04:09Z): 52(b), 54 + Q54-1, 55(a) defaults, 55(c), Q-52a; egret ACCEPT SHIP
-  (44238913491), FRESH 44244388077 running. Does not contain item 56.
+  (44238913491), FRESH 44244388077 running. Does not contain item 56 (package for it running).
 - `server-1.0.0-f4feb0d5e404` (2026-11-17 18:38Z): items 52(a), 53, 55(b); egret ACCEPT SHIP + FRESH DONE.
-- `server-1.0.0-d2e27119fda4` (2026-11-16 02:03Z); `6f0aa5a026fa` (2026-11-16 09:25Z): item 51.
+- `server-1.0.0-d2e27119fda4` (2026-11-16 02:03Z).
 
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
-- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; session 05:41Z nothing to do. Lock free.
-- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa; session 327 idle (05:51Z). Lock free.
+- marten: IMPROVEMENTS DONE (2026-11-03). Finish mode; session 06:40Z nothing to do. Lock free.
+- heron: IMPROVEMENTS DONE (session 98); finish mode, pinned 6f0aa5a026fa; session 328 idle (06:51Z). Lock free.
 
 ## egret
 
 - ACCEPT 5f02e5b35611 DONE: **SHIP** (HDFS acceptance run 44238913491, `results/ACCEPT-5f02e5b35611.md`).
 - Newest FRESH still **f4feb0d5e404** (speed/balanced 22/22, 0 errors; upstream native `d05bf9c52129` 0/22 ADBC /
-  1/22 JDBC). FRESH 5f02e5b35611 running (44244388077). README 'In progress': no other task.
+  1/22 JDBC). FRESH 5f02e5b35611 still running (44244388077, started 05:29Z). README 'In progress': no other task.
 
 ## History
+- 2026-11-18T06:56Z: item 56 main full Dev CI 44246657183 green; core lane dispatched package pkg/36f33023 (Dev CI 44253203263 running) for the first pre-release with item 56; egret FRESH 5f02e5b35611 (44244388077) still running; lanes nothing open; marten/heron idle; no stale locks.
 - 2026-11-18T05:58Z: maintainer added ITEM 56 (dc scan stream fails under memory pressure, lane 3, low priority); lane 3 fixed it same hour: ITEM 56 DONE 36f33023 (merged plain scans open 2 endpoint streams per node, `distributedCompleteScanStreamsPerNode`, 0 = old), branch fast CI 44243247868 + service cluster 44243265348 green; full Dev CI on main 44246657183 running; needs a package for the stand; egret ACCEPT 5f02e5b35611 SHIP, FRESH 44244388077 running; marten/heron idle; no stale locks.
 - 2026-11-18T04:58Z: package pkg/5f02e5b3 green (Dev CI 44231671868 + 4 service runs) -> pre-release server-1.0.0-5f02e5b35611 published 04:09Z, the build for the maintainer's rerun (52(b)/55(a)/Q54-2); main CI 44215691965 green, no new code; lanes nothing open; marten/heron idle; egret FRESH 5f02e5b35611 pending; no stale locks.
 - 2026-11-18T03:57Z: main green (push Dev CI 44215691965 on 5f02e5b3); maintainer answers taken (Q-52a c9d9b4f4, Q-55a defaults a3a7f029, Q54-1 f1ad5b22); ITEM 54 DONE, ITEM 55(c) DONE + LANE 6 DONE; red 44207492475 was SpotBugs, fixed 6c8f66de; package pkg/5f02e5b3 (44231671868 + 4 service runs) running; 52(b)/55(a) wait for stand rerun; marten/heron/egret idle; no stale locks.
@@ -105,5 +104,3 @@ marten / heron empty). No bug-first notes open.
 - 2026-11-15T14:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T13:01Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
 - 2026-11-15T11:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-15T10:56Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
-- 2026-11-15T07:57Z: ALL DONE kept; no change (lanes nothing open, locks free, no new CI runs or pre-releases; marten/heron/egret idle).
