@@ -23,6 +23,22 @@
 
 ## Next steps (one per session)
 
+> **ITEM 57 FIXED 06d6468b (2026-11-18T13:40Z, core lane) - packaging; write `ITEM 57 DONE` once the pre-release is out.**
+> Cause: Q54-1 (f1ad5b22, balanced `duckDbPreserveInsertionOrder=false` on remote data dirs). DuckDB 1.5.6 runs a
+> selective filter over remote Parquet up to 1.7x slower without the insertion order (plain DuckDB + httpfs, same S3
+> endpoint, 3 threads, warm: q14's month of lineitem 0.52 vs 1.55 s with the external file cache, 1.79 vs 3.07 s without;
+> 50 % filter 4.66 vs 3.37 s and a full scan 3.66 vs 2.82 s favour the dropped order; EXPLAIN ANALYZE shows equal times,
+> so it is in result collection). Item 53 (shared DuckDB) is neutral: per-connection balanced on the same build was as
+> slow (3.3 s). Server repro (local, S3 via rclone, SF10-shaped lineitem 60 M rows / part 2 M, partial-mode ADBC scans of
+> q14's shapes, server on 3 cores): before -> after q14 lineitem scan best 3.53 -> 1.95 s, q15's quarter 3.5-3.7 ->
+> 2.1-2.4 s, a full 3-column scan 4.1-4.8 -> 4.9-5.1 s (the gain Q54-1 bought; +0-4 % on the stand); answers equal. Fix:
+> balanced keeps the file order on every data dir again (golden setup of 5f02e5b3 reverted); explicit `false` and
+> `speed` unchanged. A per-query `SET SESSION preserve_insertion_order` for filtered scans only was tried and is refused
+> after the lockdown (`lock_configuration`); doing it would need a second pre-lockdown connection per session - see
+> Q-57a. Main full Dev CI 44311547842 and package run 44311669381 (`pkg/06d6468b`) were in progress at session end:
+> next session reads them; if green -> pre-release `server-1.0.0-06d6468b...` and `ITEM 57 DONE`; branch `pkg/06d6468b`
+> can then be deleted. marten should rerun q14/q15/q04 on that build.
+
 > **Maintainer, 2026-11-18 15:50 - ITEM 57 (core): TPC-H q14 2x slower in the default profile through the StarRocks connector.** marten's same-CPU compare (EPYC 7763, SF10, partial-mode scans from StarRocks, 22/22 correct): q14 1.79 s on `6f0aa5a026fa` -> 3.62 s on `36f3302321ba` (+102 %; slower on every runner), q15 +18 %, q04 +11 %; the speed profile is on par, the sum is 3 % faster. q14 = lineitem join part, one month of l_shipdate; StarRocks sends partial-mode scans of lineitem (date range filter) and part. Suspects in the default (balanced) profile between those builds: item 53 (balanced on the node's shared DuckDB: threads / connections per scan), Q54-1 (preserve_insertion_order=false on remote dirs), 52(b) cache cap / Q-52a budget sizing (smaller per-connection memory_limit), 55(b) (distributedAggregateMinBytes). marten is bisecting over f4feb0d5e404 / 5f02e5b35611 (in its m4-assets) - read its Open questions. Reproduce with partial-mode scans of q14's shapes in balanced (S3 cell), find the cause, fix without losing the items' gains; write `ITEM 57 DONE <sha>` with numbers and package.
 
 > **Core next step (2026-11-18T07:45Z):** none open. Package run 44253203263 (`pkg/36f33023` = `main` 36f33023) green
@@ -2107,6 +2123,14 @@ S3 slowdown item below stays open for then).
     MB/s) is not these two settings; it goes with the DuckDB scheduler question of item 22 (Open questions).
 
 ## Open questions
+
+- **Q-57a (core, 2026-11-18, item 57):** `speed` still drops the insertion order for every query, so its selective
+  filtered scans over remote Parquet pay the same up-to-1.7x (q14's month 1.8 vs 3.1 s in plain DuckDB 1.5.6) while its
+  full scans gain ~20 % (item 27). Options: (1) leave speed as is; (2) speed keeps the order too (full S3 scan
+  1118 -> 910 MB/s); (3) per query: each session gets a second connection set to `preserve_insertion_order=true`
+  before the lockdown and plain scans with a WHERE run there (twice the session's views/catalog upkeep; same for
+  balanced would bring back Q54-1's full-scan gain). Recommendation: (1) now, (3) only if the stand shows speed's q14 as
+  a problem.
 
 - **(Q-55a-nl, 2026-11-18, lane 5) Default of `distributedCompleteMergeLoadTracking`.** **Answered 2026-11-18 (maintainer): default false - done by lane 5 (CHANGELOG).** The plans of a
   distributed-complete merge write their endpoints' load reservations and added load to the cluster maps like client
@@ -4587,3 +4611,9 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T07:41-07:50Z (core lane): package 44253203263 green (services 44255135230 / 44255139047 / 44255142307 /
   44255146545) -> pre-release `server-1.0.0-36f3302321ba` (main 36f33023, item 56 + all earlier runtime changes). No
   code change; no open core item.
+- 2026-11-18T12:52-13:45Z (core lane): item 57 fixed 06d6468b - q14 2x in balanced was Q54-1's dropped insertion order
+  (DuckDB 1.5.6 slow on selective filters over remote Parquet without it); balanced keeps the order again; local S3 repro
+  q14 scan 3.53 -> 1.95 s, q15 3.6 -> 2.2 s, full scan 4.5 -> 5.0 s. Regression test ResourceProfileTest
+  `balancedKeepsTheInsertionOrderOnEveryDataDir`; local ResourceProfileTest / golden / DuckDbSharedDatabaseTest +
+  Checkstyle green. Main full Dev CI 44311547842 and package 44311669381 (`pkg/06d6468b`) in progress at session end.
+  New Q-57a (speed's order).
