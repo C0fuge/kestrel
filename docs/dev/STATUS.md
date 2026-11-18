@@ -4544,17 +4544,14 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T00:30Z (lane 5): item 55 (a) merged into `main` 9866bb15 (core `ClusterService`, `QueryPlanner`): new
   optional `distributedCompleteMergeLoadTracking` (default true, Q-55a-nl); batch-collected load changes log as
   `batch.addLoad`. Fast tier 44201981927 green, full Dev CI 44203849956 green. Details in LANE5-STATUS.md.
-<<<<<<< Updated upstream
 - 2026-11-18T01:20Z (lane 6): the red full Dev CI 44207492475 (f06e6f25, "Cluster join timeout" line) failed only in
   SpotBugs on lane 6's step-6 code (all tests green); fixed in 6c8f66de (core `ParquetQueryParser`, null-safe function
   name). ITEM 55(c) DONE e8afe351: distributed-perf 44210800053 (SF5) shows dc GROUP BYs of the step 1-6 shapes merged
   (0.64-0.88 of speed on 1-CPU nodes) where c8896332 ran them on one node (= speed). Note for the core lane: that
   workflow's check expects every `on` answer merged, but the small-aggregate / point-lookup local decisions keep one
   older query on one node (18/21 already on 2026-11-17), so it stays red. LANE 6 DONE. Details in LANE6-STATUS.md.
-=======
 - 2026-11-18T01:30Z (lane 5): item 55 (a) defaults per the maintainer's answers (`distributedCompleteMergeLoadTracking`
   false, `distributedCompleteMemberCheckMillis` 250; core `ConfigAdapter`). Red full Dev CI 44207492475 (`main`
   f06e6f25) was SpotBugs NP in `ParquetQueryParser` (lane 6 fixed it in 6c8f66de; the "Cluster join timeout" in that log
   is an expected exception of `HadoopArrowFlightServerUnitTest`). Full tier on `fix/55a` 44210325758 green, DC tail perf
   44210328551 (dc meets the item's goal on the CI cell). Details in LANE5-STATUS.md.
->>>>>>> Stashed changes
