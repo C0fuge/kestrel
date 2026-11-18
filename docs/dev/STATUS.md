@@ -2084,6 +2084,13 @@ S3 slowdown item below stays open for then).
 
 ## Open questions
 
+- **(Q-55a-nl, 2026-11-18, lane 5) Default of `distributedCompleteMergeLoadTracking`.** The plans of a
+  distributed-complete merge write their endpoints' load reservations and added load to the cluster maps like client
+  plans, and release them after the merge read them (within ms). On a CPU-loaded node these writes are a large part of a
+  small merged query's planning tail (`hazelcast.planWrites` p50 ~90 / p99 ~250 ms at c8 on the CI cell). false skips
+  them; the load then counts only in this node's 250 ms cluster snapshot, so other nodes' plans do not see this node's
+  merge load (load balancing between coordinators changes). Default true = unchanged. Numbers: DC tail perf
+  44207273404 (dc vs dc-nl), read by lane 5's next session. Options: keep true, or default false.
 - **(Q-55a-mc, 2026-11-17, lane 5) Default of `distributedCompleteMemberCheckMillis`.** Every node-to-node call of
   distributed complete is admitted only from the address of a live member, read from the cluster maps (registry +
   heartbeats) per call; under load those reads wait for CPU before the endpoint starts. The new setting remembers an
@@ -4521,3 +4528,6 @@ S3 slowdown item below stays open for then).
 - 2026-11-18T00:45Z (lane 6): item 55(c) step 6 merged (8ac047b3, core `ParquetQueryParser`, `AverageMerge`, `CopyBatchMerge`):
   aliased `strftime` / `time_bucket` GROUP BY keys merge under dc; jOOQ re-parses with unknown functions allowed only for
   these two, only inside computed keys (else unparsed as before). Details in LANE6-STATUS.md.
+- 2026-11-18T00:30Z (lane 5): item 55 (a) merged into `main` 9866bb15 (core `ClusterService`, `QueryPlanner`): new
+  optional `distributedCompleteMergeLoadTracking` (default true, Q-55a-nl); batch-collected load changes log as
+  `batch.addLoad`. Fast tier 44201981927 green, full Dev CI 44203849956 green. Details in LANE5-STATUS.md.

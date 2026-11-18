@@ -2,7 +2,18 @@
 
 ## Next steps
 
-> **Lane 5 next step (2026-11-17T23:15Z):** FIRST read full Dev CI 44196365448 (push, `main` 49f44a18: plan write
+> **Lane 5 next step (2026-11-18T00:30Z):** FIRST check full Dev CI 44203849956 (push, `main` 9866bb15: green at
+> 00:22Z) is still the latest lane-5 run; red = fix it first. Restart `fix/55a` with `git checkout -B fix/55a origin/main`.
+> Then read DC tail perf 44207273404 (`fix/55a` = 9866bb15, variants speed / dc / dc-nl, dc-nl =
+> `-DdistributedCompleteMergeLoadTracking=false`): if dc-nl's c8 p99 of sum_date / avg_date / limob is clearly below dc's
+> (this session's 44203845486, same code: dc 692 / 716 / 1209 ms vs speed 608 / 510 / 906; c1 179 / 113 / 140 vs 85 / 87
+> / 103; scans dc x1 / x4 / x8 267 / 295 / 306 vs speed 300 / 266 / 275 MB/s), add the numbers to Q-55a-nl in STATUS.md
+> (recommend false) - the default stays true until the maintainer answers. Note when reading: a push to `fix/55a`
+> cancels a running dispatched DC tail perf (same concurrency group) - dispatch perf runs only after the last push.
+> Remaining at c8 on the 1-CPU cell: `plan` p50 130-200 ms and `open` 140-210 ms of the merged shapes; at c1 the p99
+> outliers (sum_date 179 vs 85). Then ask for the real-cluster rerun (goal p99 <= 1.5x speed, scans >= 0.9x).
+
+> ~~**Lane 5 next step (2026-11-17T23:15Z):**~~ (done: CI green; (a) answered - the extra addLoad were batch-collected calls logged under the same tag; (b) implemented as an option) FIRST read full Dev CI 44196365448 (push, `main` 49f44a18: plan write
 > batch); red = fix it first. Restart `fix/55a` with `git checkout -B fix/55a origin/main`. Step (2) of the earlier note
 > is answered: on the 1-CPU CI cell the cluster writes ARE the c8 planning cost - `hazelcast.planWrites` (3 endpoint
 > reservations + one load change per node) p50 ~90 / p99 ~250 ms at c8, 1-2 ms at c1 (DC tail perf 44194780093);
@@ -101,3 +112,10 @@
   DC tail perf 44193153607: c8 p99 worse, planWrites p50 ~95 ms), then serially on the planning thread (fast tier
   44194776591 green, DC tail perf 44194780093: c8 p99 457 / 466 / 679 ms sum_date / avg_date / limob, no
   regression). Merged into `main` 49f44a18; full Dev CI 44196365448 pending. Item 55 (a) not done.
+- 2026-11-17T23:41-2026-11-18T00:30Z (lane 5): full Dev CI 44196365448 on `main` 49f44a18 green. Step (a): the ~5.7
+  `hazelcast.addLoad` per merged query were the planner's per-endpoint calls collected by the write batch (no cluster
+  write, ~0 ms) plus the batch's per-node writes, logged under the same tag; collected ones now log `batch.addLoad`.
+  Step (b): new optional `distributedCompleteMergeLoadTracking` (default true = unchanged; false = merge plans write no
+  reservations / added load and release nothing, the load counts in this node's snapshot only; Q-55a-nl). Fast tier
+  44201981927 green; DC tail perf 44203845486 (speed / dc / dc-4ep, numbers in Next steps); dc-nl run 44207273404
+  pending. Merged into `main` 9866bb15; full Dev CI 44203849956 green. Item 55 (a) not done.
