@@ -850,10 +850,24 @@ public class ParquetQueryParser {
      * @return true for such a call
      */
     static boolean keyFunction(org.jooq.Field<?> field) {
-        return field instanceof org.jooq.impl.QOM.Function<?> function
-                && field.getClass().getName().equals(UNKNOWN_FUNCTION_CLASS)
-                && function.$name().getName().length == 1
-                && KEY_FUNCTIONS.contains(function.$name().last().toLowerCase(Locale.ROOT));
+        if (!(field instanceof org.jooq.impl.QOM.Function<?> function)
+                || !field.getClass().getName().equals(UNKNOWN_FUNCTION_CLASS)
+                || function.$name().getName().length != 1) {
+            return false;
+        }
+        String name = functionName(function);
+        return name != null && KEY_FUNCTIONS.contains(name);
+    }
+
+    /**
+     * Returns the lower-case last part of a function's name.
+     *
+     * @param function the call
+     * @return the name, or null when jOOQ holds none
+     */
+    private static String functionName(org.jooq.impl.QOM.Function<?> function) {
+        String last = function.$name().last();
+        return last == null ? null : last.toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -871,8 +885,8 @@ public class ParquetQueryParser {
      */
     private static String keyFunctionText(org.jooq.impl.QOM.Function<?> function, DSLContext quotedCtx) {
         List<? extends org.jooq.Field<?>> args = function.$args();
-        String name = function.$name().last().toLowerCase(Locale.ROOT);
-        if (args.size() != 2) {
+        String name = functionName(function);
+        if (name == null || args.size() != 2) {
             return null;
         }
         boolean strftime = name.equals("strftime");
