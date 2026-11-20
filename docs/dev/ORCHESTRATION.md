@@ -5,7 +5,7 @@ ALL DONE 2026-11-18T17:58Z (restored; withdrawn 2026-11-17T15:58Z for items 52-5
 06d6468b17c5 as default; egret FRESH 06d6468b17c5 DONE. Still waiting only for the maintainer's real-cluster rerun:
 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-20T06:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-20T07:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **egret FRESH 06d6468b17c5 DONE** (44335959845 + rereport 44362838876; upstream native `47c6c7d95db0`, new head):
@@ -14,8 +14,8 @@ Points for the maintainer:
   balanced S3 mixed (SF1 ADBC -18 %, SF10 JDBC +15 % on the same CPU type). **Flag: speed S3 SF10 ADBC 38.1 s vs
   32.3 s in f4feb0d5e404 (+18 %, same 9V74 type, one run; item 57 does not touch speed) - egret suggests a re-check.**
 - heron: session 335 closed the q09/q10/q12 SF10 watch (44338448083) and q21 SF1 (44352121022) at parity; e2e kill
-  delays fixed (push e2e 44352452531 green); sessions 336-360 finish mode, nothing open (360 at 06:52Z); lane 3 06:03Z, plugins 06:12Z and catalogs 06:21Z no open item; marten unlock 05:41Z nothing new.
-- marten: finish mode, 06d6468b17c5 default (unchanged; last unlock 05:41Z).
+  delays fixed (push e2e 44352452531 green); sessions 336-360 finish mode, nothing open (360 at 06:52Z); lane 3 06:03Z, plugins 06:12Z and catalogs 07:21Z no open item; marten unlock 07:41Z nothing new.
+- marten: finish mode, 06d6468b17c5 default (unchanged; last unlock 07:41Z).
 - Q-57a (core): `speed` still drops the insertion order (options: leave / keep order / per-query second connection;
   lane recommends leave).
 - Open questions otherwise unchanged: lane 3 Q5, Q54-2 (stand numbers), Q-46, catalogs Q11, plugins Q-40a follow-up,
@@ -65,6 +65,7 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 06d6468b17c5: ACCEPT SHIP (44321703096).
 
 ## History
+- 2026-11-20T07:57Z: ALL DONE holds; only catalogs (07:21Z) no-open-item note; main green (44311547842), no new CI, services or pre-releases; marten 07:41Z nothing new, heron session 360 (06:52Z) nothing open; egret idle 07:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T06:57Z: ALL DONE holds; only lane 3 (06:03Z), plugins (06:12Z) and catalogs (06:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 05:41Z nothing new, heron session 360 (06:52Z) nothing open; egret idle 05:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T05:57Z: ALL DONE holds; only plugins (05:11Z) and catalogs (05:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 05:41Z nothing new, heron session 359 (05:51Z) nothing open; egret idle 05:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T04:57Z: ALL DONE holds; only catalogs (04:21Z) no-open-item note and a core lock/unlock (04:41Z) without change; main green (44311547842), no new CI, services or pre-releases; marten 04:41Z nothing new, heron session 358 (04:51Z) nothing open; egret idle 03:27Z (FRESH 06d6468b17c5 newest); no stale locks.
@@ -104,4 +105,3 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 2026-11-18T05:58Z: maintainer added ITEM 56 (dc scan stream fails under memory pressure, lane 3, low priority); lane 3 fixed it same hour: ITEM 56 DONE 36f33023 (merged plain scans open 2 endpoint streams per node, `distributedCompleteScanStreamsPerNode`, 0 = old), branch fast CI 44243247868 + service cluster 44243265348 green; full Dev CI on main 44246657183 running; needs a package for the stand; egret ACCEPT 5f02e5b35611 SHIP, FRESH 44244388077 running; marten/heron idle; no stale locks.
 - 2026-11-18T04:58Z: package pkg/5f02e5b3 green (Dev CI 44231671868 + 4 service runs) -> pre-release server-1.0.0-5f02e5b35611 published 04:09Z, the build for the maintainer's rerun (52(b)/55(a)/Q54-2); main CI 44215691965 green, no new code; lanes nothing open; marten/heron idle; egret FRESH 5f02e5b35611 pending; no stale locks.
 - 2026-11-18T03:57Z: main green (push Dev CI 44215691965 on 5f02e5b3); maintainer answers taken (Q-52a c9d9b4f4, Q-55a defaults a3a7f029, Q54-1 f1ad5b22); ITEM 54 DONE, ITEM 55(c) DONE + LANE 6 DONE; red 44207492475 was SpotBugs, fixed 6c8f66de; package pkg/5f02e5b3 (44231671868 + 4 service runs) running; 52(b)/55(a) wait for stand rerun; marten/heron/egret idle; no stale locks.
-- 2026-11-17T21:58Z: main green (full Dev CI 44175118886 / 44180696125 green; 44179759902 cancelled, superseded); lane 5 merged 55(a) cluster-snapshot reuse / file-plan refresh-ahead / member-check memory (66b19368), new Q-55a-mc; lane 6 55(c) step 3 merged 5b751015 (not DONE); catalogs 54 step 3 part 4 (HDFS point perf 44178894320 green, unread); egret FRESH f4feb0d5e404 DONE; marten/heron idle; no stale locks.
