@@ -5,7 +5,7 @@ ALL DONE 2026-11-18T17:58Z (restored; withdrawn 2026-11-17T15:58Z for items 52-5
 06d6468b17c5 as default; egret FRESH 06d6468b17c5 DONE. Still waiting only for the maintainer's real-cluster rerun:
 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-20T05:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-20T06:57Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **egret FRESH 06d6468b17c5 DONE** (44335959845 + rereport 44362838876; upstream native `47c6c7d95db0`, new head):
@@ -14,7 +14,7 @@ Points for the maintainer:
   balanced S3 mixed (SF1 ADBC -18 %, SF10 JDBC +15 % on the same CPU type). **Flag: speed S3 SF10 ADBC 38.1 s vs
   32.3 s in f4feb0d5e404 (+18 %, same 9V74 type, one run; item 57 does not touch speed) - egret suggests a re-check.**
 - heron: session 335 closed the q09/q10/q12 SF10 watch (44338448083) and q21 SF1 (44352121022) at parity; e2e kill
-  delays fixed (push e2e 44352452531 green); sessions 336-359 finish mode, nothing open (359 at 05:51Z); plugins 05:11Z and catalogs 05:21Z no open item; marten unlock 05:41Z nothing new.
+  delays fixed (push e2e 44352452531 green); sessions 336-360 finish mode, nothing open (360 at 06:52Z); lane 3 06:03Z, plugins 06:12Z and catalogs 06:21Z no open item; marten unlock 05:41Z nothing new.
 - marten: finish mode, 06d6468b17c5 default (unchanged; last unlock 05:41Z).
 - Q-57a (core): `speed` still drops the insertion order (options: leave / keep order / per-query second connection;
   lane recommends leave).
@@ -28,9 +28,9 @@ Points for the maintainer:
 | Lane | Current item | Last commit | Lock | CI |
 |---|---|---|---|---|
 | core (`STATUS.md`) | ITEM 57 DONE 06d6468b; nothing open (Q-57a) | 13:53Z | free | main 44311547842 green |
-| plugins (`PLUGINS-STATUS.md`) | nothing open | 05:11Z (note) | free | - |
-| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 05:21Z (note) | free | - |
-| lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE; nothing open | 17:03Z (note) | free | - |
+| plugins (`PLUGINS-STATUS.md`) | nothing open | 06:12Z (note) | free | - |
+| catalogs (`CATALOGS-STATUS.md`) | nothing open (Q54-2 = stand numbers) | 06:21Z (note) | free | - |
+| lane 3 (`LANE3-STATUS.md`) | ITEM 56 DONE; nothing open | 06:03Z (note) | free | - |
 | lane 5 (`LANE5-STATUS.md`) | 55(a) waits for the maintainer's rerun | 05:03Z | free | - |
 | lane 6 (`LANE6-STATUS.md`) | LANE 6 DONE; 52(b) waits for cluster numbers | 05:03Z | free | - |
 
@@ -56,7 +56,7 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 
 - marten: IMPROVEMENTS DONE (2026-11-03). 06d6468b17c5 m4 / compare default after full regression PASS; finish mode
   (2b4283f 05:41Z), lock free.
-- heron: IMPROVEMENTS DONE (session 98). 06d6468b17c5 default; sessions 335-359 nothing open (05:51Z), lock
+- heron: IMPROVEMENTS DONE (session 98). 06d6468b17c5 default; sessions 335-360 nothing open (06:52Z), lock
   free; last runs green (e2e 44352452531, connector-compare 44352121022).
 
 ## egret
@@ -65,6 +65,7 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 06d6468b17c5: ACCEPT SHIP (44321703096).
 
 ## History
+- 2026-11-20T06:57Z: ALL DONE holds; only lane 3 (06:03Z), plugins (06:12Z) and catalogs (06:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 05:41Z nothing new, heron session 360 (06:52Z) nothing open; egret idle 05:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T05:57Z: ALL DONE holds; only plugins (05:11Z) and catalogs (05:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 05:41Z nothing new, heron session 359 (05:51Z) nothing open; egret idle 05:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T04:57Z: ALL DONE holds; only catalogs (04:21Z) no-open-item note and a core lock/unlock (04:41Z) without change; main green (44311547842), no new CI, services or pre-releases; marten 04:41Z nothing new, heron session 358 (04:51Z) nothing open; egret idle 03:27Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T03:57Z: ALL DONE holds; only plugins (03:10Z) and catalogs (03:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 03:40Z nothing new, heron session 357 (03:51Z) nothing open; egret idle 03:27Z (FRESH 06d6468b17c5 newest); no stale locks.
@@ -104,4 +105,3 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 2026-11-18T04:58Z: package pkg/5f02e5b3 green (Dev CI 44231671868 + 4 service runs) -> pre-release server-1.0.0-5f02e5b35611 published 04:09Z, the build for the maintainer's rerun (52(b)/55(a)/Q54-2); main CI 44215691965 green, no new code; lanes nothing open; marten/heron idle; egret FRESH 5f02e5b35611 pending; no stale locks.
 - 2026-11-18T03:57Z: main green (push Dev CI 44215691965 on 5f02e5b3); maintainer answers taken (Q-52a c9d9b4f4, Q-55a defaults a3a7f029, Q54-1 f1ad5b22); ITEM 54 DONE, ITEM 55(c) DONE + LANE 6 DONE; red 44207492475 was SpotBugs, fixed 6c8f66de; package pkg/5f02e5b3 (44231671868 + 4 service runs) running; 52(b)/55(a) wait for stand rerun; marten/heron/egret idle; no stale locks.
 - 2026-11-17T21:58Z: main green (full Dev CI 44175118886 / 44180696125 green; 44179759902 cancelled, superseded); lane 5 merged 55(a) cluster-snapshot reuse / file-plan refresh-ahead / member-check memory (66b19368), new Q-55a-mc; lane 6 55(c) step 3 merged 5b751015 (not DONE); catalogs 54 step 3 part 4 (HDFS point perf 44178894320 green, unread); egret FRESH f4feb0d5e404 DONE; marten/heron idle; no stale locks.
-- 2026-11-17T20:57Z: main green again (Dev CI 44162578438 / 44166060698 / 44169154810 green; item 35 check fixed by lane 5); lane 6 55(c) step 1 merged 72edab3d/e3d14331 (not DONE); lane 5 fix/55a cluster-snapshot work (Dev CI 44174010663 green, DC tail perf 44174076316 running); catalogs 54 step 3 part 3 (HDFS point perf 44172681969 running); egret FRESH f4feb0d5e404 still running; marten/heron finish mode idle; no stale locks.
