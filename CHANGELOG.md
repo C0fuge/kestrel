@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Statement and prepared metadata describe ENUM dictionary values with their Arrow value types,
+  matching DoGet for nested and empty enum results.
 - Direct DuckDB Arrow result streams send their dictionaries with the schema, fixing ENUM
   columns, nested enum lists and empty enum results failing before the first batch.
 - Closing the node-local copy cache fails unfinished acquisitions, rejects new requests and

@@ -2678,8 +2678,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         try (PreparedStatement ps = session.conn.prepareStatement(duckSql);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) ps.executeQuery();
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
-            org.apache.arrow.vector.types.pojo.Schema schema =
-                    reader.getVectorSchemaRoot().getSchema();
+            org.apache.arrow.vector.types.pojo.Schema schema = messageSchema(reader);
             LogUtil.logTiming(t, "duckdb.describeSql", "fields=" + schema.getFields().size());
             return schema;
         } catch (Exception e) {
@@ -3481,7 +3480,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         }, DESCRIBE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         try (org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) ps.executeQuery();
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
-            return reader.getVectorSchemaRoot().getSchema();
+            return messageSchema(reader);
         } catch (java.sql.SQLException e) {
             if (timedOut.get()) {
                 throw new IllegalArgumentException("The query took longer than "
@@ -3491,6 +3490,24 @@ public final class DuckDbAdapter implements AutoCloseable {
         } finally {
             timer.cancel(false);
         }
+    }
+
+    /**
+     * Returns the result schema with dictionary value types for Arrow IPC metadata.
+     *
+     * @param reader live result reader and dictionary provider
+     * @return schema in Arrow message format
+     * @throws IOException when the result schema cannot be read
+     */
+    static org.apache.arrow.vector.types.pojo.Schema messageSchema(ArrowReader reader) throws IOException {
+        org.apache.arrow.vector.types.pojo.Schema schema = reader.getVectorSchemaRoot().getSchema();
+        if (reader.getDictionaryIds().isEmpty()) {
+            return schema;
+        }
+        Set<Long> dictionaryIds = new HashSet<>();
+        return new org.apache.arrow.vector.types.pojo.Schema(schema.getFields().stream()
+                .map(field -> org.apache.arrow.vector.util.DictionaryUtility.toMessageFormat(
+                        field, reader, dictionaryIds)).toList(), schema.getCustomMetadata());
     }
 
     /**
