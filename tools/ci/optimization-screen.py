@@ -21,6 +21,8 @@ HARNESS = Path("flight-server/src/test/java/pro/surpin/data/arrowflight/server")
 IMAGE = "maven:3.9-eclipse-temurin-21"
 JVM = "-Xms512m -Xmx2g -XX:MaxDirectMemorySize=1g -XX:ActiveProcessorCount=4 -Duser.home=/tmp"
 KIND_METRICS = ("queries", "qps", "p50_ms", "p95_ms", "p99_ms", "max_ms")
+DRAIN_SECONDS_PER_STEP = 30
+PLANNED_WORK_LIMIT_SECONDS = 1500
 
 
 def checked_heavy_every(value):
@@ -32,6 +34,52 @@ def checked_heavy_every(value):
     if not 0 <= value <= 64:
         raise ValueError("Heavy query interval must be an integer in 0..64")
     return value
+
+
+def checked_warmup_seconds(value):
+    """Accept a common duration override, with zero preserving the legacy automatic duration."""
+    try:
+        value = int(value)
+    except ValueError as error:
+        raise ValueError("Warmup seconds must be an integer in 0..120") from error
+    if not 0 <= value <= 120:
+        raise ValueError("Warmup seconds must be an integer in 0..120")
+    return value
+
+
+def checked_warmup_mode(value):
+    """Keep common warmup placement explicit rather than accepting truthy strings."""
+    if value not in ("legacy", "per-step"):
+        raise ValueError("Warmup mode must be legacy or per-step")
+    return value
+
+
+def warmup_plan(seconds, clients, configured_seconds=0, mode="legacy"):
+    """Describe the same resolved warmup sequence as the overlaid Java harness."""
+    duration = configured_seconds or max(3, seconds // 3)
+    steps = ([{"label": "warmup-c8", "clients": 8, "seconds": duration}] if mode == "legacy" else
+             [{"label": f"warmup-step-{index}-c{count}", "clients": count, "seconds": duration}
+              for index, count in enumerate(clients, 1)])
+    return {"mode": mode, "configured_seconds": configured_seconds, "steps": steps}
+
+
+def verify_warmup_plan(folder, seconds, clients, configured_seconds, mode):
+    """Require an opt-in warmup request to match the harness's actual immutable plan."""
+    warmup = warmup_plan(seconds, clients, configured_seconds, mode)["steps"]
+    measured = [{"label": f"c{count}", "clients": count, "seconds": seconds, "measured": True} for count in clients]
+    if mode == "legacy":
+        steps = [{**warmup[0], "measured": False}, *measured]
+    else:
+        steps = [step for pair in zip(warmup, measured) for step in ({**pair[0], "measured": False}, pair[1])]
+    expected = [{"warmup_mode": mode, "configured_warmup_seconds": str(configured_seconds), "step": str(index),
+                 **{key: str(value).lower() for key, value in step.items()}} for index, step in enumerate(steps, 1)]
+    path = folder / "warmup-plan.csv"
+    if not path.is_file():
+        raise ValueError("Requested warmup controls require the updated candidate harness and warmup-plan.csv")
+    with path.open() as source:
+        actual = list(csv.DictReader(source))
+    if actual != expected:
+        raise ValueError(f"Actual warmup plan differs from the common request in {folder.name}")
 
 
 def sample_summary(rows, seconds):
@@ -86,11 +134,22 @@ def checked_options(text):
     return options
 
 
-def planned_measurement_seconds(rounds, seconds, clients):
-    """Bound trial work so the job retains time for builds and artifact upload."""
-    planned = 2 * rounds * (seconds * len(clients) + max(3, seconds // 3) + 20) + 30
-    if len(clients) > 8 or planned > 900:
-        raise ValueError("At most eight concurrency steps and fifteen planned measurement minutes are allowed")
+def nominal_measurement_seconds(rounds, seconds, clients, warmup_seconds=0, warmup_mode="legacy"):
+    """Count configured query-loop durations without drain, setup or build allowances."""
+    warmup = sum(step["seconds"] for step in warmup_plan(seconds, clients, warmup_seconds, warmup_mode)["steps"])
+    preflight_warmup = sum(step["seconds"] for step in warmup_plan(3, [1], warmup_seconds, warmup_mode)["steps"])
+    return 2 * rounds * (seconds * len(clients) + warmup) + 3 + preflight_warmup
+
+
+def planned_measurement_seconds(rounds, seconds, clients, warmup_seconds=0, warmup_mode="legacy"):
+    """Reserve every step's bounded in-flight drain plus setup before admitting a trial plan."""
+    warmup_steps = len(warmup_plan(seconds, clients, warmup_seconds, warmup_mode)["steps"])
+    preflight_steps = 1 + len(warmup_plan(3, [1], warmup_seconds, warmup_mode)["steps"])
+    steps = 2 * rounds * (len(clients) + warmup_steps) + preflight_steps
+    planned = (nominal_measurement_seconds(rounds, seconds, clients, warmup_seconds, warmup_mode)
+               + steps * DRAIN_SECONDS_PER_STEP + 2 * rounds * 20 + 24)
+    if len(clients) > 8 or planned > PLANNED_WORK_LIMIT_SECONDS:
+        raise ValueError("At most eight concurrency steps and twenty-five planned work minutes are allowed")
     return planned
 
 
@@ -230,15 +289,22 @@ def main():
     seconds = int(os.environ.get("SCREEN_SECONDS", "15"))
     clients = [int(value) for value in os.environ.get("SCREEN_CLIENTS", "1,8,32").split(",")]
     heavy_every = checked_heavy_every(os.environ.get("SCREEN_HEAVY_EVERY", "0"))
+    warmup_seconds = checked_warmup_seconds(os.environ.get("SCREEN_WARMUP_SECONDS", "0"))
+    warmup_mode = checked_warmup_mode(os.environ.get("SCREEN_WARMUP_MODE", "legacy"))
     if not 1 <= rounds <= 5 or not 3 <= seconds <= 60 or not clients or any(not 1 <= c <= 64 for c in clients):
         raise ValueError("Expected 1..5 rounds, 3..60 seconds and 1..64 clients")
     if clients != sorted(set(clients)):
         raise ValueError("Client counts must be unique and increasing")
-    planned = planned_measurement_seconds(rounds, seconds, clients)
+    planned = planned_measurement_seconds(rounds, seconds, clients, warmup_seconds, warmup_mode)
     mode = os.environ.get("SCREEN_CPU_MODE", "pinned")
     if mode not in ("pinned", "quota"):
         raise ValueError("CPU mode must be pinned or quota")
     options = checked_options(os.environ.get("SCREEN_VARIANT_OPTIONS", ""))
+    custom_warmup = warmup_seconds != 0 or warmup_mode != "legacy"
+    if custom_warmup:
+        harness = args.candidate.resolve() / HARNESS / "SmallQueryThroughputPerfTest.java"
+        if not harness.is_file() or "perf.warmupMode" not in harness.read_text():
+            raise ValueError("Requested warmup controls require the updated candidate harness")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     sources = {"A": args.baseline.resolve(), "B": args.candidate.resolve()}
@@ -256,7 +322,13 @@ def main():
               "variant": os.environ.get("SCREEN_VARIANT_NAME", "custom"),
               "clients": clients, "variant_options": options, "cpu_mode": mode, "cpu_set": cpu_set,
               "heavy_every": heavy_every,
+              "warmup_plan": warmup_plan(seconds, clients, warmup_seconds, warmup_mode),
+              "preflight_warmup_plan": warmup_plan(3, [1], warmup_seconds, warmup_mode),
               "planned_measurement_seconds": planned,
+              "nominal_workload_seconds": nominal_measurement_seconds(
+                  rounds, seconds, clients, warmup_seconds, warmup_mode),
+              "drain_seconds_per_step": DRAIN_SECONDS_PER_STEP,
+              "planned_work_limit_seconds": PLANNED_WORK_LIMIT_SECONDS,
               "scope": "embedded server and clients share one JVM; screening ratios, not production QPS"})
     command_log(["lscpu"], output / "hardware.txt")
     command_log(["docker", "version"], output / "docker-version.txt")
@@ -287,9 +359,13 @@ def main():
               "-Dtest=SmallQueryThroughputPerfTest", "-Dsurefire.failIfNoSpecifiedTests=false",
               "-Dcheckstyle.skip", "-Dspotbugs.skip", "-Dperf.threads=2", "-Dperf.shared=2:512MB",
               "-Dperf.dataDir=/data", "-Dperf.output=/output", "-Dperf.heavyEvery=" + str(heavy_every)]
+    if custom_warmup:
+        common += ["-Dperf.warmupSeconds=" + str(warmup_seconds), "-Dperf.warmupMode=" + warmup_mode]
     # Generate and warm the exact data set before either ranked side; preserve this attempt too.
     run_container(prefix + "-preflight", sources["A"], output / "preflight", data, cache,
                   common + ["-Dperf.clients=1", "-Dperf.seconds=3"], mode, cpu_set, [])
+    if custom_warmup:
+        verify_warmup_plan(output / "preflight", 3, [1], warmup_seconds, warmup_mode)
     measurements, evidence = [], []
     for index in range(1, rounds + 1):
         order = ("A", "B") if index % 2 else ("B", "A")
@@ -299,6 +375,8 @@ def main():
             run_container(prefix + f"-r{index}-" + side.lower(), sources[side], folder, data, cache,
                           common + ["-Dperf.clients=" + ",".join(map(str, clients)), "-Dperf.seconds=" + str(seconds)],
                           mode, cpu_set, options if side == "B" else [])
+            if custom_warmup:
+                verify_warmup_plan(folder, seconds, clients, warmup_seconds, warmup_mode)
             pair[side] = summary_of(folder, clients)
         overlap = matching_answers(pair["A"][1], pair["B"][1])
         evidence.append({"round": index, "order": list(order), "overlapping_answers": overlap, "mismatches": 0})
@@ -310,6 +388,8 @@ def main():
     lines = ["## Optimization screening", "", "Candidate / baseline ratios on one shared GitHub runner.",
              "Embedded server and clients share four CPUs and one JVM. Absolute QPS is not a production estimate.",
              "", f"A: `{commits['A']}`; B: `{commits['B']}`; CPU mode: `{mode}`; heavy interval: `{heavy_every}`.", "",
+             f"Common warmup: `{warmup_mode}`, duration `{warmup_seconds or 'auto'}` seconds; "
+             "the resolved plan is retained for every attempt.", "",
              "| Clients | QPS ratio | p95 ratio | p99 ratio | CPU/query ratio |", "|---:|---:|---:|---:|---:|"]
     for concurrency in clients:
         key = str(concurrency)
