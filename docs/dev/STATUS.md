@@ -2,6 +2,27 @@
 
 ## Current checkpoint (2026-11-27)
 
+Latest integration `56b4eba6` adds optional process/caller CPU deltas behind the
+existing `streamTimingLog` switch (default false), plus versioned TPC-H/restart
+answer checks, raw per-query samples, host/pressure telemetry and failure-artifact
+retention. Disabled stream timing creates no CPU sampler or counter reads. Screening
+is manual-only; rejected integer-literal execution reuse and schema IPC-cache
+experiments are not included. See [CPU timing](STREAM-TIMING-CPU.md),
+[screening](OPTIMIZATION-SCREENING.md), [TPC-H telemetry](TPCH-TELEMETRY.md) and the
+[literal coercion counterexample](LITERAL-COERCION-REJECTION-2026-11-27.md).
+
+[Full Dev CI 46045412981](https://github.com/C0fuge/kestrel/actions/runs/46045412981)
+passed on the exact integration commit: 2,120 tests, zero failures/errors and one
+unchanged JDBC skip, with Checkstyle and SpotBugs clean. All prior test-class counts
+remain unchanged; four CPU tests and 34 benchmark-oracle/artifact tests were added.
+Both concurrency gates (2 GiB and 8 GiB direct-memory limits) returned 48/48 exact
+answers; both cgroup memory-pressure gates returned exact answers with zero OOM kills. PRs #4 and #5 were
+integrated by a local fast-forward with verified author/committer metadata. This
+adds measurement capability and correctness coverage, not a claimed throughput gain.
+No release package or production deployment was made.
+
+### Earlier correctness batch
+
 Prepared-statement GetSchema now uses bound values; unsupported multirow parameter
 uploads are rejected before IPC copying. Nested SQL block comments are handled correctly,
 including a regression through a real Flight SQL client. These correctness fixes are
