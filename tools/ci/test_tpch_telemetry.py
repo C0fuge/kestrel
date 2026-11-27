@@ -54,6 +54,9 @@ def valid_run(directory):
     (directory / "queries").mkdir(parents=True)
     for name in ("q01", "q02"):
         (directory / "queries" / (name + ".sql")).write_text("select 1")
+        (directory / "queries" / (name + ".rows")).write_text("1")
+        (directory / "queries" / (name + ".checksum")).write_text("0000000000000001")
+    (directory / "queries/checksum-version.txt").write_text(TELEMETRY["CHECKSUM_VERSION"])
     (directory / "inputs.json").write_text(json.dumps({
         "rounds": "2", "clients": "2", "client": "java", "quick": True,
         "baseline": "", "extra": "", "more": "", "plain": False}))
@@ -79,7 +82,7 @@ def valid_run(directory):
     rows = [{"query": query, "client": client, "round": round_number, "warmup": int(round_number == 0),
              "start_epoch_ms": 1700000000000, "start_ns": 1, "latency_ns": 100,
              "rows": 1, "checksum": "0000000000000001", "arrow_bytes": 8, "batches": 1,
-             "ok": 1, "error_type": ""}
+             "ok": 1, "error_type": "", "checksum_version": TELEMETRY["CHECKSUM_VERSION"]}
             for query in ("q01", "q02") for client in range(2) for round_number in range(3)]
     write_rows(label, rows)
     return label, rows
@@ -110,6 +113,8 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertEqual({"count": 2, "p50_ns": 90, "p95_ns": 90, "p99_ns": 90, "max_ns": 90,
                               "arrow_buffer_bytes": 80, "table_batches": 4}, summary["queries"]["q01"])
             self.assertEqual("q01", json.loads((directory / "first-query.json").read_text())["query"])
+            self.assertEqual(RAW["CHECKSUM_VERSION"], samples[0]["checksum_version"])
+            self.assertEqual(RAW["CHECKSUM_VERSION"], json.loads((directory / "client.json").read_text())["checksum_version"])
             with self.assertRaises(FileExistsError):
                 RAW["RawRun"](directory)
 
@@ -150,6 +155,41 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertEqual(["docker", "rm", "task-container"], commands[-1])
             self.assertFalse(any("-f" in command for command in commands))
 
+    def test_finish_restores_writable_ownership_for_plain_client_derivation(self):
+        """Host derivation must work after a stopped plain container created a root-owned client directory."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            label = directory / "plain"
+            client = label / "client"
+            client.mkdir(parents=True)
+            raw = client / "samples.csv"
+            raw.write_text("query,round,warmup,latency_ns,ok\nq01,0,1,100,1\nq01,1,0,10,1\n")
+            original = raw.read_bytes()
+            ownership = {"runner": False}
+            write_text = Path.write_text
+
+            def owned_write(path, *args, **kwargs):
+                if path.parent == client and not ownership["runner"]:
+                    raise PermissionError("client directory is owned by the container root user")
+                return write_text(path, *args, **kwargs)
+
+            def diagnostic(command, **kwargs):
+                if command[:3] == ["sudo", "chown", "-R"]:
+                    self.assertEqual(f"{os.getuid()}:{os.getgid()}", command[3])
+                    self.assertEqual(str(label), command[4])
+                    ownership["runner"] = True
+                return subprocess.CompletedProcess(command, 0, "complete evidence\n", "")
+
+            with mock.patch.object(Path, "write_text", owned_write), \
+                    mock.patch.object(subprocess, "run", side_effect=diagnostic):
+                with self.assertRaises(PermissionError):
+                    TELEMETRY["summarize"](directory)
+                TELEMETRY["finish"]("task-owned-plain-container", label)
+                TELEMETRY["summarize"](directory)
+            self.assertTrue((client / "query-percentiles.json").is_file())
+            self.assertTrue((directory / "SHA256SUMS").is_file())
+            self.assertEqual(original, raw.read_bytes())
+
     def test_monitor_flushes_raw_process_and_heap_evidence(self):
         """A complete sampling interval retains unparsed counters plus the heap diagnostic."""
         with tempfile.TemporaryDirectory() as temp:
@@ -173,6 +213,33 @@ class TpchTelemetryTest(unittest.TestCase):
             command = json.loads((directory / "monitor-command.json").read_text())["argv"]
             self.assertIn("/sys/fs/cgroup/cpu.stat", command[-1])
             self.assertIn("/proc/1/io", command[-1])
+
+    def test_optional_host_and_pressure_errors_do_not_weaken_required_counter_gate(self):
+        """Unavailable PSI remains scoped evidence while missing required counters still fail."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            files = resource_fixture()
+            for path in TELEMETRY["SYSTEM"]["CGROUP_PRESSURE_FILES"]:
+                files[path] = {"status": 1, "text": "unsupported kernel"}
+            raw = "\n".join(f"@@FILE {path}\n{entry['text']}\n@@STATUS {path} {entry['status']}"
+                            for path, entry in files.items())
+
+            def sample(command, **kwargs):
+                (directory / "monitor.stop").touch()
+                return subprocess.CompletedProcess(command, 0, raw, "")
+
+            host = {"scope": "runner_host", "optional": True,
+                    "files": {"/proc/stat": {"status": 13, "text": "", "scope": "runner_host", "optional": True}}}
+            with mock.patch.object(subprocess, "run", side_effect=sample), mock.patch("time.sleep"), \
+                    mock.patch.dict(TELEMETRY["SYSTEM"], {"host_sample": lambda: host}):
+                TELEMETRY["monitor"]("task-container", directory)
+            row = json.loads((directory / "resources.jsonl").read_text())
+            self.assertEqual(host, row["optional_host"])
+            self.assertTrue(all(entry["status"] == 1 and entry["scope"] == "container_cgroup"
+                                and entry["optional"] for entry in row["optional_cgroup_pressure"].values()))
+            self.assertEqual([], TELEMETRY["resource_errors"](row["files"]))
+            del row["files"]["/sys/fs/cgroup/memory.current"]
+            self.assertIn("/sys/fs/cgroup/memory.current", TELEMETRY["resource_errors"](row["files"]))
 
     def test_protocol_keeps_early_read_failure_before_later_success(self):
         """Per-file framing retains an early missing counter even when the shell's last cat succeeds."""
@@ -243,6 +310,30 @@ class TpchTelemetryTest(unittest.TestCase):
             (directory / "run-plan.json").unlink()
             with self.assertRaisesRegex(ValueError, "requested run plan"):
                 TELEMETRY["validate"](directory)
+
+    def test_oracle_gate_rejects_wrong_values_and_mismatched_versions(self):
+        """A successful complete client whose values disagree with generation cannot pass ranking."""
+        with tempfile.TemporaryDirectory() as temp:
+            for case in ("wrong_checksum", "wrong_rows", "old_raw_version", "old_reference_version", "missing_reference"):
+                with self.subTest(case=case):
+                    directory = Path(temp) / case
+                    label, rows = valid_run(directory)
+                    if case == "wrong_checksum":
+                        # Every repeated answer agrees with itself, but the independent oracle says 1.
+                        for row in rows:
+                            row["checksum"] = "0000000000000002"
+                    elif case == "wrong_rows":
+                        rows[0]["rows"] = 2
+                    elif case == "old_raw_version":
+                        rows[0]["checksum_version"] = "legacy"
+                    elif case == "old_reference_version":
+                        (directory / "queries/checksum-version.txt").write_text("legacy")
+                    else:
+                        (directory / "queries/q01.checksum").unlink()
+                    write_rows(label, rows)
+                    with self.assertRaises(ValueError):
+                        TELEMETRY["validate"](directory)
+                    self.assertTrue((label / "client/queries.csv").exists())
 
     def test_validation_rejects_unreadable_or_stale_jfr_evidence(self):
         """Nonempty files, failed extraction, invalid JSON and post-extraction changes cannot prove readability."""

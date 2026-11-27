@@ -294,7 +294,27 @@ class DuckDbAdapterTest {
         assertEquals(1, lines.size(), log.toString(java.nio.charset.StandardCharsets.UTF_8));
         String line = lines.get(0);
         assertTrue(line.matches(".*startMs=\\d{13} executeMs=\\d+ firstBatchMs=\\d+ totalMs=\\d+ duckMs=\\d+"
-                + " sendMs=\\d+ backpressureMs=\\d+ rows=250 batches=\\d+ sql='SELECT range.*"), line);
+                + " sendMs=\\d+ backpressureMs=\\d+ rows=250 batches=\\d+"
+                + " executeProcessCpuNs=(?:-1|\\d+) executeCallerThreadCpuNs=(?:-1|\\d+)"
+                + " totalProcessCpuNs=(?:-1|\\d+) totalCallerThreadCpuNs=(?:-1|\\d+) sql='SELECT range.*"), line);
+        java.util.Map<String, Long> cpu = new java.util.HashMap<>();
+        java.util.regex.Matcher counters = java.util.regex.Pattern.compile("(\\w+CpuNs)=(-?\\d+)").matcher(line);
+        while (counters.find()) {
+            cpu.put(counters.group(1), Long.parseLong(counters.group(2)));
+        }
+        for (String scope : List.of("Process", "CallerThread")) {
+            long execute = cpu.get("execute" + scope + "CpuNs");
+            long total = cpu.get("total" + scope + "CpuNs");
+            assertTrue(execute == -1 || total == -1 || total >= execute, line);
+        }
+        if (java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+                instanceof com.sun.management.OperatingSystemMXBean process && process.getProcessCpuTime() >= 0) {
+            assertTrue(cpu.get("executeProcessCpuNs") >= 0 && cpu.get("totalProcessCpuNs") >= 0, line);
+        }
+        java.lang.management.ThreadMXBean caller = java.lang.management.ManagementFactory.getThreadMXBean();
+        if (caller.isCurrentThreadCpuTimeSupported() && caller.isThreadCpuTimeEnabled()) {
+            assertTrue(cpu.get("executeCallerThreadCpuNs") >= 0 && cpu.get("totalCallerThreadCpuNs") >= 0, line);
+        }
         verify(listener, org.mockito.Mockito.atLeastOnce()).putNext();
     }
 

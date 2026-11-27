@@ -11,8 +11,6 @@ the checksum is computed the same way, so it is comparable with tpch-adbc.py's) 
 ``SELECT name, value FROM duckdb_settings()`` to <settings out> (one ``name=value`` per line). Exits non-zero
 when a row count differs from ``qNN.rows``.
 """
-import decimal
-import hashlib
 import os
 from pathlib import Path
 import runpy
@@ -22,25 +20,16 @@ import time
 import duckdb
 
 RawRun = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["RawRun"]
+CHECKSUM = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))
+normalized = CHECKSUM["canonical_value"]
 
 TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
-
-
-def normalized(value):
-    """Renders a cell with floating-point and decimal values rounded to 2 decimals."""
-    if isinstance(value, (float, decimal.Decimal)):
-        return f"{value:.2f}"
-    return "None" if value is None else str(value)
 
 
 def read(db, sql):
     """Return rows, the existing checksum, referenced Arrow bytes and table chunk count."""
     table = db.execute(sql).fetch_arrow_table()
-    total = 0
-    for row in table.to_pylist():
-        text = "|".join(normalized(v) for v in row.values()) + "|"
-        digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
-        total = (total + int.from_bytes(digest, "little")) % (1 << 64)
+    total = CHECKSUM["checksum_rows"](row.values() for row in table.to_pylist())
     return table.num_rows, total, table.nbytes, len(table.to_batches())
 
 

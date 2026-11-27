@@ -6,9 +6,12 @@ Prepared-statement GetSchema now uses bound values; unsupported multirow paramet
 uploads are rejected before IPC copying. Nested SQL block comments are handled correctly,
 including a regression through a real Flight SQL client. These correctness fixes are
 integrated in `25b225fa`; experimental performance switches are not enabled or included.
+`fc89a55a` also fixes concurrent root-JDBC inspection in the shared-describe test and
+retains both worker failures in diagnostics; its ten concurrent describe rounds and
+timeouts are unchanged.
 
-[Full Dev CI 46026380100](https://github.com/C0fuge/kestrel/actions/runs/46026380100)
-passed on the identical source tree: 2,081 tests, zero failures/errors and one skipped,
+[Full Dev CI 46035230051](https://github.com/C0fuge/kestrel/actions/runs/46035230051)
+passed on `fc89a55a`: 2,082 tests, zero failures/errors and one skipped,
 Checkstyle and SpotBugs. Follow-up gates passed 48/48 exact concurrent distributed
 answers and both cgroup memory-pressure scenarios with zero OOM kills. The workflow
 installs reactor artifacts before standalone checks. No release package or production

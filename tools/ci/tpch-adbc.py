@@ -6,13 +6,10 @@ The ADBC twin of TpchPerfTest for tpch-perf.yml (input client=adbc, STATUS "Bug 
 2026-10-29: the S3 slowdown was measured by the screening with ADBC). Runs one unmeasured pass,
 then <rounds> measured passes, and prints the same lines as TpchPerfTest
 (``q01 r1 1234.5 ms rows 4 sum <checksum>`` per query and pass, ``total r<n> <seconds> s`` per
-pass). The checksum is order-independent with floating-point and decimal values rounded to 2
-decimals; it is comparable between configurations measured with this script, not with
-TpchPerfTest's. Exits non-zero when an answer's row count differs from ``qNN.rows`` (or is
+pass). The versioned checksum is shared with native generation and Java, using exact numeric
+values rounded HALF_EVEN to 2 decimals. Exits non-zero when an answer's row count differs from ``qNN.rows`` (or is
 empty when that file is missing).
 """
-import decimal
-import hashlib
 import os
 from pathlib import Path
 import runpy
@@ -22,24 +19,15 @@ import time
 import adbc_driver_flightsql.dbapi as flightsql
 
 RawRun = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["RawRun"]
-
-
-def normalized(value):
-    """Renders a cell with floating-point and decimal values rounded to 2 decimals."""
-    if isinstance(value, (float, decimal.Decimal)):
-        return f"{value:.2f}"
-    return "None" if value is None else str(value)
+CHECKSUM = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))
+normalized = CHECKSUM["canonical_value"]
 
 
 def read(cursor, sql):
     """Return rows, the existing checksum, referenced Arrow bytes and table chunk count."""
     cursor.execute(sql)
     table = cursor.fetch_arrow_table()
-    total = 0
-    for row in table.to_pylist():
-        text = "|".join(normalized(v) for v in row.values()) + "|"
-        digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
-        total = (total + int.from_bytes(digest, "little")) % (1 << 64)
+    total = CHECKSUM["checksum_rows"](row.values() for row in table.to_pylist())
     return table.num_rows, total, table.nbytes, len(table.to_batches())
 
 

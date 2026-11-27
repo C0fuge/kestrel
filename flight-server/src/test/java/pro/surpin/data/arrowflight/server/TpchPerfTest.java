@@ -1,7 +1,6 @@
 package pro.surpin.data.arrowflight.server;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,8 +39,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code -Dperf.queries} a directory of {@code q01.sql} .. {@code q22.sql} on its tables. Runs
  * one unmeasured pass, then {@code -Dperf.rounds} (default 2) measured passes, and prints one
  * line per query and pass ({@code q01 r1 1234.5 ms rows 4 sum <checksum>}) plus one
- * {@code total r<n> <seconds> s} line per pass. The checksum is order-independent with
- * floating-point values rounded, so runs with other thread counts can be compared. Asserts the
+ * {@code total r<n> <seconds> s} line per pass. The versioned checksum is order-independent with
+ * exact numeric values rounded to two decimals, so equivalent Arrow scalar types compare equally. Asserts the
  * row count of every answer: the one in {@code qNN.rows} next to the query when present, else
  * at least one row. {@code -Dperf.clients=N} (default 1) runs each pass on N concurrent clients,
  * each starting at another query, and tags their lines {@code c0} .. {@code c<N-1>}; a pass's
@@ -197,59 +196,32 @@ class TpchPerfTest {
     private static TpchQuerySamples.Answer read(FlightSqlClient client, FlightInfo info,
             CallOption header, boolean collectTransfer) throws Exception {
         long rows = 0;
-        long sum = 0;
+        TpchChecksum checksum = new TpchChecksum();
         long bytes = collectTransfer ? 0 : -1;
         long batches = collectTransfer ? 0 : -1;
         for (FlightEndpoint endpoint : info.getEndpoints()) {
             try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
                 while (stream.next()) {
                     VectorSchemaRoot root = stream.getRoot();
+                    List<FieldVector> vectors = root.getFieldVectors();
                     if (collectTransfer) {
-                        for (FieldVector vector : root.getFieldVectors()) {
+                        for (FieldVector vector : vectors) {
                             bytes += vector.getBufferSize();
                         }
                         batches++;
                     }
                     for (int row = 0; row < root.getRowCount(); row++) {
-                        StringBuilder text = new StringBuilder();
-                        for (FieldVector vector : root.getFieldVectors()) {
-                            text.append(normalized(vector.getObject(row))).append('|');
+                        Object[] values = new Object[vectors.size()];
+                        for (int column = 0; column < values.length; column++) {
+                            values[column] = TpchArrowValues.cell(vectors.get(column), row);
                         }
-                        sum += mix(text.toString().hashCode());
+                        checksum.addRow(values);
                     }
                     rows += root.getRowCount();
                 }
             }
         }
-        return new TpchQuerySamples.Answer(rows, sum, bytes, batches);
+        return new TpchQuerySamples.Answer(rows, checksum.value(), bytes, batches);
     }
 
-    /**
-     * Renders a value with floating-point and decimal values rounded to 2 decimals, so sums
-     * added up in another order compare equal.
-     *
-     * @param value cell value, may be null
-     * @return text
-     */
-    static String normalized(Object value) {
-        if (value instanceof Double || value instanceof Float) {
-            return String.format(Locale.ROOT, "%.2f", ((Number) value).doubleValue());
-        }
-        if (value instanceof BigDecimal d) {
-            return String.format(Locale.ROOT, "%.2f", d);
-        }
-        return String.valueOf(value);
-    }
-
-    /**
-     * Spreads a row hash over 64 bits before it is added up.
-     *
-     * @param hash row hash
-     * @return mixed value
-     */
-    static long mix(int hash) {
-        long z = hash * 0x9E3779B97F4A7C15L;
-        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        return z ^ (z >>> 31);
-    }
 }

@@ -13,7 +13,9 @@ import runpy
 import subprocess
 import time
 
+SYSTEM = runpy.run_path(str(Path(__file__).with_name("benchmark-system.py")))
 percentiles = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["percentiles"]
+CHECKSUM_VERSION = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))["VERSION"]
 COUNTERS = ("cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.stat",
             "memory.events", "memory.max", "memory.swap.max", "io.stat", "pids.current")
 EVENTS = ("jdk.CPULoad,jdk.ThreadCPULoad,jdk.GCHeapSummary,jdk.GarbageCollection,"
@@ -146,18 +148,24 @@ def capture(command, path):
 def monitor(container, directory):
     """Flush timestamped raw cgroup and process CPU/RSS/I/O counters once per second."""
     command = ["docker", "exec", container, "sh", "-c",
-               "for f in " + " ".join(RESOURCE_FILES) + "; "
-               "do printf '\\n@@FILE %s\\n' \"$f\"; cat \"$f\"; code=$?; "
-               "printf '\\n@@STATUS %s %s\\n' \"$f\" \"$code\"; done"]
+               SYSTEM["framed_read_command"]((*RESOURCE_FILES, *SYSTEM["CGROUP_PRESSURE_FILES"]))]
     save_json(directory / "monitor-command.json", {"argv": command, "period_seconds": 1,
-              "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "page_bytes": os.sysconf("SC_PAGE_SIZE")})
+              "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "page_bytes": os.sysconf("SC_PAGE_SIZE"),
+              "required_scope": "container_process_and_cgroup",
+              "optional_host_scope": "runner_host", "optional_pressure_scope": "container_cgroup"})
     with (directory / "resources.jsonl").open("x") as output:
         index = 0
         while not (directory / "monitor.stop").exists():
             started = time.monotonic()
             result = run(command, timeout=15)
             sample = {"timestamp_ns": time.time_ns(), "status": result.returncode,
+                      "scope": "container_process_and_cgroup",
                       "stdout": result.stdout, "stderr": result.stderr, "files": parsed_files(result.stdout)}
+            sample["optional_host"] = SYSTEM["host_sample"]()
+            sample["optional_cgroup_pressure"] = {
+                path: {**sample["files"].get(path, {"status": -1, "text": "not captured"}),
+                       "scope": "container_cgroup", "optional": True}
+                for path in SYSTEM["CGROUP_PRESSURE_FILES"]}
             if directory.name != "plain" and index % 5 == 0:
                 heap = run(["docker", "exec", container, "jcmd", "1", "GC.heap_info"], timeout=15)
                 sample["heap"] = {"status": heap.returncode, "stdout": heap.stdout, "stderr": heap.stderr}
@@ -177,8 +185,9 @@ def finish(container, directory):
              '"path":{{json .Path}},"args":{{json .Args}},"memory":{{json .HostConfig.Memory}},'
              '"memory_swap":{{json .HostConfig.MemorySwap}},"nano_cpus":{{json .HostConfig.NanoCpus}},'
              '"cpuset":{{json .HostConfig.CpusetCpus}}}', container], directory / "container.json")
-    # JVM repository directories are owner-only, and the server uses the image's root user.
-    capture(["sudo", "chmod", "-R", "a+rX", str(directory)], directory / "artifact-permissions.log")
+    # Only this stopped task's mounted output is reassigned; plain/JFR files were written as root.
+    capture(["sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory)],
+            directory / "artifact-permissions.log")
     log = (directory / "server.log").read_text()
     (directory / "warnings-errors.log").write_text("\n".join(
         line for line in log.splitlines() if re.search(r"\bWARN(?:ING)?\b|\bERROR\b", line)) + "\n")
@@ -242,6 +251,13 @@ def query_errors(label, plan, names, rounds):
     """Require each requested query/client/round exactly once, including the warmup round."""
     filename = "queries.csv" if plan["client"] == "java" else "samples.csv"
     try:
+        queries = label.parent / "queries"
+        if (queries / "checksum-version.txt").read_text().strip() != CHECKSUM_VERSION:
+            return ["unsupported or mismatched oracle checksum version"]
+        expected_checksums = {name: (queries / (name + ".checksum")).read_text().strip() for name in names}
+        expected_rows = {name: int((queries / (name + ".rows")).read_text().strip()) for name in names}
+        if any(not re.fullmatch(r"[0-9a-f]{16}", value) for value in expected_checksums.values()):
+            return ["invalid oracle checksum reference"]
         with (label / "client" / filename).open() as source:
             rows = list(csv.DictReader(source))
         slots = []
@@ -256,6 +272,10 @@ def query_errors(label, plan, names, rounds):
                 return ["missing query latency/answer/buffer evidence"]
             if not re.fullmatch(r"[0-9a-f]{16}", row["checksum"]):
                 return ["invalid query checksum"]
+            if row["checksum_version"] != CHECKSUM_VERSION:
+                return ["unsupported or mismatched raw checksum version"]
+            if row["checksum"] != expected_checksums[row["query"]] or int(row["rows"]) != expected_rows[row["query"]]:
+                return [f"oracle answer mismatch for {row['query']} client {client} round {round_number}"]
             if plan["client"] == "java":
                 if int(row["start_epoch_ms"]) <= 0:
                     return ["missing query timestamp"]

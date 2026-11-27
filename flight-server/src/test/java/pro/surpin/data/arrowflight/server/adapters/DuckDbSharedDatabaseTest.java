@@ -9,6 +9,8 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.function.Executable;
+import org.opentest4j.MultipleFailuresError;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -18,11 +20,13 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -210,25 +214,17 @@ class DuckDbSharedDatabaseTest {
                         assertEquals(1, adapter.describeParameters(
                                 "SELECT price FROM s.t WHERE id = ? + " + i, views).getFields().size());
                     }
-                    round.await(30, TimeUnit.SECONDS);
-                    // Both sessions' describe catalogs are attached while both threads live.
-                    long attached;
-                    try (Statement s = describeRoot.createStatement(); ResultSet rs = s.executeQuery(
-                            "SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '"
-                                    + DuckDbAdapter.SESSION_CATALOG_PREFIX + "%'")) {
-                        assertTrue(rs.next());
-                        attached = rs.getLong(1);
-                    }
-                    round.await(30, TimeUnit.SECONDS);
-                    return seen + "|" + attached;
+                    return seen.toString();
                 }));
             }
-            String[] first = types.get(0).get(60, TimeUnit.SECONDS).split("\\|");
-            String[] second = types.get(1).get(60, TimeUnit.SECONDS).split("\\|");
-            assertEquals("Decimal(6, 1, 128);".repeat(10), first[0]);
-            assertEquals("Utf8;".repeat(10), second[0]);
-            assertEquals("2", first[1]);
-            assertEquals("2", second[1]);
+            List<String> completed = describeResults(types);
+            assertEquals("Decimal(6, 1, 128);".repeat(10), completed.get(0));
+            assertEquals("Utf8;".repeat(10), completed.get(1));
+            // Idle executor threads are still alive, so both session catalogs remain attached.
+            // Inspect on the coordinator: concurrent root queries can invalidate a pending result.
+            assertEquals("2", single(describeRoot,
+                    "SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '"
+                            + DuckDbAdapter.SESSION_CATALOG_PREFIX + "%'"));
             assertSame(describeRoot, adapter.describeDatabase());
 
             // The query connection reads the file; the describe DuckDB does not.
@@ -243,6 +239,35 @@ class DuckDbSharedDatabaseTest {
         } finally {
             workers.shutdownNow();
         }
+    }
+
+    /** Preserves the other worker's root error when its peer only reports a barrier timeout. */
+    @Test
+    void describeResultsReportBothWorkerFailures() {
+        Exception timeout = new java.util.concurrent.TimeoutException("peer waited at final barrier");
+        Exception rootFailure = new java.sql.SQLException("catalog inspection failed");
+        MultipleFailuresError error = assertThrows(MultipleFailuresError.class,
+                () -> describeResults(List.of(CompletableFuture.failedFuture(timeout),
+                        CompletableFuture.failedFuture(rootFailure))));
+        assertEquals(2, error.getFailures().size());
+        assertTrue(error.getFailures().get(0).getMessage().contains("describe worker 0"));
+        assertTrue(error.getFailures().get(1).getMessage().contains("describe worker 1"));
+        assertSame(timeout, error.getFailures().get(0).getCause().getCause());
+        assertSame(rootFailure, error.getFailures().get(1).getCause().getCause());
+    }
+
+    /**
+     * Collects every describe worker result while retaining failures from all workers.
+     *
+     * @param workers describe tasks in their submitted order
+     * @return results in submitted order
+     */
+    private static List<String> describeResults(List<Future<String>> workers) {
+        List<String> results = new ArrayList<>();
+        assertAll("describe workers", IntStream.range(0, workers.size())
+                .mapToObj(index -> (Executable) () -> results.add(assertDoesNotThrow(
+                        () -> workers.get(index).get(60, TimeUnit.SECONDS), "describe worker " + index))));
+        return results;
     }
 
     /**
