@@ -38,6 +38,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.util.Text;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -51,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the nodes, {@code -Dload.queries} a directory of {@code <name>.sql} files with optional
  * {@code <name>.rows} row counts; queries whose name starts with {@code partial_} run in result
  * mode {@code partial}, the others in {@code complete}. First reads a reference answer of every
- * query (rows and the order-independent checksum of {@link TpchPerfTest}) on the healthy cluster,
+ * query (rows and the order-independent checksum of {@link TpchChecksum}) on the healthy cluster,
  * then {@code -Dload.clients} (default 3) clients run the queries in turn, each call on the next
  * node, until the file {@code -Dload.stopFile} exists (at most {@code -Dload.maxSeconds}, default
  * 1800). Endpoints are read from their locations in order (header
@@ -332,7 +333,7 @@ class RollingRestartLoadTest {
     }
 
     /** One client's Flight connections, one per location it has read from. */
-    private static final class Reader {
+    static final class Reader {
         /** Arrow allocator. */
         private final BufferAllocator allocator;
         /** Clients by location URI. */
@@ -403,19 +404,21 @@ class RollingRestartLoadTest {
          * @throws StreamCut when the stream failed after rows were read
          * @throws FlightRuntimeException when it failed before
          */
-        private static long[] read(FlightSqlClient client, FlightEndpoint endpoint, CallOption header,
+        static long[] read(FlightSqlClient client, FlightEndpoint endpoint, CallOption header,
                 CallOption timeout) {
             long rows = 0;
-            long sum = 0;
+            TpchChecksum checksum = new TpchChecksum();
             try (FlightStream stream = client.getStream(endpoint.getTicket(), header, timeout)) {
                 while (stream.next()) {
                     VectorSchemaRoot root = stream.getRoot();
+                    List<FieldVector> vectors = root.getFieldVectors();
                     for (int row = 0; row < root.getRowCount(); row++) {
-                        StringBuilder text = new StringBuilder();
-                        for (FieldVector vector : root.getFieldVectors()) {
-                            text.append(TpchPerfTest.normalized(vector.getObject(row))).append('|');
+                        Object[] values = new Object[vectors.size()];
+                        for (int column = 0; column < values.length; column++) {
+                            Object value = vectors.get(column).getObject(row);
+                            values[column] = value instanceof Text text ? text.toString() : value;
                         }
-                        sum += TpchPerfTest.mix(text.toString().hashCode());
+                        checksum.addRow(values);
                     }
                     rows += root.getRowCount();
                 }
@@ -429,7 +432,7 @@ class RollingRestartLoadTest {
                 throw CallStatus.UNKNOWN.withCause(e).withDescription(String.valueOf(e.getMessage()))
                         .toRuntimeException();
             }
-            return new long[] {rows, sum};
+            return new long[] {rows, checksum.value()};
         }
 
         /**
