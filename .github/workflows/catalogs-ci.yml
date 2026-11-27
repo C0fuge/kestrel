@@ -18,6 +18,12 @@ on:
       - "tools/ci/**"
       - ".github/workflows/catalogs-ci.yml"
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "All catalog gates, or only the Paimon/Hudi fixture and lockdown checks"
+        type: choice
+        options: [all, paimon-hudi]
+        default: all
 
 permissions:
   contents: read
@@ -32,6 +38,7 @@ env:
 
 jobs:
   iceberg-rest:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'paimon-hudi'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -273,6 +280,7 @@ jobs:
   # (tools/ci/DuckDbScannerProbe.java). Records what reads and what client statements get through;
   # fails only when loading, attaching or the plain read fails. Test-only passwords, generated.
   jdbc-scanners:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'paimon-hudi'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -355,7 +363,7 @@ jobs:
       - name: Probe
         run: |
           set -euo pipefail
-          ./mvnw dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
+          ./mvnw org.apache.maven.plugins:maven-dependency-plugin:3.8.1:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
           java -cp "$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar" \
             tools/ci/DuckDbScannerProbe.java "$SCANNER_EXT_DIR"
 
@@ -396,6 +404,7 @@ jobs:
   # checkpoints, versions, schema evolution, types), local, on S3 (moto) and on HDFS (single node, read
   # through our hadoopfs build); results in the job summary.
   delta:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'paimon-hudi'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -488,7 +497,7 @@ jobs:
       - name: Probe
         run: |
           set -euo pipefail
-          ./mvnw dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
+          ./mvnw org.apache.maven.plugins:maven-dependency-plugin:3.8.1:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
           jar="$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar"
           docker run --rm --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD/tools/ci:/probe:ro" \
             -v "$jar:/duckdb.jar:ro" -e GITHUB_STEP_SUMMARY -e PROBE_S3_ENDPOINT -e PROBE_S3_KEY \
@@ -574,7 +583,8 @@ jobs:
           jars="$RUNNER_TEMP/jars"
           for a in org.apache.paimon:paimon-spark-3.5:1.2.0 org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
               org.apache.hudi:hudi-spark3.5-bundle_2.12:1.0.2; do
-            ./mvnw -q dependency:copy -Dartifact="$a" -DoutputDirectory="$jars"
+            ./mvnw -q org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy \
+              -Dartifact="$a" -DoutputDirectory="$jars"
           done
           out="$RUNNER_TEMP/ph-fixtures"
           py="$RUNNER_TEMP/py/bin/python"
@@ -628,7 +638,7 @@ jobs:
       - name: Lockdown probe
         run: |
           set -euo pipefail
-          ./mvnw -q dependency:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
+          ./mvnw -q org.apache.maven.plugins:maven-dependency-plugin:3.8.1:get -Dartifact=org.duckdb:duckdb_jdbc:1.5.6.0
           jar="$HOME/.m2/repository/org/duckdb/duckdb_jdbc/1.5.6.0/duckdb_jdbc-1.5.6.0.jar"
           docker run --rm --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -v "$PWD/tools/ci:/probe:ro" \
             -v "$jar:/duckdb.jar:ro" -e GITHUB_STEP_SUMMARY -e PROBE_S3_ENDPOINT -e PROBE_S3_KEY \
@@ -649,6 +659,7 @@ jobs:
   # through the server with the hive plugin against a metastore on the same database
   # (HiveRealWriterIntegrationTest: equal to Hive's own answers, complete and partial).
   hive-writer:
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'paimon-hudi'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
