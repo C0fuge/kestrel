@@ -79,6 +79,7 @@ class NativeCompilerBuildTest(unittest.TestCase):
                 ("false" if compiler == "gcc" else "true") + "\n#define __cplusplus 201103L\n"
                 "#define _GLIBCXX_USE_CXX11_ABI 1\n#define __GLIBCXX__ 20260101\n")
             (folder / "libstdcxx.txt").write_text("/portable/libstdc++.so\n")
+            (folder / "gcc-toolchain-root.txt").write_text("/portable/toolchain\n")
             entry = {
                 "file": "/source/src/duckdb/third_party/snappy/snappy.cc",
                 "directory": "/source/build/release",
@@ -124,6 +125,49 @@ class NativeCompilerBuildTest(unittest.TestCase):
             result = json.loads((root / "verified-compiler-probes.json").read_text())
             self.assertEqual("true", result["clang"]["decoder"])
             self.assertIn("entry", result["gcc"])
+
+    def update_actual_flags(self, root, compiler, extra):
+        """Keep mutated compile argv and its derived evidence mutually consistent."""
+        folder = root / compiler
+        path = folder / "compile_commands.json"
+        entries = json.loads(path.read_text())
+        entries[0]["command"] += " " + extra
+        path.write_text(json.dumps(entries))
+        proof_path = folder / "effective.json"
+        proof = json.loads(proof_path.read_text())
+        proof["entry"] = entries[0]
+        proof["probe_argv"] = BUILD.EFFECTIVE["command"](entries[0], compiler)
+        proof["compile_database_sha256"] = BUILD.digest(path)
+        proof_path.write_text(json.dumps(proof))
+
+    def test_exact_common_argv_rejects_one_sided_nonmacro_optimization_options(self):
+        """Matching macros cannot hide otherwise consistent one-sided compiler options."""
+        for extra in ("-fno-inline", "-fno-tree-vectorize", "--param=max-inline-insns-single=0"):
+            for compiler in ("gcc", "clang"):
+                with self.subTest(extra=extra, compiler=compiler), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    self.probes(root)
+                    self.update_actual_flags(root, compiler, extra)
+                    with self.assertRaisesRegex(ValueError, "common decoder arguments differ"):
+                        BUILD.check_probes(root)
+                    self.assertFalse((root / "verified-compiler-probes.json").exists())
+
+    def test_only_recorded_clang_toolchain_selector_is_normalized(self):
+        """The intended driver selector is allowed, while another root or extra selector is rejected."""
+        for selector, valid in (("--gcc-toolchain=/portable/toolchain", True),
+                                ("--gcc-toolchain=/other", False),
+                                ("--gcc-toolchain=/portable/toolchain --gcc-toolchain=/other", False)):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.probes(root)
+                self.update_actual_flags(root, "clang", selector)
+                if valid:
+                    BUILD.check_probes(root)
+                    proof = json.loads((root / "verified-compiler-probes.json").read_text())
+                    self.assertFalse(any(flag.startswith("--gcc-toolchain") for flag in proof["verified_common_decoder_argv"]))
+                else:
+                    with self.assertRaisesRegex(ValueError, "toolchain selector"):
+                        BUILD.check_probes(root)
 
     def test_actual_compile_argv_rejects_all_late_conflicting_overrides(self):
         """Fixed standalone macros cannot hide overrides in the actual decoder compilation."""

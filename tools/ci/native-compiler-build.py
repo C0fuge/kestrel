@@ -283,7 +283,7 @@ def candidate_phase(compiler, image, pristine, work, output, phase):
 
 def check_probes(output):
     """Reject a wrong decoder, raised ISA, different libstdc++ or incompatible declared ABI."""
-    probes = {}
+    probes, common, toolchains = {}, {}, {}
     for compiler in ("gcc", "clang"):
         folder = output / compiler
         effective = json.loads((folder / "effective.json").read_text())
@@ -306,9 +306,28 @@ def check_probes(output):
         if effective.get("glibcxx_header_version") != macros.get("__GLIBCXX__") or not re.fullmatch(r"[0-9a-f]{64}", effective.get("libstdcxx_sha256", "")):
             raise ValueError("Effective standard-library identity differs")
         probes[compiler] = effective
+        toolchains[compiler] = (folder / "gcc-toolchain-root.txt").read_text().strip()
+        if not toolchains[compiler].startswith("/"):
+            raise ValueError("Missing recorded GCC toolchain root")
+        common[compiler] = common_decoder_arguments(effective, toolchains[compiler])
     if any(probes["gcc"][key] != probes["clang"][key] for key in ("libstdcxx", "libstdcxx_sha256", "glibcxx_header_version", "glibcxx_config_header", "glibcxx_config_sha256", "abi_features")):
         raise ValueError("Compiler builds use different standard libraries")
+    if toolchains["gcc"] != toolchains["clang"] or common["gcc"] != common["clang"] or probes["gcc"]["entry"]["directory"] != probes["clang"]["entry"]["directory"]:
+        raise ValueError("Actual common decoder arguments differ beyond compiler/toolchain selection")
+    probes["verified_common_decoder_argv"] = common["gcc"]
     save(output / "verified-compiler-probes.json", probes)
+
+
+def common_decoder_arguments(effective, toolchain):
+    """Remove only the executable and the declared Clang GCC-toolchain driver selector."""
+    flags = effective["probe_argv"][1:]
+    if effective["compiler"] == "clang":
+        selectors = [value for value in flags if value.startswith("--gcc-toolchain")]
+        expected = "--gcc-toolchain=" + toolchain
+        if selectors and selectors != [expected]:
+            raise ValueError("Unexpected Clang toolchain selector")
+        flags = [value for value in flags if value != expected]
+    return flags
 
 
 def verify_smoke(evidence):

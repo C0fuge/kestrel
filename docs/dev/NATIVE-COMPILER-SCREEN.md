@@ -39,6 +39,10 @@ rejects conflicting ISA, optimization, C++ standard, ABI, decoder and standard-l
 overrides, including later ones. Actual macros must prove baseline x86-64, C++11,
 ABI 1 and GCC's old / Clang's new decoder. Both candidates must identify the same
 libstdc++ linker input/hash and header version before either native build begins.
+Normalized actual decoder argv must also match exactly across the pair, removing
+only the compiler executable and the recorded Clang GCC-toolchain driver selector.
+One-sided options such as `-fno-inline`, `-fno-tree-vectorize` or `--param` therefore
+cannot hide behind unchanged preprocessor macros. Unexpected differences fail preflight.
 The compile database is hashed and checked again by the build phase.
 The toolbox is immutable within one run. Its additional RPMs are resolved during
 the first cloud preflight; reproducing that toolchain across later runs requires
