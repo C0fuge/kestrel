@@ -16,9 +16,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import pro.surpin.data.arrowflight.spi.storage.DataFile;
 
@@ -268,6 +270,304 @@ class LocalCopyCacheTest {
         }
         cache.close();
         assertFalse(Files.exists(path));
+    }
+
+    /** Verifies closing a saturated copy pool also fails a queued query's separate promise. */
+    @Test
+    void closeFailsQueuedAndRunningAcquisitions() throws Exception {
+        DataFile first = file("s/t/first.parquet", 100, 1);
+        DataFile second = file("s/t/second.parquet", 100, 1);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch secondPlanned = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        AtomicInteger checks = new AtomicInteger();
+        AtomicInteger secondOpens = new AtomicInteger();
+        LocalCopyCache.Copier blocked = f -> {
+            if (f.equals(first)) {
+                worker.set(Thread.currentThread());
+                started.countDown();
+                try {
+                    if (!release.await(10, TimeUnit.SECONDS)) {
+                        throw new IOException("Fixture copy was not released");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Fixture copy interrupted", e);
+                }
+            } else {
+                secondOpens.incrementAndGet();
+            }
+            return new ByteArrayInputStream(content(f));
+        };
+        LocalCopyCache.FreeSpace room = d -> {
+            if (checks.incrementAndGet() == 2) {
+                secondPlanned.countDown();
+            }
+            return 1000;
+        };
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("closing"), 1000, 1,
+                blocked, 0, room);
+        ExecutorService queries = Executors.newFixedThreadPool(2);
+        Future<LocalCopyCache.Lease> running = null;
+        Future<LocalCopyCache.Lease> queued = null;
+        try {
+            running = queries.submit(() -> cache.acquire(List.of(first)));
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            queued = queries.submit(() -> cache.acquire(List.of(second)));
+            assertTrue(secondPlanned.await(5, TimeUnit.SECONDS));
+            // The callback signalled while holding the cache monitor. Taking it here waits
+            // until the second entry was queued behind the still-blocked first copy.
+            assertEquals(2, cache.size());
+            cache.close();
+            assertTrue(copyFailure(queued).getMessage().contains("closed"));
+            assertTrue(copyFailure(running).getMessage().contains("closed"));
+            assertEquals(0, secondOpens.get());
+            assertEquals(0, cache.size());
+            assertEquals(0, cache.cachedBytes());
+            assertEquals(0, cache.inUseBytes());
+            assertEquals(1000, cache.room());
+        } finally {
+            release.countDown();
+            if (running != null) {
+                running.cancel(true);
+            }
+            if (queued != null) {
+                queued.cancel(true);
+            }
+            cache.close();
+            queries.shutdownNow();
+            assertTrue(queries.awaitTermination(5, TimeUnit.SECONDS));
+            if (worker.get() != null) {
+                worker.get().join(5000);
+                assertFalse(worker.get().isAlive(), "copy worker ended");
+            }
+        }
+    }
+
+    /**
+     * Waits a bounded time for an acquisition to fail with an I/O failure.
+     *
+     * @param acquisition query waiting for copies
+     * @return copy failure
+     */
+    private static IOException copyFailure(Future<LocalCopyCache.Lease> acquisition) {
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> acquisition.get(2, TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof IOException, failure.toString());
+        return (IOException) failure.getCause();
+    }
+
+    /** Verifies close stays terminal and existing leases can still release their pins once. */
+    @Test
+    void closedCacheRejectsAcquisitionsAndKeepsLeaseReleaseSafe() throws Exception {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("closed"), 1000, 1, copier());
+        try (LocalCopyCache.Lease lease = cache.acquire(List.of(a))) {
+            Path path = lease.localPath(a.relativePath());
+            assertArrayEquals(content(a), Files.readAllBytes(path));
+            cache.close();
+            cache.close();
+            assertFalse(Files.exists(path));
+            assertEquals(1, lease.copied(), "completed lease retains its successful outcome");
+            assertTrue(assertThrows(IOException.class, () -> cache.acquire(List.of(a)))
+                    .getMessage().contains("closed"));
+            assertTrue(assertThrows(IOException.class, () -> cache.acquire(List.of()))
+                    .getMessage().contains("closed"));
+            assertEquals(1, opens.get(a.location()).get());
+            lease.close();
+            lease.close();
+            assertEquals(0, cache.inUseBytes());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Verifies a source ignoring interruption cannot publish its partial copy after close. */
+    @Test
+    void lateCopyCannotPublishAfterCloseAndClosesItsSource() throws Exception {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch sourceClosed = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        InputStream source = new InputStream() {
+            private final ByteArrayInputStream bytes = new ByteArrayInputStream(content(a));
+
+            @Override
+            public int read() {
+                return bytes.read();
+            }
+
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                worker.set(Thread.currentThread());
+                reading.countDown();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (true) {
+                    try {
+                        if (!release.await(Math.max(0, deadline - System.nanoTime()),
+                                TimeUnit.NANOSECONDS)) {
+                            throw new IOException("Fixture source was not released");
+                        }
+                        return bytes.read(buffer, offset, length);
+                    } catch (InterruptedException e) {
+                        // Simulate an I/O provider that consumes interruption and still returns data.
+                        interrupted.countDown();
+                    }
+                }
+            }
+
+            @Override
+            public void close() throws IOException {
+                bytes.close();
+                sourceClosed.countDown();
+            }
+        };
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("late"), 1000, 1, f -> source,
+                0, d -> 1000);
+        ExecutorService queries = Executors.newSingleThreadExecutor();
+        Future<LocalCopyCache.Lease> acquisition = null;
+        try {
+            acquisition = queries.submit(() -> cache.acquire(List.of(a)));
+            assertTrue(reading.await(5, TimeUnit.SECONDS));
+            Path path = cache.directory().resolve(
+                    LocalCopyCache.copyPath(LocalCopyCache.key(a), a.relativePath()));
+            Path partial = path.resolveSibling(path.getFileName() + ".part");
+            assertTrue(Files.exists(partial));
+            cache.close();
+            assertTrue(copyFailure(acquisition).getMessage().contains("closed"));
+            assertTrue(interrupted.await(5, TimeUnit.SECONDS));
+            assertFalse(Files.exists(partial));
+            release.countDown();
+            assertTrue(sourceClosed.await(5, TimeUnit.SECONDS));
+            worker.get().join(5000);
+            assertFalse(worker.get().isAlive(), "copy worker ended");
+            assertFalse(Files.exists(path));
+            assertFalse(Files.exists(partial));
+            try (java.util.stream.Stream<Path> remaining = Files.walk(cache.directory())) {
+                assertEquals(1, remaining.count(), "late source cannot recreate copy directories");
+            }
+            assertEquals(0, cache.cachedBytes());
+            assertEquals(1000, cache.room());
+        } finally {
+            release.countDown();
+            if (acquisition != null) {
+                acquisition.cancel(true);
+            }
+            cache.close();
+            queries.shutdownNow();
+            assertTrue(queries.awaitTermination(5, TimeUnit.SECONDS));
+            if (worker.get() != null) {
+                worker.get().join(5000);
+                assertFalse(worker.get().isAlive());
+            }
+        }
+    }
+
+    /** Verifies a source opened after close is closed before any local copy file is created. */
+    @Test
+    void lateSourceOpenCannotCreateCopyFiles() throws Exception {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        CountDownLatch opening = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        AtomicInteger closed = new AtomicInteger();
+        AtomicInteger reads = new AtomicInteger();
+        InputStream source = new ByteArrayInputStream(content(a)) {
+            @Override
+            public synchronized int read(byte[] buffer, int offset, int length) {
+                reads.incrementAndGet();
+                return super.read(buffer, offset, length);
+            }
+
+            @Override
+            public void close() throws IOException {
+                closed.incrementAndGet();
+                super.close();
+            }
+        };
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("late-open"), 1000, 1, f -> {
+            worker.set(Thread.currentThread());
+            opening.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (true) {
+                try {
+                    if (!release.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+                        throw new IOException("Fixture source open was not released");
+                    }
+                    return source;
+                } catch (InterruptedException e) {
+                    interrupted.countDown();
+                }
+            }
+        });
+        ExecutorService queries = Executors.newSingleThreadExecutor();
+        Future<LocalCopyCache.Lease> acquisition = null;
+        try {
+            acquisition = queries.submit(() -> cache.acquire(List.of(a)));
+            assertTrue(opening.await(5, TimeUnit.SECONDS));
+            cache.close();
+            assertTrue(copyFailure(acquisition).getMessage().contains("closed"));
+            assertTrue(interrupted.await(5, TimeUnit.SECONDS));
+            release.countDown();
+            worker.get().join(5000);
+            assertFalse(worker.get().isAlive());
+            assertEquals(1, closed.get(), "late source is closed once");
+            assertEquals(0, reads.get());
+            try (java.util.stream.Stream<Path> remaining = Files.walk(cache.directory())) {
+                assertEquals(1, remaining.count(), "late source cannot create copy directories");
+            }
+        } finally {
+            release.countDown();
+            if (acquisition != null) {
+                acquisition.cancel(true);
+            }
+            cache.close();
+            queries.shutdownNow();
+            assertTrue(queries.awaitTermination(5, TimeUnit.SECONDS));
+            if (worker.get() != null) {
+                worker.get().join(5000);
+                assertFalse(worker.get().isAlive());
+            }
+        }
+    }
+
+    /** Verifies close wakes a room waiter without waiting for its configured room timeout. */
+    @Test
+    void closeWakesRoomWaiters() throws Exception {
+        DataFile a = file("s/t/a.parquet", 100, 1);
+        DataFile b = file("s/t/b.parquet", 100, 1);
+        CountDownLatch planned = new CountDownLatch(1);
+        AtomicInteger checks = new AtomicInteger();
+        LocalCopyCache.FreeSpace disk = disk(300);
+        LocalCopyCache.FreeSpace room = d -> {
+            if (checks.incrementAndGet() == 2) {
+                planned.countDown();
+            }
+            return disk.usableBytes(d);
+        };
+        LocalCopyCache cache = new LocalCopyCache(dir.resolve("waiting"), 1000, 1,
+                copier(), 150, room, 10_000);
+        ExecutorService queries = Executors.newSingleThreadExecutor();
+        Future<LocalCopyCache.Lease> waiting = null;
+        try (LocalCopyCache.Lease held = cache.acquire(List.of(a))) {
+            waiting = queries.submit(() -> cache.acquire(List.of(b)));
+            assertTrue(planned.await(5, TimeUnit.SECONDS));
+            assertEquals(1, cache.size(), "second query is waiting before enqueueing a copy");
+            cache.close();
+            assertTrue(copyFailure(waiting).getMessage().contains("closed"));
+            assertNull(opens.get(b.location()));
+        } finally {
+            if (waiting != null) {
+                waiting.cancel(true);
+            }
+            cache.close();
+            queries.shutdownNow();
+            assertTrue(queries.awaitTermination(5, TimeUnit.SECONDS));
+        }
     }
 
     /**

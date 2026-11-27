@@ -21,6 +21,26 @@ integrated by a local fast-forward with verified author/committer metadata. This
 adds measurement capability and correctness coverage, not a claimed throughput gain.
 No release package or production deployment was made.
 
+### Local-copy cache close fix (2026-11-27, pending review)
+
+`LocalCopyCache.close()` now fails unfinished copy promises, including queued copies whose
+tasks never start, rejects acquisitions after close and wakes disk-room waiters. Local file
+creation and publication share the close boundary; a source that returns after consuming an
+interrupt is closed without recreating a local copy. Pending-byte reservations are released
+once, and completed promises and existing lease release semantics remain intact. Close still
+deletes completed copy files; callers must finish using their leases before closing the cache.
+An I/O provider that ignores interruption may retain its stream until its operation returns.
+
+The deterministic before-fix test saturated a one-thread pool and proved the second copy was
+queued before close; its acquisition timed out while the 26 existing tests passed. After the
+fix, all 31 focused tests and direct Checkstyle passed in an isolated Java 21 container without
+network access. These were direct source compilation and unit checks using cached dependencies;
+the full reactor and CI have not run for this change yet. The change does not wire cache or
+`IoPool` shutdown into server bootstrap and makes no claim to fix production server stopping.
+The queue-cancellation ownership review was prompted by the independently inspected
+[DazzleDuck executor helper](https://github.com/dazzleduck-web/dazzleduck-sql-server/blob/09d40128a46c5229d7e7c73fcf8ce4161ee8508d/dazzleduck-sql-flight/src/main/java/io/dazzleduck/sql/flight/server/StreamExecutors.java);
+the cache's separate copy promises require their own completion and publication rules.
+
 ### Earlier correctness batch
 
 Prepared-statement GetSchema now uses bound values; unsupported multirow parameter

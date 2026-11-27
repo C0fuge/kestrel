@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
@@ -118,9 +119,12 @@ public final class LocalCopyCache implements AutoCloseable {
     private static final class Entry {
         private final String key;
         private final Path path;
+        private final Path partial;
         private final long bytes;
         private final CompletableFuture<Path> ready = new CompletableFuture<>();
         private int pins;
+        /** Whether the copy still reserves pending bytes; guarded by the cache. */
+        private boolean pending = true;
 
         /**
          * Creates an entry for a copy being made.
@@ -132,6 +136,7 @@ public final class LocalCopyCache implements AutoCloseable {
         Entry(String key, Path path, long bytes) {
             this.key = key;
             this.path = path;
+            this.partial = path.resolveSibling(path.getFileName() + ".part");
             this.bytes = bytes;
         }
     }
@@ -149,6 +154,8 @@ public final class LocalCopyCache implements AutoCloseable {
     private long cachedBytes;
     /** Bytes of the entries being made, not yet complete on disk; guarded by this. */
     private long pendingBytes;
+    /** Whether the cache refuses new copies; guarded by this. */
+    private boolean closed;
     /** Query that was last warned about the limit (evictFor runs once per copy batch); guarded by this. */
     private String overLimitQid;
 
@@ -280,6 +287,7 @@ public final class LocalCopyCache implements AutoCloseable {
                 long waitStart = 0;
                 List<DataFile> toCopy = new ArrayList<>();
                 while (true) {
+                    requireOpen();
                     // Copies already present are pinned first, so that making room for the new ones
                     // never evicts a copy this query reads (it would be copied again, unreserved).
                     toCopy.clear();
@@ -377,45 +385,77 @@ public final class LocalCopyCache implements AutoCloseable {
      */
     private void copy(DataFile file, Entry entry) {
         long started = System.nanoTime();
-        Path partial = entry.path.resolveSibling(entry.path.getFileName() + ".part");
         try {
             long copied;
-            Path parent = partial.getParent();
-            if (parent != null) {
-                // Always below the cache directory; the check is for SpotBugs.
-                Files.createDirectories(parent);
+            synchronized (this) {
+                requireOpen();
             }
-            try (InputStream in = copier.open(file);
-                    OutputStream out = Files.newOutputStream(partial)) {
-                copied = transfer(in, out);
+            try (InputStream in = copier.open(file)) {
+                OutputStream target;
+                synchronized (this) {
+                    requireOpen();
+                    Path parent = entry.partial.getParent();
+                    if (parent != null) {
+                        // Always below the cache directory; the check is for SpotBugs.
+                        Files.createDirectories(parent);
+                    }
+                    target = Files.newOutputStream(entry.partial);
+                }
+                try (OutputStream out = target) {
+                    copied = transfer(in, out);
+                }
             }
             if (copied != file.size()) {
                 throw new IOException("Copied " + copied + " bytes of " + file.location()
                         + ", which has " + file.size() + ": it changed while it was copied");
             }
-            Files.move(partial, entry.path, StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
+            synchronized (this) {
+                requireOpen();
+                Files.move(entry.partial, entry.path, StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+                finishPending(entry);
+                entry.ready.complete(entry.path);
+            }
             long ms = Math.max(1L, (System.nanoTime() - started) / 1_000_000L);
             LOGGER.info("node={} hdfs=localCopy file={} bytes={} ms={} MBps={}", LogUtil.node(),
                     file.relativePath(), copied, ms, copied * 1000L / ms / (1024 * 1024));
-            synchronized (this) {
-                pendingBytes -= entry.bytes;
-            }
-            entry.ready.complete(entry.path);
         } catch (IOException | RuntimeException e) {
-            deleteCopy(partial);
             synchronized (this) {
-                pendingBytes -= entry.bytes;
-                if (entries.get(entry.key) == entry) {
+                deleteCopy(entry.partial);
+                finishPending(entry);
+                if (!entry.ready.isDone() && entries.get(entry.key) == entry) {
                     entries.remove(entry.key);
                     cachedBytes -= entry.bytes;
                 }
+                entry.ready.completeExceptionally(new IOException("Cannot copy " + file.relativePath()
+                        + " to the node-local cache " + directory + ": " + e.getMessage(), e));
                 notifyAll();
             }
             LOGGER.warn("node={} hdfs=localCopyFailed file={} reason='{}'", LogUtil.node(),
                     file.relativePath(), e.toString());
-            entry.ready.completeExceptionally(new IOException("Cannot copy " + file.relativePath()
-                    + " to the node-local cache " + directory + ": " + e.getMessage(), e));
+        }
+    }
+
+    /**
+     * Refuses copies after the cache closes.
+     *
+     * @throws IOException when the cache is closed
+     */
+    private void requireOpen() throws IOException {
+        if (closed) {
+            throw new IOException("Node-local copy cache is closed");
+        }
+    }
+
+    /**
+     * Releases an entry's pending copy bytes once.
+     *
+     * @param entry finished or abandoned copy
+     */
+    private void finishPending(Entry entry) {
+        if (entry.pending) {
+            pendingBytes -= entry.bytes;
+            entry.pending = false;
         }
     }
 
@@ -702,16 +742,23 @@ public final class LocalCopyCache implements AutoCloseable {
         return directory;
     }
 
+    /** Closes the cache, fails unfinished acquisitions and deletes cached and partial copies. */
     @Override
-    public void close() {
-        copyPool.shutdownNow();
-        synchronized (this) {
-            for (Entry entry : entries.values()) {
-                deleteCopy(entry.path);
-            }
-            entries.clear();
-            cachedBytes = 0;
+    public synchronized void close() {
+        if (closed) {
+            return;
         }
+        closed = true;
+        copyPool.shutdownNow();
+        for (Entry entry : entries.values()) {
+            finishPending(entry);
+            entry.ready.completeExceptionally(new IOException("Node-local copy cache is closed"));
+            deleteCopy(entry.path);
+            deleteCopy(entry.partial);
+        }
+        entries.clear();
+        cachedBytes = 0;
+        notifyAll();
     }
 
     /**
@@ -728,6 +775,8 @@ public final class LocalCopyCache implements AutoCloseable {
                     if (children.findAny().isPresent()) {
                         break;
                     }
+                } catch (NoSuchFileException e) {
+                    continue;
                 }
                 Files.deleteIfExists(dir);
             }
