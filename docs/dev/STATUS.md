@@ -2,8 +2,11 @@
 
 ## Current checkpoint (2026-11-27)
 
-Latest integration `56b4eba6` adds optional process/caller CPU deltas behind the
-existing `streamTimingLog` switch (default false), plus versioned TPC-H/restart
+Latest integration `75a99c5e` fixes direct DuckDB dictionary result streams and
+unfinished local-copy acquisitions on cache close. It also adds opt-in common
+warmup controls and an overall work deadline to the optional CPU diagnostic.
+Production defaults are unchanged. Earlier `56b4eba6` adds optional process/caller
+CPU deltas behind the existing `streamTimingLog` switch (default false), plus versioned TPC-H/restart
 answer checks, raw per-query samples, host/pressure telemetry and failure-artifact
 retention. Disabled stream timing creates no CPU sampler or counter reads. Screening
 is manual-only; rejected integer-literal execution reuse and schema IPC-cache
@@ -11,17 +14,30 @@ experiments are not included. See [CPU timing](STREAM-TIMING-CPU.md),
 [screening](OPTIMIZATION-SCREENING.md), [TPC-H telemetry](TPCH-TELEMETRY.md) and the
 [literal coercion counterexample](LITERAL-COERCION-REJECTION-2026-11-27.md).
 
-[Full Dev CI 46045412981](https://github.com/C0fuge/kestrel/actions/runs/46045412981)
-passed on the exact integration commit: 2,120 tests, zero failures/errors and one
-unchanged JDBC skip, with Checkstyle and SpotBugs clean. All prior test-class counts
-remain unchanged; four CPU tests and 34 benchmark-oracle/artifact tests were added.
+[Full Dev CI 46057454442](https://github.com/C0fuge/kestrel/actions/runs/46057454442)
+passed on exact `75a99c5e`: 2,135 tests, zero failures/errors and one unchanged JDBC
+skip. All 16 Checkstyle and 15 SpotBugs checks are clean. Against the previous
+2,127-test integration, 273 class reports are unchanged; local-copy tests increase
+26 to 31 and three dictionary regressions are added. Module identities and report
+multiplicities were independently checked against the original logs.
 Both concurrency gates (2 GiB and 8 GiB direct-memory limits) returned 48/48 exact
-answers; both cgroup memory-pressure gates returned exact answers with zero OOM kills. PRs #4 and #5 were
-integrated by a local fast-forward with verified author/committer metadata. This
-adds measurement capability and correctness coverage, not a claimed throughput gain.
+answers; both 100M-group memory-pressure gates returned exact answers with zero OOM
+kills. The original 19-entry log ZIP passed CRC/hash checks. PR #8 was integrated by
+a local fast-forward with verified author/committer metadata. These are correctness
+and measurement improvements, with no claimed throughput gain.
 No release package or production deployment was made.
 
-### Local-copy cache close fix (2026-11-27, pending review)
+### Direct dictionary streams
+
+DuckDB ENUM exports use dictionary indices. Direct streams now pass their live
+Arrow reader as dictionary provider at both first-data and empty-result starts.
+Three real Flight regressions failed with a null-provider exception before the fix;
+six regular/zero-copy streams now pass, covering nulls, nested enum lists, empty
+results and multiple one-row batches. Fast CI also passed all 130 selected adapter,
+retry, counter and dictionary tests. Specialized copy/merge/distributed dictionary
+restrictions are unchanged; broader metadata/client handling remains separate work.
+
+### Local-copy cache close fix
 
 `LocalCopyCache.close()` now fails unfinished copy promises, including queued copies whose
 tasks never start, rejects acquisitions after close and wakes disk-room waiters. Local file
@@ -34,12 +50,22 @@ An I/O provider that ignores interruption may retain its stream until its operat
 The deterministic before-fix test saturated a one-thread pool and proved the second copy was
 queued before close; its acquisition timed out while the 26 existing tests passed. After the
 fix, all 31 focused tests and direct Checkstyle passed in an isolated Java 21 container without
-network access. These were direct source compilation and unit checks using cached dependencies;
-the full reactor and CI have not run for this change yet. The change does not wire cache or
+network access. The exact combined fast CI passed 34 tests, and the full reactor,
+Checkstyle, SpotBugs and resource gates above subsequently passed. The change does not wire cache or
 `IoPool` shutdown into server bootstrap and makes no claim to fix production server stopping.
 The queue-cancellation ownership review was prompted by the independently inspected
 [DazzleDuck executor helper](https://github.com/dazzleduck-web/dazzleduck-sql-server/blob/09d40128a46c5229d7e7c73fcf8ce4161ee8508d/dazzleduck-sql-flight/src/main/java/io/dazzleduck/sql/flight/server/StreamExecutors.java);
 the cache's separate copy promises require their own completion and publication rules.
+
+### CPU and compiler research
+
+The [matching-concurrency CPU diagnostic](CPU-DIAGNOSTIC-2026-11-27.md#matching-concurrency-follow-up)
+passes its identities, native-worker coverage, actual plans and all 33,235 answer
+checks. Twenty-second warmup still does not demonstrate steady state; raw temporal
+and resource evidence remains preserved. No experimental performance default changes.
+The separate GCC/Clang configure-only preflight caught different GCC header versions
+despite a nominal common toolchain root. Its strict library gate refused the comparison;
+no native engine build or compiler-performance conclusion followed from that attempt.
 
 ### Earlier correctness batch
 

@@ -57,3 +57,22 @@ Its ZIP CRC and exact file set pass; SHA-256 matches GitHub's digest:
 `6f1c2e594e4ad0775a1c3ad7c64d4d92ffe95b5a8bfb140b87f4d17d772829da`.
 A retained private copy and separate hashed derivations preserve evidence beyond
 GitHub's artifact retention window. [Collection details](CPU-PROFILING.md).
+
+## Matching-concurrency follow-up
+
+[Run 46056424151](https://github.com/C0fuge/kestrel/actions/runs/46056424151)
+uses source `028d6612` and collector `0d2a20d1`. Each fresh JVM follows its verified
+20-second warmup at its measured concurrency, then thirty measured seconds.
+All 33,235 answers pass the full oracle, including 10,759 warmup answers; all 105
+command statuses succeed. Actual JVM/CPU/native-worker identities and coverage pass.
+The immutable ZIP digest/CRC and exact 496-file manifest are independently verified:
+`5db07d573e366c80886b53621ad98d58fb2f0fdbe3100d289d000fe855e23708`.
+
+This still does not establish steady state. Completion rates rise across both measured
+windows; compiler CPU-sample shares in their last ten seconds remain 3.04% and 8.17%
+at eight and 32 clients. Fresh client threads begin at measurement even after warming
+at the same concurrency. This is temporal association, without a comparison that
+isolates warmup duration or an absolute-QPS comparison to the earlier runner.
+All phase bins, tails, pressure, GC/allocation and native-binary evidence are retained
+with a separate 54-file derived ledger. Snappy and native planning remain concrete
+optimization hypotheses; production defaults remain unchanged.
