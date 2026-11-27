@@ -100,6 +100,15 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private volatile boolean plainCommands;
     private final String defaultResultMode;
     private final java.util.Set<Integer> knownSqlInfo;
+    /** Whether prepares share only the empty parameter schema and its immutable IPC encoding. */
+    private final boolean shareEmptyParameterSchema =
+            Boolean.getBoolean("arrowflight.experimental.shareEmptyParameterSchema");
+
+    /** Initializes the canonical empty parameter schema only when the experiment uses it. */
+    private static final class EmptyParameterSchema {
+        private static final Schema SCHEMA = new Schema(List.of());
+        private static final ByteString MESSAGE = copyFrom(SCHEMA.serializeAsMessage());
+    }
 
     /**
      * @param location server location; unused, endpoints of metadata calls carry no location
@@ -1710,12 +1719,13 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             boolean complete = checkQuery(context == null ? null : context.peerIdentity(), query)
                     .restricted() || completeAnswer(context);
             Schema arrowSchema = complete ? completeSchemaFor(query) : schemaForQuery(query);
-            Schema parameterSchema = complete ? completeParameterSchemaFor(query) : new Schema(List.of());
+            Schema parameterSchema = complete ? completeParameterSchemaFor(query)
+                    : shareEmptyParameterSchema ? EmptyParameterSchema.SCHEMA : new Schema(List.of());
             FlightSql.ActionCreatePreparedStatementResult result =
                     FlightSql.ActionCreatePreparedStatementResult.newBuilder()
                             .setPreparedStatementHandle(preparedHandle(query, parameterSchema))
                             .setDatasetSchema(copyFrom(arrowSchema.serializeAsMessage()))
-                            .setParameterSchema(copyFrom(parameterSchema.serializeAsMessage()))
+                            .setParameterSchema(parameterSchemaMessage(parameterSchema))
                             .build();
             listener.onNext(new Result(Any.pack(result).toByteArray()));
             listener.onCompleted();
@@ -1725,6 +1735,17 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             listener.onError(CallStatus.INTERNAL
                     .withDescription(failureDescription(e)).withCause(e).toRuntimeException());
         }
+    }
+
+    /**
+     * Encodes a currently resolved parameter schema, sharing only a completely empty schema.
+     *
+     * @param schema current parameter schema
+     * @return immutable IPC schema message
+     */
+    ByteString parameterSchemaMessage(Schema schema) {
+        return shareEmptyParameterSchema && schema.getFields().isEmpty() && schema.getCustomMetadata().isEmpty()
+                ? EmptyParameterSchema.MESSAGE : copyFrom(schema.serializeAsMessage());
     }
 
     /**
