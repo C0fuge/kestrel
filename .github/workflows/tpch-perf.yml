@@ -127,6 +127,7 @@ jobs:
           jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output "$metrics/server.jfc" \
             jdk.DirectBufferStatistics#enabled=true jdk.DirectBufferStatistics#period=1s \
             jdk.CPULoad#period=1s jdk.GCHeapSummary#enabled=true \
+            jdk.JVMInformation#enabled=true jdk.CPUInformation#enabled=true \
             jdk.InitialEnvironmentVariable#enabled=false > "$metrics/jfr-configuration.log" 2>&1
 
       - name: Build this ref (no tests)
@@ -286,6 +287,7 @@ jobs:
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
           metrics_root="$RUNNER_TEMP/tpch-metrics"
+          python3 tools/ci/tpch-telemetry.py plan "$metrics_root" || exit 1
           active_container=""; active_metrics=""; monitor_pid=""
           finish_active() {
             if [ -n "$active_container" ]; then
@@ -323,7 +325,7 @@ jobs:
               --add-opens=java.base/java.lang=ALL-UNNAMED
               --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
               --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true
-              -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*"
+              -Dhazelcast.phone.home.enabled=false -DstreamTimingLog=true $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*"
               pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$dataDir" --localhost 127.0.0.1
               --port 32010 --hosts 127.0.0.1)
             local container=(docker run -d --name "$active_container" --network host
@@ -415,7 +417,7 @@ jobs:
             plain_container=(docker run -d --name "$active_container" --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
               -v "$RUNNER_TEMP/data:/data:ro" -v "$RUNNER_TEMP/queries:/queries:ro" -v "$PWD/tools/ci:/tools:ro" \
               -v "$RUNNER_TEMP:/out" -e TPCH_RAW_DIR=/out/tpch-metrics/plain/client "${plainMount[@]}" python:3.12-slim sh -c \
-              "pip install --root-user-action=ignore duckdb==1.5.6 pyarrow==22.0.0 && python -I /tools/tpch-duckdb.py $(printf '%q ' "${plainArgs[@]}") /queries ${{ inputs.rounds }} /out/settings-plain.txt")
+              "pip install --root-user-action=ignore duckdb==1.5.6 pyarrow==22.0.0 && exec python -I /tools/tpch-duckdb.py $(printf '%q ' "${plainArgs[@]}") /queries ${{ inputs.rounds }} /out/settings-plain.txt")
             python3 tools/ci/tpch-telemetry.py command "$plain_metrics/container-argv.json" "${plain_container[@]}"
             echo "Starting TPC-H configuration plain; full logs and metrics: plain/"
             "${plain_container[@]}" > "$plain_metrics/start-container.log" 2>&1

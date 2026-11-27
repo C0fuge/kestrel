@@ -6,6 +6,11 @@ storage/S3 latency, client/concurrent clients, baseline, quick and extra-configu
 inputs keep their meanings. Every configuration keeps its complete client/Maven log;
 later configurations never replace earlier logs. A telemetry gate runs before the
 existing answer and timing checks and rejects incomplete or failed raw measurements.
+`run-plan.json` is written from the requested inputs before any configuration starts.
+The gate requires every planned label and exactly one sample per requested query,
+client and round, including round zero; duplicate slots and truncated final rounds
+fail even when the client exits zero. ADBC and plain DuckDB each have one effective
+client, while Java uses the requested concurrency.
 
 The shared artifact contains the dispatched inputs, source commits, build/install
 logs, exact workflow, hardware/kernel/JDK/Docker/image identities, jar hashes, query
@@ -29,13 +34,28 @@ Each server configuration also retains:
   logs, WARN/ERROR extracts, effective JVM flags and Java/DuckDB version evidence.
 - Once-per-second timestamped raw cgroup CPU/throttling, memory/peak/events, process
   count and I/O counters, plus `/proc/1/stat`, `status`, `io` and `smaps_rollup`.
-  Clock tick/page units are recorded. A server heap snapshot from `jcmd GC.heap_info`
+  Each file's read status is retained separately, with actual required field checks;
+  a later successful read cannot conceal an earlier failure. A valid empty `io.stat`
+  is allowed when there was no attributed I/O. Clock tick/page units are recorded.
+  The gate requires at least one complete process/cgroup sample. A server heap snapshot from `jcmd GC.heap_info`
   is collected every fifth sample, including runs with no garbage collections.
 - An unrotated complete GC/safepoint log, the original JFR recording and preserved
   disk repository chunks. The recording enables periodic direct-buffer and CPU
   statistics and GC heap/collection events. The server is stopped gracefully before
   host-JDK summary/JSON extraction. If no final recording exists, collection attempts
   `jfr assemble` recovery and preserves the original chunks regardless of success.
+  Ranking requires a nonempty complete recording, successful summary and JSON event
+  extraction bound to its SHA-256/size, readable summary/events, and actual JVM/direct
+  buffer fields. GC initialization logs plus an actual successful heap snapshot are
+  valid without any garbage collections; arbitrary nonempty files are insufficient.
+
+Common server flags enable `streamTimingLog=true` before variant options. Every
+finished result stream's INFO line retains epoch `startMs`, `executeMs` (gate wait,
+execution and Arrow export), `firstBatchMs` (start to first nonempty batch, or -1),
+`totalMs`, `duckMs` (batch loading), `sendMs` (handoff to gRPC), `backpressureMs`, rows
+and batches. These server timings live in the complete server log and describe stream
+execution and handoff, rather than network delivery time or wire bytes. Client raw
+timestamps provide the corresponding query/round timeline.
 
 The server image uses Temurin 21 JDK so diagnostic tools are available. All compared
 configurations receive the same collectors. JFR, one-second Docker/proc sampling and

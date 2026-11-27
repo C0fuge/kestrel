@@ -2,6 +2,7 @@
 """Retain TPC-H container evidence and derive optional summaries without deleting raw files."""
 
 import argparse
+from collections import Counter
 import csv
 import hashlib
 import json
@@ -18,6 +19,95 @@ COUNTERS = ("cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "m
 EVENTS = ("jdk.CPULoad,jdk.ThreadCPULoad,jdk.GCHeapSummary,jdk.GarbageCollection,"
           "jdk.DirectBufferStatistics,jdk.PhysicalMemory,jdk.JVMInformation,jdk.OSInformation,"
           "jdk.CPUInformation,jdk.InitialSystemProperty")
+PROC_FILES = ("/proc/1/stat", "/proc/1/status", "/proc/1/io", "/proc/1/smaps_rollup")
+RESOURCE_FILES = tuple("/sys/fs/cgroup/" + name for name in COUNTERS) + PROC_FILES
+
+
+def write_plan(directory):
+    """Record all requested slots before measuring, using dispatch inputs rather than observed samples."""
+    inputs = json.loads((directory / "inputs.json").read_text())
+    rounds, clients = int(inputs["rounds"]), int(inputs["clients"])
+    if rounds < 1 or clients < 1:
+        raise ValueError("TPC-H requires positive rounds and clients")
+    labels = ["default"]
+    if clients == 1 and str(inputs["quick"]).lower() != "true":
+        labels.append("threads4")
+    labels += [label for label in ("baseline", "extra") if inputs[label]]
+    if inputs["more"]:
+        # Bash read -a preserves interior empty fields, but drops the final delimiter's empty field.
+        configs = inputs["more"].split("|")
+        if not configs[-1]:
+            configs.pop()
+        labels += [f"more{index + 1}" for index in range(len(configs))]
+    if str(inputs["plain"]).lower() == "true":
+        labels.append("plain")
+    queries = sorted(path.stem for path in (directory / "queries").glob("*.sql"))
+    if not queries:
+        raise ValueError("No requested SQL queries")
+    save_json(directory / "run-plan.json", {
+        "rounds": rounds, "warmup_round": 0, "queries": queries,
+        "labels": {label: {"client": "plain" if label == "plain" else inputs["client"],
+                           "clients": clients if label != "plain" and inputs["client"] == "java" else 1}
+                   for label in labels},
+    })
+
+
+def parsed_files(text):
+    """Keep each counter's own read status so a later successful cat cannot hide failure."""
+    pattern = r"^@@FILE ([^\n]+)\n(.*?)\n@@STATUS \1 ([0-9]+)$"
+    return {name: {"text": body, "status": int(status)}
+            for name, body, status in re.findall(pattern, text, re.M | re.S)}
+
+
+def resource_errors(files):
+    """Require actual CPU/RSS/I/O and limit fields, permitting a valid empty cgroup I/O file."""
+    errors = []
+    def checked(path, pattern):
+        entry = files.get(path, {})
+        if entry.get("status") != 0 or not re.search(pattern, entry.get("text", ""), re.M):
+            errors.append(path)
+        return entry.get("text", "")
+    base = "/sys/fs/cgroup/"
+    def fields(path, names):
+        text = checked(path, r"\S")
+        for name in names:
+            if not re.search(r"^" + re.escape(name) + r"\s+[0-9]+$", text, re.M):
+                errors.append(path + ":" + name)
+    fields(base + "cpu.stat", ("usage_usec", "user_usec", "system_usec", "nr_periods", "nr_throttled", "throttled_usec"))
+    checked(base + "cpu.max", r"^(?:max|[0-9]+) [1-9][0-9]*$")
+    checked(base + "cpuset.cpus.effective", r"^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$")
+    for name in ("memory.current", "memory.peak", "pids.current"):
+        checked(base + name, r"^[0-9]+$")
+    for name in ("memory.max", "memory.swap.max"):
+        checked(base + name, r"^(?:max|[0-9]+)$")
+    fields(base + "memory.stat", ("anon", "file"))
+    fields(base + "memory.events", ("low", "high", "max", "oom", "oom_kill"))
+    io = files.get(base + "io.stat", {})
+    if io.get("status") != 0:
+        errors.append(base + "io.stat")
+    for line in io.get("text", "").splitlines():
+        if not re.fullmatch(r"[0-9]+:[0-9]+(?: [a-z_]+=[0-9]+)+", line) or any(
+                not re.search(r"\b" + name + r"=[0-9]+\b", line) for name in ("rbytes", "wbytes", "rios", "wios")):
+            errors.append(base + "io.stat:fields")
+    stat = checked("/proc/1/stat", r"^1 \(.+\) ")
+    try:
+        fields_after_comm = stat.rsplit(")", 1)[1].split()
+        if len(fields_after_comm) < 22 or any(int(fields_after_comm[index]) < 0 for index in (11, 12, 20, 21)):
+            errors.append("/proc/1/stat:cpu/rss")
+    except (IndexError, ValueError):
+        errors.append("/proc/1/stat:cpu/rss")
+    for name in ("VmRSS", "Threads"):
+        checked("/proc/1/status", r"^" + name + r":\s+[0-9]+" + (r" kB$" if name == "VmRSS" else r"$"))
+    fields("/proc/1/io", ("rchar:", "wchar:", "syscr:", "syscw:", "read_bytes:", "write_bytes:"))
+    for name in ("Rss", "Pss"):
+        checked("/proc/1/smaps_rollup", r"^" + name + r":\s+[0-9]+ kB$")
+    return errors
+
+
+def heap_evidence(text):
+    """Recognize an actual heap usage response without requiring a garbage collection."""
+    return bool(re.search(r"heap|generation|PSYoungGen|ParOldGen", text, re.I)
+                and re.search(r"\bused\s+[0-9]+", text))
 
 
 def redacted(text):
@@ -54,9 +144,9 @@ def capture(command, path):
 def monitor(container, directory):
     """Flush timestamped raw cgroup and process CPU/RSS/I/O counters once per second."""
     command = ["docker", "exec", container, "sh", "-c",
-               "for f in " + " ".join("/sys/fs/cgroup/" + name for name in COUNTERS)
-               + " /proc/1/stat /proc/1/status /proc/1/io /proc/1/smaps_rollup; "
-                 "do echo ===$f; cat $f; done"]
+               "for f in " + " ".join(RESOURCE_FILES) + "; "
+               "do printf '\\n@@FILE %s\\n' \"$f\"; cat \"$f\"; code=$?; "
+               "printf '\\n@@STATUS %s %s\\n' \"$f\" \"$code\"; done"]
     save_json(directory / "monitor-command.json", {"argv": command, "period_seconds": 1,
               "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "page_bytes": os.sysconf("SC_PAGE_SIZE")})
     with (directory / "resources.jsonl").open("x") as output:
@@ -65,7 +155,7 @@ def monitor(container, directory):
             started = time.monotonic()
             result = run(command, timeout=15)
             sample = {"timestamp_ns": time.time_ns(), "status": result.returncode,
-                      "stdout": result.stdout, "stderr": result.stderr}
+                      "stdout": result.stdout, "stderr": result.stderr, "files": parsed_files(result.stdout)}
             if directory.name != "plain" and index % 5 == 0:
                 heap = run(["docker", "exec", container, "jcmd", "1", "GC.heap_info"], timeout=15)
                 sample["heap"] = {"status": heap.returncode, "stdout": heap.stdout, "stderr": heap.stderr}
@@ -100,47 +190,142 @@ def finish(container, directory):
             if recovered.is_file():
                 profiles.append(recovered)
     for recording in profiles:
-        capture(["jfr", "summary", str(recording)], directory / (recording.stem + "-jfr-summary.txt"))
+        summary = capture(["jfr", "summary", str(recording)], directory / (recording.stem + "-jfr-summary.txt"))
         # Environment events are disabled in the recording configuration before server startup.
-        capture(["jfr", "print", "--json", "--events", EVENTS, str(recording)],
-                directory / (recording.stem + "-jfr-events.json"))
+        events = capture(["jfr", "print", "--json", "--events", EVENTS, str(recording)],
+                         directory / (recording.stem + "-jfr-events.json"))
+        with recording.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        save_json(directory / (recording.stem + "-jfr-extraction.json"), {
+            "sha256": digest, "bytes": recording.stat().st_size,
+            "summary_status": summary.returncode, "events_status": events.returncode})
     save_json(directory / "finished.json", {"finished_ns": time.time_ns(), "jfr_present": profile.is_file()})
     capture(["docker", "rm", container], directory / "remove.log")
 
 
+def recording_errors(label):
+    """Bind readable, successfully extracted event evidence to the retained complete recording."""
+    try:
+        profile = label / "server.jfr"
+        with profile.open("rb") as source:
+            if source.read(4) != b"FLR\0" or profile.stat().st_size < 68:
+                return ["empty or malformed server JFR"]
+            source.seek(0)
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        extracted = json.loads((label / "server-jfr-extraction.json").read_text())
+        if extracted != {"sha256": digest, "bytes": profile.stat().st_size, "summary_status": 0, "events_status": 0}:
+            return ["JFR extraction failed or recording changed after extraction"]
+        summary = (label / "server-jfr-summary.txt").read_text()
+        if not re.search(r"\bVersion:\s+[0-9]+\.[0-9]+", summary) or not re.search(r"\bChunks:\s+[1-9][0-9]*", summary):
+            return ["unreadable JFR summary"]
+        events = json.loads((label / "server-jfr-events.json").read_text())["recording"]["events"]
+        if not isinstance(events, list) or not events or any(
+                not isinstance(event.get("values"), dict) for event in events):
+            return ["unreadable JFR events"]
+        kinds = {event["type"] for event in events}
+        if not {"jdk.JVMInformation", "jdk.DirectBufferStatistics"} <= kinds:
+            return ["missing JVM/direct-buffer JFR events"]
+        jvm = [event["values"] for event in events if event["type"] == "jdk.JVMInformation"]
+        direct = [event["values"] for event in events if event["type"] == "jdk.DirectBufferStatistics"]
+        if not any(isinstance(values.get("jvmVersion"), str) and values["jvmVersion"] for values in jvm):
+            return ["missing actual JVM version event fields"]
+        if not any(all(type(values.get(name)) is int for name in ("count", "totalCapacity", "memoryUsed")) for values in direct):
+            return ["missing actual direct-buffer event fields"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return ["missing or unreadable complete server JFR extraction"]
+    return []
+
+
+def query_errors(label, plan, names, rounds):
+    """Require each requested query/client/round exactly once, including the warmup round."""
+    filename = "queries.csv" if plan["client"] == "java" else "samples.csv"
+    try:
+        with (label / "client" / filename).open() as source:
+            rows = list(csv.DictReader(source))
+        slots = []
+        for row in rows:
+            client = int(row["client"]) if plan["client"] == "java" else int(row.get("client", "0"))
+            round_number = int(row["round"])
+            byte_field = "arrow_bytes" if plan["client"] == "java" else "arrow_buffer_bytes"
+            batch_field = "batches" if plan["client"] == "java" else "table_batches"
+            if row["ok"] != "1" or row["warmup"] != str(int(round_number == 0)) or row.get("error_type", ""):
+                return ["failed query or inconsistent warmup/status"]
+            if int(row["latency_ns"]) <= 0 or any(int(row[name]) < 0 for name in ("rows", byte_field, batch_field)):
+                return ["missing query latency/answer/buffer evidence"]
+            if not re.fullmatch(r"[0-9a-f]{16}", row["checksum"]):
+                return ["invalid query checksum"]
+            if plan["client"] == "java":
+                if int(row["start_epoch_ms"]) <= 0:
+                    return ["missing query timestamp"]
+                int(row["start_ns"])
+            elif int(row["timestamp_ns"]) <= 0:
+                return ["missing query timestamp"]
+            slots.append((row["query"], client, round_number))
+        expected = {(query, client, round_number) for query in names for client in range(plan["clients"])
+                    for round_number in range(rounds + 1)}
+        counts = Counter(slots)
+        missing, extra = expected - counts.keys(), counts.keys() - expected
+        duplicates = [slot for slot, count in counts.items() if count != 1]
+        if missing or extra or duplicates:
+            return [f"incomplete query slots: missing={len(missing)}, unexpected={len(extra)}, duplicates={len(duplicates)}"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["missing or malformed query samples"]
+    return []
+
+
 def validate(directory):
-    """Require complete client samples and resource/JVM evidence before comparing speeds."""
-    errors = []
-    labels = [path for path in directory.iterdir() if path.is_dir() and (path / "container-argv.json").is_file()]
-    if not labels:
-        errors.append("no configurations started")
-    expected = {path.stem for path in (directory / "queries").glob("*.sql")}
-    for label in labels:
-        for name in ("container.json", "server.log", "mvn.log"):
-            if not (label / name).is_file():
-                errors.append(f"{label.name}: missing {name}")
-        status = label / "client-exit-status.txt"
-        if not status.is_file() or status.read_text().strip() != "0":
-            errors.append(f"{label.name}: client did not complete successfully")
-        resources = label / "resources.jsonl"
-        samples = [json.loads(line) for line in resources.read_text().splitlines()] if resources.is_file() else []
-        if not any(row["status"] == 0 for row in samples):
-            errors.append(f"{label.name}: no successful process/cgroup sample")
-        csvs = list((label / "client").glob("*.csv"))
-        rows = []
-        for path in csvs:
-            with path.open() as source:
-                rows.extend(csv.DictReader(source))
-        if not rows or any(row["ok"] != "1" for row in rows) or {row["query"] for row in rows} != expected:
-            errors.append(f"{label.name}: missing, failed or incomplete query samples")
-        if label.name != "plain":
-            if not (label / "server.jfr").is_file() or not (label / "gc.log").is_file():
-                errors.append(f"{label.name}: missing complete server JFR or GC log")
-            startup_heap = label / "startup-heap-status.txt"
-            if not any(row.get("heap", {}).get("status") == 0 for row in samples) and not (
-                    startup_heap.is_file() and startup_heap.read_text().strip() == "0"):
-                errors.append(f"{label.name}: no successful heap sample")
-    save_json(directory / "telemetry-validation.json", {"labels": [label.name for label in labels], "errors": errors})
+    """Require the explicit requested plan and complete raw measurements before comparing speeds."""
+    errors, labels = [], {}
+    try:
+        plan = json.loads((directory / "run-plan.json").read_text())
+        labels = plan["labels"]
+        names, rounds = plan["queries"], plan["rounds"]
+        if (not isinstance(labels, dict) or not labels or not isinstance(names, list) or not names
+                or not all(isinstance(name, str) for name in names)
+                or type(rounds) is not int or rounds < 1 or len(set(names)) != len(names)):
+            raise ValueError("invalid plan")
+        if set(names) != {path.stem for path in (directory / "queries").glob("*.sql")}:
+            raise ValueError("requested SQL inputs changed")
+        for label_name, requested in labels.items():
+            if requested["client"] not in ("java", "adbc", "plain") or type(requested["clients"]) is not int or requested["clients"] < 1:
+                raise ValueError("invalid client plan")
+            label = directory / label_name
+            failures = []
+            for name in ("container-argv.json", "container.json", "server.log", "mvn.log"):
+                if not (label / name).is_file() or not (label / name).stat().st_size:
+                    failures.append(f"missing {name}")
+            status = label / "client-exit-status.txt"
+            if not status.is_file() or status.read_text().strip() != "0":
+                failures.append("client did not complete successfully")
+            samples = []
+            resources = label / "resources.jsonl"
+            if resources.is_file():
+                for line in resources.read_text().splitlines():
+                    try:
+                        samples.append(json.loads(line))
+                    except ValueError:
+                        failures.append("malformed resource sample")
+            if not any(row.get("status") == 0 and not resource_errors(row.get("files", {})) for row in samples):
+                failures.append("no complete required process/cgroup fields with individual read statuses")
+            failures += query_errors(label, requested, names, rounds)
+            if requested["client"] != "plain":
+                failures += recording_errors(label)
+                gc = label / "gc.log"
+                if not gc.is_file() or not re.search(r"\[(?:info|debug|trace)\]\[gc(?:[\], ])", gc.read_text()):
+                    failures.append("missing actual GC log evidence")
+                startup = label / "startup-heap-status.txt"
+                startup_text = label / "startup-heap.txt"
+                heap = any(row.get("heap", {}).get("status") == 0 and
+                           heap_evidence(row["heap"].get("stdout", "")) for row in samples)
+                heap |= (startup.is_file() and startup.read_text().strip() == "0" and
+                         startup_text.is_file() and heap_evidence(startup_text.read_text()))
+                if not heap:
+                    failures.append("no successful actual heap usage snapshot")
+            errors += [f"{label_name}: {failure}" for failure in failures]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        errors.append(f"missing or invalid requested run plan/evidence: {type(error).__name__}")
+    save_json(directory / "telemetry-validation.json", {
+        "labels": list(labels) if isinstance(labels, dict) else [], "errors": errors})
     if errors:
         raise ValueError("Incomplete telemetry: " + "; ".join(errors))
 
@@ -178,14 +363,14 @@ def summarize(directory):
 def main():
     """Expose small lifecycle operations for the existing shell workflow."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("monitor", "finish", "command", "summarize", "validate"))
+    parser.add_argument("operation", choices=("monitor", "finish", "command", "summarize", "validate", "plan"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.operation == "command":
         save_json(args.directory, args.arguments)
-    elif args.operation in ("summarize", "validate"):
-        {"summarize": summarize, "validate": validate}[args.operation](args.directory)
+    elif args.operation in ("summarize", "validate", "plan"):
+        {"summarize": summarize, "validate": validate, "plan": write_plan}[args.operation](args.directory)
     else:
         {"monitor": monitor, "finish": finish}[args.operation](args.arguments[0], args.directory)
 

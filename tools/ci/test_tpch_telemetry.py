@@ -2,6 +2,7 @@
 
 import contextlib
 import csv
+import hashlib
 import io
 import json
 import os
@@ -18,6 +19,70 @@ from unittest import mock
 HERE = Path(__file__).parent
 RAW = runpy.run_path(str(HERE / "tpch-raw.py"))
 TELEMETRY = runpy.run_path(str(HERE / "tpch-telemetry.py"))
+
+
+def resource_fixture():
+    """Represent real cgroup v2 and proc fields without relying on the test host's limits."""
+    values = {
+        "cpu.stat": "usage_usec 10\nuser_usec 7\nsystem_usec 3\nnr_periods 1\nnr_throttled 0\nthrottled_usec 0",
+        "cpu.max": "400000 100000", "cpuset.cpus.effective": "0-3", "memory.current": "100",
+        "memory.peak": "200", "memory.stat": "anon 50\nfile 50", "memory.max": "8589934592",
+        "memory.swap.max": "8589934592", "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0",
+        "io.stat": "", "pids.current": "20",
+    }
+    result = {"/sys/fs/cgroup/" + name: {"status": 0, "text": text} for name, text in values.items()}
+    result.update({
+        "/proc/1/stat": {"status": 0, "text": "1 (java) S " + " ".join("1" for _ in range(21))},
+        "/proc/1/status": {"status": 0, "text": "VmRSS:\t100 kB\nThreads:\t20"},
+        "/proc/1/io": {"status": 0, "text": "rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0"},
+        "/proc/1/smaps_rollup": {"status": 0, "text": "Rss: 100 kB\nPss: 90 kB"},
+    })
+    return result
+
+
+def write_rows(label, rows, client="java"):
+    """Write a complete or deliberately damaged client fixture in its actual CSV schema."""
+    path = label / "client" / ("queries.csv" if client == "java" else "samples.csv")
+    with path.open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def valid_run(directory):
+    """Build an internally bound extraction fixture with two clients, two queries and two measured rounds."""
+    (directory / "queries").mkdir(parents=True)
+    for name in ("q01", "q02"):
+        (directory / "queries" / (name + ".sql")).write_text("select 1")
+    (directory / "inputs.json").write_text(json.dumps({
+        "rounds": "2", "clients": "2", "client": "java", "quick": True,
+        "baseline": "", "extra": "", "more": "", "plain": False}))
+    TELEMETRY["write_plan"](directory)
+    label = directory / "default"
+    (label / "client").mkdir(parents=True)
+    for name in ("container-argv.json", "container.json", "server.log", "mvn.log"):
+        (label / name).write_text("complete evidence")
+    (label / "client-exit-status.txt").write_text("0")
+    (label / "resources.jsonl").write_text(json.dumps({
+        "status": 0, "files": resource_fixture(),
+        "heap": {"status": 0, "stdout": "garbage-first heap total 1024K, used 512K"}}) + "\n")
+    recording = b"FLR\0" + bytes(100)
+    (label / "server.jfr").write_bytes(recording)
+    (label / "server-jfr-extraction.json").write_text(json.dumps({
+        "sha256": hashlib.sha256(recording).hexdigest(), "bytes": len(recording),
+        "summary_status": 0, "events_status": 0}))
+    (label / "server-jfr-summary.txt").write_text("Version: 2.1\nChunks: 1\n")
+    (label / "server-jfr-events.json").write_text(json.dumps({"recording": {"events": [
+        {"type": "jdk.JVMInformation", "values": {"jvmVersion": "21 test JVM"}},
+        {"type": "jdk.DirectBufferStatistics", "values": {"count": 0, "totalCapacity": 0, "memoryUsed": 0}}]}}))
+    (label / "gc.log").write_text("[0.001s][info][gc] Using G1\n")
+    rows = [{"query": query, "client": client, "round": round_number, "warmup": int(round_number == 0),
+             "start_epoch_ms": 1700000000000, "start_ns": 1, "latency_ns": 100,
+             "rows": 1, "checksum": "0000000000000001", "arrow_bytes": 8, "batches": 1,
+             "ok": 1, "error_type": ""}
+            for query in ("q01", "q02") for client in range(2) for round_number in range(3)]
+    write_rows(label, rows)
+    return label, rows
 
 
 class TpchTelemetryTest(unittest.TestCase):
@@ -89,20 +154,36 @@ class TpchTelemetryTest(unittest.TestCase):
         """A complete sampling interval retains unparsed counters plus the heap diagnostic."""
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
+            files = resource_fixture()
+            raw = "\n".join(f"@@FILE {name}\n{entry['text']}\n@@STATUS {name} {entry['status']}"
+                            for name, entry in files.items())
 
             def sample(command, **kwargs):
                 (directory / "monitor.stop").touch()
-                return subprocess.CompletedProcess(command, 0, "raw counter output", "raw diagnostic stderr")
+                return subprocess.CompletedProcess(command, 0, raw, "raw diagnostic stderr")
 
             with mock.patch.object(subprocess, "run", side_effect=sample), mock.patch("time.sleep"):
                 TELEMETRY["monitor"]("task-container", directory)
             rows = [json.loads(line) for line in (directory / "resources.jsonl").read_text().splitlines()]
             self.assertEqual(1, len(rows))
-            self.assertEqual("raw counter output", rows[0]["stdout"])
+            self.assertEqual(raw, rows[0]["stdout"])
+            self.assertEqual(files, rows[0]["files"])
+            self.assertEqual([], TELEMETRY["resource_errors"](rows[0]["files"]))
             self.assertEqual("raw diagnostic stderr", rows[0]["heap"]["stderr"])
             command = json.loads((directory / "monitor-command.json").read_text())["argv"]
             self.assertIn("/sys/fs/cgroup/cpu.stat", command[-1])
             self.assertIn("/proc/1/io", command[-1])
+
+    def test_protocol_keeps_early_read_failure_before_later_success(self):
+        """Per-file framing retains an early missing counter even when the shell's last cat succeeds."""
+        files = resource_fixture()
+        files["/sys/fs/cgroup/memory.current"] = {"status": 1, "text": ""}
+        raw = "\n".join(f"@@FILE {name}\n{entry['text']}\n@@STATUS {name} {entry['status']}"
+                        for name, entry in files.items())
+        parsed = TELEMETRY["parsed_files"](raw)
+        self.assertEqual(0, parsed["/proc/1/smaps_rollup"]["status"])
+        self.assertEqual(1, parsed["/sys/fs/cgroup/memory.current"]["status"])
+        self.assertIn("/sys/fs/cgroup/memory.current", TELEMETRY["resource_errors"](parsed))
 
     def test_summary_keeps_both_labels_and_java_schema(self):
         """Derivation supports the Java schema and never replaces earlier labels' raw samples/logs."""
@@ -122,29 +203,113 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertIn("default/client/queries.csv", (directory / "SHA256SUMS").read_text())
             self.assertIn("extra/client/queries.csv", (directory / "SHA256SUMS").read_text())
 
-    def test_validation_refuses_partial_or_missing_metrics(self):
-        """Printed timings alone cannot pass the telemetry gate."""
+    def test_complete_requested_run_with_no_gc_is_valid(self):
+        """A real heap snapshot and GC initialization are enough when no collection occurs."""
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
-            (directory / "queries").mkdir()
-            (directory / "queries/q01.sql").write_text("select 1")
-            label = directory / "default"
-            (label / "client").mkdir(parents=True)
-            (label / "container-argv.json").write_text("[]")
-            with self.assertRaisesRegex(ValueError, "Incomplete telemetry"):
-                TELEMETRY["validate"](directory)
-            (label / "client-exit-status.txt").write_text("0")
-            for name in ("container.json", "server.log", "mvn.log"):
-                (label / name).write_text("complete evidence")
-            (label / "resources.jsonl").write_text('{"status":0,"heap":{"status":0}}\n')
-            (label / "server.jfr").write_bytes(b"recording")
-            (label / "gc.log").write_text("gc")
-            (label / "client/queries.csv").write_text("query,warmup,ok\nq01,0,1\n")
+            valid_run(directory)
             TELEMETRY["validate"](directory)
             self.assertEqual([], json.loads((directory / "telemetry-validation.json").read_text())["errors"])
-            (label / "client/queries.csv").write_text("query,warmup,ok\nq01,0,0\n")
-            with self.assertRaisesRegex(ValueError, "failed or incomplete"):
+        for text in ("garbage-first heap total 1024K, used 512K", "ZHeap used 4M, capacity 64M",
+                     "PSYoungGen total 1024K, used 512K", "def new generation total 1024K, used 512K"):
+            self.assertTrue(TELEMETRY["heap_evidence"](text))
+        self.assertFalse(TELEMETRY["heap_evidence"]("no actual heap information"))
+
+    def test_validation_requires_every_requested_slot_and_label(self):
+        """Missing final rounds, clients, warmups and duplicate rows cannot pass a name-only check."""
+        cases = {
+            "missing_last_round": lambda rows: [row for row in rows if row["round"] != 2],
+            "missing_client": lambda rows: [row for row in rows if row["client"] != 1],
+            "missing_warmup": lambda rows: [row for row in rows if row["round"] != 0],
+            "duplicate_warmup": lambda rows: rows + [rows[0]],
+            "warmup_only_duplicates": lambda rows: [rows[0], rows[0]],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            for name, mutate in cases.items():
+                with self.subTest(case=name):
+                    directory = Path(temp) / name
+                    label, rows = valid_run(directory)
+                    write_rows(label, mutate(rows))
+                    with self.assertRaisesRegex(ValueError, "incomplete query slots"):
+                        TELEMETRY["validate"](directory)
+                    self.assertTrue((label / "client/queries.csv").exists())
+            directory = Path(temp) / "omitted_label"
+            valid_run(directory)
+            plan = json.loads((directory / "run-plan.json").read_text())
+            plan["labels"]["extra"] = {"client": "java", "clients": 2}
+            (directory / "run-plan.json").write_text(json.dumps(plan))
+            with self.assertRaisesRegex(ValueError, "extra:"):
                 TELEMETRY["validate"](directory)
+            (directory / "run-plan.json").unlink()
+            with self.assertRaisesRegex(ValueError, "requested run plan"):
+                TELEMETRY["validate"](directory)
+
+    def test_validation_rejects_unreadable_or_stale_jfr_evidence(self):
+        """Nonempty files, failed extraction, invalid JSON and post-extraction changes cannot prove readability."""
+        cases = {
+            "empty_recording": ("server.jfr", b""),
+            "malformed_recording": ("server.jfr", b"not a recording"),
+            "changed_recording": ("server.jfr", b"FLR\0" + bytes(101)),
+            "bad_summary": ("server-jfr-summary.txt", "not a summary"),
+            "bad_events": ("server-jfr-events.json", "not json"),
+            "empty_events": ("server-jfr-events.json", '{"recording":{"events":[]}}'),
+            "bad_gc": ("gc.log", "not gc evidence"),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            for name, (filename, value) in cases.items():
+                with self.subTest(case=name):
+                    directory = Path(temp) / name
+                    label, _ = valid_run(directory)
+                    path = label / filename
+                    path.write_bytes(value) if isinstance(value, bytes) else path.write_text(value)
+                    with self.assertRaises(ValueError):
+                        TELEMETRY["validate"](directory)
+                    self.assertTrue(path.exists())
+            directory = Path(temp) / "failed_extraction"
+            label, _ = valid_run(directory)
+            path = label / "server-jfr-extraction.json"
+            extracted = json.loads(path.read_text())
+            extracted["events_status"] = 1
+            path.write_text(json.dumps(extracted))
+            with self.assertRaisesRegex(ValueError, "JFR extraction failed"):
+                TELEMETRY["validate"](directory)
+
+    def test_validation_rejects_partial_fields_despite_outer_success(self):
+        """A final successful cat and zero exit code cannot hide required fields that failed earlier."""
+        with tempfile.TemporaryDirectory() as temp:
+            for case in ("missing_file", "failed_read", "missing_cpu_field", "fake_heap"):
+                with self.subTest(case=case):
+                    directory = Path(temp) / case
+                    label, _ = valid_run(directory)
+                    path = label / "resources.jsonl"
+                    sample = json.loads(path.read_text())
+                    if case == "missing_file":
+                        del sample["files"]["/sys/fs/cgroup/memory.current"]
+                    elif case == "failed_read":
+                        sample["files"]["/proc/1/io"]["status"] = 1
+                    elif case == "missing_cpu_field":
+                        sample["files"]["/sys/fs/cgroup/cpu.stat"]["text"] = "nr_periods 1"
+                    else:
+                        sample["heap"]["stdout"] = "no actual heap information"
+                    path.write_text(json.dumps(sample) + "\n")
+                    with self.assertRaisesRegex(ValueError, "heap usage" if case == "fake_heap" else "required process/cgroup fields"):
+                        TELEMETRY["validate"](directory)
+
+    def test_explicit_plan_preserves_all_configurations_and_effective_clients(self):
+        """ADBC/plain use one client while Java uses the requested count, with all optional labels listed."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            valid_run(directory)
+            inputs = json.loads((directory / "inputs.json").read_text())
+            inputs.update(client="adbc", clients="1", quick=False, baseline="ref", extra="-Dsetting=true",
+                          more="one||three|", plain=True)
+            (directory / "inputs.json").write_text(json.dumps(inputs))
+            TELEMETRY["write_plan"](directory)
+            plan = json.loads((directory / "run-plan.json").read_text())
+            self.assertEqual(["default", "threads4", "baseline", "extra", "more1", "more2", "more3", "plain"],
+                             list(plan["labels"]))
+            self.assertTrue(all(value["clients"] == 1 for value in plan["labels"].values()))
+            self.assertEqual(2, plan["rounds"])
 
     def test_python_clients_preserve_checksums_and_actual_table_chunks(self):
         """Both clients report the same checksum, referenced buffer size and observed table chunks."""
