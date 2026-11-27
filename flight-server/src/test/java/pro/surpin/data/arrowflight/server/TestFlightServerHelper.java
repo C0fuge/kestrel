@@ -31,7 +31,11 @@ import org.apache.hadoop.fs.LocalFileSystem;
 
 import java.net.URI;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -178,45 +182,110 @@ public class TestFlightServerHelper implements AutoCloseable {
         return flightClient;
     }
 
+    /**
+     * Closes helper-owned resources with bounded I/O waits, preserving failures and interruption.
+     *
+     * @throws Exception when resource cleanup fails or an owned I/O pool misses its five-second bound
+     */
     @Override
     public void close() throws Exception {
-        Exception first = null;
-        try { if (sqlClient != null) sqlClient.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (flightClient != null) flightClient.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (server != null) server.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (flightSqlProducer != null) flightSqlProducer.close(); }
-        catch (Exception e) { if (first == null) first = e; }
+        List<Exception> failures = new ArrayList<>();
+        try {
+            if (sqlClient != null) {
+                sqlClient.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (flightClient != null) {
+                flightClient.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (server != null) {
+                server.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (flightSqlProducer != null) {
+                flightSqlProducer.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
         duckDbIoPool.shutdownNow();
         executionIoPool.shutdownNow();
         try {
             awaitOwnedExecutor(duckDbIoPool);
         } catch (Exception e) {
-            if (first == null) {
-                first = e;
-            }
+            failures.add(e);
         }
         try {
             awaitOwnedExecutor(executionIoPool);
         } catch (Exception e) {
-            if (first == null) {
-                first = e;
+            failures.add(e);
+        }
+        try {
+            if (clusterService != null) {
+                clusterService.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (hazelcastAdapter != null) {
+                hazelcastAdapter.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (duckDbAdapter != null) {
+                duckDbAdapter.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (registry != null) {
+                registry.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        try {
+            if (allocator != null) {
+                allocator.close();
+            }
+        } catch (Exception e) {
+            failures.add(e);
+        }
+        restoreProps(savedProps);
+        Exception first = null;
+        boolean interrupted = false;
+        Set<Exception> distinct = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Exception failure : failures) {
+            interrupted |= failure instanceof InterruptedException;
+            if (distinct.add(failure)) {
+                if (first == null) {
+                    first = failure;
+                } else {
+                    first.addSuppressed(failure);
+                }
             }
         }
-        try { if (clusterService != null) clusterService.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (hazelcastAdapter != null) hazelcastAdapter.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (duckDbAdapter != null) duckDbAdapter.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (registry != null) registry.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        try { if (allocator != null) allocator.close(); }
-        catch (Exception e) { if (first == null) first = e; }
-        restoreProps(savedProps);
-        if (first != null) throw first;
+        // Keep later cleanup waits usable; restore a consumed interrupt only after all cleanup.
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (first != null) {
+            throw first;
+        }
     }
 
     /**

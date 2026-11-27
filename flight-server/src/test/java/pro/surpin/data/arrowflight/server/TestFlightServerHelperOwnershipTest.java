@@ -2,16 +2,23 @@ package pro.surpin.data.arrowflight.server;
 
 import java.lang.reflect.Field;
 import java.nio.file.Path;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 
 /** Verifies a plain-local helper closes the exact background resources it creates. */
 @Tag("integration")
@@ -54,6 +61,79 @@ class TestFlightServerHelperOwnershipTest {
         } finally {
             try {
                 cleanup(helper, closed, reaper, adapterIo, executionIo);
+            } catch (Exception | Error error) {
+                if (failure == null) {
+                    throw error;
+                }
+                failure.addSuppressed(error);
+            }
+        }
+    }
+
+    /** Verifies a later interrupted owned-worker wait preserves the primary close failure and interrupt. */
+    @Test
+    void closePreservesPrimaryFailureAndLaterInterruption() throws Exception {
+        TestFlightServerHelper helper = TestFlightServerHelper.builder()
+                .dataDir(directory.toString()).start();
+        ExecutorService adapterIo = helper.duckDbAdapter.ioPool();
+        ExecutorService executionIo = null;
+        ExecutorService reaper = null;
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        FlightSqlClient original = helper.sqlClient;
+        Field clientField = TestFlightServerHelper.class.getDeclaredField("sqlClient");
+        clientField.setAccessible(true);
+        Future<?> worker = null;
+        boolean closeCalled = false;
+        Throwable failure = null;
+        try {
+            executionIo = executor(helper.executionService, "ioPool");
+            reaper = executor(helper.duckDbAdapter, "sessionReaper");
+            Thread cleanupThread = Thread.currentThread();
+            worker = adapterIo.submit(() -> {
+                started.countDown();
+                boolean signalled = false;
+                while (release.getCount() != 0) {
+                    try {
+                        release.await();
+                    } catch (InterruptedException ignored) {
+                        // shutdownNow reaches this exact worker only after the earlier close failure.
+                        if (!signalled) {
+                            cleanupThread.interrupt();
+                            signalled = true;
+                        }
+                    }
+                }
+            });
+            assertTrue(started.await(5, TimeUnit.SECONDS), "owned worker entered its bounded fixture");
+            IllegalStateException primary = new IllegalStateException("synthetic client close failure");
+            FlightSqlClient failing = mock(FlightSqlClient.class);
+            doThrow(primary).when(failing).close();
+            clientField.set(helper, failing);
+            closeCalled = true;
+            Exception actual = assertThrows(Exception.class, helper::close);
+            assertSame(primary, actual, "first close failure remains primary");
+            assertTrue(Thread.currentThread().isInterrupted(), "later cleanup interruption is restored");
+            assertTrue(java.util.Arrays.stream(actual.getSuppressed())
+                    .anyMatch(InterruptedException.class::isInstance), "later interruption remains diagnostic evidence");
+            assertTrue(reaper.isShutdown(), "cleanup still reaches adapter close");
+            assertTrue(executionIo.isShutdown(), "cleanup still stops the other owned pool");
+        } catch (Exception | Error error) {
+            failure = error;
+            throw error;
+        } finally {
+            // Clear only this fixture's deliberate interrupt so its own cleanup can wait.
+            Thread.interrupted();
+            release.countDown();
+            try {
+                try {
+                    clientField.set(helper, original);
+                    if (worker != null) {
+                        worker.get(5, TimeUnit.SECONDS);
+                    }
+                } finally {
+                    cleanup(helper, closeCalled, reaper, adapterIo, executionIo);
+                }
             } catch (Exception | Error error) {
                 if (failure == null) {
                     throw error;
