@@ -4632,3 +4632,9 @@ S3 slowdown item below stays open for then).
   zero failures/errors, six skipped; eight complete-answer integration tests pass separately.
   No throughput claim, remote push, production deployment or release replacement.
   Sources and rationale: [implementation review](IMPLEMENTATION-REVIEW-2026-11-27.md).
+- 2026-11-27 (SQL lexer): valid nested block comments could expose an inner comment's tail
+  to time-travel detection and wrongly reject a query before authorization. The block-comment
+  scanner now tracks nesting depth. Regressions fail on the previous scanner; all 28 focused
+  lexer/authorization/reference/restriction tests and module Checkstyle pass under Java 21.
+  Full integration CI is required before merging these correctness fixes. The separate
+  integer-literal performance experiment remains opt-in and is not part of this fix branch.
