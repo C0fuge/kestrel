@@ -2073,6 +2073,11 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             return;
         }
+        PreparedStatement shaped = literalStatement(session, duckSql);
+        if (shaped != null) {
+            streamPrepared(allocator, duckSql, shaped, listener, startListener);
+            return;
+        }
         PreparedStatement ps = beforeSend(session, () -> session.statement(duckSql));
         streamPrepared(allocator, duckSql, ps, listener, startListener);
     }
@@ -3129,12 +3134,72 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             return;
         }
-        PreparedStatement ps = beforeSend(session, () -> session.statement(sql));
+        PreparedStatement shaped = parameters.isEmpty() ? literalStatement(session, sql) : null;
+        PreparedStatement ps = shaped != null ? shaped : beforeSend(session, () -> session.statement(sql));
         requireQuery(sql, ps);
-        bindParameters(ps, parameters);
+        if (shaped == null) {
+            bindParameters(ps, parameters);
+        }
         // Not streamSql: its parse check would take a statement from the cache, and a cache of
         // one statement would close this bound one ("Parameter count mismatch").
         streamPrepared(allocator, sql, ps, listener, startListener);
+    }
+
+    /**
+     * Prepares an experimental shared shape for checked SQL with integer comparison literals.
+     *
+     * @param session query session
+     * @param sql original checked SQL
+     * @return bound statement, or null when this experiment does not apply
+     * @throws Exception when preparing or binding fails
+     */
+    private PreparedStatement literalStatement(Session session, String sql) throws Exception {
+        if (!Boolean.getBoolean("arrowflight.experimental.integerLiteralParameters")) {
+            return null;
+        }
+        LiteralParameters shape = literalParameters(sql);
+        if (shape == null) {
+            return null;
+        }
+        PreparedStatement statement = beforeSend(session, () -> session.statement(shape.sql()));
+        bindParameters(statement, shape.values());
+        return statement;
+    }
+
+    /**
+     * SQL and values of a checked integer-comparison shape.
+     *
+     * @param sql parameterized SQL
+     * @param values comparison literals in order
+     */
+    record LiteralParameters(String sql, List<Object> values) {
+    }
+
+    /**
+     * Replaces only small integer comparison literals recognized by the describe-key lexer.
+     *
+     * @param sql SQL already accepted by the single-query check
+     * @return typed shape and values, or null when no safe shape applies
+     */
+    static LiteralParameters literalParameters(String sql) {
+        if (!QueryCacheLimits.cacheable(sql) || sql.indexOf('?') >= 0 || sql.indexOf('$') >= 0
+                || sql.indexOf('\\') >= 0 || sql.contains("/*") || sql.contains("--")) {
+            return null;
+        }
+        var shape = pro.surpin.data.arrowflight.server.services.DescribeKey.shape(sql);
+        if (shape == null) {
+            return null;
+        }
+        StringBuilder query = new StringBuilder(sql.length());
+        List<Object> values = new ArrayList<>();
+        int copied = 0;
+        for (var span : shape.literals()) {
+            query.append(sql, copied, span.start()).append("CAST(? AS INTEGER)");
+            values.add(Integer.valueOf(sql.substring(span.start(), span.end())));
+            copied = span.end();
+        }
+        query.append(sql, copied, sql.length());
+        return new LiteralParameters(query.toString(), List.copyOf(values));
     }
 
     /**
