@@ -62,6 +62,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults);
  * {@code -Dperf.shared=threads:memoryLimit} runs it on one shared DuckDB (duckDbSharedDatabase).
  * {@code -Dperf.producingStreams} caps active producers and records gate wait deltas.
+ * {@code -Dperf.heavyEvery=N} replaces every Nth query with a bounded customer-key self join,
+ * phased by client (default 0 keeps the original point/count mix). Raw query kinds are
+ * 0 for point lookups, 1 for filtered counts and 2 for the heavier join count.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -235,6 +238,10 @@ class SmallQueryThroughputPerfTest {
      */
     private static void run(FlightSqlClient client, CallOption header, boolean statements,
             int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
+        int heavyEvery = Integer.getInteger("perf.heavyEvery", 0);
+        if (heavyEvery < 0) {
+            throw new IllegalArgumentException("perf.heavyEvery must not be negative");
+        }
         AtomicInteger names = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(clients,
                 r -> new Thread(r, "perf-client-" + names.incrementAndGet()));
@@ -259,9 +266,8 @@ class SmallQueryThroughputPerfTest {
                     for (int i = 0; System.nanoTime() < end && n < times.length; i++) {
                         long t0 = System.nanoTime();
                         long k = Math.floorMod((base + i) * 7919L, (long) ROWS);
-                        String sql = (i & 1) == 0
-                                ? "SELECT * FROM s.orders WHERE o_orderkey = " + k
-                                : "SELECT count(*) FROM s.orders WHERE o_orderkey < " + k;
+                        QueryCase query = queryFor(i, thread, k, heavyEvery);
+                        String sql = query.sql();
                         QueryRead result;
                         if (statements) {
                             result = read(client, client.execute(sql, header), header);
@@ -273,14 +279,14 @@ class SmallQueryThroughputPerfTest {
                         long elapsed = System.nanoTime() - t0;
                         times[n++] = elapsed;
                         if (PerfRunArtifacts.enabled()) {
-                            raw.append(thread).append(',').append(i).append(',').append(i & 1)
+                            raw.append(thread).append(',').append(i).append(',').append(query.kind())
                                     .append(',').append(k).append(',').append(t0 - wall0)
                                     .append(',').append(elapsed).append(',').append(result.rows())
                                     .append(',').append(result.checksum()).append(',').append(result.bytes())
                                     .append(',').append(result.batches()).append('\n');
                         }
                         assertEquals(1, result.rows(), sql);
-                        assertEquals(k, result.first(), sql);
+                        assertEquals(query.expectedFirst(), result.first(), sql);
                     }
                     return Arrays.copyOf(times, n);
                 }));
@@ -340,6 +346,37 @@ class SmallQueryThroughputPerfTest {
                 PerfRunArtifacts.writeSamples(print ? "c" + clients : "warmup-c" + clients, samples);
             }
         }
+    }
+
+    /**
+     * Selects one deterministic query, rotating the heavy-query phase by client.
+     *
+     * @param sequence query sequence within the client
+     * @param thread client index
+     * @param key existing order key
+     * @param heavyEvery heavy-query interval, or 0 to disable
+     * @return query kind, SQL and exact first value
+     */
+    static QueryCase queryFor(int sequence, int thread, long key, int heavyEvery) {
+        if (heavyEvery > 0 && Math.floorMod((long) sequence + thread, heavyEvery) == heavyEvery - 1) {
+            long bound = Math.min(key, 5000);
+            return new QueryCase(2, "SELECT count(*) FROM s.orders a JOIN s.orders b"
+                    + " ON a.o_custkey = b.o_custkey WHERE a.o_orderkey < " + bound,
+                    bound * (ROWS / 1000L));
+        }
+        return (sequence & 1) == 0
+                ? new QueryCase(0, "SELECT * FROM s.orders WHERE o_orderkey = " + key, key)
+                : new QueryCase(1, "SELECT count(*) FROM s.orders WHERE o_orderkey < " + key, key);
+    }
+
+    /**
+     * One checked workload query.
+     *
+     * @param kind 0 for point, 1 for count, 2 for heavy join
+     * @param sql query text
+     * @param expectedFirst exact first numeric result
+     */
+    record QueryCase(int kind, String sql, long expectedFirst) {
     }
 
     /**
