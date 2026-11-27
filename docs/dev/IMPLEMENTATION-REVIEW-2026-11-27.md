@@ -78,6 +78,15 @@ correctness-focused change.
 
 ## Follow-up candidates
 
+Cloud integration completed on 2026-11-27:
+[full Dev CI](https://github.com/C0fuge/kestrel/actions/runs/46026380100) passed
+2,081 tests (one skip, zero failures/errors), Checkstyle and SpotBugs, followed by
+48/48 exact concurrent distributed answers and both cgroup memory-pressure gates
+without OOM kills. This includes the later nested-block-comment correction and
+its real Flight SQL regression. The final source tree is integrated in `25b225fa`.
+The workflow now installs reactor artifacts before standalone follow-up checks;
+those checks previously tried to resolve internal project JARs from Maven Central.
+
 - Compare bounded statement scheduling and query cancellation under mixed small/heavy
   load before adopting further admission-control changes.
 - Compare native Arrow batch transfer and copy/backpressure behavior under the same

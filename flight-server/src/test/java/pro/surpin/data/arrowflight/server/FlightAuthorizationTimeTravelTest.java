@@ -1,9 +1,11 @@
 package pro.surpin.data.arrowflight.server;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +33,16 @@ class FlightAuthorizationTimeTravelTest {
             // Nothing to release.
         }
     };
+
+    /** Checks only real table reads when nested comments contain a malformed clause. */
+    @Test
+    void nestedCommentsCannotIntroduceATimeTravelClause() {
+        String comment = " /* outer /* inner */ FOR VERSION AS OF nonsense */";
+        assertDoesNotThrow(() -> ONLY_A.requireQuery("u", "SELECT id FROM s.a" + comment));
+        FlightRuntimeException denied = assertThrows(FlightRuntimeException.class,
+                () -> ONLY_A.requireQuery("u", "SELECT id FROM s.b" + comment));
+        assertEquals(FlightStatusCode.UNAUTHORIZED, denied.status().code());
+    }
 
     @Test
     void timeTravelTablesAreChecked() {

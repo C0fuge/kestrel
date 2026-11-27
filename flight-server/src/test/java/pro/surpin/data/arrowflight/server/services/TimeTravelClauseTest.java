@@ -89,6 +89,21 @@ class TimeTravelClauseTest {
         assertFalse(TimeTravelClause.present(null));
     }
 
+    /** Finds clauses only after every nested block comment has closed. */
+    @Test
+    void nestedCommentsHideClausesUntilTheirOuterClose() {
+        for (String sql : List.of(
+                "SELECT 1 /* outer /* inner */ FOR VERSION AS OF nonsense */",
+                "SELECT 1 /* outer /* inner /* deeper */ */ s.t FOR VERSION AS OF 1 */")) {
+            assertFalse(TimeTravelClause.present(sql), sql);
+            assertEquals(List.of(), TimeTravelClause.find(sql), sql);
+            assertEquals(sql, TimeTravelClause.withoutClauses(sql), sql);
+        }
+        assertEquals("SELECT * FROM /* outer /* inner */ still comment */ <s/t AS t>",
+                replaced("SELECT * FROM /* outer /* inner */ still comment */"
+                        + " s.t FOR VERSION AS OF 1"));
+    }
+
     @Test
     void malformedClausesAreRefused() {
         for (String[] c : new String[][] {

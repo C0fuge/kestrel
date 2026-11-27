@@ -55,6 +55,16 @@ class CompleteAnswerIntegrationTest {
         assertNotEquals(0L, firstValue(info));
     }
 
+    /** Verifies nested comment text cannot turn a valid complete query into time travel. */
+    @Test
+    void nestedCommentIsIgnoredThroughFlight() throws Exception {
+        String sql = "SELECT count(*) FROM test_schema.test_table";
+        Object expected = firstValue(helper.sqlClient().execute(sql));
+        Object actual = firstValue(helper.sqlClient().execute(sql
+                + " /* outer /* inner */ FOR VERSION AS OF nonsense */"));
+        assertEquals(expected, actual);
+    }
+
     /** Verifies a prepared statement with a parameter answers for each value it is given. */
     @Test
     void preparedStatementBindsParameterValues() throws Exception {
