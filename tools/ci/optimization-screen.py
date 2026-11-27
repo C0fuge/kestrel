@@ -18,6 +18,53 @@ import time
 HARNESS = Path("flight-server/src/test/java/pro/surpin/data/arrowflight/server")
 IMAGE = "maven:3.9-eclipse-temurin-21"
 JVM = "-Xms512m -Xmx2g -XX:MaxDirectMemorySize=1g -XX:ActiveProcessorCount=4 -Duser.home=/tmp"
+KIND_METRICS = ("queries", "qps", "p50_ms", "p95_ms", "p99_ms", "max_ms")
+
+
+def checked_heavy_every(value):
+    """Keep the workload mix bounded and identical on both measured revisions."""
+    try:
+        value = int(value)
+    except ValueError as error:
+        raise ValueError("Heavy query interval must be an integer in 0..64") from error
+    if not 0 <= value <= 64:
+        raise ValueError("Heavy query interval must be an integer in 0..64")
+    return value
+
+
+def sample_summary(rows, seconds):
+    """Report throughput and tails over the same full measurement wall interval."""
+    latency = sorted(int(row["latency_ns"]) / 1e6 for row in rows)
+    return {
+        "queries": len(rows), "qps": len(rows) / seconds,
+        "p50_ms": latency[len(latency) // 2],
+        "p95_ms": latency[int(len(latency) * .95)],
+        "p99_ms": latency[int(len(latency) * .99)], "max_ms": latency[-1],
+    }
+
+
+def paired_ratios(measurements, clients):
+    """Retain each paired ratio and its median, including every query kind's tails."""
+    result = {}
+    for concurrency in clients:
+        key = str(concurrency)
+        kinds = set(measurements[0]["A"][key]["query_kinds"])
+        if any(set(row[side][key]["query_kinds"]) != kinds
+               for row in measurements for side in ("A", "B")):
+            raise ValueError(f"Query kinds differ across paired measurements at {concurrency} clients")
+        result[key] = {"aggregate": {}, "query_kinds": {kind: {} for kind in sorted(kinds)}}
+        for kind in (None, *sorted(kinds)):
+            destination = result[key]["aggregate"] if kind is None else result[key]["query_kinds"][kind]
+            metrics = (*KIND_METRICS, "cpu_ms_per_query") if kind is None else KIND_METRICS
+            for metric in metrics:
+                ratios = []
+                for row in measurements:
+                    baseline, candidate = row["A"][key], row["B"][key]
+                    if kind is not None:
+                        baseline, candidate = baseline["query_kinds"][kind], candidate["query_kinds"][kind]
+                    ratios.append(candidate[metric] / baseline[metric])
+                destination[metric] = {"pairs": ratios, "median": statistics.median(ratios)}
+    return result
 
 
 def checked_options(text):
@@ -74,15 +121,21 @@ def summary_of(folder, clients):
             rows = list(csv.DictReader(source))
         if not rows:
             raise ValueError(f"No samples for concurrency {concurrency}")
-        latency = sorted(int(row["latency_ns"]) / 1e6 for row in rows)
+        failed = [row for row in rows if row.get("ok", "1") != "1"]
+        if failed:
+            errors = sorted({row.get("error_type", "unknown") for row in failed})
+            raise ValueError(f"Failed samples at {concurrency} clients: {len(failed)}; errors={errors}")
         wall = dict(line.split("=", 1) for line in
                     (folder / f"c{concurrency}-wall.txt").read_text().splitlines())
         seconds = float(wall["wall_seconds"])
         result[str(concurrency)] = {
-            "queries": len(rows), "qps": len(rows) / seconds,
-            "p50_ms": latency[len(latency) // 2],
-            "p95_ms": latency[int(len(latency) * .95)],
-            "p99_ms": latency[int(len(latency) * .99)], "max_ms": latency[-1],
+            **sample_summary(rows, seconds),
+            "answer_evidence": "all samples ok=1" if "ok" in rows[0] else "legacy: no per-sample status",
+            "query_kinds": {
+                kind: {**sample_summary([row for row in rows if row["query_kind"] == kind], seconds),
+                       "sample_fraction": sum(row["query_kind"] == kind for row in rows) / len(rows)}
+                for kind in sorted({row["query_kind"] for row in rows})
+            },
             "cpu_ms_per_query": int(wall["process_cpu_ns"]) / 1e6 / len(rows),
             "arrow_bytes": sum(int(row["arrow_bytes"]) for row in rows),
             "batches": sum(int(row["batches"]) for row in rows),
@@ -115,6 +168,7 @@ def matching_answers(first, second):
 def run_container(name, source, output, data, cache, arguments, cpu_mode, cpu_set, options):
     """Run one dedicated container while retaining cgroup counters and full logs."""
     output.mkdir(parents=True)
+    print(f"Starting {output.name}; complete Maven log: {output.name}/maven.log", flush=True)
     cpu = ["--cpuset-cpus=" + cpu_set] if cpu_mode == "pinned" else ["--cpus=4"]
     command = ["docker", "run", "--name", name, "--hostname", "screen-node",
                "--add-host", "screen-node:127.0.0.1", "--network", "host",
@@ -170,6 +224,7 @@ def main():
     rounds = int(os.environ.get("SCREEN_ROUNDS", "3"))
     seconds = int(os.environ.get("SCREEN_SECONDS", "15"))
     clients = [int(value) for value in os.environ.get("SCREEN_CLIENTS", "1,8,32").split(",")]
+    heavy_every = checked_heavy_every(os.environ.get("SCREEN_HEAVY_EVERY", "0"))
     if not 1 <= rounds <= 5 or not 3 <= seconds <= 60 or not clients or any(not 1 <= c <= 64 for c in clients):
         raise ValueError("Expected 1..5 rounds, 3..60 seconds and 1..64 clients")
     if clients != sorted(set(clients)):
@@ -195,6 +250,7 @@ def main():
     save_json(output / "screen.json", {"commits": commits, "rounds": rounds, "seconds": seconds,
               "variant": os.environ.get("SCREEN_VARIANT_NAME", "custom"),
               "clients": clients, "variant_options": options, "cpu_mode": mode, "cpu_set": cpu_set,
+              "heavy_every": heavy_every,
               "planned_measurement_seconds": planned,
               "scope": "embedded server and clients share one JVM; screening ratios, not production QPS"})
     command_log(["lscpu"], output / "hardware.txt")
@@ -225,7 +281,7 @@ def main():
     common = ["test", "-Pperf", "-Dgroups=perf", "-DexcludedGroups=", "-Djacoco.skip=true",
               "-Dtest=SmallQueryThroughputPerfTest", "-Dsurefire.failIfNoSpecifiedTests=false",
               "-Dcheckstyle.skip", "-Dspotbugs.skip", "-Dperf.threads=2", "-Dperf.shared=2:512MB",
-              "-Dperf.dataDir=/data", "-Dperf.output=/output"]
+              "-Dperf.dataDir=/data", "-Dperf.output=/output", "-Dperf.heavyEvery=" + str(heavy_every)]
     # Generate and warm the exact data set before either ranked side; preserve this attempt too.
     run_container(prefix + "-preflight", sources["A"], output / "preflight", data, cache,
                   common + ["-Dperf.clients=1", "-Dperf.seconds=3"], mode, cpu_set, [])
@@ -244,15 +300,37 @@ def main():
         measurements.append({side: pair[side][0] for side in ("A", "B")})
     save_json(output / "correctness.json", evidence)
     save_json(output / "measurements.json", measurements)
+    ratios = paired_ratios(measurements, clients)
+    save_json(output / "paired-ratios.json", ratios)
     lines = ["## Optimization screening", "", "Candidate / baseline ratios on one shared GitHub runner.",
              "Embedded server and clients share four CPUs and one JVM. Absolute QPS is not a production estimate.",
-             "", f"A: `{commits['A']}`; B: `{commits['B']}`; CPU mode: `{mode}`.", "",
+             "", f"A: `{commits['A']}`; B: `{commits['B']}`; CPU mode: `{mode}`; heavy interval: `{heavy_every}`.", "",
              "| Clients | QPS ratio | p95 ratio | p99 ratio | CPU/query ratio |", "|---:|---:|---:|---:|---:|"]
     for concurrency in clients:
         key = str(concurrency)
-        ratios = [statistics.median(row["B"][key][metric] / row["A"][key][metric] for row in measurements)
+        values = [ratios[key]["aggregate"][metric]["median"]
                   for metric in ("qps", "p95_ms", "p99_ms", "cpu_ms_per_query")]
-        lines.append("| " + str(concurrency) + " | " + " | ".join(f"{value:.3f}" for value in ratios) + " |")
+        lines.append("| " + str(concurrency) + " | " + " | ".join(f"{value:.3f}" for value in values) + " |")
+    lines += ["", "Query kinds: 0 = point lookup; 1 = filtered count; 2 = bounded self-join count.",
+              "Each kind's QPS uses the full step wall time. All ratios are medians of paired B/A ratios.",
+              "Inspect short-query p95/p99/max separately: aggregate QPS can hide a tail regression.",
+              "Observed counts and shares below are medians across rounds; exact counts remain in each summary.", "",
+              "| Clients | Kind | A count | B count | A share | B share |",
+              "|---:|---:|---:|---:|---:|---:|"]
+    for concurrency in clients:
+        key = str(concurrency)
+        for kind in ratios[key]["query_kinds"]:
+            values = [statistics.median(row[side][key]["query_kinds"][kind][metric] for row in measurements)
+                      for metric in ("queries", "sample_fraction") for side in ("A", "B")]
+            lines.append(f"| {concurrency} | {kind} | {values[0]:g} | {values[1]:g} | "
+                         f"{values[2]:.1%} | {values[3]:.1%} |")
+    lines += ["",
+              "| Clients | Kind | Count ratio | QPS ratio | p50 ratio | p95 ratio | p99 ratio | Max ratio |",
+              "|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for concurrency in clients:
+        for kind, values in ratios[str(concurrency)]["query_kinds"].items():
+            lines.append(f"| {concurrency} | {kind} | " + " | ".join(
+                f"{values[metric]['median']:.3f}" for metric in KIND_METRICS) + " |")
     lines += ["", f"All {rounds} paired answer gates passed. All samples, hashes, JFR profiles, resource/cgroup",
               "measurements, runtime flags, startup stages, hardware and full logs are retained as artifacts.",
               "No TPC-H or full-scan workload was run by this small-query screening."]

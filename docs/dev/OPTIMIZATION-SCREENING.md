@@ -6,7 +6,11 @@ from Dev CI and does not publish a server release. Manual runs accept `source_re
 `baseline_ref`, candidate-only `variant_options`, paired `rounds`, seconds per step,
 rising client counts and `cpu_mode=pinned|quota`. Push runs use three paired rounds,
 15 seconds per step, clients 1/8/32 and pinned CPUs, comparing the pushed revision with
-`90542012`. Pushes start three independent paired jobs: `literal` enables
+`90542012`. Pushes to `perf/optimization-screen-mixed-*` use two rounds and
+`heavy_every=8`; other pushes use `heavy_every=0`. Manual dispatches default to three
+rounds and `heavy_every=0` and accept a common interval from 0 through 64.
+The workflow runs the Python runner's unit tests before building or measuring.
+Pushes start three independent paired jobs: `literal` enables
 `arrowflight.experimental.integerLiteralParameters` only on B; `admission2` and
 `admission4` set only B's `perf.producingStreams=2` or `4`. Manual dispatches start one
 `custom` paired job with explicit options. Each variant has its own raw artifact.
@@ -23,7 +27,12 @@ normal fast branch CI and final full CI remain separate requirements before merg
 
 The data set is synthetic: 400,000 orders-like rows, four Parquet files, alternating
 point lookup and filtered-count queries over Flight SQL. An unranked preflight writes
-and warms the common data set before either ranked side. Each dedicated container has
+and warms the common data set before either ranked side. With `heavy_every=N` greater
+than zero, every Nth query is a bounded count self-join on `o_custkey` (query kind 2),
+whose expected count is `min(key, 5000) * 400`. The remaining queries alternate point
+lookups (kind 0) and filtered counts (kind 1). The workload interval is passed as
+`-Dperf.heavyEvery` to both A and B, including preflight, and recorded in `screen.json`.
+It is rejected as a candidate-only option. Each dedicated container has
 8 GiB memory and a four-processor JVM (`-Xmx2g`, direct-memory limit 1 GiB). Pinned mode
 uses four logical CPUs; quota mode applies `--cpus=4`. Embedded clients and the server
 share one JVM and CPU allocation, so process CPU/RSS measurements include both. These
@@ -54,8 +63,21 @@ artifacts if the work fails or exceeds its budget.
 The answer gate compares rows, ordered value checksums, Arrow buffer bytes and batches
 for every overlapping `(concurrency, client, sequence, query kind, key)` pair. The test
 also asserts the known first value and row count. A failed gate prevents ranking.
-The summary reports median paired ratios for QPS, p95, p99 and CPU time/query. A QPS
-gain with worse tails is reported as a tradeoff, never promoted automatically.
+Any raw row with `ok=0` prevents ranking, including execution/read errors and answer
+mismatches; failed rows and partial attempts remain in the artifacts. Historical
+samples without the status column are accepted and explicitly labelled legacy in
+their summary. New trials overlay the same status-aware harness on both revisions.
+The aggregate summary reports median paired ratios for QPS, p95, p99 and CPU time/query.
+Each query kind also retains its count, fraction of observed queries, QPS, p50, p95,
+p99 and maximum latency in every trial's `summary.json`. Kind QPS uses the full step's
+wall time, so the kind QPS values add up to the aggregate. The Markdown summary shows
+observed A/B counts and shares plus per-kind paired ratios for counts, QPS and all four
+latency metrics; `paired-ratios.json` retains every paired ratio and its median.
+Missing kinds across A/B or rounds fail the comparison. Inspect the short-query tails
+independently: aggregate QPS gains can conceal a short-query p95/p99/max regression.
+A QPS gain with worse tails is a tradeoff, never promoted automatically.
+Concise phase-start messages appear in the Actions console; complete Maven logs stay
+in each phase's artifact directory.
 
 Every successful or failed attempt is uploaded for 30 days with SHA-256 checksums:
 

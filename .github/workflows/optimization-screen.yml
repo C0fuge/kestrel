@@ -29,6 +29,10 @@ on:
         description: "Rising concurrent clients"
         type: string
         default: "1,8,32"
+      heavy_every:
+        description: "Every Nth query is a bounded self-join (0 disables; 0..64; both revisions)"
+        type: string
+        default: "0"
       cpu_mode:
         description: "Pinned logical CPU set or Docker CPU quota"
         type: choice
@@ -74,14 +78,17 @@ jobs:
           cache-dependency-path: |
             candidate/**/pom.xml
             baseline/**/pom.xml
+      - name: Test screening runner
+        run: python3 -m unittest discover -s control/tools/ci -p 'test_optimization_screen.py' -v
       - name: Build and measure both revisions
         timeout-minutes: 35 # Reserve ten job minutes for summary/artifact upload on failure.
         env:
           SCREEN_VARIANT_OPTIONS: ${{ matrix.variant == 'literal' && '-Darrowflight.experimental.integerLiteralParameters=true' || matrix.variant == 'admission2' && '-Dperf.producingStreams=2' || matrix.variant == 'admission4' && '-Dperf.producingStreams=4' || inputs.variant_options || '' }}
           SCREEN_VARIANT_NAME: ${{ matrix.variant }}
-          SCREEN_ROUNDS: ${{ inputs.rounds || '3' }}
+          SCREEN_ROUNDS: ${{ inputs.rounds || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/perf/optimization-screen-mixed-') && '2') || '3' }}
           SCREEN_SECONDS: ${{ inputs.seconds || '15' }}
           SCREEN_CLIENTS: ${{ inputs.clients || '1,8,32' }}
+          SCREEN_HEAVY_EVERY: ${{ inputs.heavy_every || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/perf/optimization-screen-mixed-') && '8') || '0' }}
           SCREEN_CPU_MODE: ${{ inputs.cpu_mode || 'pinned' }}
         run: >
           python3 control/tools/ci/optimization-screen.py
