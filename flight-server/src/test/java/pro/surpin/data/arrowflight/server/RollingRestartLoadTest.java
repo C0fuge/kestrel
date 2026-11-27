@@ -38,7 +38,6 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.util.Text;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -415,8 +414,7 @@ class RollingRestartLoadTest {
                     for (int row = 0; row < root.getRowCount(); row++) {
                         Object[] values = new Object[vectors.size()];
                         for (int column = 0; column < values.length; column++) {
-                            Object value = vectors.get(column).getObject(row);
-                            values[column] = value instanceof Text text ? text.toString() : value;
+                            values[column] = TpchArrowValues.cell(vectors.get(column), row);
                         }
                         checksum.addRow(values);
                     }

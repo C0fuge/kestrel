@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -18,7 +19,10 @@ import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.flight.HeaderCallOption;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.sql.FlightSqlClient;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.util.Text;
 import org.junit.jupiter.api.Tag;
@@ -112,6 +116,38 @@ class TpchQuerySamplesTest {
         assertEquals(0, failures.get());
         assertEquals("66191bf0fe853f3d", rows(directory).getFirst()[10]);
         assertEquals(TpchChecksum.VERSION, rows(directory).getFirst()[15]);
+    }
+
+    /**
+     * Uses logical Date32 values in streamed checksums while preserving ordinary integers.
+     *
+     * @param directory temporary parent directory
+     * @throws Exception when fixture setup or sample reading fails
+     */
+    @Test
+    void dateDayStreamMatchesTheLogicalDateOracle(@TempDir Path directory) throws Exception {
+        try (RootAllocator allocator = new RootAllocator();
+                DateDayVector dates = new DateDayVector("date", allocator);
+                IntVector integers = new IntVector("integer", allocator)) {
+            int day = Math.toIntExact(LocalDate.of(1994, 1, 1).toEpochDay());
+            dates.allocateNew(1);
+            dates.set(0, day);
+            dates.setValueCount(1);
+            integers.allocateNew(1);
+            integers.set(0, day);
+            integers.setValueCount(1);
+            FlightSqlClient client = mock(FlightSqlClient.class);
+            FlightStream stream = answerStream(client);
+            when(stream.getRoot().getFieldVectors()).thenReturn(List.of(dates, integers));
+            when(stream.next()).thenReturn(true, false);
+            AtomicInteger failures = new AtomicInteger();
+            try (TpchQuerySamples raw = samples(directory, List.of("date-probe"), List.of(1L))) {
+                TpchPerfTest.runPass(client, header(), List.of("SELECT 1"), List.of("date-probe"), List.of(1L),
+                        0, 0, 1, failures, raw);
+            }
+            assertEquals(0, failures.get());
+            assertEquals("1e967ed8f5775dac", rows(directory).getFirst()[10]);
+        }
     }
 
     /**
