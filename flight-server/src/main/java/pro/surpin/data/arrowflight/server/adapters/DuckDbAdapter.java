@@ -2162,7 +2162,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                 if (!sent && startListener) {
                     // The schema goes out with the first batch, so a run that fails before it
                     // has sent nothing.
-                    listener.start(duckRoot);
+                    startArrowStream(listener, duckRoot, reader);
                 }
                 sent = true;
                 long bpStart = System.nanoTime();
@@ -2184,7 +2184,7 @@ public final class DuckDbAdapter implements AutoCloseable {
             }
             duckNanos += System.nanoTime() - tNext;
             if (!sent && startListener) {
-                listener.start(duckRoot);
+                startArrowStream(listener, duckRoot, reader);
             }
             sent = true;
 
@@ -2227,6 +2227,23 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw retryableOutOfMemory(e, sent, listener);
         } finally {
             listenerReadiness.disarm();
+        }
+    }
+
+    /**
+     * Starts the Flight stream with any dictionaries supplied by its Arrow reader.
+     *
+     * @param listener Flight stream listener
+     * @param root exported Arrow root
+     * @param reader owner of the exported dictionaries
+     */
+    private static void startArrowStream(
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
+            VectorSchemaRoot root, ArrowReader reader) {
+        if (reader.getDictionaryIds().isEmpty()) {
+            listener.start(root);
+        } else {
+            listener.start(root, reader);
         }
     }
 
