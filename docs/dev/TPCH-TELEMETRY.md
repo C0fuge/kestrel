@@ -74,6 +74,10 @@ Each server configuration also retains:
   statistics and GC heap/collection events. The server is stopped gracefully before
   host-JDK summary/JSON extraction. If no final recording exists, collection attempts
   `jfr assemble` recovery and preserves the original chunks regardless of success.
+  After stopping each container, only its task-owned per-label output directory is
+  reassigned to the runner's UID/GID. This lets host derivation write beside plain
+  DuckDB's container-created CSV files and read owner-only JFR chunks; unrelated
+  paths and containers are untouched.
   Ranking requires a nonempty complete recording, successful summary and JSON event
   extraction bound to its SHA-256/size, readable summary/events, and actual JVM/direct
   buffer fields. GC initialization logs plus an actual successful heap snapshot are

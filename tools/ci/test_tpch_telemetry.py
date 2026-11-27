@@ -155,6 +155,41 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertEqual(["docker", "rm", "task-container"], commands[-1])
             self.assertFalse(any("-f" in command for command in commands))
 
+    def test_finish_restores_writable_ownership_for_plain_client_derivation(self):
+        """Host derivation must work after a stopped plain container created a root-owned client directory."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            label = directory / "plain"
+            client = label / "client"
+            client.mkdir(parents=True)
+            raw = client / "samples.csv"
+            raw.write_text("query,round,warmup,latency_ns,ok\nq01,0,1,100,1\nq01,1,0,10,1\n")
+            original = raw.read_bytes()
+            ownership = {"runner": False}
+            write_text = Path.write_text
+
+            def owned_write(path, *args, **kwargs):
+                if path.parent == client and not ownership["runner"]:
+                    raise PermissionError("client directory is owned by the container root user")
+                return write_text(path, *args, **kwargs)
+
+            def diagnostic(command, **kwargs):
+                if command[:3] == ["sudo", "chown", "-R"]:
+                    self.assertEqual(f"{os.getuid()}:{os.getgid()}", command[3])
+                    self.assertEqual(str(label), command[4])
+                    ownership["runner"] = True
+                return subprocess.CompletedProcess(command, 0, "complete evidence\n", "")
+
+            with mock.patch.object(Path, "write_text", owned_write), \
+                    mock.patch.object(subprocess, "run", side_effect=diagnostic):
+                with self.assertRaises(PermissionError):
+                    TELEMETRY["summarize"](directory)
+                TELEMETRY["finish"]("task-owned-plain-container", label)
+                TELEMETRY["summarize"](directory)
+            self.assertTrue((client / "query-percentiles.json").is_file())
+            self.assertTrue((directory / "SHA256SUMS").is_file())
+            self.assertEqual(original, raw.read_bytes())
+
     def test_monitor_flushes_raw_process_and_heap_evidence(self):
         """A complete sampling interval retains unparsed counters plus the heap diagnostic."""
         with tempfile.TemporaryDirectory() as temp:

@@ -178,8 +178,9 @@ def finish(container, directory):
              '"path":{{json .Path}},"args":{{json .Args}},"memory":{{json .HostConfig.Memory}},'
              '"memory_swap":{{json .HostConfig.MemorySwap}},"nano_cpus":{{json .HostConfig.NanoCpus}},'
              '"cpuset":{{json .HostConfig.CpusetCpus}}}', container], directory / "container.json")
-    # JVM repository directories are owner-only, and the server uses the image's root user.
-    capture(["sudo", "chmod", "-R", "a+rX", str(directory)], directory / "artifact-permissions.log")
+    # Only this stopped task's mounted output is reassigned; plain/JFR files were written as root.
+    capture(["sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory)],
+            directory / "artifact-permissions.log")
     log = (directory / "server.log").read_text()
     (directory / "warnings-errors.log").write_text("\n".join(
         line for line in log.splitlines() if re.search(r"\bWARN(?:ING)?\b|\bERROR\b", line)) + "\n")
