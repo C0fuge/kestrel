@@ -57,3 +57,17 @@ while compiler activity continued late in the measured phase. That motivates
 controlled comparisons; it does not prove warmup caused a latency change or that
 the final bins represent steady state. Compare settings within the same paired
 experiment rather than ranking absolute QPS across runners.
+
+## Runtime validation
+
+[Fast CI 46051600568](https://github.com/C0fuge/kestrel/actions/runs/46051600568)
+passes 163 selected tests and Checkstyle on source `37703d62`, with all test sources
+compiled. [Same-source A/A 46052077357](https://github.com/C0fuge/kestrel/actions/runs/46052077357)
+validates per-step three-second warmups at one and 32 clients. Actual preflight/A/B
+plans match, all 7,562 warmup/measured answers pass an independent full oracle, and
+all three JFRs are readable. The 32-client warmups contain 32 actual client threads.
+All five container/wrapper exits are zero without OOM. The artifact's CRC, all 121
+manifest entries and exact file set pass; its SHA-256 matches GitHub's digest:
+`4d03fbed0cded2f38f8fc3180bcf05bab5d9cfc6fdaef11b678530cee854c142`.
+Optional periodic cgroup reads outside container lifetimes retain their unavailable
+statuses. This checks the pipeline, with no speedup, A/A ranking or plateau claim.
