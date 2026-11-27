@@ -37,6 +37,16 @@ class OptimizationScreenTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             SCREEN.planned_measurement_seconds(5, 60, [1, 2, 4, 8, 16, 32, 64])
 
+    def test_numeric_container_user_has_native_unix_identity(self):
+        """Hadoop's native Unix login must resolve the runner UID even when the image cannot."""
+        passwd = "root:x:0:0:root:/root:/bin/sh\n"
+        groups = "root:x:0:\n"
+        mapped = SCREEN.container_identity(passwd, groups, 1001, 1001)
+        self.assertIn("screen-user-1001:x:1001:1001:", mapped[0])
+        self.assertIn("screen-group-1001:x:1001:", mapped[1])
+        self.assertEqual(mapped, SCREEN.container_identity(*mapped, 1001, 1001))
+        self.assertEqual((passwd, groups), SCREEN.container_identity(passwd, groups, 0, 0))
+
     def test_answer_gate_checks_values_and_requires_overlap(self):
         """Different timing samples may overlap partially, but overlapping answers must match."""
         first = {(1, "0", "1", "0", "42"): ("1", "99", "8", "1")}

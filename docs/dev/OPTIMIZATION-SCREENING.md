@@ -6,7 +6,11 @@ from Dev CI and does not publish a server release. Manual runs accept `source_re
 `baseline_ref`, candidate-only `variant_options`, paired `rounds`, seconds per step,
 rising client counts and `cpu_mode=pinned|quota`. Push runs use three paired rounds,
 15 seconds per step, clients 1/8/32 and pinned CPUs, comparing the pushed revision with
-`90542012` and enabling `arrowflight.experimental.integerLiteralParameters` only on B.
+`90542012`. Pushes start three independent paired jobs: `literal` enables
+`arrowflight.experimental.integerLiteralParameters` only on B; `admission2` and
+`admission4` set only B's `perf.producingStreams=2` or `4`. Manual dispatches start one
+`custom` paired job with explicit options. Each variant has its own raw artifact.
+Compare A/B ratios within a job; absolute values from different runners are not comparable.
 Use a full 40-character commit SHA for explicit commit inputs; branch and tag names
 are also accepted by the checkout action.
 
@@ -24,6 +28,11 @@ and warms the common data set before either ranked side. Each dedicated containe
 uses four logical CPUs; quota mode applies `--cpus=4`. Embedded clients and the server
 share one JVM and CPU allocation, so process CPU/RSS measurements include both. These
 are screening ratios; hosted-runner absolute QPS is not a production estimate.
+
+Containers run as the runner's numeric UID/GID. Read-only passwd/group files retain the
+image's system entries and add a synthetic screening identity when needed, so Hadoop's
+native Unix login works even when that UID is absent from the image. Outputs and the
+Maven cache remain owned by the runner; no host accounts or credentials are copied.
 
 Candidate options are structured arguments, never shell-expanded. Only experimental
 server properties, effective `duckDb*` settings, `resourceProfile`, `perf.producingStreams`,

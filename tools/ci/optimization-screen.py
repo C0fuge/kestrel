@@ -50,6 +50,15 @@ def save_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def container_identity(passwd, groups, uid, gid):
+    """Give a numeric runner UID/GID a native Unix identity without root-owned outputs."""
+    if not any(line.split(":")[2] == str(uid) for line in passwd.splitlines() if len(line.split(":")) >= 4):
+        passwd = passwd.rstrip("\n") + f"\nscreen-user-{uid}:x:{uid}:{gid}:Screening user:/tmp:/bin/sh\n"
+    if not any(line.split(":")[2] == str(gid) for line in groups.splitlines() if len(line.split(":")) >= 3):
+        groups = groups.rstrip("\n") + f"\nscreen-group-{gid}:x:{gid}:\n"
+    return passwd, groups
+
+
 def command_log(command, path):
     """Preserve the exact command and its complete output."""
     save_json(path.with_suffix(".command.json"), command)
@@ -113,6 +122,8 @@ def run_container(name, source, output, data, cache, arguments, cpu_mode, cpu_se
                "-e", "HOME=/tmp", "-e", "MAVEN_CONFIG=/tmp/.m2", "-e", "LC_ALL=C.UTF-8",
                "-e", "JAVA_TOOL_OPTIONS=" + JVM, "-v", str(source) + ":/work",
                "-v", str(output) + ":/output", "-v", str(data) + ":/data",
+               "-v", str(output.parent / "container-passwd") + ":/etc/passwd:ro",
+               "-v", str(output.parent / "container-group") + ":/etc/group:ro",
                "-v", str(cache) + ":/maven-cache", "-w", "/work", IMAGE,
                "mvn", "-B", "-ntp", "-Dmaven.repo.local=/maven-cache", "-pl", "flight-server", "-am",
                *arguments, *options]
@@ -182,6 +193,7 @@ def main():
     commits = {side: subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
                for side, source in sources.items()}
     save_json(output / "screen.json", {"commits": commits, "rounds": rounds, "seconds": seconds,
+              "variant": os.environ.get("SCREEN_VARIANT_NAME", "custom"),
               "clients": clients, "variant_options": options, "cpu_mode": mode, "cpu_set": cpu_set,
               "planned_measurement_seconds": planned,
               "scope": "embedded server and clients share one JVM; screening ratios, not production QPS"})
@@ -198,6 +210,14 @@ def main():
         shutil.copyfile(source, sources["A"] / HARNESS / filename)
     identity = re.sub(r"[^A-Za-z0-9_.-]", "-", os.environ.get("GITHUB_RUN_ID", "local"))
     prefix = "opt-screen-" + identity + "-" + str(os.getpid())
+    command_log(["docker", "run", "--rm", "--name", prefix + "-passwd", "--entrypoint", "cat", IMAGE,
+                 "/etc/passwd"], output / "image-passwd.txt")
+    command_log(["docker", "run", "--rm", "--name", prefix + "-group", "--entrypoint", "cat", IMAGE,
+                 "/etc/group"], output / "image-group.txt")
+    passwd, groups = container_identity((output / "image-passwd.txt").read_text(),
+                                       (output / "image-group.txt").read_text(), os.getuid(), os.getgid())
+    (output / "container-passwd").write_text(passwd)
+    (output / "container-group").write_text(groups)
     for side in ("A", "B"):
         run_container(prefix + "-build-" + side.lower(), sources[side], output / ("build-" + side),
                       data, cache, ["package", "-DskipTests", "-Dcheckstyle.skip", "-Dspotbugs.skip"],

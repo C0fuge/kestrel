@@ -44,8 +44,13 @@ concurrency:
 
 jobs:
   screen:
+    name: ${{ matrix.variant }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.event_name == 'push' && '["literal","admission2","admission4"]' || '["custom"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,7 +77,8 @@ jobs:
       - name: Build and measure both revisions
         timeout-minutes: 35 # Reserve ten job minutes for summary/artifact upload on failure.
         env:
-          SCREEN_VARIANT_OPTIONS: ${{ inputs.variant_options || (github.event_name == 'push' && '-Darrowflight.experimental.integerLiteralParameters=true' || '') }}
+          SCREEN_VARIANT_OPTIONS: ${{ matrix.variant == 'literal' && '-Darrowflight.experimental.integerLiteralParameters=true' || matrix.variant == 'admission2' && '-Dperf.producingStreams=2' || matrix.variant == 'admission4' && '-Dperf.producingStreams=4' || inputs.variant_options || '' }}
+          SCREEN_VARIANT_NAME: ${{ matrix.variant }}
           SCREEN_ROUNDS: ${{ inputs.rounds || '3' }}
           SCREEN_SECONDS: ${{ inputs.seconds || '15' }}
           SCREEN_CLIENTS: ${{ inputs.clients || '1,8,32' }}
@@ -93,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: optimization-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          name: optimization-screen-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/optimization-screen
           include-hidden-files: true
           if-no-files-found: error
