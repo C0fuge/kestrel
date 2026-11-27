@@ -276,6 +276,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final boolean parquetMetadataCache = ConfigAdapter.duckDbParquetMetadataCache();
     /** Whether every finished result stream logs one {@code streamTiming} INFO line (streamTimingLog). */
     private final boolean streamTimingLog = ConfigAdapter.streamTimingLog();
+    /** CPU sources exist only when stream timing telemetry is enabled. */
+    private final StreamCpuCounters streamCpuCounters = streamTimingLog ? new StreamCpuCounters() : null;
     /**
      * Lets gRPC send DuckDB's batch buffers without a copy (flightZeroCopyWrites); safe because
      * each batch DuckDB exports lives in new buffers that gRPC keeps until it has written them.
@@ -2108,6 +2110,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         long t = LogUtil.mark();
         long streamStartNanos = System.nanoTime();
         long streamStartMillis = streamTimingLog ? System.currentTimeMillis() : 0L;
+        StreamCpuCounters.Snapshot cpuStart = streamTimingLog ? streamCpuCounters.sample() : null;
         // Arguments of the debug lines below are formatted only when they are written.
         boolean debug = LOGGER.isDebugEnabled();
         if (debug) {
@@ -2128,6 +2131,8 @@ public final class DuckDbAdapter implements AutoCloseable {
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             // Gate wait, executeQuery and arrowExportStream.
             long executeNanos = System.nanoTime() - streamStartNanos;
+            StreamCpuCounters.Snapshot executeCpu = streamTimingLog
+                    ? streamCpuCounters.sample().since(cpuStart) : null;
             long duckNanos = 0;
             long sendNanos = 0;
             VectorSchemaRoot duckRoot = reader.getVectorSchemaRoot();
@@ -2184,9 +2189,11 @@ public final class DuckDbAdapter implements AutoCloseable {
             sent = true;
 
             if (streamTimingLog) {
+                long totalNanos = System.nanoTime() - streamStartNanos;
+                StreamCpuCounters.Snapshot totalCpu = streamCpuCounters.sample().since(cpuStart);
                 logStreamTiming(new StreamTiming(streamStartMillis, executeNanos, firstBatchNanos,
-                        System.nanoTime() - streamStartNanos, duckNanos, sendNanos, backpressureNanos,
-                        rowsSent, batchesSent), duckSql);
+                        totalNanos, duckNanos, sendNanos, backpressureNanos,
+                        rowsSent, batchesSent), executeCpu, totalCpu, duckSql);
             }
             if (t >= 0) {
                 LogUtil.logTiming(t, "duckdb.streamSql",
@@ -2288,11 +2295,16 @@ public final class DuckDbAdapter implements AutoCloseable {
      * declared secret values redacted.
      *
      * @param timing  times of the stream
+     * @param executeCpu overlapping CPU deltas through the execute interval
+     * @param totalCpu overlapping CPU deltas through the total stream interval
      * @param duckSql DuckDB SQL of the stream
      */
-    private void logStreamTiming(StreamTiming timing, String duckSql) {
-        LOGGER.info("qid={} node={} streamTiming {} sql='{}'", LogUtil.qid(), LogUtil.node(),
-                timing.fields(), streamTimingSql(redactor, duckSql));
+    private void logStreamTiming(StreamTiming timing, StreamCpuCounters.Snapshot executeCpu,
+            StreamCpuCounters.Snapshot totalCpu, String duckSql) {
+        LOGGER.info("qid={} node={} streamTiming {} executeProcessCpuNs={} executeCallerThreadCpuNs={}"
+                        + " totalProcessCpuNs={} totalCallerThreadCpuNs={} sql='{}'", LogUtil.qid(), LogUtil.node(),
+                timing.fields(), executeCpu.processNanos(), executeCpu.callerThreadNanos(),
+                totalCpu.processNanos(), totalCpu.callerThreadNanos(), streamTimingSql(redactor, duckSql));
     }
 
     /**
