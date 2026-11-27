@@ -1772,14 +1772,14 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
                 while (flightStream.next()) {
                     VectorSchemaRoot root = flightStream.getRoot();
                     rows += root.getRowCount();
+                    if (rows > 1) {
+                        throw CallStatus.INVALID_ARGUMENT
+                                .withDescription("Exactly one set of parameter values is supported, got " + rows)
+                                .toRuntimeException();
+                    }
                     if (root.getRowCount() > 0) {
                         values = QueryParameters.serialize(root);
                     }
-                }
-                if (rows > 1) {
-                    throw CallStatus.INVALID_ARGUMENT
-                            .withDescription("Exactly one set of parameter values is supported, got " + rows)
-                            .toRuntimeException();
                 }
                 if (prepared.statementId() != null) {
                     // For clients that go on using the handle they have. An empty upload drops
@@ -1820,10 +1820,7 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightSql.CommandPreparedStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
         QueryParameters.Handle handle = parseHandle(command.getPreparedStatementHandle());
-        byte[] parameters = handle.parameters();
-        if (parameters == null && handle.statementId() != null) {
-            parameters = clusterService.recallParameters(handle.statementId());
-        }
+        byte[] parameters = preparedParameters(handle);
         boolean restricted = checkQuery(context == null ? null : context.peerIdentity(),
                 handle.sql()).restricted();
         return flightInfoForQuery(handle.sql(), parameters, descriptor, context,
@@ -1845,15 +1842,28 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
         }
     }
 
+    /**
+     * Resolves the values used by both prepared query planning and schema inference.
+     *
+     * @param handle parsed statement handle
+     * @return embedded or cluster-held values, or null when unbound
+     */
+    private byte[] preparedParameters(QueryParameters.Handle handle) {
+        byte[] parameters = handle.parameters();
+        return parameters == null && handle.statementId() != null
+                ? clusterService.recallParameters(handle.statementId()) : parameters;
+    }
+
     @Override
     public SchemaResult getSchemaPreparedStatement(
             FlightSql.CommandPreparedStatementQuery command,
             FlightProducer.CallContext context, FlightDescriptor descriptor) {
-        String query = parseHandle(command.getPreparedStatementHandle()).sql();
+        QueryParameters.Handle handle = parseHandle(command.getPreparedStatementHandle());
+        String query = handle.sql();
         boolean restricted = checkQuery(context == null ? null : context.peerIdentity(), query)
                 .restricted();
         return new SchemaResult(restricted || completeAnswer(context)
-                ? completeSchemaFor(query) : schemaForQuery(query));
+                ? completeSchemaFor(query, preparedParameters(handle)) : schemaForQuery(query));
     }
 
     @Override

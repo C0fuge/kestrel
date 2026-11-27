@@ -206,8 +206,10 @@ jobs:
         if: env.FAST != 'true'
         env:
           LD_LIBRARY_PATH: ${{ env.HADOOPFS_LIBS }}
+        # Follow-up steps build flight-server alone and need this reactor's SPI, codec and
+        # test-plugin artifacts installed even when the runner's Maven cache is empty.
         run: >
-          ./mvnw clean verify checkstyle:check spotbugs:check
+          ./mvnw clean install checkstyle:check spotbugs:check
           -DexcludedGroups=perf,real-services
           -Diceberg.it.extensionDir="$ICEBERG_EXT_DIR"
           -Ds3.it.httpfs="$DUCKDB_HTTPFS_EXTENSION"

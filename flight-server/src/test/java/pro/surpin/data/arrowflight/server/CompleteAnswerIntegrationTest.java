@@ -55,6 +55,16 @@ class CompleteAnswerIntegrationTest {
         assertNotEquals(0L, firstValue(info));
     }
 
+    /** Verifies nested comment text cannot turn a valid complete query into time travel. */
+    @Test
+    void nestedCommentIsIgnoredThroughFlight() throws Exception {
+        String sql = "SELECT count(*) FROM test_schema.test_table";
+        Object expected = firstValue(helper.sqlClient().execute(sql));
+        Object actual = firstValue(helper.sqlClient().execute(sql
+                + " /* outer /* inner */ FOR VERSION AS OF nonsense */"));
+        assertEquals(expected, actual);
+    }
+
     /** Verifies a prepared statement with a parameter answers for each value it is given. */
     @Test
     void preparedStatementBindsParameterValues() throws Exception {
@@ -163,6 +173,28 @@ class CompleteAnswerIntegrationTest {
                 assertEquals(ArrowType.Utf8.INSTANCE, info.getSchema().getFields().get(0).getType());
                 assertEquals("abc", String.valueOf(firstValue(info)));
             }
+        }
+    }
+
+    /** Verifies GetSchema, GetFlightInfo and DoGet agree after binding an untyped numeric parameter. */
+    @Test
+    void boundParameterSchemaMatchesItsStream() throws Exception {
+        org.apache.arrow.vector.types.pojo.Schema parameters = new org.apache.arrow.vector.types.pojo.Schema(
+                java.util.List.of(org.apache.arrow.vector.types.pojo.Field.nullable("p", new ArrowType.Int(64, true))));
+        try (VectorSchemaRoot values = VectorSchemaRoot.create(parameters, helper.allocator)) {
+            ((org.apache.arrow.vector.BigIntVector) values.getVector(0)).setSafe(0, 42L);
+            values.setRowCount(1);
+            com.google.protobuf.ByteString handle =
+                    pro.surpin.data.arrowflight.server.adapters.QueryParameters.boundHandle("SELECT ? AS v",
+                            pro.surpin.data.arrowflight.server.adapters.QueryParameters.serialize(values));
+            org.apache.arrow.flight.FlightDescriptor descriptor = org.apache.arrow.flight.FlightDescriptor.command(
+                    com.google.protobuf.Any.pack(org.apache.arrow.flight.sql.impl.FlightSql.CommandPreparedStatementQuery
+                            .newBuilder().setPreparedStatementHandle(handle).build()).toByteArray());
+            org.apache.arrow.vector.types.pojo.Schema schema = helper.flightClient().getSchema(descriptor).getSchema();
+            FlightInfo info = helper.flightClient().getInfo(descriptor);
+            assertEquals(new ArrowType.Int(64, true), schema.getFields().get(0).getType());
+            assertEquals(info.getSchema(), schema);
+            assertEquals(42L, firstValue(info));
         }
     }
 
