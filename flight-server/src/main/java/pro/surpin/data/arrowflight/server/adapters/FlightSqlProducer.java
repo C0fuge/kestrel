@@ -100,6 +100,10 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
     private volatile boolean plainCommands;
     private final String defaultResultMode;
     private final java.util.Set<Integer> knownSqlInfo;
+    /** Experimental encoding reuse after the current request's schema and access checks. */
+    private final PreparedSchemaMessages preparedSchemaMessages =
+            Boolean.getBoolean("arrowflight.experimental.cachePreparedSchemaMessages")
+                    ? new PreparedSchemaMessages() : null;
 
     /**
      * @param location server location; unused, endpoints of metadata calls carry no location
@@ -1714,8 +1718,8 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             FlightSql.ActionCreatePreparedStatementResult result =
                     FlightSql.ActionCreatePreparedStatementResult.newBuilder()
                             .setPreparedStatementHandle(preparedHandle(query, parameterSchema))
-                            .setDatasetSchema(copyFrom(arrowSchema.serializeAsMessage()))
-                            .setParameterSchema(copyFrom(parameterSchema.serializeAsMessage()))
+                            .setDatasetSchema(preparedSchemaMessage(arrowSchema))
+                            .setParameterSchema(preparedSchemaMessage(parameterSchema))
                             .build();
             listener.onNext(new Result(Any.pack(result).toByteArray()));
             listener.onCompleted();
@@ -1725,6 +1729,17 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
             listener.onError(CallStatus.INTERNAL
                     .withDescription(failureDescription(e)).withCause(e).toRuntimeException());
         }
+    }
+
+    /**
+     * Encodes an already resolved prepared-statement schema.
+     *
+     * @param schema current authorized schema
+     * @return immutable IPC schema message
+     */
+    private ByteString preparedSchemaMessage(Schema schema) {
+        return preparedSchemaMessages == null ? copyFrom(schema.serializeAsMessage())
+                : preparedSchemaMessages.encode(schema);
     }
 
     /**
@@ -2257,6 +2272,9 @@ public final class FlightSqlProducer extends BasicFlightSqlProducer implements A
 
     @Override
     public void close() throws Exception {
+        if (preparedSchemaMessages != null) {
+            preparedSchemaMessages.clear();
+        }
         // Dependencies and allocator are owned and closed by the server bootstrap.
     }
 
