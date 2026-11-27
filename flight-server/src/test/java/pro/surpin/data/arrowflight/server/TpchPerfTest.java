@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,7 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * at least one row. {@code -Dperf.clients=N} (default 1) runs each pass on N concurrent clients,
  * each starting at another query, and tags their lines {@code c0} .. {@code c<N-1>}; a pass's
  * total is then its wall-clock time. Failed queries and wrong row counts are printed per query
- * and fail the test at the end.
+ * and fail the test at the end. Optional {@code -Dperf.rawDir=<fresh-directory>} flushes every
+ * attempt, including warm-up and failures, with timestamps, checksums and Arrow transfer sizes.
  */
 @Tag("perf")
 class TpchPerfTest {
@@ -75,15 +77,17 @@ class TpchPerfTest {
         }
         int rounds = Integer.parseInt(System.getProperty("perf.rounds", "2"));
         int clients = Integer.parseInt(System.getProperty("perf.clients", "1"));
+        String mode = System.getProperty("perf.mode", "complete");
         FlightCallHeaders headers = new FlightCallHeaders();
-        headers.insert("x-flight-result-mode", System.getProperty("perf.mode", "complete"));
+        headers.insert("x-flight-result-mode", mode);
         CallOption header = new HeaderCallOption(headers);
         String[] hostPort = external.split(":");
         Location location = Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]));
         List<String> names = files.stream().map(f -> f.getFileName().toString().replace(".sql", "")).toList();
         AtomicInteger failures = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(clients);
-        try (BufferAllocator allocator = new RootAllocator()) {
+        try (TpchQuerySamples samples = TpchQuerySamples.open(names, sqls, expectedRows, rounds, clients, mode);
+                BufferAllocator allocator = new RootAllocator()) {
             List<FlightClient> flights = new ArrayList<>();
             try {
                 for (int c = 0; c < clients; c++) {
@@ -98,7 +102,7 @@ class TpchPerfTest {
                         int client = c;
                         runs.add(pool.submit(() -> {
                             sums[client] = runPass(new FlightSqlClient(flights.get(client)), header, sqls, names,
-                                    expectedRows, pass, client, clients, failures);
+                                    expectedRows, pass, client, clients, failures, samples);
                             return null;
                         }));
                     }
@@ -133,33 +137,48 @@ class TpchPerfTest {
      * @param index       index of the client
      * @param clients     number of concurrent clients
      * @param failures    counter of failed queries
+     * @param samples     optional raw collector
      * @return the summed query time in nanoseconds
+     * @throws IOException when raw samples cannot be retained
      */
-    private static long runPass(FlightSqlClient client, CallOption header, List<String> sqls, List<String> names,
-            List<Long> expected, int pass, int index, int clients, AtomicInteger failures) {
+    static long runPass(FlightSqlClient client, CallOption header, List<String> sqls, List<String> names,
+            List<Long> expected, int pass, int index, int clients, AtomicInteger failures,
+            TpchQuerySamples samples) throws IOException {
         String tag = clients == 1 ? "" : " c" + index;
         long total = 0;
         for (int k = 0; k < sqls.size(); k++) {
             int i = (k + index * sqls.size() / clients) % sqls.size();
             String name = names.get(i);
             long t0 = System.nanoTime();
+            long nanos;
+            TpchQuerySamples.Answer answer = null;
+            String error = "";
             try {
-                long[] answer = read(client, client.execute(sqls.get(i), header), header);
-                long nanos = System.nanoTime() - t0;
+                answer = read(client, client.execute(sqls.get(i), header), header, samples != null);
+                nanos = System.nanoTime() - t0;
                 total += nanos;
                 long want = expected.get(i);
-                if (want >= 0 ? answer[0] != want : answer[0] <= 0) {
+                if (want >= 0 ? answer.rows() != want : answer.rows() <= 0) {
                     failures.incrementAndGet();
-                    System.out.printf(Locale.ROOT, "%s r%d wrong rows %d expected %d%s%n", name, pass, answer[0],
+                    error = "answer_mismatch";
+                    System.out.printf(Locale.ROOT, "%s r%d wrong rows %d expected %d%s%n", name, pass, answer.rows(),
                             want, tag);
                 }
                 System.out.printf(Locale.ROOT, "%s r%d %9.1f ms rows %d sum %016x%s%n",
-                        name, pass, nanos / 1e6, answer[0], answer[1], tag);
+                        name, pass, nanos / 1e6, answer.rows(), answer.checksum(), tag);
             } catch (Exception e) {
+                nanos = System.nanoTime() - t0;
                 failures.incrementAndGet();
+                error = e.getClass().getSimpleName();
+                if (error.isEmpty()) {
+                    error = "Exception";
+                }
                 String message = String.valueOf(e.getMessage()).lines().findFirst().orElse("");
                 System.out.printf(Locale.ROOT, "%s r%d error %.1f ms %s: %s%s%n", name, pass,
-                        (System.nanoTime() - t0) / 1e6, e.getClass().getSimpleName(), message, tag);
+                        nanos / 1e6, e.getClass().getSimpleName(), message, tag);
+            }
+            if (samples != null) {
+                samples.write(name, index, pass, k, t0, nanos, answer, error);
             }
         }
         return total;
@@ -171,16 +190,26 @@ class TpchPerfTest {
      * @param client Flight SQL client
      * @param info the query's flight info
      * @param header result-mode header
-     * @return rows read and the order-independent checksum of the values
+     * @param collectTransfer whether to count Arrow buffer bytes and batches
+     * @return rows, checksum and optional Arrow buffer measurements
      * @throws Exception on failure
      */
-    private static long[] read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
+    private static TpchQuerySamples.Answer read(FlightSqlClient client, FlightInfo info,
+            CallOption header, boolean collectTransfer) throws Exception {
         long rows = 0;
         long sum = 0;
+        long bytes = collectTransfer ? 0 : -1;
+        long batches = collectTransfer ? 0 : -1;
         for (FlightEndpoint endpoint : info.getEndpoints()) {
             try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
                 while (stream.next()) {
                     VectorSchemaRoot root = stream.getRoot();
+                    if (collectTransfer) {
+                        for (FieldVector vector : root.getFieldVectors()) {
+                            bytes += vector.getBufferSize();
+                        }
+                        batches++;
+                    }
                     for (int row = 0; row < root.getRowCount(); row++) {
                         StringBuilder text = new StringBuilder();
                         for (FieldVector vector : root.getFieldVectors()) {
@@ -192,7 +221,7 @@ class TpchPerfTest {
                 }
             }
         }
-        return new long[] {rows, sum};
+        return new TpchQuerySamples.Answer(rows, sum, bytes, batches);
     }
 
     /**
