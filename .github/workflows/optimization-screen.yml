@@ -1,0 +1,99 @@
+name: Optimization screening
+
+on:
+  push:
+    branches: ["perf/optimization-screen-*"]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Candidate commit, tag or branch (empty = dispatched ref)"
+        type: string
+        default: ""
+      baseline_ref:
+        description: "Baseline commit, tag or branch"
+        type: string
+        default: "90542012c037465c8b7213908c85e957b8af771b"
+      variant_options:
+        description: "Candidate-only experimental/duckDb/resourceProfile properties or perf.producingStreams; no credentials"
+        type: string
+        default: ""
+      rounds:
+        description: "Alternating paired rounds (A/B, B/A, A/B)"
+        type: string
+        default: "3"
+      seconds:
+        description: "Measured seconds per concurrency step"
+        type: string
+        default: "15"
+      clients:
+        description: "Rising concurrent clients"
+        type: string
+        default: "1,8,32"
+      cpu_mode:
+        description: "Pinned logical CPU set or Docker CPU quota"
+        type: choice
+        options: [pinned, quota]
+        default: pinned
+
+permissions:
+  contents: read
+
+concurrency:
+  group: optimization-screen-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_ref || '90542012c037465c8b7213908c85e957b8af771b' }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+          cache-dependency-path: |
+            candidate/**/pom.xml
+            baseline/**/pom.xml
+      - name: Build and measure both revisions
+        env:
+          SCREEN_VARIANT_OPTIONS: ${{ inputs.variant_options || (github.event_name == 'push' && '-Darrowflight.experimental.integerLiteralParameters=true' || '') }}
+          SCREEN_ROUNDS: ${{ inputs.rounds || '3' }}
+          SCREEN_SECONDS: ${{ inputs.seconds || '15' }}
+          SCREEN_CLIENTS: ${{ inputs.clients || '1,8,32' }}
+          SCREEN_CPU_MODE: ${{ inputs.cpu_mode || 'pinned' }}
+        run: >
+          python3 control/tools/ci/optimization-screen.py
+          --baseline baseline --candidate candidate
+          --output "$RUNNER_TEMP/optimization-screen"
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/optimization-screen/summary.md" ]; then
+            cat "$RUNNER_TEMP/optimization-screen/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Screening did not complete; inspect the raw artifacts and step log.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve all measurements and failed attempts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: optimization-screen-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/optimization-screen
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
