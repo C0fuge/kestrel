@@ -28,7 +28,7 @@ perf privileges. Its timer resolution is limited by kernel jiffies and it cannot
 collect kernel stacks. Optional `cpu-clock,alluser` forces perf user-space CPU
 sampling and fails if unavailable. The helper never requests automatic `cpu`,
 `itimer` or wall fallback. It reads actual `engine`, `event`, version, interval and
-native stack mode from every recording before declaring success. CPU samples
+native stack mode and monotonic clock from every recording before declaring success. CPU samples
 represent running time, subject to sampling/timer granularity; sample percentages
 are statistical estimates, not exact per-query costs.
 
