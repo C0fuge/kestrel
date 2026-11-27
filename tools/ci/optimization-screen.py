@@ -63,6 +63,29 @@ def warmup_plan(seconds, clients, configured_seconds=0, mode="legacy"):
     return {"mode": mode, "configured_seconds": configured_seconds, "steps": steps}
 
 
+def require_warmup_harness(source, configured_seconds, mode):
+    """Reject unsupported opt-in warmup controls before downloading or building anything."""
+    if configured_seconds != 0 or mode != "legacy":
+        harness = source / HARNESS / "SmallQueryThroughputPerfTest.java"
+        if not harness.is_file() or "perf.warmupMode" not in harness.read_text():
+            raise ValueError("Requested warmup controls require the updated measurement harness")
+
+
+def warmup_arguments(configured_seconds, mode):
+    """Pass only opt-in controls so historical default-source commands remain unchanged."""
+    return ([] if configured_seconds == 0 and mode == "legacy" else
+            ["-Dperf.warmupSeconds=" + str(configured_seconds), "-Dperf.warmupMode=" + mode])
+
+
+def trial_budget(seconds, clients, configured_seconds=0, mode="legacy", setup_seconds=20):
+    """Bound one JVM's configured workload and per-step drains, separately from builds and tools."""
+    warmup = warmup_plan(seconds, clients, configured_seconds, mode)["steps"]
+    nominal = seconds * len(clients) + sum(step["seconds"] for step in warmup)
+    drains = (len(clients) + len(warmup)) * DRAIN_SECONDS_PER_STEP
+    return {"nominal_workload_seconds": nominal, "drain_seconds": drains, "setup_seconds": setup_seconds,
+            "planned_work_seconds": nominal + drains + setup_seconds}
+
+
 def verify_warmup_plan(folder, seconds, clients, configured_seconds, mode):
     """Require an opt-in warmup request to match the harness's actual immutable plan."""
     warmup = warmup_plan(seconds, clients, configured_seconds, mode)["steps"]
@@ -136,18 +159,16 @@ def checked_options(text):
 
 def nominal_measurement_seconds(rounds, seconds, clients, warmup_seconds=0, warmup_mode="legacy"):
     """Count configured query-loop durations without drain, setup or build allowances."""
-    warmup = sum(step["seconds"] for step in warmup_plan(seconds, clients, warmup_seconds, warmup_mode)["steps"])
-    preflight_warmup = sum(step["seconds"] for step in warmup_plan(3, [1], warmup_seconds, warmup_mode)["steps"])
-    return 2 * rounds * (seconds * len(clients) + warmup) + 3 + preflight_warmup
+    trial = trial_budget(seconds, clients, warmup_seconds, warmup_mode)
+    preflight = trial_budget(3, [1], warmup_seconds, warmup_mode, 24)
+    return 2 * rounds * trial["nominal_workload_seconds"] + preflight["nominal_workload_seconds"]
 
 
 def planned_measurement_seconds(rounds, seconds, clients, warmup_seconds=0, warmup_mode="legacy"):
     """Reserve every step's bounded in-flight drain plus setup before admitting a trial plan."""
-    warmup_steps = len(warmup_plan(seconds, clients, warmup_seconds, warmup_mode)["steps"])
-    preflight_steps = 1 + len(warmup_plan(3, [1], warmup_seconds, warmup_mode)["steps"])
-    steps = 2 * rounds * (len(clients) + warmup_steps) + preflight_steps
-    planned = (nominal_measurement_seconds(rounds, seconds, clients, warmup_seconds, warmup_mode)
-               + steps * DRAIN_SECONDS_PER_STEP + 2 * rounds * 20 + 24)
+    trial = trial_budget(seconds, clients, warmup_seconds, warmup_mode)
+    preflight = trial_budget(3, [1], warmup_seconds, warmup_mode, 24)
+    planned = 2 * rounds * trial["planned_work_seconds"] + preflight["planned_work_seconds"]
     if len(clients) > 8 or planned > PLANNED_WORK_LIMIT_SECONDS:
         raise ValueError("At most eight concurrency steps and twenty-five planned work minutes are allowed")
     return planned
@@ -301,10 +322,7 @@ def main():
         raise ValueError("CPU mode must be pinned or quota")
     options = checked_options(os.environ.get("SCREEN_VARIANT_OPTIONS", ""))
     custom_warmup = warmup_seconds != 0 or warmup_mode != "legacy"
-    if custom_warmup:
-        harness = args.candidate.resolve() / HARNESS / "SmallQueryThroughputPerfTest.java"
-        if not harness.is_file() or "perf.warmupMode" not in harness.read_text():
-            raise ValueError("Requested warmup controls require the updated candidate harness")
+    require_warmup_harness(args.candidate.resolve(), warmup_seconds, warmup_mode)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     sources = {"A": args.baseline.resolve(), "B": args.candidate.resolve()}
@@ -359,8 +377,7 @@ def main():
               "-Dtest=SmallQueryThroughputPerfTest", "-Dsurefire.failIfNoSpecifiedTests=false",
               "-Dcheckstyle.skip", "-Dspotbugs.skip", "-Dperf.threads=2", "-Dperf.shared=2:512MB",
               "-Dperf.dataDir=/data", "-Dperf.output=/output", "-Dperf.heavyEvery=" + str(heavy_every)]
-    if custom_warmup:
-        common += ["-Dperf.warmupSeconds=" + str(warmup_seconds), "-Dperf.warmupMode=" + warmup_mode]
+    common += warmup_arguments(warmup_seconds, warmup_mode)
     # Generate and warm the exact data set before either ranked side; preserve this attempt too.
     run_container(prefix + "-preflight", sources["A"], output / "preflight", data, cache,
                   common + ["-Dperf.clients=1", "-Dperf.seconds=3"], mode, cpu_set, [])

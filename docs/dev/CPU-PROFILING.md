@@ -18,6 +18,44 @@ arguments, plus the actual available-processor count. Conflicting overrides fail
 The job uses host Java 21 without sudo, kernel changes, capabilities or privileged
 containers. Host limits/cgroup access are recorded rather than assuming isolation.
 
+Optional workflow inputs `warmup_mode=legacy|per-step` and `warmup_seconds=0..120`
+map to CLI `--warmup-mode` and `--warmup-seconds`. Defaults remain a single eight-client
+warmup for `max(3, measured seconds/3)` seconds in each JVM. Zero means automatic
+duration; a positive value overrides it. `per-step` warms the measured concurrency.
+Because each fresh JVM measures only one concurrency, its raw warmup prefix is
+`warmup-step-1-c8` or `warmup-step-1-c32`, followed by `c8` or `c32`. Legacy prefixes
+remain `warmup-c8` in both JVMs. No setting guarantees steady state, and absolute QPS
+from separate runs is not an A/B causal comparison.
+
+The CPU helper reuses screening validation, planning, arguments and the actual-plan
+gate. Unsupported custom requests fail before profiler download or build. Custom
+requests require the exact `warmup-plan.csv`; a new harness's explicit default plan
+is checked too. Historical source without that file remains supported only with
+legacy defaults and is labelled as having no explicit plan CSV. Every selected raw
+warmup and measurement label must retain successful mixed-query samples. `plan.json`
+records intended per-JVM plans, nominal duration, workload bounds and command caps;
+`cpu-verified.json` records checked plans, actual label names and evidence scope.
+`preflight_only=true` performs no workload warmup or measurement.
+
+Each fork's workload bound includes configured warmup/measurement durations, a
+30-second drain for each step and 20 seconds of setup. A plan above its existing
+240-second Maven-fork timeout is rejected before download/build. For per-step 20-second
+warmup and 30-second measurement the bound is 130 seconds per fork, including 60 seconds
+of drains; total nominal workload is 100 seconds across both JVMs. This is a workload
+bound, not the entire diagnostic's elapsed-time guarantee.
+
+The existing 900-second build and 240-second fork caps are command maxima. Their sum
+does not account for profiler download/preflight, JFR parsing/conversion or symbols,
+so they are not presented as an additive global runtime bound. An overall 1,440-second
+monotonic work deadline now covers download, preflight, build, validation and conversion.
+An alarm interrupts blocking Python/I/O work, and each command is limited to its
+remaining work time. One minute remains inside the unchanged 25-minute workflow step
+for finalization; the 35-minute job retains ten further minutes for artifact upload.
+The deadline may stop a run before any command uses its full individual cap. It is
+disarmed during failure sealing; native-symbol commands still obey the expired
+deadline and retain explicit failed-command statuses instead of silently running
+unbounded. Original partial recordings, logs and failure evidence remain preserved.
+
 The profile covers **combined embedded server, clients, JVM compiler/GC and
 collectors**, including startup, warmup and teardown. It is not pure-server CPU.
 The original harness `profile.jfr` remains separate: its native method residency

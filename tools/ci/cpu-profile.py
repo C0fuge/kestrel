@@ -35,6 +35,10 @@ SYSTEM = runpy.run_path(str(HERE / "benchmark-system.py"))
 SCOPE = ("embedded server, Flight clients, JVM/compiler/GC and collectors share one JVM; "
          "whole-process on-CPU attribution, not pure-server CPU or an A/B ranking")
 FIXED_JVM = ("-Xms512m", "-Xmx2g", "-XX:MaxDirectMemorySize=1g", "-XX:ActiveProcessorCount=4", "-Duser.home=/tmp")
+WORK_BUDGET_SECONDS = 1440
+BUILD_TIMEOUT_SECONDS = 900
+FORK_TIMEOUT_SECONDS = 240
+WORK_DEADLINE = None
 
 
 def save(path, value):
@@ -50,6 +54,53 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def remaining_work_seconds():
+    """Check the overall monotonic work deadline, including Python and blocking-I/O work."""
+    if WORK_DEADLINE is None:
+        return None
+    remaining = WORK_DEADLINE - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Overall CPU diagnostic work deadline exceeded")
+    return remaining
+
+
+def deadline_alarm(signum, frame):
+    """Interrupt blocking work at the deadline and tolerate an early timer delivery."""
+    remaining = remaining_work_seconds()
+    if remaining is not None:
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+
+
+def start_work_deadline():
+    """Arm a monotonic-checked alarm while reserving one workflow minute for finalization."""
+    global WORK_DEADLINE
+    if WORK_DEADLINE is not None or signal.getitimer(signal.ITIMER_REAL)[0] > 0:
+        raise ValueError("A diagnostic work deadline is already active")
+    previous = signal.getsignal(signal.SIGALRM)
+    WORK_DEADLINE = time.monotonic() + WORK_BUDGET_SECONDS
+    signal.signal(signal.SIGALRM, deadline_alarm)
+    signal.setitimer(signal.ITIMER_REAL, WORK_BUDGET_SECONDS)
+    return previous
+
+
+def stop_work_alarm(previous):
+    """Disarm interruption during failure sealing while keeping command deadline checks active."""
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous)
+
+
+def workload_plan(seconds, warmup_seconds, warmup_mode):
+    """Resolve each fresh JVM's warmup and reject workload bounds above its command timeout."""
+    trials = {}
+    for clients in (8, 32):
+        budget = SCREEN["trial_budget"](seconds, [clients], warmup_seconds, warmup_mode)
+        if budget["planned_work_seconds"] > FORK_TIMEOUT_SECONDS:
+            raise ValueError("Warmup/measurement/drain/setup plan exceeds the 240-second fork limit")
+        trials[f"c{clients}"] = {"warmup_plan": SCREEN["warmup_plan"](seconds, [clients], warmup_seconds, warmup_mode),
+                                "workload_budget": budget, "command_timeout_seconds": FORK_TIMEOUT_SECONDS}
+    return trials
+
+
 def run(command, folder, label, cwd=None, timeout=120, monitor=None, env=None):
     """Retain a complete command/log/status and stop only its process group on failure."""
     save(folder / (label + ".command.json"), command)
@@ -57,14 +108,17 @@ def run(command, folder, label, cwd=None, timeout=120, monitor=None, env=None):
     status = {"start_epoch_ns": time.time_ns(), "start_monotonic_ns": time.monotonic_ns()}
     try:
         with (folder / (label + ".log")).open("x") as log:
+            remaining = remaining_work_seconds()
+            effective_timeout = min(timeout, remaining) if remaining is not None else timeout
+            status.update(requested_timeout_seconds=timeout, effective_timeout_seconds=effective_timeout)
             process = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + effective_timeout
             while process.poll() is None:
                 if monitor:
                     monitor()
                 if time.monotonic() > deadline:
-                    raise TimeoutError(f"{label} exceeded {timeout} seconds")
+                    raise TimeoutError(f"{label} exceeded its {effective_timeout:g}-second command/work limit")
                 time.sleep(.25)
             status["exit_code"] = process.returncode
             if process.returncode:
@@ -482,17 +536,29 @@ def thread_cpu_coverage(path, samples):
                                       if row["observed_user_seconds"] >= .5 and not row["cpu_samples"]]}
 
 
-def validate_trial(folder, clients, event):
-    """Require completed answer/resource evidence and native worker CPU coverage, retaining failures."""
-    summary, _ = SCREEN["summary_of"](folder, [clients])
-    run(["jfr", "summary", str(folder / "profile.jfr")], folder, "harness-jfr-summary")
-    for label in ("warmup-c8", f"c{clients}"):
+def validate_answers(folder, clients, seconds, warmup_seconds=0, warmup_mode="legacy"):
+    """Verify the actual common plan and every requested warmup/measured label before CPU attribution."""
+    warmup = SCREEN["warmup_plan"](seconds, [clients], warmup_seconds, warmup_mode)
+    explicit_plan = (folder / "warmup-plan.csv").is_file()
+    if explicit_plan or warmup_seconds != 0 or warmup_mode != "legacy":
+        SCREEN["verify_warmup_plan"](folder, seconds, [clients], warmup_seconds, warmup_mode)
+    labels = [step["label"] for step in warmup["steps"]] + [f"c{clients}"]
+    for label in labels:
         with (folder / (label + ".csv")).open() as source:
             rows = list(csv.DictReader(source))
         if not rows or any(row.get("ok") != "1" for row in rows):
             raise ValueError("Missing or unsuccessful raw answer rows")
         if {row["query_kind"] for row in rows} != {"0", "1", "2"}:
             raise ValueError("Mixed workload lacks one of its query kinds")
+    return {"warmup_plan": warmup, "raw_answer_labels": labels,
+            "actual_warmup_plan": "verified CSV" if explicit_plan else "legacy source; no explicit plan CSV"}
+
+
+def validate_trial(folder, clients, event, seconds=30, warmup_seconds=0, warmup_mode="legacy"):
+    """Require completed answer/resource evidence and native worker CPU coverage, retaining failures."""
+    answers = validate_answers(folder, clients, seconds, warmup_seconds, warmup_mode)
+    summary, _ = SCREEN["summary_of"](folder, [clients])
+    run(["jfr", "summary", str(folder / "profile.jfr")], folder, "harness-jfr-summary")
     recording, launch, auxiliary = target_recording(folder)
     recording_inventory(folder, recording, auxiliary)
     metadata, samples = extract_profile(folder, recording, event)
@@ -516,7 +582,7 @@ def validate_trial(folder, clients, event):
     native = [json.loads(path.read_text()) for path in folder.glob("native-*.json")]
     if not any("duckdb" in item["mapped_path"].lower() for item in native):
         raise ValueError("Actual mapped DuckDB native binary was not retained")
-    save(folder / "cpu-verified.json", {**metadata, "scope": SCOPE, "target_identity": identity,
+    save(folder / "cpu-verified.json", {**metadata, **answers, "scope": SCOPE, "target_identity": identity,
          "sample_classification_counts": dict(classes),
          "unattached_duckdb_worker_samples": len(worker), "profile_window": "entire Surefire JVM lifetime",
          "resolved_unattached_duckdb_worker_samples": len(resolved_worker),
@@ -558,19 +624,27 @@ def symbol_metadata(libraries):
 
 def main():
     """Build once and collect representative baseline profiles without comparison or promotion."""
+    global WORK_DEADLINE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--event", choices=("ctimer", "cpu-clock"), default="ctimer")
     parser.add_argument("--seconds", type=int, default=30)
+    parser.add_argument("--warmup-mode", default="legacy")
+    parser.add_argument("--warmup-seconds", default="0")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     if platform.machine() != "x86_64" or sys.platform != "linux" or not 5 <= args.seconds <= 60:
         raise ValueError("Requires Linux x86_64 and 5..60 measured seconds")
+    warmup_mode = SCREEN["checked_warmup_mode"](args.warmup_mode)
+    warmup_seconds = SCREEN["checked_warmup_seconds"](args.warmup_seconds)
+    trials = workload_plan(args.seconds, warmup_seconds, warmup_mode)
     output, source = args.output.resolve(), args.source.resolve()
+    SCREEN["require_warmup_harness"](source, warmup_seconds, warmup_mode)
     if any(char in str(output) for char in ", \n"):
         raise ValueError("Profiler output path cannot contain commas, spaces or newlines")
     output.mkdir(parents=True, exist_ok=False)
+    previous_alarm = start_work_deadline()
     try:
         # No inherited JVM/native agent may change the measurement or expose caller configuration.
         launch_environment(output, args.event, output)
@@ -580,6 +654,15 @@ def main():
         save(output / "plan.json", {"scope": SCOPE, "clients": [8, 32], "seconds": args.seconds,
              "heavy_every": 8, "requested_event": args.event, "interval_ns": 10_000_000,
              "fixed_jvm_flags": list(FIXED_JVM),
+             "trials": trials, "preflight_only": args.preflight_only,
+             "nominal_workload_seconds": 0 if args.preflight_only else sum(
+                 trial["workload_budget"]["nominal_workload_seconds"] for trial in trials.values()),
+             "work_deadline_seconds": WORK_BUDGET_SECONDS, "build_timeout_seconds": BUILD_TIMEOUT_SECONDS,
+             "workflow_step_seconds": 1500, "workflow_job_seconds": 2100,
+             "finalization_reserve_seconds": 60, "artifact_reserve_seconds": 600,
+             "budget_scope": "Per-fork bounds cover configured workload/drain/setup only; command maxima are not "
+                             "additive runtime guarantees. Overall monotonic deadline covers download/preflight/"
+                             "build/validation/conversion; finalization has the last workflow minute.",
              "cpus": affinity[:4], "kernel_release": platform.release(), "kernel_version": platform.version(),
              "workflow_sha": os.environ.get("GITHUB_SHA"), "run_id": os.environ.get("GITHUB_RUN_ID"),
              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
@@ -611,7 +694,7 @@ def main():
         java = str(Path(shutil.which("java")).resolve())
         print("Building one baseline; full Maven output retained", flush=True)
         run(["mvn", "-B", "-ntp", "-pl", "flight-server", "-am", "package", "-DskipTests",
-             "-Dcheckstyle.skip", "-Dspotbugs.skip"], output, "build", cwd=source, timeout=900)
+             "-Dcheckstyle.skip", "-Dspotbugs.skip"], output, "build", cwd=source, timeout=BUILD_TIMEOUT_SECONDS)
         for clients in (8, 32):
             folder = output / f"c{clients}"
             folder.mkdir()
@@ -628,29 +711,36 @@ def main():
                      "-Dperf.heavyEvery=8", "-Dperf.threads=2", "-Dperf.shared=2:512MB",
                      "-Dperf.dataDir=" + str(data), "-Dperf.output=" + str(folder),
                      "-Darrowflight.experimental.integerLiteralParameters=false",
-                     "-Darrowflight.experimental.cachePreparedSchemaMessages=false"],
-                    folder, "maven", cwd=source, timeout=240, monitor=collector.sample)
+                     "-Darrowflight.experimental.cachePreparedSchemaMessages=false",
+                     *SCREEN["warmup_arguments"](warmup_seconds, warmup_mode)],
+                    folder, "maven", cwd=source, timeout=FORK_TIMEOUT_SECONDS, monitor=collector.sample)
             finally:
                 collector.close()
                 reports = source / "flight-server/target/surefire-reports"
                 for report in reports.glob("*SmallQueryThroughputPerfTest*"):
                     shutil.copyfile(report, folder / report.name)
-            recording = validate_trial(folder, clients, args.event)
+            recording = validate_trial(folder, clients, args.event, args.seconds, warmup_seconds, warmup_mode)
             for name, options in (("flame.html", []), ("collapsed.txt", ["--output", "collapsed"])):
                 run([str(profiler / "bin/jfrconv"), *options, "--threads", str(recording), str(folder / name)],
                     folder, "convert-" + name)
         (output / "summary.md").write_text("## CPU profile collection\n\nBoth mixed baseline profiles passed "
             "the answer, actual CPU-engine and unattached DuckDB worker gates.\n\n" + SCOPE
             + ". The CPU recordings include JVM startup, warmup, measurement and shutdown. "
-            "Use the retained phase clocks before attributing measured-query costs.\n")
+            "Use the retained phase clocks before attributing measured-query costs. "
+            f"Warmup mode={warmup_mode}, configured seconds={warmup_seconds or 'auto'}; "
+            "actual plans and labels are retained per JVM. No setting guarantees steady state.\n")
     except BaseException as error:
         save(output / "failure.json", {"type": type(error).__name__, "message": str(error)})
         raise
     finally:
-        if (output / "native-libraries").is_dir():
-            symbol_metadata(output / "native-libraries")
-        SYSTEM["save_host_snapshot"](output / "system-host-after.json", output)
-        manifest(output)
+        stop_work_alarm(previous_alarm)
+        try:
+            if (output / "native-libraries").is_dir():
+                symbol_metadata(output / "native-libraries")
+            SYSTEM["save_host_snapshot"](output / "system-host-after.json", output)
+            manifest(output)
+        finally:
+            WORK_DEADLINE = None
 
 
 if __name__ == "__main__":
