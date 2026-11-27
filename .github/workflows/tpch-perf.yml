@@ -163,10 +163,13 @@ jobs:
           set -euo pipefail
           (pip install -q duckdb==1.5.6 || pip install -q duckdb) 2>&1 | tee "$RUNNER_TEMP/tpch-metrics/datagen-install.log"
           python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" <<'EOF' | tee "$RUNNER_TEMP/tpch-metrics/datagen.log"
-          import decimal, hashlib, json, os, re, sys, duckdb
+          import hashlib, json, os, re, runpy, sys, duckdb
+          checksum = runpy.run_path('tools/ci/tpch-checksum.py')
           tmp, sf = sys.argv[1], float(sys.argv[2])
           data, queries = os.path.join(tmp, "data", "tpch"), os.path.join(tmp, "queries")
           os.makedirs(queries, exist_ok=True)
+          with open(os.path.join(queries, 'checksum-version.txt'), 'w') as output:
+              output.write(checksum['VERSION'] + '\n')
           db = duckdb.connect(os.path.join(tmp, "gen.duckdb"))
           db.execute("SET memory_limit='10GB'")
           db.execute("INSTALL tpch; LOAD tpch")
@@ -183,6 +186,7 @@ jobs:
                                    rows=db.execute(f'SELECT count(*) FROM {t}').fetchone()[0], sha256=digest))
               with open(os.path.join(tmp, 'tpch-metrics', 'input-manifest.json'), 'w') as output:
                   json.dump(dict(sf=sf, duckdb_version=duckdb.__version__, generation=f'CALL dbgen(sf={sf})',
+                                 checksum_version=checksum['VERSION'],
                                  layout='one Parquet per table, ROW_GROUP_SIZE 122880',
                                  seed='DuckDB tpch extension deterministic dbgen default',
                                  tables_complete=len(manifest) == len(tables), files=manifest), output, indent=2)
@@ -193,19 +197,21 @@ jobs:
               if nr == 11:
                   assert "0.0001000000" in q or "0.0001" in q, q
                   q = q.replace("0.0001000000", "0.0001").replace("0.0001", f"{0.0001 / sf:.10f}")
-              answer = db.execute(q).fetchall()
+              result = db.execute(q)
+              columns = [{'name': column[0], 'duckdb_type': str(column[1])} for column in result.description]
+              answer = result.fetchall()
               rows = len(answer)
-              checksum = 0
-              for values in answer:
-                  text = '|'.join(f'{v:.2f}' if isinstance(v, (float, decimal.Decimal)) else
-                                  'None' if v is None else str(v) for v in values) + '|'
-                  checksum = (checksum + int.from_bytes(hashlib.blake2b(text.encode('utf-8'), digest_size=8).digest(), 'little')) % (1 << 64)
+              value_checksum = checksum['checksum_rows'](answer)
               with open(os.path.join(queries, f"q{nr:02d}.sql"), "w") as f:
                   f.write(pattern.sub(lambda m: m.group(1) + "tpch." + m.group(2), q))
               with open(os.path.join(queries, f"q{nr:02d}.rows"), "w") as f:
                   f.write(str(rows))
               with open(os.path.join(queries, f"q{nr:02d}.checksum"), "w") as f:
-                  f.write(f'{checksum:016x}\n')
+                  f.write(f'{value_checksum:016x}\n')
+              with open(os.path.join(queries, f"q{nr:02d}.reference.json"), 'w') as f:
+                  json.dump(dict(checksum_version=checksum['VERSION'], checksum=f'{value_checksum:016x}',
+                                 columns=columns, rows=[[{'python_type': type(v).__name__, 'repr': repr(v)}
+                                                        for v in values] for values in answer]), f, indent=2)
               print(f"q{nr:02d} duckdb rows {rows}")
           db.close()
           os.remove(os.path.join(tmp, "gen.duckdb"))

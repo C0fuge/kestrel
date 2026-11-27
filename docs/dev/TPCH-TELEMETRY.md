@@ -16,14 +16,44 @@ The shared artifact contains the dispatched inputs, source commits, build/instal
 logs, exact workflow, hardware/kernel/JDK/Docker/image identities, jar hashes, query
 SQL and expected row references. The already-computed generation answers also retain
 `qNN.checksum` references using the Python clients' rounded, order-independent checksum
-algorithm; Java's existing checksum algorithm differs. The existing answer gates keep
-their behavior. `input-manifest.json` identifies each immutable
+algorithm. Native generation, ADBC, plain DuckDB and Java now share the versioned
+`tpch-v2-sha256-64-numeric2` value rules. `queries/checksum-version.txt`, every raw CSV
+row's `checksum_version`, and client metadata identify the algorithm. The gate checks
+each warmup and measured answer against generation's row count and checksum, and
+rejects missing/mismatched versions or references. Matching A/B answers alone cannot
+pass. `qNN.reference.json` also keeps the already-computed native answer's SQL column
+types and each cell's Python type and exact representation, making future mapping
+differences auditable without regenerating TPC-H. Historic artifacts retain their original checksums and are not reinterpreted as
+v2 evidence. `input-manifest.json` identifies each immutable
 generated Parquet input by relative path, SHA-256, size and row count, and records
 DuckDB's version, dbgen call, default deterministic generation and row-group layout.
 Large regenerable Parquet inputs are represented by this shared manifest rather
 than uploaded or duplicated per configuration. Query/measurement evidence is retained
 in full, including failed attempts. Download decision-making artifacts before their
 30-day retention expires.
+
+The v2 numeric rule compares TPC-H values at the established two-decimal precision.
+Integer and Decimal values remain exact, including values beyond 28 decimal digits
+or double precision. Float values first become their exact binary value expressed
+as Decimal; all finite numbers then round HALF_EVEN to two places, so native HUGEINT
+integers and Arrow Decimal128 integers share the same numeric token. Rounded negative
+zero becomes positive zero; NaNs share one token and infinities retain their sign.
+This deliberately distinguishes Decimal `1.015` (1.02) from the slightly smaller
+binary double `1.015` (1.01). The rule is a precision-limited value check, rather than
+bitwise equality or a general-purpose SQL type equivalence assertion.
+
+Tokens distinguish null (`null`), numbers (`num:`), booleans (`bool:`) and strings/ISO
+dates (`text:`). Thus null differs from the string `null`, and numeric 1 differs from
+the string `1.00`. Every token is strict UTF-8 preceded by its ASCII byte length and
+`:`, preventing delimiter/Unicode collisions. SHA-256's first eight bytes, read
+big-endian, form each row's unsigned hash; answer hashes add modulo 2^64, retaining
+duplicates while ignoring row order. Unsupported scalar types fail explicitly.
+
+The historical SF1 run `46029114466` passed A/B and row-count checks but predates this
+oracle gate. Its q12 reference checksum differs only because native `SUM(CASE)` is a
+Python HUGEINT integer while Arrow exports Decimal128(38,0), and the old helper
+rendered these as `2` and `2.00`. Its raw evidence is unchanged; that run alone does
+not establish a complete generation-oracle checksum pass.
 
 Each server configuration also retains:
 

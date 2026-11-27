@@ -14,6 +14,7 @@ import subprocess
 import time
 
 percentiles = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["percentiles"]
+CHECKSUM_VERSION = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))["VERSION"]
 COUNTERS = ("cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.stat",
             "memory.events", "memory.max", "memory.swap.max", "io.stat", "pids.current")
 EVENTS = ("jdk.CPULoad,jdk.ThreadCPULoad,jdk.GCHeapSummary,jdk.GarbageCollection,"
@@ -242,6 +243,13 @@ def query_errors(label, plan, names, rounds):
     """Require each requested query/client/round exactly once, including the warmup round."""
     filename = "queries.csv" if plan["client"] == "java" else "samples.csv"
     try:
+        queries = label.parent / "queries"
+        if (queries / "checksum-version.txt").read_text().strip() != CHECKSUM_VERSION:
+            return ["unsupported or mismatched oracle checksum version"]
+        expected_checksums = {name: (queries / (name + ".checksum")).read_text().strip() for name in names}
+        expected_rows = {name: int((queries / (name + ".rows")).read_text().strip()) for name in names}
+        if any(not re.fullmatch(r"[0-9a-f]{16}", value) for value in expected_checksums.values()):
+            return ["invalid oracle checksum reference"]
         with (label / "client" / filename).open() as source:
             rows = list(csv.DictReader(source))
         slots = []
@@ -256,6 +264,10 @@ def query_errors(label, plan, names, rounds):
                 return ["missing query latency/answer/buffer evidence"]
             if not re.fullmatch(r"[0-9a-f]{16}", row["checksum"]):
                 return ["invalid query checksum"]
+            if row["checksum_version"] != CHECKSUM_VERSION:
+                return ["unsupported or mismatched raw checksum version"]
+            if row["checksum"] != expected_checksums[row["query"]] or int(row["rows"]) != expected_rows[row["query"]]:
+                return [f"oracle answer mismatch for {row['query']} client {client} round {round_number}"]
             if plan["client"] == "java":
                 if int(row["start_epoch_ms"]) <= 0:
                     return ["missing query timestamp"]

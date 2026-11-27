@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import resource
+import runpy
 import sys
 import time
 
 
 FIELDS = ("query", "round", "warmup", "timestamp_ns", "latency_ns", "rows", "checksum",
-          "arrow_buffer_bytes", "table_batches", "expected_rows", "ok", "error_type")
+          "arrow_buffer_bytes", "table_batches", "expected_rows", "ok", "error_type", "checksum_version")
+CHECKSUM_VERSION = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))["VERSION"]
 
 
 def percentiles(values):
@@ -44,6 +46,7 @@ class RawRun:
                     pass
             self.save("client.json", {"started_ns": self.started_ns, "argv": sys.argv,
                       "python": sys.version, "versions": versions,
+                      "checksum_version": CHECKSUM_VERSION,
                       "bytes_semantics": "Arrow table.nbytes: referenced buffer ranges, never wire bytes",
                       "batches_semantics": "len(table.to_batches()): table chunk layout, never transport batches"})
 
@@ -60,7 +63,7 @@ class RawRun:
         correct = answer is not None and (rows == expected_rows if expected_rows >= 0 else rows > 0)
         sample = dict(zip(FIELDS, (query, round_number, int(round_number == 0), timestamp_ns, latency_ns,
                                   rows, f"{checksum:016x}", size, batches, expected_rows, int(correct),
-                                  error_type or ("" if correct else "answer_mismatch"))))
+                                  error_type or ("" if correct else "answer_mismatch"), CHECKSUM_VERSION)))
         self.writer.writerow(sample)
         self.output.flush()
         if not self.samples:
