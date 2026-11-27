@@ -2,30 +2,54 @@
 
 ## Current checkpoint (2026-11-27)
 
-Latest integration `75a99c5e` fixes direct DuckDB dictionary result streams and
-unfinished local-copy acquisitions on cache close. It also adds opt-in common
-warmup controls and an overall work deadline to the optional CPU diagnostic.
-Production defaults are unchanged. Earlier `56b4eba6` adds optional process/caller
-CPU deltas behind the existing `streamTimingLog` switch (default false), plus versioned TPC-H/restart
-answer checks, raw per-query samples, host/pressure telemetry and failure-artifact
-retention. Disabled stream timing creates no CPU sampler or counter reads. Screening
-is manual-only; rejected integer-literal execution reuse and schema IPC-cache
-experiments are not included. See [CPU timing](STREAM-TIMING-CPU.md),
+Latest integration `ca8bdd69` aligns statement and prepared dictionary metadata with
+DoGet, closes the test server helper's owned adapter and I/O pools, and pins Maven
+plugin resolution in catalog fixture checks. It contains the runtime/test code from
+`394e1b86` plus the independently checked catalog workflow from `b8fc8ef4`.
+Both PR heads were integrated locally with verified author/committer metadata.
+
+[Full Dev CI 46061761988](https://github.com/C0fuge/kestrel/actions/runs/46061761988)
+passed on exact `394e1b86`: 2,143 tests, zero failures/errors and one unchanged JDBC
+skip. All 275 previous class reports/counts/multiplicities are unchanged; six
+metadata and two helper-ownership regressions are added. All 14 module totals
+match with only those eight additions. The 16 Checkstyle and 15 SpotBugs module
+results are clean. Both direct-memory concurrency gates return 48/48 exact
+answers; both 100M-group scopes return exact answers with zero OOM kills.
+The original 19-entry log ZIP passed CRC/hash checks.
+
+Dictionary descriptions now recursively use value types while the provider is
+live, preserving field/schema metadata and index encoding without loading data
+batches. Five statement/prepared metadata surfaces agree with real native DoGet
+for ordinary, empty and nested enum results in both result modes. The actual
+JDBC 19 driver still reads dictionary indices as values; general JDBC dictionary
+decoding and specialized dictionary merge support are separate work.
+
+The test helper owns its plain-local adapter and two I/O executors. Its cleanup
+now stops those resources, preserves the primary error and later distinct errors,
+and restores consumed interruption after completing cleanup. Deterministic
+before/after regressions cover the reaper leak and a later interrupted wait.
+This is test-fixture ownership; production shutdown behavior is unchanged.
+
+[Focused catalog check 46061505473](https://github.com/C0fuge/kestrel/actions/runs/46061505473)
+passes after pinning four existing Maven plugin calls to full coordinates.
+Spark fixtures yield 40 exact Python answers and two allowed refusals, with both
+extensions loaded. The complete Paimon/Hudi job ran; other catalog jobs were
+intentionally skipped by the new explicit manual scope. Push/default runs retain
+the entire matrix. Detailed Java refusal probes remain observational and include
+operations that get through; this success is not a universal isolation claim.
+Final main Dev/Catalogs push checks are separate from this focused result.
+
+Earlier integration `75a99c5e` fixes direct dictionary delivery and terminal
+local-copy cache acquisitions, and adds opt-in common warmup/deadline controls.
+Its [full CI 46057454442](https://github.com/C0fuge/kestrel/actions/runs/46057454442)
+and [main CI 46059723459](https://github.com/C0fuge/kestrel/actions/runs/46059723459)
+both passed 2,135 tests with zero failures/errors and one unchanged JDBC skip.
+Earlier optional CPU timing, typed TPC-H/restart checks and raw telemetry remain;
+disabled stream timing creates no CPU sampler or counter reads. Rejected literal
+rewrites and schema IPC caches are absent. See [CPU timing](STREAM-TIMING-CPU.md),
 [screening](OPTIMIZATION-SCREENING.md), [TPC-H telemetry](TPCH-TELEMETRY.md) and the
 [literal coercion counterexample](LITERAL-COERCION-REJECTION-2026-11-27.md).
-
-[Full Dev CI 46057454442](https://github.com/C0fuge/kestrel/actions/runs/46057454442)
-passed on exact `75a99c5e`: 2,135 tests, zero failures/errors and one unchanged JDBC
-skip. All 16 Checkstyle and 15 SpotBugs checks are clean. Against the previous
-2,127-test integration, 273 class reports are unchanged; local-copy tests increase
-26 to 31 and three dictionary regressions are added. Module identities and report
-multiplicities were independently checked against the original logs.
-Both concurrency gates (2 GiB and 8 GiB direct-memory limits) returned 48/48 exact
-answers; both 100M-group memory-pressure gates returned exact answers with zero OOM
-kills. The original 19-entry log ZIP passed CRC/hash checks. PR #8 was integrated by
-a local fast-forward with verified author/committer metadata. These are correctness
-and measurement improvements, with no claimed throughput gain.
-No release package or production deployment was made.
+No throughput gain, release package or production deployment is claimed.
 
 ### Direct dictionary streams
 
@@ -35,7 +59,7 @@ Three real Flight regressions failed with a null-provider exception before the f
 six regular/zero-copy streams now pass, covering nulls, nested enum lists, empty
 results and multiple one-row batches. Fast CI also passed all 130 selected adapter,
 retry, counter and dictionary tests. Specialized copy/merge/distributed dictionary
-restrictions are unchanged; broader metadata/client handling remains separate work.
+restrictions are unchanged; JDBC value decoding remains separate work.
 
 ### Local-copy cache close fix
 
@@ -66,6 +90,14 @@ and resource evidence remains preserved. No experimental performance default cha
 The separate GCC/Clang configure-only preflight caught different GCC header versions
 despite a nominal common toolchain root. Its strict library gate refused the comparison;
 no native engine build or compiler-performance conclusion followed from that attempt.
+[Corrected preflight 46061379966](https://github.com/C0fuge/kestrel/actions/runs/46061379966)
+passes with matching GCC 14 headers/library resolution, ABI, C++ standard and common
+flags. Retained automatic Clang configs confirm the earlier GCC 15 selection;
+the corrected command disables those configs and selects the recorded installation.
+Artifact digest, CRC, all 130 final/128 raw manifest entries and both containers'
+mandatory resource snapshots were checked. The separate
+[build/smoke run 46062127296](https://github.com/C0fuge/kestrel/actions/runs/46062127296)
+is running; its outcome and any compiler performance effect remain unproven.
 
 ### Earlier correctness batch
 
