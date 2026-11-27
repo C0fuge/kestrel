@@ -327,8 +327,19 @@ public final class TimeTravelClause {
                 int eol = sql.indexOf('\n', i);
                 i = eol < 0 ? n : eol + 1;
             } else if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
-                int close = sql.indexOf("*/", i + 2);
-                i = close < 0 ? n : close + 2;
+                int depth = 1;
+                i += 2;
+                while (i < n && depth > 0) {
+                    if (i + 1 < n && sql.charAt(i) == '/' && sql.charAt(i + 1) == '*') {
+                        depth++;
+                        i += 2;
+                    } else if (i + 1 < n && sql.charAt(i) == '*' && sql.charAt(i + 1) == '/') {
+                        depth--;
+                        i += 2;
+                    } else {
+                        i++;
+                    }
+                }
             } else if (c == '\'' || c == '"') {
                 int j = i + 1;
                 while (j < n) {
