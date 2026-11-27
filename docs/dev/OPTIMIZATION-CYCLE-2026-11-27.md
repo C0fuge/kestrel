@@ -53,6 +53,38 @@ also pass with the experiment enabled (148 reported tests, three skipped).
 Compile, Checkstyle and SpotBugs passed for the server and its reactor dependencies
 before the final telemetry-only edits. Remote checks validate the final branch.
 
+## Verified cloud screening
+
+[Run 46020524364](https://github.com/C0fuge/kestrel/actions/runs/46020524364) passed
+three independent variants, each with three alternating paired rounds on four pinned
+logical CPUs. A is `90542012`; B is `2df1ce6a`. The same measurement harness was used
+on both sides. JVM/process metrics include the embedded clients.
+
+| Variant | Clients | QPS ratio | p95 ratio | p99 ratio | CPU/query ratio |
+| --- | --- | --- | --- | --- | --- |
+| Integer literal reuse | 1 | 1.144 | 0.895 | 0.880 | 0.904 |
+| Integer literal reuse | 8 | 1.112 | 0.920 | 0.938 | 0.891 |
+| Integer literal reuse | 32 | 1.104 | 0.889 | 0.908 | 0.900 |
+| Producer cap 2 | 8 | 0.892 | 1.055 | 1.091 | 1.021 |
+| Producer cap 2 | 32 | 0.827 | 0.997 | 0.962 | 1.092 |
+| Producer cap 4 | 8 | 0.989 | 1.003 | 0.984 | 1.012 |
+| Producer cap 4 | 32 | 0.903 | 0.926 | 0.877 | 1.079 |
+
+These are medians of paired candidate/baseline ratios, not comparisons of absolute
+QPS across runners. Integer reuse improves both point-query and filtered-count p99
+separately; its median peak process RSS ratio is 0.993. All 87,852 overlapping answers
+of that variant match. All three variants pass their answer gates. Each variant's
+193 raw files was downloaded and verified against its SHA256SUMS manifest.
+
+The pinned result confirms the reuse candidate's benefit in this workload. It does
+not prove why earlier local quota-only tails worsened: hardware and scheduling differ.
+Neither producer cap justifies a universal default on short queries: cap 2 loses
+throughput, while cap 4 trades throughput for some tail improvement at 32 clients.
+Mixed-load and TPC-H checks remain necessary before changing defaults.
+
+[Fast Dev CI 46020549681](https://github.com/C0fuge/kestrel/actions/runs/46020549681)
+passed 148 focused tests with no skips and Checkstyle on the published screening branch.
+
 ## Measurement support and next experiments
 
 `SmallQueryThroughputPerfTest` now accepts `-Dperf.output=<fresh-directory>` and
@@ -69,5 +101,11 @@ shared DuckDB's node-wide pool and is not a substitute for this experiment.
 
 Cloud screening should alternate A/B order on one runner, pin equal resources,
 retain every raw log/profile/sample as an artifact and fail on incorrect answers.
-Next: pinned literal-reuse A/B; then cap 0/2/4 and a mixed small/heavy/slow-reader
-workload before promoting any default. No TPC-H or full-scan run is claimed here.
+The next cycle interleaves a deterministic bounded customer-key self join with the
+small queries using `-Dperf.heavyEvery=8`, identically on A and B. Point and count
+slots alternate among non-heavy queries so client count does not introduce a parity
+bias. Reports retain observed proportions and per-kind tails. Explicit failed-sample
+status prevents execution or answer errors from being ranked as fast queries;
+global deadline and synchronized snapshots preserve partial evidence.
+TPC-H and slow-reader checks follow before promoting any default. No TPC-H or
+full-scan run is claimed here.
