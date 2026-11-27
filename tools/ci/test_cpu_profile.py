@@ -25,7 +25,7 @@ def sample(tid=1, name="CpuProfileProbe", method="main", java_id=1):
 def events(engine="ctimer", event="ctimer"):
     """Build recording settings that identify a real explicit CPU timer."""
     settings = {"version": "4.6", "engine": engine, "event": event,
-                "interval": "10000000", "cstack": "dwarf"}
+                "interval": "10000000", "cstack": "dwarf", "clock": "monotonic"}
     return [{"type": "jdk.ActiveSetting", "values": {"name": k, "value": v}}
             for k, v in settings.items()] + [{"type": "jdk.ExecutionSample", "values": sample()}]
 
@@ -50,6 +50,17 @@ class CpuProfileTest(unittest.TestCase):
         wrong[3]["values"]["value"] = "1000"
         for invalid in (empty, wrong):
             with self.assertRaises(ValueError):
+                PROFILE["inspect_cpu_events"](invalid, "ctimer")
+
+    def test_missing_wrong_or_conflicting_clock_is_rejected(self):
+        valid = events()
+        missing = [event for event in valid if event["values"].get("name") != "clock"]
+        wrong = [event if event["values"].get("name") != "clock" else
+                 {"type": "jdk.ActiveSetting", "values": {"name": "clock", "value": "tsc"}}
+                 for event in valid]
+        conflicting = valid + [{"type": "jdk.ActiveSetting", "values": {"name": "clock", "value": "tsc"}}]
+        for invalid in (missing, wrong, conflicting):
+            with self.assertRaisesRegex(ValueError, "clock"):
                 PROFILE["inspect_cpu_events"](invalid, "ctimer")
 
     def test_native_busy_waiting_and_symbol_gate(self):

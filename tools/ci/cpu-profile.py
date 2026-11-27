@@ -161,7 +161,7 @@ def inspect_cpu_events(events, expected):
             raise ValueError("Wall clock samples are not an on-CPU profile")
     engine = "ctimer" if expected == "ctimer" else "perf_events"
     for key, required in (("engine", engine), ("event", expected), ("version", VERSION),
-                          ("interval", "10000000")):
+                          ("interval", "10000000"), ("clock", "monotonic")):
         if settings.get(key) != {required}:
             raise ValueError(f"Wrong or missing actual CPU setting {key}: {settings.get(key)}")
     if "wall" in settings or settings.get("cstack") != {"dwarf"}:
