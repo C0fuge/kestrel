@@ -41,3 +41,33 @@ workload with a heavy join every eighth query. Preserve all raw query samples, J
 resources, gate counters, commands and versions; compare answer checksums and per-kind
 tails as well as QPS and process CPU/query. Separate runners require paired ratios
 within each workload, rather than comparisons of their absolute QPS.
+
+## Verified screening result
+
+The [short-query run](https://github.com/C0fuge/kestrel/actions/runs/46030841408)
+and [mixed run](https://github.com/C0fuge/kestrel/actions/runs/46030841640) completed
+on revision `9eb0fedc`. Each compares that same revision with the flag off/on;
+integer reuse and admission are off. Values are medians of paired on/off ratios.
+
+| Workload | Clients | QPS | CPU/query | Allocation sample weight/query |
+| --- | --- | --- | --- | --- |
+| Short | 1 | 1.017 | 0.998 | 0.966 |
+| Short | 8 | 1.016 | 0.983 | 0.956 |
+| Short | 32 | 1.010 | 0.989 | 0.958 |
+| Mixed | 1 | 0.961 | 1.069 | 0.971 |
+| Mixed | 8 | 0.990 | 1.009 | 0.973 |
+| Mixed | 32 | 1.007 | 0.994 | 0.966 |
+
+Schema serialization disappears from ranked allocation samples with reuse enabled.
+The small allocation reduction does not consistently improve CPU, tails or observed
+GC time. At 32 clients the short-workload point-query p99 worsens in all three pairs
+(median ratio 1.024). Mixed single-client QPS and CPU/query worsen in both pairs;
+point/count/join p99 ratios there are 1.008/1.021/1.065. These results do not justify
+enabling this cache as a general default. The prototype stays on its research branch.
+
+All 248,644 ranked samples succeeded and 123,074 overlapping typed answers matched.
+All ten measured containers exited successfully without OOM. The 194 short and
+146 mixed artifact files were downloaded and verified against their manifests and
+the GitHub archive digests. Raw archives and calibrated JFR analysis are retained.
+Allocation weights are statistical; the encoding-byte bounds do not measure total
+heap retained by the schema key graphs. No per-query-kind CPU attribution is claimed.
