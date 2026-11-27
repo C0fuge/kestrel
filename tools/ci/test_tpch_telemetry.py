@@ -311,6 +311,31 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertTrue(all(value["clients"] == 1 for value in plan["labels"].values()))
             self.assertEqual(2, plan["rounds"])
 
+    def test_plan_accepts_omitted_empty_dispatch_inputs(self):
+        """GitHub's sparse toJSON payload must preserve requested labels without requiring empty keys."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            valid_run(directory)
+            required = {"rounds": "2", "clients": "1", "client": "adbc", "quick": True, "plain": False}
+            cases = (
+                ({}, ["default"]),
+                ({"extra": "-Darrowflight.experimental.integerLiteralParameters=true",
+                  "more": "-DresourceProfile=speed|-DresourceProfile=speed -Darrowflight.experimental.integerLiteralParameters=true"},
+                 ["default", "extra", "more1", "more2"]),
+                ({"baseline": "requested-ref"}, ["default", "baseline"]),
+                ({"baseline": "", "extra": "", "more": "", "s3latency": ""}, ["default"]),
+            )
+            for optional, labels in cases:
+                with self.subTest(optional=optional):
+                    requested = {**required, **optional}
+                    (directory / "inputs.json").write_text(json.dumps(requested))
+                    TELEMETRY["write_plan"](directory)
+                    plan = json.loads((directory / "run-plan.json").read_text())
+                    self.assertEqual(labels, list(plan["labels"]))
+                    self.assertTrue(all(value["clients"] == 1 for value in plan["labels"].values()))
+                    self.assertEqual(2, plan["rounds"])
+                    self.assertEqual(requested, json.loads((directory / "inputs.json").read_text()))
+
     def test_python_clients_preserve_checksums_and_actual_table_chunks(self):
         """Both clients report the same checksum, referenced buffer size and observed table chunks."""
         table = mock.Mock(num_rows=2, nbytes=40)

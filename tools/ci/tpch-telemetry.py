@@ -30,16 +30,18 @@ def write_plan(directory):
     if rounds < 1 or clients < 1:
         raise ValueError("TPC-H requires positive rounds and clients")
     labels = ["default"]
-    if clients == 1 and str(inputs["quick"]).lower() != "true":
+    if clients == 1 and str(inputs.get("quick", False)).lower() != "true":
         labels.append("threads4")
-    labels += [label for label in ("baseline", "extra") if inputs[label]]
-    if inputs["more"]:
+    # GitHub omits empty optional dispatch strings from toJSON(inputs).
+    labels += [label for label in ("baseline", "extra") if inputs.get(label, "")]
+    more = inputs.get("more", "")
+    if more:
         # Bash read -a preserves interior empty fields, but drops the final delimiter's empty field.
-        configs = inputs["more"].split("|")
+        configs = more.split("|")
         if not configs[-1]:
             configs.pop()
         labels += [f"more{index + 1}" for index in range(len(configs))]
-    if str(inputs["plain"]).lower() == "true":
+    if str(inputs.get("plain", False)).lower() == "true":
         labels.append("plain")
     queries = sorted(path.stem for path in (directory / "queries").glob("*.sql"))
     if not queries:
