@@ -1,0 +1,83 @@
+name: Diagnostic CPU profile
+
+on:
+  push:
+    branches: ["perf/cpu-profile-*"]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Baseline source commit (empty = dispatched ref); no A/B or promotion"
+        type: string
+        default: ""
+      event:
+        description: "Explicit CPU timer; perf cpu-clock fails if unavailable (no privilege changes)"
+        type: choice
+        options: [ctimer, cpu-clock]
+        default: ctimer
+      seconds:
+        description: "Measured seconds at each of 8 and 32 clients (5..60)"
+        type: string
+        default: "5"
+      preflight_only:
+        description: "Run only the tiny Java/unattached-pthread CPU versus waiting check"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-cpu-profile-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+          cache-dependency-path: source/**/pom.xml
+      - name: Test CPU profile gates
+        run: python3 -m unittest discover -s control/tools/ci -p 'test_cpu_profile.py' -v
+      - name: Verify CPU timer and profile mixed baseline
+        timeout-minutes: 25
+        env:
+          PROFILE_EVENT: ${{ inputs.event || 'ctimer' }}
+          PROFILE_SECONDS: ${{ inputs.seconds || '5' }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only || false }}
+        run: |
+          extra=()
+          if [ "$PREFLIGHT_ONLY" = true ]; then extra+=(--preflight-only); fi
+          python3 control/tools/ci/cpu-profile.py --source source \
+            --output "$RUNNER_TEMP/cpu-profile" --event "$PROFILE_EVENT" \
+            --seconds "$PROFILE_SECONDS" "${extra[@]}"
+      - name: Publish diagnostic scope
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/cpu-profile/summary.md" ]; then
+            cat "$RUNNER_TEMP/cpu-profile/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'CPU collection incomplete or preflight only; inspect all retained raw files. No performance ranking.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve every profile and failed attempt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cpu-profile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cpu-profile
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
