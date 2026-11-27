@@ -6,9 +6,11 @@ import io
 import os
 from pathlib import Path
 import runpy
+import signal
 import sys
 import tempfile
 import tarfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -38,6 +40,20 @@ def events(engine="ctimer", event="ctimer"):
                 "interval": "10000000", "cstack": "dwarf", "clock": "monotonic"}
     return [{"type": "jdk.ActiveSetting", "values": {"name": k, "value": v}}
             for k, v in settings.items()] + [{"type": "jdk.ExecutionSample", "values": sample()}]
+
+
+def warmup_fixture(folder, clients=32, mode="per-step", configured=20, seconds=30):
+    """Write independent expected plan rows and successful per-kind raw samples."""
+    label = f"warmup-step-1-c{clients}" if mode == "per-step" else "warmup-c8"
+    duration = configured or max(3, seconds // 3)
+    warm_clients = clients if mode == "per-step" else 8
+    (folder / "warmup-plan.csv").write_text(
+        "warmup_mode,configured_warmup_seconds,step,label,clients,seconds,measured\n"
+        f"{mode},{configured},1,{label},{warm_clients},{duration},false\n"
+        f"{mode},{configured},2,c{clients},{clients},{seconds},true\n")
+    for name in (label, f"c{clients}"):
+        (folder / (name + ".csv")).write_text("query_kind,ok\n0,1\n1,1\n2,1\n")
+    return label
 
 
 class CpuProfileTest(unittest.TestCase):
@@ -80,6 +96,182 @@ class CpuProfileTest(unittest.TestCase):
                         flags + ["-XX:MaxHeapSize=4294967296"], flags[:-1] + ["-Duser.home=/elsewhere"]):
             with self.subTest(flags=invalid), self.assertRaises(ValueError):
                 PROFILE["check_jvm_arguments"](invalid)
+
+    def test_fresh_jvm_plans_reuse_common_bounds_and_first_step_labels(self):
+        plans = PROFILE["workload_plan"](30, 20, "per-step")
+        for clients in (8, 32):
+            plan = plans[f"c{clients}"]
+            self.assertEqual([{"label": f"warmup-step-1-c{clients}", "clients": clients, "seconds": 20}],
+                             plan["warmup_plan"]["steps"])
+            self.assertEqual({"nominal_workload_seconds": 50, "drain_seconds": 60, "setup_seconds": 20,
+                              "planned_work_seconds": 130}, plan["workload_budget"])
+            self.assertEqual(240, plan["command_timeout_seconds"])
+        self.assertEqual([{"label": "warmup-c8", "clients": 8, "seconds": 10}],
+                         PROFILE["workload_plan"](30, 0, "legacy")["c32"]["warmup_plan"]["steps"])
+        with self.assertRaisesRegex(ValueError, "240-second fork"):
+            PROFILE["workload_plan"](60, 120, "per-step")
+
+    def test_actual_plan_and_new_raw_labels_are_required_for_custom_warmup(self):
+        for clients in (8, 32):
+            with self.subTest(clients=clients), tempfile.TemporaryDirectory() as temporary:
+                folder = Path(temporary)
+                label = warmup_fixture(folder, clients)
+                result = PROFILE["validate_answers"](folder, clients, 30, 20, "per-step")
+                self.assertEqual([label, f"c{clients}"], result["raw_answer_labels"])
+                self.assertEqual("verified CSV", result["actual_warmup_plan"])
+                path = folder / "warmup-plan.csv"
+                valid = path.read_text()
+                path.write_text(valid.replace(",20,false", ",3,false"))
+                with self.assertRaisesRegex(ValueError, "Actual warmup plan differs"):
+                    PROFILE["validate_answers"](folder, clients, 30, 20, "per-step")
+                path.write_text(valid)
+                (folder / (label + ".csv")).rename(folder / "warmup-c8.csv")
+                with self.assertRaises(FileNotFoundError):
+                    PROFILE["validate_answers"](folder, clients, 30, 20, "per-step")
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, "warmup-plan.csv"):
+                    PROFILE["validate_answers"](folder, clients, 30, 20, "per-step")
+
+    def test_default_old_source_and_explicit_new_default_plan_both_work(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            label = warmup_fixture(folder, mode="legacy", configured=0)
+            result = PROFILE["validate_answers"](folder, 32, 30)
+            self.assertEqual("verified CSV", result["actual_warmup_plan"])
+            (folder / "warmup-plan.csv").unlink()
+            result = PROFILE["validate_answers"](folder, 32, 30)
+            self.assertEqual("legacy source; no explicit plan CSV", result["actual_warmup_plan"])
+            self.assertEqual(["warmup-c8", "c32"], result["raw_answer_labels"])
+            for content, error in (("query_kind,ok\n0,0\n1,1\n2,1\n", "unsuccessful"),
+                                   ("query_kind,ok\n0,1\n1,1\n", "query kinds")):
+                (folder / (label + ".csv")).write_text(content)
+                with self.assertRaisesRegex(ValueError, error):
+                    PROFILE["validate_answers"](folder, 32, 30)
+
+    def test_unsupported_invalid_and_oversized_requests_fail_before_download_or_build(self):
+        function_globals = PROFILE["main"].__globals__
+        for options, error in ((["--warmup-mode", "per-step"], "updated.*harness"),
+                               (["--warmup-seconds", "121"], "0..120"),
+                               (["--warmup-mode", "unknown"], "legacy or per-step"),
+                               (["--seconds", "60", "--warmup-seconds", "120"], "240-second fork")):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = ["profile", "--source", str(root / "old-source"), "--output", str(root / "raw"), *options]
+                with patch.object(sys, "argv", args), patch.dict(function_globals,
+                        {"install_profiler": lambda *args: self.fail("Unexpected download"),
+                         "run": lambda *args, **kwargs: self.fail("Unexpected command")}):
+                    with self.assertRaisesRegex(ValueError, error):
+                        PROFILE["main"]()
+                self.assertFalse((root / "raw").exists())
+
+    def test_main_passes_common_controls_and_records_scope_for_each_fresh_jvm(self):
+        function_globals = PROFILE["main"].__globals__
+        for custom in (False, True):
+            with self.subTest(custom=custom), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "source"
+                harness = source / PROFILE["SCREEN"]["HARNESS"]
+                harness.mkdir(parents=True)
+                (harness / "SmallQueryThroughputPerfTest.java").write_text(
+                    "supports perf.warmupMode" if custom else "historical harness")
+                (harness / "PerfRunArtifacts.java").write_text("collector fixture")
+                output = root / "raw"
+                args = ["profile", "--source", str(source), "--output", str(output), "--seconds", "30"]
+                if custom:
+                    args += ["--warmup-mode", "per-step", "--warmup-seconds", "20"]
+                commands, validations = [], []
+                def run(command, folder, label, **kwargs):
+                    commands.append((command, kwargs))
+                    if label == "java-version":
+                        (folder / "java-version.log").write_text('openjdk version "21.0.12"\n')
+                def validate(folder, *values):
+                    validations.append(values)
+                    return folder / "cpu-fixture.jfr"
+                with patch.object(sys, "argv", args), patch.dict(function_globals,
+                        {"run": run, "install_profiler": lambda *args: root / "profiler",
+                         "preflight": lambda *args: None, "start_work_deadline": lambda: None,
+                         "stop_work_alarm": lambda *args: None,
+                         "write_wrapper": lambda folder, *args: folder / "wrapper",
+                         "ProcessCollector": lambda *args: type("Collector", (), {
+                             "sample": lambda self: None, "close": lambda self: None})(),
+                         "validate_trial": validate, "symbol_metadata": lambda *args: None}), \
+                        patch.dict(function_globals["SYSTEM"], {"save_host_snapshot": lambda *args: None}), \
+                        patch.object(os, "sched_getaffinity", return_value={0, 1, 2, 3}), \
+                        patch("shutil.which", return_value="/synthetic-jdk/bin/java"):
+                    PROFILE["main"]()
+                mode, configured = ("per-step", 20) if custom else ("legacy", 0)
+                self.assertEqual([(8, "ctimer", 30, configured, mode), (32, "ctimer", 30, configured, mode)], validations)
+                forks = [(command, kwargs) for command, kwargs in commands if "-Pperf" in command]
+                self.assertEqual(2, len(forks))
+                for command, kwargs in forks:
+                    actual = [arg for arg in command if arg.startswith("-Dperf.warmup")]
+                    self.assertEqual(["-Dperf.warmupSeconds=20", "-Dperf.warmupMode=per-step"] if custom else [], actual)
+                    self.assertEqual(240, kwargs["timeout"])
+                plan = json.loads((output / "plan.json").read_text())
+                self.assertEqual(1440, plan["work_deadline_seconds"])
+                self.assertEqual(1500, plan["workflow_step_seconds"])
+                self.assertEqual(2100, plan["workflow_job_seconds"])
+                self.assertEqual(mode, plan["trials"]["c32"]["warmup_plan"]["mode"])
+                self.assertIn("No setting guarantees steady state", (output / "summary.md").read_text())
+
+    def test_deadline_alarm_interrupts_blocking_work_and_is_restored(self):
+        function_globals = PROFILE["start_work_deadline"].__globals__
+        with patch.dict(function_globals, {"WORK_DEADLINE": None, "WORK_BUDGET_SECONDS": .05}):
+            before = signal.getsignal(signal.SIGALRM)
+            previous = PROFILE["start_work_deadline"]()
+            try:
+                with self.assertRaisesRegex(TimeoutError, "Overall CPU diagnostic"):
+                    time.sleep(5)
+            finally:
+                PROFILE["stop_work_alarm"](previous)
+                function_globals["WORK_DEADLINE"] = None
+            self.assertEqual(before, signal.getsignal(signal.SIGALRM))
+            self.assertEqual(0, signal.getitimer(signal.ITIMER_REAL)[0])
+
+    def test_deadline_respects_an_existing_timer_and_rearms_early_delivery(self):
+        function_globals = PROFILE["start_work_deadline"].__globals__
+        with patch.dict(function_globals, {"WORK_DEADLINE": None}), \
+                patch("signal.getitimer", return_value=(1, 0)):
+            with self.assertRaisesRegex(ValueError, "already active"):
+                PROFILE["start_work_deadline"]()
+        with patch.dict(function_globals, {"WORK_DEADLINE": time.monotonic() + 30}), \
+                patch("signal.setitimer") as timer:
+            PROFILE["deadline_alarm"](signal.SIGALRM, None)
+            self.assertEqual(signal.ITIMER_REAL, timer.call_args.args[0])
+            self.assertGreater(timer.call_args.args[1], 0)
+            self.assertLessEqual(timer.call_args.args[1], 30)
+
+    def test_expired_deadline_preserves_native_extraction_failures_without_launching(self):
+        function_globals = PROFILE["run"].__globals__
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            library = "a" * 64 + "-fixture.so"
+            (folder / library).write_bytes(b"retained library")
+            with patch.dict(function_globals, {"WORK_DEADLINE": time.monotonic() - 1}), \
+                    patch("subprocess.Popen") as launch:
+                PROFILE["symbol_metadata"](folder)
+            launch.assert_not_called()
+            errors = json.loads((folder / "extraction-errors.json").read_text())
+            self.assertEqual(2, len(errors))
+            for name in ("symbols", "elf"):
+                status = json.loads((folder / (library + "-" + name + ".status.json")).read_text())
+                self.assertIsNone(status["exit_code"])
+                self.assertIn("Overall CPU diagnostic", status["failure"])
+            self.assertEqual(b"retained library", (folder / library).read_bytes())
+
+    def test_remaining_work_clamps_an_inflight_command_and_retains_partial_output(self):
+        function_globals = PROFILE["run"].__globals__
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            with patch.dict(function_globals, {"WORK_DEADLINE": time.monotonic() + .15}):
+                with self.assertRaises(TimeoutError):
+                    PROFILE["run"]([sys.executable, "-u", "-c", "import time;print('partial');time.sleep(30)"],
+                                   folder, "limited", timeout=120)
+            status = json.loads((folder / "limited.status.json").read_text())
+            self.assertEqual(120, status["requested_timeout_seconds"])
+            self.assertLessEqual(status["effective_timeout_seconds"], .15)
+            self.assertEqual(-15, status["exit_code"])
+            self.assertEqual("partial\n", (folder / "limited.log").read_text())
 
     def test_target_pid_selects_exact_recording_and_preserves_auxiliary_files(self):
         with tempfile.TemporaryDirectory() as temporary:

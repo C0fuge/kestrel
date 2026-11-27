@@ -18,6 +18,15 @@ on:
         description: "Measured seconds at each of 8 and 32 clients (5..60)"
         type: string
         default: "5"
+      warmup_mode:
+        description: "Warmup placement in each fresh JVM; no steady-state guarantee"
+        type: choice
+        options: [legacy, per-step]
+        default: legacy
+      warmup_seconds:
+        description: "Warmup seconds (0 = legacy automatic duration; explicit 1..120, subject to fork budget)"
+        type: string
+        default: "0"
       preflight_only:
         description: "Run only the tiny Java/unattached-pthread CPU versus waiting check"
         type: boolean
@@ -51,19 +60,24 @@ jobs:
           cache: maven
           cache-dependency-path: source/**/pom.xml
       - name: Test CPU profile gates
-        run: python3 -m unittest discover -s control/tools/ci -p 'test_cpu_profile.py' -v
+        run: |
+          python3 -m unittest discover -s control/tools/ci -p 'test_cpu_profile.py' -v
+          python3 -m unittest discover -s control/tools/ci -p 'test_optimization_screen.py' -v
       - name: Verify CPU timer and profile mixed baseline
         timeout-minutes: 25
         env:
           PROFILE_EVENT: ${{ inputs.event || 'ctimer' }}
           PROFILE_SECONDS: ${{ inputs.seconds || '5' }}
+          PROFILE_WARMUP_MODE: ${{ inputs.warmup_mode || 'legacy' }}
+          PROFILE_WARMUP_SECONDS: ${{ inputs.warmup_seconds || '0' }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only || false }}
         run: |
           extra=()
           if [ "$PREFLIGHT_ONLY" = true ]; then extra+=(--preflight-only); fi
           python3 control/tools/ci/cpu-profile.py --source source \
             --output "$RUNNER_TEMP/cpu-profile" --event "$PROFILE_EVENT" \
-            --seconds "$PROFILE_SECONDS" "${extra[@]}"
+            --seconds "$PROFILE_SECONDS" --warmup-mode "$PROFILE_WARMUP_MODE" \
+            --warmup-seconds "$PROFILE_WARMUP_SECONDS" "${extra[@]}"
       - name: Publish diagnostic scope
         if: always()
         run: |

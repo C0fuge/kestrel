@@ -111,10 +111,27 @@ class OptimizationScreenTest(unittest.TestCase):
                          "--output", str(root / "output")]
             with mock.patch.dict(SCREEN.os.environ, {"SCREEN_WARMUP_MODE": "per-step", "SCREEN_ROUNDS": "1"}, clear=True), \
                     mock.patch("sys.argv", arguments), mock.patch.object(SCREEN, "run_container") as runner:
-                with self.assertRaisesRegex(ValueError, "updated candidate harness"):
+                with self.assertRaisesRegex(ValueError, "updated.*harness"):
                     SCREEN.main()
             runner.assert_not_called()
             self.assertFalse((root / "output").exists())
+
+    def test_shared_single_jvm_budget_and_legacy_arguments(self):
+        """Other collectors reuse the same workload/drain/setup contract without changing default flags."""
+        self.assertEqual({"nominal_workload_seconds": 50, "drain_seconds": 60, "setup_seconds": 20,
+                          "planned_work_seconds": 130}, SCREEN.trial_budget(30, [32], 20, "per-step"))
+        self.assertEqual([], SCREEN.warmup_arguments(0, "legacy"))
+        self.assertEqual(["-Dperf.warmupSeconds=20", "-Dperf.warmupMode=per-step"],
+                         SCREEN.warmup_arguments(20, "per-step"))
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            SCREEN.require_warmup_harness(source, 0, "legacy")
+            with self.assertRaisesRegex(ValueError, "updated.*harness"):
+                SCREEN.require_warmup_harness(source, 20, "per-step")
+            harness = source / SCREEN.HARNESS / "SmallQueryThroughputPerfTest.java"
+            harness.parent.mkdir(parents=True)
+            harness.write_text("supports perf.warmupMode")
+            SCREEN.require_warmup_harness(source, 20, "per-step")
 
     def test_numeric_container_user_has_native_unix_identity(self):
         """Hadoop's native Unix login must resolve the runner UID even when the image cannot."""
