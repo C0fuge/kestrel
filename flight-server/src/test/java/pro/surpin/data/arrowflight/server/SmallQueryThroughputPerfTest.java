@@ -19,6 +19,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.arrow.flight.CallOption;
@@ -236,7 +237,7 @@ class SmallQueryThroughputPerfTest {
      * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
-    private static void run(FlightSqlClient client, CallOption header, boolean statements,
+    static void run(FlightSqlClient client, CallOption header, boolean statements,
             int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
         int heavyEvery = Integer.getInteger("perf.heavyEvery", 0);
         if (heavyEvery < 0) {
@@ -252,13 +253,14 @@ class SmallQueryThroughputPerfTest {
         long waitNanos0 = gate == null ? 0 : gate.waitNanos();
         long end = System.nanoTime() + seconds * 1_000_000_000L;
         long wall0 = System.nanoTime();
-        List<StringBuilder> samples = new ArrayList<>();
+        List<StringBuffer> samples = new ArrayList<>();
+        Throwable failure = null;
         try {
             List<Future<long[]>> futures = new ArrayList<>();
             for (int c = 0; c < clients; c++) {
                 int base = c * 100_003;
                 int thread = c;
-                StringBuilder raw = new StringBuilder();
+                StringBuffer raw = new StringBuffer();
                 samples.add(raw);
                 futures.add(pool.submit(() -> {
                     long[] times = new long[1 << 16];
@@ -269,32 +271,32 @@ class SmallQueryThroughputPerfTest {
                         QueryCase query = queryFor(i, thread, k, heavyEvery);
                         String sql = query.sql();
                         QueryRead result;
-                        if (statements) {
-                            result = read(client, client.execute(sql, header), header);
-                        } else {
-                            try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
-                                result = read(client, prepared.execute(header), header);
+                        try {
+                            if (statements) {
+                                result = read(client, client.execute(sql, header), header);
+                            } else {
+                                try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
+                                    result = read(client, prepared.execute(header), header);
+                                }
                             }
+                        } catch (Exception e) {
+                            String error = e.getClass().getSimpleName();
+                            appendSample(raw, thread, i, query.kind(), k, t0 - wall0,
+                                    System.nanoTime() - t0, null, error.isEmpty() ? "Exception" : error);
+                            throw e;
                         }
                         long elapsed = System.nanoTime() - t0;
                         times[n++] = elapsed;
-                        if (PerfRunArtifacts.enabled()) {
-                            raw.append(thread).append(',').append(i).append(',').append(query.kind())
-                                    .append(',').append(k).append(',').append(t0 - wall0)
-                                    .append(',').append(elapsed).append(',').append(result.rows())
-                                    .append(',').append(result.checksum()).append(',').append(result.bytes())
-                                    .append(',').append(result.batches()).append('\n');
-                        }
+                        String error = result.rows() == 1 && result.first() == query.expectedFirst()
+                                ? "" : "answer_mismatch";
+                        appendSample(raw, thread, i, query.kind(), k, t0 - wall0, elapsed, result, error);
                         assertEquals(1, result.rows(), sql);
                         assertEquals(query.expectedFirst(), result.first(), sql);
                     }
                     return Arrays.copyOf(times, n);
                 }));
             }
-            List<long[]> all = new ArrayList<>();
-            for (Future<long[]> f : futures) {
-                all.add(f.get());
-            }
+            List<long[]> all = awaitClients(futures, end + TimeUnit.SECONDS.toNanos(30));
             double wall = (System.nanoTime() - wall0) / 1e9;
             long cpu = processCpu() - cpu0;
             if (gate != null) {
@@ -337,13 +339,88 @@ class SmallQueryThroughputPerfTest {
                     .forEach(e -> line.append(String.format(Locale.ROOT, " %s %.2f", e.getKey(),
                             e.getValue() / 1e6 / queries)));
             System.out.println(line);
+        } catch (Exception | Error e) {
+            failure = e;
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw e;
         } finally {
-            pool.shutdownNow();
-            if (!pool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+            finishClients(pool, samples, print ? "c" + clients : "warmup-c" + clients, failure);
+        }
+    }
+
+    /**
+     * Collects answers against one global deadline, including the final in-flight queries.
+     *
+     * @param futures submitted client tasks
+     * @param deadline absolute monotonic deadline
+     * @return completed latency arrays
+     * @throws Exception when a client fails, times out or the caller is interrupted
+     */
+    static List<long[]> awaitClients(List<Future<long[]>> futures, long deadline) throws Exception {
+        List<long[]> all = new ArrayList<>();
+        for (Future<long[]> future : futures) {
+            all.add(future.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+        }
+        return all;
+    }
+
+    /**
+     * Stops client tasks and preserves complete sample rows even when shutdown fails.
+     *
+     * @param pool client executor
+     * @param samples synchronized per-client sample buffers
+     * @param label workload step
+     * @param failure original failure, or null
+     * @throws Exception when cleanup fails without an original failure
+     */
+    static void finishClients(ExecutorService pool, List<StringBuffer> samples,
+            String label, Throwable failure) throws Exception {
+        pool.shutdownNow();
+        try {
+            if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Performance clients did not stop");
             }
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            if (failure == null) {
+                throw e;
+            }
+            failure.addSuppressed(e);
+        } finally {
             if (PerfRunArtifacts.enabled()) {
-                PerfRunArtifacts.writeSamples(print ? "c" + clients : "warmup-c" + clients, samples);
+                PerfRunArtifacts.writeSamples(label, samples);
+            }
+        }
+    }
+
+    /**
+     * Appends one complete success or failure sample when raw output is enabled.
+     *
+     * @param raw synchronized client buffer
+     * @param thread client index
+     * @param sequence query index
+     * @param kind query kind
+     * @param key generated key
+     * @param start start relative to this step
+     * @param elapsed query latency
+     * @param result consumed answer, or null after an execution failure
+     * @param error empty on success, otherwise a safe error type
+     */
+    private static void appendSample(StringBuffer raw, int thread, int sequence, int kind, long key,
+            long start, long elapsed, QueryRead result, String error) {
+        if (PerfRunArtifacts.enabled()) {
+            synchronized (raw) {
+                raw.append(thread).append(',').append(sequence).append(',').append(kind)
+                        .append(',').append(key).append(',').append(start).append(',').append(elapsed)
+                        .append(',').append(result == null ? -1 : result.rows())
+                        .append(',').append(result == null ? 0 : result.checksum())
+                        .append(',').append(result == null ? -1 : result.bytes())
+                        .append(',').append(result == null ? -1 : result.batches())
+                        .append(',').append(error.isEmpty() ? 1 : 0).append(',').append(error).append('\n');
             }
         }
     }
@@ -358,13 +435,15 @@ class SmallQueryThroughputPerfTest {
      * @return query kind, SQL and exact first value
      */
     static QueryCase queryFor(int sequence, int thread, long key, int heavyEvery) {
-        if (heavyEvery > 0 && Math.floorMod((long) sequence + thread, heavyEvery) == heavyEvery - 1) {
+        long slot = (long) sequence + thread;
+        if (heavyEvery > 0 && Math.floorMod(slot, heavyEvery) == heavyEvery - 1) {
             long bound = Math.min(key, 5000);
             return new QueryCase(2, "SELECT count(*) FROM s.orders a JOIN s.orders b"
                     + " ON a.o_custkey = b.o_custkey WHERE a.o_orderkey < " + bound,
                     bound * (ROWS / 1000L));
         }
-        return (sequence & 1) == 0
+        long smallSlot = heavyEvery == 0 ? sequence : slot - slot / heavyEvery;
+        return (smallSlot & 1) == 0
                 ? new QueryCase(0, "SELECT * FROM s.orders WHERE o_orderkey = " + key, key)
                 : new QueryCase(1, "SELECT count(*) FROM s.orders WHERE o_orderkey < " + key, key);
     }

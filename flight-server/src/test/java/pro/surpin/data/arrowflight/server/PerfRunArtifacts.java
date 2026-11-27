@@ -94,12 +94,12 @@ final class PerfRunArtifacts implements AutoCloseable {
      * @param samples one buffer per client
      * @throws IOException when writing fails
      */
-    static void writeSamples(String label, List<StringBuilder> samples) throws IOException {
+    static void writeSamples(String label, List<StringBuffer> samples) throws IOException {
         Path path = Path.of(System.getProperty("perf.output"), label + ".csv");
         try (BufferedWriter writer = Files.newBufferedWriter(path, StandardOpenOption.CREATE_NEW)) {
-            writer.write("thread,sequence,query_kind,key,start_ns,latency_ns,rows,checksum,arrow_bytes,batches\n");
-            for (StringBuilder sample : samples) {
-                writer.append(sample);
+            writer.write("thread,sequence,query_kind,key,start_ns,latency_ns,rows,checksum,arrow_bytes,batches,ok,error_type\n");
+            for (StringBuffer sample : samples) {
+                writer.append(sample.toString());
             }
         }
     }

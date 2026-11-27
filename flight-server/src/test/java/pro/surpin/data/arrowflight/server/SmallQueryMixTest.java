@@ -17,6 +17,12 @@ class SmallQueryMixTest {
     void disabledMixKeepsTheOriginalQueries() {
         var point = SmallQueryThroughputPerfTest.queryFor(0, 7, 42, 0);
         var count = SmallQueryThroughputPerfTest.queryFor(1, 7, 42, 0);
+        for (int client = 0; client < 8; client++) {
+            for (int sequence = 0; sequence < 16; sequence++) {
+                assertEquals(sequence & 1,
+                        SmallQueryThroughputPerfTest.queryFor(sequence, client, 42, 0).kind());
+            }
+        }
         assertEquals(0, point.kind());
         assertEquals("SELECT * FROM s.orders WHERE o_orderkey = 42", point.sql());
         assertEquals(42L, point.expectedFirst());
@@ -41,6 +47,22 @@ class SmallQueryMixTest {
             assertEquals(3, heavy);
         }
         assertEquals(2, SmallQueryThroughputPerfTest.queryFor(0, 0, 7, 1).kind());
+    }
+
+    /** Verifies balanced non-heavy queries for one client and every client phase. */
+    @Test
+    void smallQueriesStayBalancedAcrossCompleteMixedCycles() {
+        for (int interval : new int[] {1, 2, 3, 4, 7}) {
+            for (int client = 0; client < 8; client++) {
+                int[] counts = new int[3];
+                for (int sequence = 0; sequence < 2 * interval; sequence++) {
+                    counts[SmallQueryThroughputPerfTest.queryFor(sequence, client, 42, interval).kind()]++;
+                }
+                assertEquals(interval - 1, counts[0]);
+                assertEquals(interval - 1, counts[1]);
+                assertEquals(2, counts[2]);
+            }
+        }
     }
 
     /**
