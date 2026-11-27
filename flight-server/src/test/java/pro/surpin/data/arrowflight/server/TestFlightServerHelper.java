@@ -32,7 +32,9 @@ import org.apache.hadoop.fs.LocalFileSystem;
 import java.net.URI;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.arrow.memory.DefaultAllocationManagerOption.ALLOCATION_MANAGER_TYPE_PROPERTY_NAME;
 
@@ -57,6 +59,10 @@ public class TestFlightServerHelper implements AutoCloseable {
     public final pro.surpin.data.arrowflight.server.storage.StoreRegistry registry;
 
     private final String[] savedProps;
+    /** I/O executor created for this helper's adapter. */
+    private final ExecutorService duckDbIoPool = Executors.newCachedThreadPool();
+    /** Separate I/O executor created for this helper's execution service. */
+    private final ExecutorService executionIoPool = Executors.newCachedThreadPool();
 
     private TestFlightServerHelper(Builder b) throws Exception {
         savedProps = saveProps();
@@ -83,7 +89,7 @@ public class TestFlightServerHelper implements AutoCloseable {
             registry = b.registry.apply(appConfig);
             parquetAdapter = new ParquetAdapter(appConfig, registry.dataDirectory(), "localhost",
                     registry.catalogTables());
-            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
+            duckDbAdapter = new DuckDbAdapter(appConfig, duckDbIoPool,
                     registry.duckDbSetup(), b.threadsUnderLoad, b.threadsWhenIdle, b.cores,
                     new ProducingStreamGate(b.producingStreams), b.zeroCopyWrites, b.sharedDatabase);
         } else {
@@ -96,7 +102,7 @@ public class TestFlightServerHelper implements AutoCloseable {
             pro.surpin.data.arrowflight.server.storage.DataStore store =
                     new HadoopDataStore(localFs, appConfig.dataDir(), "localhost");
             parquetAdapter = new ParquetAdapter(appConfig, b.sharedStorage ? shared(store) : store);
-            duckDbAdapter = new DuckDbAdapter(appConfig, Executors.newCachedThreadPool(),
+            duckDbAdapter = new DuckDbAdapter(appConfig, duckDbIoPool,
                     pro.surpin.data.arrowflight.server.duckdb.DuckDbSetupPlan.of(List.of(), List.of()),
                     b.threadsUnderLoad, b.threadsWhenIdle, b.cores,
                     new ProducingStreamGate(b.producingStreams),
@@ -130,8 +136,7 @@ public class TestFlightServerHelper implements AutoCloseable {
                 QueryPlanner.DEFAULT_BACKUP_LOCATIONS, appConfig.endpointsPerServer());
 
         executionService = new ExecutionService(parquetAdapter, duckDbAdapter,
-                metadataService, appConfig,
-                Executors.newCachedThreadPool());
+                metadataService, appConfig, executionIoPool);
 
         flightSqlProducer = b.authorization == null
                 ? new FlightSqlProducer(location, allocator, metadataService, queryPlanner,
@@ -180,15 +185,31 @@ public class TestFlightServerHelper implements AutoCloseable {
         catch (Exception e) { if (first == null) first = e; }
         try { if (flightClient != null) flightClient.close(); }
         catch (Exception e) { if (first == null) first = e; }
-        try { if (server != null) server.shutdown(); }
+        try { if (server != null) server.close(); }
         catch (Exception e) { if (first == null) first = e; }
         try { if (flightSqlProducer != null) flightSqlProducer.close(); }
         catch (Exception e) { if (first == null) first = e; }
+        duckDbIoPool.shutdownNow();
+        executionIoPool.shutdownNow();
+        try {
+            awaitOwnedExecutor(duckDbIoPool);
+        } catch (Exception e) {
+            if (first == null) {
+                first = e;
+            }
+        }
+        try {
+            awaitOwnedExecutor(executionIoPool);
+        } catch (Exception e) {
+            if (first == null) {
+                first = e;
+            }
+        }
         try { if (clusterService != null) clusterService.close(); }
         catch (Exception e) { if (first == null) first = e; }
         try { if (hazelcastAdapter != null) hazelcastAdapter.close(); }
         catch (Exception e) { if (first == null) first = e; }
-        try { if (duckDbAdapter != null && registry != null) duckDbAdapter.close(); }
+        try { if (duckDbAdapter != null) duckDbAdapter.close(); }
         catch (Exception e) { if (first == null) first = e; }
         try { if (registry != null) registry.close(); }
         catch (Exception e) { if (first == null) first = e; }
@@ -196,6 +217,19 @@ public class TestFlightServerHelper implements AutoCloseable {
         catch (Exception e) { if (first == null) first = e; }
         restoreProps(savedProps);
         if (first != null) throw first;
+    }
+
+    /**
+     * Waits a bounded time for an executor this helper created to stop.
+     *
+     * @param executor helper-owned executor already shutting down
+     * @throws InterruptedException when the cleanup thread is interrupted
+     * @throws IllegalStateException when its tasks do not stop in time
+     */
+    private static void awaitOwnedExecutor(ExecutorService executor) throws InterruptedException {
+        if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Helper-owned I/O tasks did not terminate");
+        }
     }
 
     /**
