@@ -1,0 +1,81 @@
+name: Native compiler build and smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [perf/native-compiler-20261127]
+    paths: [.github/workflows/native-compiler-screen.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-compiler-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: github.event_name == 'workflow_dispatch' # A narrow branch push only registers the workflow.
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: maven
+      - name: Check runner and smoke recipes
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/ci -p test_native_compiler_build.py -v
+          bash -n tools/ci/native-compiler/build.sh tools/ci/native-compiler/smoke.sh
+      - name: Build both compilers and require native correctness
+        timeout-minutes: 180 # Preserve twenty job minutes for partial artifacts after failure.
+        run: |
+          set -euo pipefail
+          python3 tools/ci/native-compiler-build.py \
+            --output "$RUNNER_TEMP/native-compiler-evidence" --work "$RUNNER_TEMP/native-compiler-work"
+      - name: Preserve source identity, binaries, commands and every failed attempt
+        if: always()
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/native-compiler-evidence"
+          if [ -d "$output" ]; then
+            # Only this task's fresh artifact directory; source and unrelated containers are untouched.
+            sudo chown -R "$(id -u):$(id -g)" "$output"
+            python3 - "$output" <<'PY'
+          import hashlib,json,os,re,subprocess,sys,tempfile
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          cleanup=[]
+          for identity in root.glob('*/owned-container.json'):
+              name=json.loads(identity.read_text())['name']
+              if not re.fullmatch(r'native-compiler-[0-9a-f]{32}-(gcc|clang)',name):
+                  raise ValueError('Invalid task-owned container identity')
+              result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True)
+              cleanup.append({'name':name,'status':result.returncode,'stdout':result.stdout,'stderr':result.stderr})
+          with (root/'workflow-cleanup.json').open('x') as output:
+              json.dump(cleanup,output,indent=2)
+          # A terminated Python process may not have reached its finally block.
+          if not (root/'SHA256SUMS').exists():
+              with tempfile.NamedTemporaryFile('w',dir=root.parent,prefix='native-checksums-') as output:
+                  for path in sorted(root.rglob('*')):
+                      if path.is_file() and path.name!='SHA256SUMS':
+                          with path.open('rb') as source:
+                              output.write(hashlib.file_digest(source,'sha256').hexdigest()+'  '+str(path.relative_to(root))+'\n')
+                  output.flush()
+                  os.fsync(output.fileno())
+                  os.link(output.name,root/'SHA256SUMS')
+          PY
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: native-compiler-build-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-compiler-evidence
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
