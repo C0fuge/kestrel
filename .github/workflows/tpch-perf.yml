@@ -109,8 +109,34 @@ jobs:
           distribution: temurin
           cache: maven
 
+      - name: Prepare telemetry and check collectors
+        env:
+          TPCH_INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          set -euo pipefail
+          metrics="$RUNNER_TEMP/tpch-metrics"
+          mkdir "$metrics"
+          cp .github/workflows/tpch-perf.yml "$metrics/workflow.yml"
+          git rev-parse HEAD > "$metrics/source-commit.txt"
+          python3 -c 'import os,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "tpch-metrics", "inputs.json").write_text(os.environ["TPCH_INPUTS"] + "\n")'
+          lscpu > "$metrics/hardware.txt"
+          uname -srvmp > "$metrics/kernel.txt"
+          java -version > "$metrics/host-java-version.txt" 2>&1
+          docker version > "$metrics/docker-version.txt" 2>&1
+          python3 tools/ci/benchmark-system.py "$metrics/system-host-prepare.json" --filesystem "$RUNNER_TEMP"
+          python3 -m unittest discover -s tools/ci -p 'test_benchmark_system.py' -v
+          python3 -m unittest discover -s tools/ci -p 'test_tpch_*.py' -v
+          jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output "$metrics/server.jfc" \
+            jdk.DirectBufferStatistics#enabled=true jdk.DirectBufferStatistics#period=1s \
+            jdk.CPULoad#period=1s jdk.GCHeapSummary#enabled=true \
+            jdk.JVMInformation#enabled=true jdk.CPUInformation#enabled=true \
+            jdk.InitialEnvironmentVariable#enabled=false > "$metrics/jfr-configuration.log" 2>&1
+
       - name: Build this ref (no tests)
-        run: ./mvnw install -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip
+        run: |
+          set -euo pipefail
+          ./mvnw install -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip \
+            2>&1 | tee "$RUNNER_TEMP/tpch-metrics/build-head.log"
 
       - name: Build the baseline (no tests)
         run: |
@@ -120,31 +146,52 @@ jobs:
           mkdir -p "$RUNNER_TEMP/jars/head/plugins" && cp -r flight-plugin-s3/target/plugin/s3 "$RUNNER_TEMP/jars/head/plugins/"
           if [ -n "${{ inputs.baseline }}" ]; then
             git worktree add "$RUNNER_TEMP/base" "${{ inputs.baseline }}"
-            (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip)
+            git -C "$RUNNER_TEMP/base" rev-parse HEAD > "$RUNNER_TEMP/tpch-metrics/baseline-commit.txt"
+            (cd "$RUNNER_TEMP/base" && ./mvnw package -pl flight-server,flight-plugin-s3 -am -DskipTests -Dcheckstyle.skip -Dspotbugs.skip) \
+              2>&1 | tee "$RUNNER_TEMP/tpch-metrics/build-baseline.log"
             mkdir -p "$RUNNER_TEMP/jars/base/plugins"
             cp -r "$RUNNER_TEMP/base/flight-server/target/arrow-flight-server-1.0.0-shaded.jar" \
               "$RUNNER_TEMP/base/flight-server/target/libs" "$RUNNER_TEMP/jars/base/"
             cp -r "$RUNNER_TEMP/base/flight-plugin-s3/target/plugin/s3" "$RUNNER_TEMP/jars/base/plugins/"
           fi
-          docker pull -q eclipse-temurin:21-jre
+          docker pull -q eclipse-temurin:21-jdk
+          docker image inspect --format '{{.Id}} {{json .RepoDigests}}' eclipse-temurin:21-jdk \
+            > "$RUNNER_TEMP/tpch-metrics/server-image.txt"
+          find "$RUNNER_TEMP/jars" -type f -print0 | sort -z | xargs -0 sha256sum \
+            > "$RUNNER_TEMP/tpch-metrics/jars-SHA256SUMS"
 
       - name: Generate TPC-H SF${{ inputs.sf }} and the queries
         run: |
           set -euo pipefail
-          pip install -q duckdb==1.5.6 || pip install -q duckdb
-          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" <<'EOF'
-          import os, re, sys, duckdb
+          (pip install -q duckdb==1.5.6 || pip install -q duckdb) 2>&1 | tee "$RUNNER_TEMP/tpch-metrics/datagen-install.log"
+          python3 - "$RUNNER_TEMP" "${{ inputs.sf }}" <<'EOF' | tee "$RUNNER_TEMP/tpch-metrics/datagen.log"
+          import hashlib, json, os, re, runpy, sys, duckdb
+          checksum = runpy.run_path('tools/ci/tpch-checksum.py')
           tmp, sf = sys.argv[1], float(sys.argv[2])
           data, queries = os.path.join(tmp, "data", "tpch"), os.path.join(tmp, "queries")
           os.makedirs(queries, exist_ok=True)
+          with open(os.path.join(queries, 'checksum-version.txt'), 'w') as output:
+              output.write(checksum['VERSION'] + '\n')
           db = duckdb.connect(os.path.join(tmp, "gen.duckdb"))
           db.execute("SET memory_limit='10GB'")
           db.execute("INSTALL tpch; LOAD tpch")
           db.execute(f"CALL dbgen(sf={sf})")
           tables = [r[0] for r in db.execute("SHOW TABLES").fetchall()]
+          manifest = []
           for t in tables:
               os.makedirs(os.path.join(data, t), exist_ok=True)
-              db.execute(f"COPY {t} TO '{os.path.join(data, t, 'data.parquet')}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+              path = os.path.join(data, t, 'data.parquet')
+              db.execute(f"COPY {t} TO '{path}' (FORMAT parquet, ROW_GROUP_SIZE 122880)")
+              with open(path, 'rb') as source:
+                  digest = hashlib.file_digest(source, 'sha256').hexdigest()
+              manifest.append(dict(path=os.path.relpath(path, data), bytes=os.path.getsize(path),
+                                   rows=db.execute(f'SELECT count(*) FROM {t}').fetchone()[0], sha256=digest))
+              with open(os.path.join(tmp, 'tpch-metrics', 'input-manifest.json'), 'w') as output:
+                  json.dump(dict(sf=sf, duckdb_version=duckdb.__version__, generation=f'CALL dbgen(sf={sf})',
+                                 checksum_version=checksum['VERSION'],
+                                 layout='one Parquet per table, ROW_GROUP_SIZE 122880',
+                                 seed='DuckDB tpch extension deterministic dbgen default',
+                                 tables_complete=len(manifest) == len(tables), files=manifest), output, indent=2)
           # Qualify the tables: a table name right after FROM, JOIN or a comma of a FROM list.
           pattern = re.compile(r"(\b(?:from|join)\s+|,\s*)(" + "|".join(tables) + r")\b", re.IGNORECASE)
           # DuckDB's q11 has the SF1 fraction 0.0001 (its threshold is too high above SF1); the spec's is 0.0001 / SF.
@@ -152,15 +199,26 @@ jobs:
               if nr == 11:
                   assert "0.0001000000" in q or "0.0001" in q, q
                   q = q.replace("0.0001000000", "0.0001").replace("0.0001", f"{0.0001 / sf:.10f}")
-              rows = len(db.execute(q).fetchall())
+              result = db.execute(q)
+              columns = [{'name': column[0], 'duckdb_type': str(column[1])} for column in result.description]
+              answer = result.fetchall()
+              rows = len(answer)
+              value_checksum = checksum['checksum_rows'](answer)
               with open(os.path.join(queries, f"q{nr:02d}.sql"), "w") as f:
                   f.write(pattern.sub(lambda m: m.group(1) + "tpch." + m.group(2), q))
               with open(os.path.join(queries, f"q{nr:02d}.rows"), "w") as f:
                   f.write(str(rows))
+              with open(os.path.join(queries, f"q{nr:02d}.checksum"), "w") as f:
+                  f.write(f'{value_checksum:016x}\n')
+              with open(os.path.join(queries, f"q{nr:02d}.reference.json"), 'w') as f:
+                  json.dump(dict(checksum_version=checksum['VERSION'], checksum=f'{value_checksum:016x}',
+                                 columns=columns, rows=[[{'python_type': type(v).__name__, 'repr': repr(v)}
+                                                        for v in values] for values in answer]), f, indent=2)
               print(f"q{nr:02d} duckdb rows {rows}")
           db.close()
           os.remove(os.path.join(tmp, "gen.duckdb"))
           EOF
+          cp -r "$RUNNER_TEMP/queries" "$RUNNER_TEMP/tpch-metrics/queries"
           du -sh "$RUNNER_TEMP/data/tpch"; ls "$RUNNER_TEMP"/queries/*.sql | wc -l
           grep -c 'tpch\.' "$RUNNER_TEMP"/queries/*.sql | head -n 3
 
@@ -169,7 +227,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/adbc"
-          "$RUNNER_TEMP/adbc/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0
+          "$RUNNER_TEMP/adbc/bin/pip" install --quiet pyarrow==26.0.0 adbc-driver-flightsql==1.13.0 adbc-driver-manager==1.13.0 \
+            2>&1 | tee "$RUNNER_TEMP/tpch-metrics/adbc-install.log"
+          "$RUNNER_TEMP/adbc/bin/pip" freeze > "$RUNNER_TEMP/tpch-metrics/adbc-packages.txt"
 
       # The httpfs extension of the server's DuckDB (ci-assets, else extensions.duckdb.org) and an S3
       # endpoint on 127.0.0.1:9000 over the generated files: bucket "lake", data directory
@@ -193,9 +253,11 @@ jobs:
               | gunzip > "$httpfs"
           fi
           cp "$httpfs" "$RUNNER_TEMP/httpfs.duckdb_extension"
+          sha256sum "$RUNNER_TEMP/httpfs.duckdb_extension" > "$RUNNER_TEMP/tpch-metrics/httpfs-SHA256SUMS"
           curl -fsSL --retry 4 -o "$RUNNER_TEMP/rclone.zip" \
             https://github.com/rclone/rclone/releases/download/v1.69.1/rclone-v1.69.1-linux-amd64.zip
           unzip -q -j "$RUNNER_TEMP/rclone.zip" '*/rclone' -d "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/rclone" version > "$RUNNER_TEMP/tpch-metrics/rclone-version.txt"
           mkdir -p "$RUNNER_TEMP/s3root/lake"
           mv "$RUNNER_TEMP/data" "$RUNNER_TEMP/s3root/lake/data"
           mkdir -p "$RUNNER_TEMP/data"
@@ -221,15 +283,31 @@ jobs:
           sudo tc qdisc add dev lo parent 1:3 handle 30: netem delay "$half"
           sudo tc filter add dev lo parent 1: protocol ip prio 1 u32 match ip dport 9000 0xffff flowid 1:3
           sudo tc filter add dev lo parent 1: protocol ip prio 1 u32 match ip sport 9000 0xffff flowid 1:3
-          tc qdisc show dev lo
-          echo "connect time to the S3 endpoint: $(curl -sS -o /dev/null -w '%{time_connect}' http://127.0.0.1:9000/) s"
+          tc qdisc show dev lo | tee "$RUNNER_TEMP/tpch-metrics/netem.txt"
+          echo "connect time to the S3 endpoint: $(curl -sS -o /dev/null -w '%{time_connect}' http://127.0.0.1:9000/) s" \
+            | tee -a "$RUNNER_TEMP/tpch-metrics/netem.txt"
 
       - name: Measure
+        timeout-minutes: 180 # Leave room within the job for failed-attempt collection and upload.
         env:
           MORE: ${{ inputs.more }}
         run: |
           set +e -u
           out="$RUNNER_TEMP/results.txt"; : > "$out"
+          metrics_root="$RUNNER_TEMP/tpch-metrics"
+          python3 tools/ci/tpch-telemetry.py plan "$metrics_root" || exit 1
+          active_container=""; active_metrics=""; monitor_pid=""
+          finish_active() {
+            if [ -n "$active_container" ]; then
+              python3 tools/ci/tpch-telemetry.py finish "$active_metrics" "$active_container" || true
+              touch "$active_metrics/monitor.stop"
+              [ -z "$monitor_pid" ] || wait "$monitor_pid" || true
+              active_container=""; active_metrics=""; monitor_pid=""
+            fi
+          }
+          trap finish_active EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
           if [ "${{ inputs.store }}" = s3 ]; then
             dataDir=s3://lake/data
             storeArgs=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro"
@@ -242,46 +320,76 @@ jobs:
           fi
           measure() { # label, jars, extra server options
             local label=$1 jars=$2 opts=$3 i
-            docker run -d --name srv --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+            local metrics="$metrics_root/$label"
+            mkdir "$metrics" || return 1
+            cp "$metrics_root/server.jfc" "$metrics/server.jfc"
+            date -u +%FT%T.%NZ > "$metrics/start-requested.txt"
+            active_container="tpch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$label"
+            active_metrics="$metrics"
+            local server=(java -Xmx3g -XX:MaxDirectMemorySize=2g
+              -XX:FlightRecorderOptions=repository=/metrics/jfr-repository,preserve-repository=true
+              -XX:StartFlightRecording=filename=/metrics/server.jfr,dumponexit=true,settings=/metrics/server.jfc,disk=true
+              -Xlog:gc*,safepoint:file=/metrics/gc.log:time,uptime,level,tags:filecount=0
+              --add-opens=java.base/java.lang=ALL-UNNAMED
+              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true
+              -Dhazelcast.phone.home.enabled=false -DstreamTimingLog=true $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*"
+              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$dataDir" --localhost 127.0.0.1
+              --port 32010 --hosts 127.0.0.1)
+            local container=(docker run -d --name "$active_container" --network host
+              --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}"
+              -v "$metrics:/metrics"
               -v "$RUNNER_TEMP/jars/$jars:/app:ro" -v "$RUNNER_TEMP/data:/data:ro" -e FLIGHT_ALLOW_INSECURE=true \
-              "${storeArgs[@]}" eclipse-temurin:21-jre \
-              java -Xmx3g -XX:MaxDirectMemorySize=2g --add-opens=java.base/java.lang=ALL-UNNAMED \
-              --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED \
-              --add-opens=java.base/sun.nio.ch=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true \
-              -Dhazelcast.phone.home.enabled=false $opts -cp "/app/arrow-flight-server-1.0.0-shaded.jar:/app/libs/*" \
-              pro.surpin.data.arrowflight.server.HadoopArrowFlightServer --data-dir "$dataDir" --localhost 127.0.0.1 \
-              --port 32010 --hosts 127.0.0.1 > /dev/null
-            for i in $(seq 120); do docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
-            if ! docker logs srv 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
-              echo "$label: server did not start" >> "$out"; docker logs srv 2>&1 | tail -n 30; docker rm -f srv > /dev/null
+              "${storeArgs[@]}" eclipse-temurin:21-jdk "${server[@]}")
+            python3 tools/ci/tpch-telemetry.py command "$metrics/server-argv.json" "${server[@]}"
+            python3 tools/ci/tpch-telemetry.py command "$metrics/container-argv.json" "${container[@]}"
+            echo "Starting TPC-H configuration $label; full logs and metrics: $label/"
+            "${container[@]}" > "$metrics/start-container.log" 2>&1
+            python3 tools/ci/tpch-telemetry.py monitor "$metrics" "$active_container" > "$metrics/monitor.log" 2>&1 &
+            monitor_pid=$!
+            for i in $(seq 120); do docker logs "$active_container" 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null && break; sleep 1; done
+            if ! docker logs "$active_container" 2>&1 | grep 'Server Arrow Flight SQL started' > /dev/null; then
+              echo "$label: server did not start" >> "$out"; finish_active
               return
             fi
-            docker logs srv 2>&1 | grep -o 'duckdb=\(sizing\|threads\) .*' | head -n 2 | sed "s/^/$label: /" >> "$out"
-            docker logs srv 2>&1 | grep -o 'profile=.*' | head -n 1 | sed "s/^/$label: /" >> "$out"
+            date -u +%FT%T.%NZ > "$metrics/server-ready.txt"
+            docker exec "$active_container" java -version > "$metrics/server-java-version.txt" 2>&1
+            docker exec "$active_container" jcmd 1 VM.flags -all > "$metrics/effective-jvm-flags.txt" 2>&1
+            docker exec "$active_container" jcmd 1 VM.version > "$metrics/jvm-version.txt" 2>&1
+            docker exec "$active_container" jcmd 1 GC.heap_info > "$metrics/startup-heap.txt" 2>&1
+            echo "$?" > "$metrics/startup-heap-status.txt"
+            docker logs "$active_container" 2>&1 | grep -o 'duckdb=\(sizing\|threads\) .*' | head -n 2 | sed "s/^/$label: /" >> "$out"
+            docker logs "$active_container" 2>&1 | grep -o 'profile=.*' | head -n 1 | sed "s/^/$label: /" >> "$out"
             if [ "${{ inputs.plain }}" = true ]; then
               "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/flight-settings.py 127.0.0.1:32010 "$RUNNER_TEMP/settings-$label.txt" || true
             fi
             local ok=0
+            local client
             if [ "${{ inputs.client }}" = adbc ]; then
-              "$RUNNER_TEMP/adbc/bin/python" -I tools/ci/tpch-adbc.py 127.0.0.1:32010 "$RUNNER_TEMP/queries" \
-                "${{ inputs.rounds }}" > "$RUNNER_TEMP/mvn.log" 2>&1 || ok=1
+              client=("$RUNNER_TEMP/adbc/bin/python" -I tools/ci/tpch-adbc.py 127.0.0.1:32010 "$RUNNER_TEMP/queries" "${{ inputs.rounds }}")
             else
-              ./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
+              client=(./mvnw -pl flight-server test -Dcheckstyle.skip -Dspotbugs.skip -Djacoco.skip=true \
                 -DargLine=-Dx=1 -Dgroups=perf -DexcludedGroups= -Dtest=TpchPerfTest \
                 -Dsurefire.failIfNoSpecifiedTests=false -Dperf.server=127.0.0.1:32010 \
                 -Dperf.queries="$RUNNER_TEMP/queries" -Dperf.rounds="${{ inputs.rounds }}" \
-                -Dperf.clients="${{ inputs.clients }}" > "$RUNNER_TEMP/mvn.log" 2>&1
-              grep -q 'BUILD SUCCESS' "$RUNNER_TEMP/mvn.log" || ok=1
+                -Dperf.clients="${{ inputs.clients }}" -Dperf.rawDir="$metrics/client")
             fi
-            grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/mvn.log" | sed "s/^/$label: /" >> "$out"
+            python3 tools/ci/tpch-telemetry.py command "$metrics/client-argv.json" "${client[@]}"
+            TPCH_RAW_DIR="$metrics/client" "${client[@]}" > "$metrics/mvn.log" 2>&1 || ok=$?
+            if [ "${{ inputs.client }}" = java ]; then
+              grep -q 'BUILD SUCCESS' "$metrics/mvn.log" || ok=1
+              mkdir "$metrics/surefire"
+              cp flight-server/target/surefire-reports/*TpchPerfTest* "$metrics/surefire/" 2>/dev/null || true
+            fi
+            echo "$ok" > "$metrics/client-exit-status.txt"
+            grep -E '^(q[0-9]+|total) r' "$metrics/mvn.log" | sed "s/^/$label: /" >> "$out"
             if [ "$ok" -ne 0 ]; then
-              echo "$label: client failed" >> "$out"; grep -E 'ERROR|FAIL|Exception|Error|expected' "$RUNNER_TEMP/mvn.log" | head -n 20
-              docker logs srv 2>&1 | tail -n 30
+              echo "$label: client failed" >> "$out"; grep -E 'ERROR|FAIL|Exception|Error|expected' "$metrics/mvn.log" | head -n 20
             fi
-            docker stats --no-stream --format '{{.MemUsage}}' srv | sed "s/^/$label: container memory /" >> "$out"
-            local peak; peak=$(docker exec srv cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)
+            docker stats --no-stream --format '{{.MemUsage}}' "$active_container" | sed "s/^/$label: container memory /" >> "$out"
+            local peak; peak=$(docker exec "$active_container" cat /sys/fs/cgroup/memory.peak 2>/dev/null || true)
             [ -n "$peak" ] && echo "$label: container memory peak $((peak / 1048576)) MiB" >> "$out"
-            docker rm -f srv > /dev/null
+            finish_active
           }
           measure "default" head ""
           if [ "${{ inputs.clients }}" = 1 ] && [ "${{ inputs.quick }}" != true ]; then
@@ -303,6 +411,7 @@ jobs:
             done
           fi
           if [ "${{ inputs.plain }}" = true ]; then
+            plain_metrics="$metrics_root/plain"; mkdir "$plain_metrics"
             if [ "${{ inputs.store }}" = s3 ]; then
               plainArgs=(/ext/httpfs.duckdb_extension 127.0.0.1:9000 s3://lake/data/tpch)
               plainMount=(-v "$RUNNER_TEMP/httpfs.duckdb_extension:/ext/httpfs.duckdb_extension:ro" -e S3_KEY="$S3_KEY" -e S3_SECRET="$S3_SECRET")
@@ -311,11 +420,24 @@ jobs:
               plainMount=()
             fi
             # pip runs before the measured passes; the container has the server's CPU and memory limits.
-            docker run --rm --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
+            active_container="tpch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plain"
+            active_metrics="$plain_metrics"
+            plain_container=(docker run -d --name "$active_container" --network host --cpus="${{ inputs.cpus }}" --memory="${{ inputs.memory }}" \
               -v "$RUNNER_TEMP/data:/data:ro" -v "$RUNNER_TEMP/queries:/queries:ro" -v "$PWD/tools/ci:/tools:ro" \
-              -v "$RUNNER_TEMP:/out" "${plainMount[@]}" python:3.12-slim sh -c \
-              "pip install -q --root-user-action=ignore duckdb==1.5.6 pyarrow==22.0.0 >/dev/null && python -I /tools/tpch-duckdb.py $(printf '%q ' "${plainArgs[@]}") /queries ${{ inputs.rounds }} /out/settings-plain.txt" \
-              > "$RUNNER_TEMP/plain.log" 2>&1 || echo "plain: client failed" >> "$out"
+              -v "$RUNNER_TEMP:/out" -e TPCH_RAW_DIR=/out/tpch-metrics/plain/client "${plainMount[@]}" python:3.12-slim sh -c \
+              "pip install --root-user-action=ignore duckdb==1.5.6 pyarrow==22.0.0 && exec python -I /tools/tpch-duckdb.py $(printf '%q ' "${plainArgs[@]}") /queries ${{ inputs.rounds }} /out/settings-plain.txt")
+            python3 tools/ci/tpch-telemetry.py command "$plain_metrics/container-argv.json" "${plain_container[@]}"
+            echo "Starting TPC-H configuration plain; full logs and metrics: plain/"
+            "${plain_container[@]}" > "$plain_metrics/start-container.log" 2>&1
+            docker image inspect --format '{{.Id}} {{json .RepoDigests}}' python:3.12-slim > "$plain_metrics/image.txt"
+            python3 tools/ci/tpch-telemetry.py monitor "$plain_metrics" "$active_container" > "$plain_metrics/monitor.log" 2>&1 &
+            monitor_pid=$!
+            plain_status=$(docker wait "$active_container")
+            echo "$plain_status" > "$plain_metrics/client-exit-status.txt"
+            [ "$plain_status" = 0 ] || echo "plain: client failed" >> "$out"
+            docker logs "$active_container" > "$plain_metrics/mvn.log" 2>&1
+            finish_active
+            cp "$plain_metrics/mvn.log" "$RUNNER_TEMP/plain.log"
             grep -E '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | sed "s/^/plain: /" >> "$out"
             grep -vE '^(q[0-9]+|total) r' "$RUNNER_TEMP/plain.log" | head -n 20
             for f in "$RUNNER_TEMP"/settings-*.txt; do
@@ -328,6 +450,9 @@ jobs:
           fi
           cat "$out"
 
+      - name: Require complete telemetry before ranking
+        run: python3 tools/ci/tpch-telemetry.py validate "$RUNNER_TEMP/tpch-metrics"
+
       - name: Check
         env:
           MORE: ${{ inputs.more }}
@@ -335,6 +460,10 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/results.txt"
+          if grep -E ': (client failed|server did not start)' "$out"; then
+            echo "a configuration failed; inspect complete per-label artifacts" | tee "$RUNNER_TEMP/check.txt"
+            exit 1
+          fi
           best() { grep "^$1: total r" "$out" | grep -v warm-up | awk '{print $4}' | sort -n | head -n 1; }
           # One line per query and client; all clients must agree, so the unique lines are 22.
           sums() { grep -E "^$1: q[0-9]+ r1 " "$out" | awk '{print $2, $7, $9}' | sort -u; }
@@ -449,3 +578,26 @@ jobs:
               done
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain partial and complete telemetry
+        if: always()
+        run: |
+          set -euo pipefail
+          metrics="$RUNNER_TEMP/tpch-metrics"
+          mkdir -p "$metrics"
+          for source in "$RUNNER_TEMP/results.txt" "$RUNNER_TEMP/check.txt" "$RUNNER_TEMP"/settings-*.txt "$RUNNER_TEMP/s3.log"; do
+            [ ! -f "$source" ] || cp "$source" "$metrics/"
+          done
+          [ ! -d "$RUNNER_TEMP/queries" ] || cp -r "$RUNNER_TEMP/queries" "$metrics/"
+          # The immutable shared Parquet inputs are identified by the manifest, not copied per label.
+          python3 tools/ci/tpch-telemetry.py summarize "$metrics"
+
+      - name: Upload every TPC-H measurement and failed attempt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tpch-perf-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tpch-metrics
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

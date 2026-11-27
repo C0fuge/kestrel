@@ -19,6 +19,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.arrow.flight.CallOption;
@@ -39,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbSizing;
+import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
@@ -60,6 +62,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * {@code -Dperf.threads} and {@code -Dperf.threadsUnderLoad} set duckDbThreads and
  * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults);
  * {@code -Dperf.shared=threads:memoryLimit} runs it on one shared DuckDB (duckDbSharedDatabase).
+ * {@code -Dperf.producingStreams} caps active producers and records gate wait deltas.
+ * {@code -Dperf.heavyEvery=N} replaces every Nth query with a bounded customer-key self join,
+ * phased by client (default 0 keeps the original point/count mix). Raw query kinds are
+ * 0 for point lookups, 1 for filtered counts and 2 for the heavier join count.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -83,11 +89,15 @@ class SmallQueryThroughputPerfTest {
         }
         if (external != null) {
             String[] hostPort = external.split(":");
-            try (BufferAllocator allocator = new RootAllocator();
+            try (PerfRunArtifacts artifacts = PerfRunArtifacts.open();
+                    BufferAllocator allocator = new RootAllocator();
                     FlightClient flight = FlightClient.builder(allocator,
                             Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]))).build()) {
+                if (artifacts != null) {
+                    artifacts.stage("external-client-ready");
+                }
                 measureAll(new FlightSqlClient(flight), System.getProperty("perf.mode", "complete"),
-                        "external " + external);
+                        "external " + external, null);
             }
             return;
         }
@@ -98,19 +108,41 @@ class SmallQueryThroughputPerfTest {
         // 0 = the server's own default for the store (not the helper's 1 thread).
         TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
                 .dataDir(dir.toString()).resultMode(mode).threads(threads)
-                .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors());
+                .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors())
+                .producingStreams(Integer.getInteger("perf.producingStreams", 0));
         String shared = System.getProperty("perf.shared");
         if (shared != null) {
             // threads:memoryLimit of one node-wide DuckDB, as duckDbSharedDatabase=true.
             String[] parts = shared.split(":", 2);
             builder.sharedDatabase(new DuckDbSizing.Shared(Integer.parseInt(parts[0]), parts[1]));
         }
-        try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
-                TestFlightServerHelper helper = builder.start()) {
+        try (PerfRunArtifacts artifacts = PerfRunArtifacts.open();
+                FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
+                TestFlightServerHelper helper = startServer(builder, artifacts)) {
+            if (artifacts != null) {
+                artifacts.stage("server-ready");
+            }
             measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)
                     + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default")
-                    + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""));
+                    + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""),
+                    helper.duckDbAdapter.producingGate());
         }
+    }
+
+    /**
+     * Starts the server after recording its initialization boundary.
+     *
+     * @param builder server configuration
+     * @param artifacts optional raw measurement collector
+     * @return running server helper
+     * @throws Exception when recording or startup fails
+     */
+    private static TestFlightServerHelper startServer(TestFlightServerHelper.Builder builder,
+            PerfRunArtifacts artifacts) throws Exception {
+        if (artifacts != null) {
+            artifacts.stage("server-start");
+        }
+        return builder.start();
     }
 
     /**
@@ -139,9 +171,11 @@ class SmallQueryThroughputPerfTest {
      * @param client Flight SQL client of the measured server
      * @param mode result mode
      * @param server description of the server for the header line
+     * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
-    private static void measureAll(FlightSqlClient client, String mode, String server) throws Exception {
+    private static void measureAll(FlightSqlClient client, String mode, String server,
+            ProducingStreamGate gate) throws Exception {
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
         FlightCallHeaders headers = new FlightCallHeaders();
         headers.insert("x-flight-result-mode", mode);
@@ -150,9 +184,9 @@ class SmallQueryThroughputPerfTest {
         System.out.printf(Locale.ROOT, "== server %s, mode %s, client %s, %d cores, %d s per step%n",
                 server, mode, statements ? "statement" : "prepared", Runtime.getRuntime().availableProcessors(),
                 seconds);
-        run(client, header, statements, 8, Math.max(3, seconds / 3), false);
+        run(client, header, statements, 8, Math.max(3, seconds / 3), false, gate);
         for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
+            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true, gate);
         }
     }
 
@@ -200,51 +234,88 @@ class SmallQueryThroughputPerfTest {
      * @param clients concurrent clients
      * @param seconds duration
      * @param print whether to print the step (false for warm-up)
+     * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
-    private static void run(FlightSqlClient client, CallOption header, boolean statements,
-            int clients, int seconds, boolean print) throws Exception {
+    static void run(FlightSqlClient client, CallOption header, boolean statements,
+            int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
+        int heavyEvery = Integer.getInteger("perf.heavyEvery", 0);
+        if (heavyEvery < 0) {
+            throw new IllegalArgumentException("perf.heavyEvery must not be negative");
+        }
         AtomicInteger names = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(clients,
                 r -> new Thread(r, "perf-client-" + names.incrementAndGet()));
         ThreadMXBean mx = ManagementFactory.getThreadMXBean();
         Map<String, Long> cpuBefore = cpuByGroup(mx);
         long cpu0 = processCpu();
+        long waits0 = gate == null ? 0 : gate.waits();
+        long waitNanos0 = gate == null ? 0 : gate.waitNanos();
         long end = System.nanoTime() + seconds * 1_000_000_000L;
         long wall0 = System.nanoTime();
+        List<StringBuffer> samples = new ArrayList<>();
+        Throwable failure = null;
         try {
             List<Future<long[]>> futures = new ArrayList<>();
             for (int c = 0; c < clients; c++) {
                 int base = c * 100_003;
+                int thread = c;
+                StringBuffer raw = new StringBuffer();
+                samples.add(raw);
                 futures.add(pool.submit(() -> {
                     long[] times = new long[1 << 16];
                     int n = 0;
                     for (int i = 0; System.nanoTime() < end && n < times.length; i++) {
                         long t0 = System.nanoTime();
                         long k = Math.floorMod((base + i) * 7919L, (long) ROWS);
-                        String sql = (i & 1) == 0
-                                ? "SELECT * FROM s.orders WHERE o_orderkey = " + k
-                                : "SELECT count(*) FROM s.orders WHERE o_orderkey < " + k;
-                        long rows;
-                        if (statements) {
-                            rows = read(client, client.execute(sql, header), header);
-                        } else {
-                            try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
-                                rows = read(client, prepared.execute(header), header);
+                        QueryCase query = queryFor(i, thread, k, heavyEvery);
+                        String sql = query.sql();
+                        QueryRead result;
+                        try {
+                            if (statements) {
+                                result = read(client, client.execute(sql, header), header);
+                            } else {
+                                try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
+                                    result = read(client, prepared.execute(header), header);
+                                }
                             }
+                        } catch (Exception e) {
+                            String error = e.getClass().getSimpleName();
+                            appendSample(raw, thread, i, query.kind(), k, t0 - wall0,
+                                    System.nanoTime() - t0, null, error.isEmpty() ? "Exception" : error);
+                            throw e;
                         }
-                        assertEquals(1, rows, sql);
-                        times[n++] = System.nanoTime() - t0;
+                        long elapsed = System.nanoTime() - t0;
+                        times[n++] = elapsed;
+                        String error = result.rows() == 1 && result.first() == query.expectedFirst()
+                                ? "" : "answer_mismatch";
+                        appendSample(raw, thread, i, query.kind(), k, t0 - wall0, elapsed, result, error);
+                        assertEquals(1, result.rows(), sql);
+                        assertEquals(query.expectedFirst(), result.first(), sql);
                     }
                     return Arrays.copyOf(times, n);
                 }));
             }
-            List<long[]> all = new ArrayList<>();
-            for (Future<long[]> f : futures) {
-                all.add(f.get());
-            }
+            List<long[]> all = awaitClients(futures, end + TimeUnit.SECONDS.toNanos(30));
             double wall = (System.nanoTime() - wall0) / 1e9;
             long cpu = processCpu() - cpu0;
+            if (gate != null) {
+                String sample = "permits=" + gate.permits() + "\nwaits=" + (gate.waits() - waits0)
+                        + "\nwait_ns=" + (gate.waitNanos() - waitNanos0) + "\n";
+                if (PerfRunArtifacts.enabled()) {
+                    String label = print ? "c" + clients : "warmup-c" + clients;
+                    Files.writeString(Path.of(System.getProperty("perf.output"), label + "-gate.txt"), sample);
+                }
+                if (print) {
+                    System.out.printf(Locale.ROOT, "gate c%d %s%n", clients,
+                            sample.strip().replace('\n', ' '));
+                }
+            }
+            if (PerfRunArtifacts.enabled()) {
+                String label = print ? "c" + clients : "warmup-c" + clients;
+                Files.writeString(Path.of(System.getProperty("perf.output"), label + "-wall.txt"),
+                        "wall_start_ns=" + wall0 + "\nwall_seconds=" + wall + "\nprocess_cpu_ns=" + cpu + "\n");
+            }
             if (!print) {
                 return;
             }
@@ -268,9 +339,142 @@ class SmallQueryThroughputPerfTest {
                     .forEach(e -> line.append(String.format(Locale.ROOT, " %s %.2f", e.getKey(),
                             e.getValue() / 1e6 / queries)));
             System.out.println(line);
+        } catch (Exception | Error e) {
+            failure = e;
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw e;
         } finally {
-            pool.shutdownNow();
+            finishClients(pool, samples, print ? "c" + clients : "warmup-c" + clients, failure);
         }
+    }
+
+    /**
+     * Collects answers against one global deadline, including the final in-flight queries.
+     *
+     * @param futures submitted client tasks
+     * @param deadline absolute monotonic deadline
+     * @return completed latency arrays
+     * @throws Exception when a client fails, times out or the caller is interrupted
+     */
+    static List<long[]> awaitClients(List<Future<long[]>> futures, long deadline) throws Exception {
+        List<long[]> all = new ArrayList<>();
+        for (Future<long[]> future : futures) {
+            if (Thread.interrupted()) {
+                throw new InterruptedException("Interrupted while collecting performance clients");
+            }
+            all.add(future.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+        }
+        return all;
+    }
+
+    /**
+     * Stops client tasks and preserves complete sample rows even when shutdown fails.
+     *
+     * @param pool client executor
+     * @param samples synchronized per-client sample buffers
+     * @param label workload step
+     * @param failure original failure, or null
+     * @throws Exception when cleanup fails without an original failure
+     */
+    static void finishClients(ExecutorService pool, List<StringBuffer> samples,
+            String label, Throwable failure) throws Exception {
+        boolean interrupted = Thread.interrupted();
+        Exception cleanup = null;
+        try {
+            pool.shutdownNow();
+            if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Performance clients did not stop");
+            }
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                interrupted = true;
+            }
+            cleanup = e;
+        }
+        try {
+            if (PerfRunArtifacts.enabled()) {
+                PerfRunArtifacts.writeSamples(label, samples);
+            }
+        } catch (Exception e) {
+            if (cleanup == null) {
+                cleanup = e;
+            } else {
+                cleanup.addSuppressed(e);
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (cleanup != null) {
+            if (failure == null) {
+                throw cleanup;
+            }
+            failure.addSuppressed(cleanup);
+        }
+    }
+
+    /**
+     * Appends one complete success or failure sample when raw output is enabled.
+     *
+     * @param raw synchronized client buffer
+     * @param thread client index
+     * @param sequence query index
+     * @param kind query kind
+     * @param key generated key
+     * @param start start relative to this step
+     * @param elapsed query latency
+     * @param result consumed answer, or null after an execution failure
+     * @param error empty on success, otherwise a safe error type
+     */
+    private static void appendSample(StringBuffer raw, int thread, int sequence, int kind, long key,
+            long start, long elapsed, QueryRead result, String error) {
+        if (PerfRunArtifacts.enabled()) {
+            synchronized (raw) {
+                raw.append(thread).append(',').append(sequence).append(',').append(kind)
+                        .append(',').append(key).append(',').append(start).append(',').append(elapsed)
+                        .append(',').append(result == null ? -1 : result.rows())
+                        .append(',').append(result == null ? 0 : result.checksum())
+                        .append(',').append(result == null ? -1 : result.bytes())
+                        .append(',').append(result == null ? -1 : result.batches())
+                        .append(',').append(error.isEmpty() ? 1 : 0).append(',').append(error).append('\n');
+            }
+        }
+    }
+
+    /**
+     * Selects one deterministic query, rotating the heavy-query phase by client.
+     *
+     * @param sequence query sequence within the client
+     * @param thread client index
+     * @param key existing order key
+     * @param heavyEvery heavy-query interval, or 0 to disable
+     * @return query kind, SQL and exact first value
+     */
+    static QueryCase queryFor(int sequence, int thread, long key, int heavyEvery) {
+        long slot = (long) sequence + thread;
+        if (heavyEvery > 0 && Math.floorMod(slot, heavyEvery) == heavyEvery - 1) {
+            long bound = Math.min(key, 5000);
+            return new QueryCase(2, "SELECT count(*) FROM s.orders a JOIN s.orders b"
+                    + " ON a.o_custkey = b.o_custkey WHERE a.o_orderkey < " + bound,
+                    bound * (ROWS / 1000L));
+        }
+        long smallSlot = heavyEvery == 0 ? sequence : slot - slot / heavyEvery;
+        return (smallSlot & 1) == 0
+                ? new QueryCase(0, "SELECT * FROM s.orders WHERE o_orderkey = " + key, key)
+                : new QueryCase(1, "SELECT count(*) FROM s.orders WHERE o_orderkey < " + key, key);
+    }
+
+    /**
+     * One checked workload query.
+     *
+     * @param kind 0 for point, 1 for count, 2 for heavy join
+     * @param sql query text
+     * @param expectedFirst exact first numeric result
+     */
+    record QueryCase(int kind, String sql, long expectedFirst) {
     }
 
     /**
@@ -279,19 +483,49 @@ class SmallQueryThroughputPerfTest {
      * @param client Flight SQL client
      * @param info the query's flight info
      * @param header result-mode header
-     * @return rows read
+     * @return rows, first value, checksum and transferred Arrow buffers
      * @throws Exception on failure
      */
-    private static long read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
+    private static QueryRead read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
         long rows = 0;
+        long first = 0;
+        long checksum = 1;
+        long bytes = 0;
+        long batches = 0;
         for (FlightEndpoint endpoint : info.getEndpoints()) {
             try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
                 while (stream.next()) {
-                    rows += stream.getRoot().getRowCount();
+                    org.apache.arrow.vector.VectorSchemaRoot root = stream.getRoot();
+                    if (rows == 0 && root.getRowCount() > 0) {
+                        first = ((Number) root.getVector(0).getObject(0)).longValue();
+                    }
+                    for (org.apache.arrow.vector.FieldVector vector : root.getFieldVectors()) {
+                        bytes += vector.getBufferSize();
+                    }
+                    for (int row = 0; row < root.getRowCount(); row++) {
+                        for (org.apache.arrow.vector.FieldVector vector : root.getFieldVectors()) {
+                            Object value = vector.getObject(row);
+                            checksum = 31 * checksum + (value == null ? 0 : value.toString().hashCode());
+                        }
+                    }
+                    rows += root.getRowCount();
+                    batches++;
                 }
             }
         }
-        return rows;
+        return new QueryRead(rows, first, checksum, bytes, batches);
+    }
+
+    /**
+     * One completely consumed answer.
+     *
+     * @param rows returned rows
+     * @param first first numeric value
+     * @param checksum ordered hash of all values
+     * @param bytes bytes of Arrow buffers
+     * @param batches batches received
+     */
+    private record QueryRead(long rows, long first, long checksum, long bytes, long batches) {
     }
 
     /**
