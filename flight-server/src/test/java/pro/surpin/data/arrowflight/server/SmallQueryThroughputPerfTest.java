@@ -5,6 +5,7 @@ import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -66,6 +67,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * {@code -Dperf.heavyEvery=N} replaces every Nth query with a bounded customer-key self join,
  * phased by client (default 0 keeps the original point/count mix). Raw query kinds are
  * 0 for point lookups, 1 for filtered counts and 2 for the heavier join count.
+ * {@code -Dperf.warmupSeconds=1..120} overrides the automatic warmup duration;
+ * {@code -Dperf.warmupMode=per-step} warms each measured concurrency separately.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -174,9 +177,10 @@ class SmallQueryThroughputPerfTest {
      * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
-    private static void measureAll(FlightSqlClient client, String mode, String server,
+    static void measureAll(FlightSqlClient client, String mode, String server,
             ProducingStreamGate gate) throws Exception {
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
+        RunPlan plan = runPlan(System.getProperties(), seconds);
         FlightCallHeaders headers = new FlightCallHeaders();
         headers.insert("x-flight-result-mode", mode);
         CallOption header = new HeaderCallOption(headers);
@@ -184,11 +188,88 @@ class SmallQueryThroughputPerfTest {
         System.out.printf(Locale.ROOT, "== server %s, mode %s, client %s, %d cores, %d s per step%n",
                 server, mode, statements ? "statement" : "prepared", Runtime.getRuntime().availableProcessors(),
                 seconds);
-        run(client, header, statements, 8, Math.max(3, seconds / 3), false, gate);
-        for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true, gate);
+        if (PerfRunArtifacts.enabled()) {
+            writeRunPlan(plan, Path.of(System.getProperty("perf.output")));
+        }
+        for (RunStep step : plan.steps()) {
+            run(client, header, statements, step.clients(), step.seconds(), step.measured(), gate, step.label());
         }
     }
+
+    /**
+     * Resolves the common warmup and measurement sequence.
+     *
+     * @param settings harness properties
+     * @param seconds measured duration per step
+     * @return immutable ordered run plan
+     */
+    static RunPlan runPlan(Properties settings, int seconds) {
+        String mode = settings.getProperty("perf.warmupMode", "legacy");
+        if (!mode.equals("legacy") && !mode.equals("per-step")) {
+            throw new IllegalArgumentException("perf.warmupMode must be legacy or per-step");
+        }
+        int configured;
+        try {
+            configured = Integer.parseInt(settings.getProperty("perf.warmupSeconds", "0"));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("perf.warmupSeconds must be an integer in 0..120", e);
+        }
+        if (configured < 0 || configured > 120) {
+            throw new IllegalArgumentException("perf.warmupSeconds must be an integer in 0..120");
+        }
+        int warmupSeconds = configured == 0 ? Math.max(3, seconds / 3) : configured;
+        List<RunStep> steps = new ArrayList<>();
+        if (mode.equals("legacy")) {
+            steps.add(new RunStep(8, warmupSeconds, false, "warmup-c8"));
+        }
+        int index = 0;
+        for (String value : settings.getProperty("perf.clients", "1,8,32").split(",")) {
+            int clients = Integer.parseInt(value.strip());
+            index++;
+            if (mode.equals("per-step")) {
+                steps.add(new RunStep(clients, warmupSeconds, false, "warmup-step-" + index + "-c" + clients));
+            }
+            steps.add(new RunStep(clients, seconds, true, "c" + clients));
+        }
+        return new RunPlan(mode, configured, List.copyOf(steps));
+    }
+
+    /**
+     * Preserves the resolved warmup sequence before executing it.
+     *
+     * @param plan common warmup and measurement plan
+     * @param output raw output directory
+     * @throws Exception when the plan cannot be written without overwriting evidence
+     */
+    static void writeRunPlan(RunPlan plan, Path output) throws Exception {
+        StringBuilder text = new StringBuilder("warmup_mode,configured_warmup_seconds,step,label,clients,seconds,measured\n");
+        int index = 0;
+        for (RunStep step : plan.steps()) {
+            text.append(plan.warmupMode()).append(',').append(plan.configuredWarmupSeconds()).append(',')
+                    .append(++index).append(',').append(step.label()).append(',').append(step.clients()).append(',')
+                    .append(step.seconds()).append(',').append(step.measured()).append('\n');
+        }
+        Files.writeString(output.resolve("warmup-plan.csv"), text, StandardOpenOption.CREATE_NEW);
+    }
+
+    /**
+     * Describes one immutable common run plan.
+     *
+     * @param warmupMode warmup placement
+     * @param configuredWarmupSeconds duration override, or zero for automatic duration
+     * @param steps ordered warmup and measured steps
+     */
+    record RunPlan(String warmupMode, int configuredWarmupSeconds, List<RunStep> steps) { }
+
+    /**
+     * Describes one warmup or measured step.
+     *
+     * @param clients concurrent clients
+     * @param seconds step duration
+     * @param measured whether to print ranked results
+     * @param label unique raw artifact prefix
+     */
+    record RunStep(int clients, int seconds, boolean measured, String label) { }
 
     /**
      * Moves the written table to a fake S3 and points the server at it through the real s3 plugin.
@@ -239,6 +320,25 @@ class SmallQueryThroughputPerfTest {
      */
     static void run(FlightSqlClient client, CallOption header, boolean statements,
             int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
+        run(client, header, statements, clients, seconds, print, gate,
+                print ? "c" + clients : "warmup-c" + clients);
+    }
+
+    /**
+     * Executes one step while retaining its uniquely named raw artifacts.
+     *
+     * @param client Flight SQL client
+     * @param header result-mode header
+     * @param statements whether to run plain statements
+     * @param clients concurrent clients
+     * @param seconds duration
+     * @param print whether to print measured results
+     * @param gate producer gate, or null for an external server
+     * @param label raw artifact prefix
+     * @throws Exception on failure
+     */
+    private static void run(FlightSqlClient client, CallOption header, boolean statements,
+            int clients, int seconds, boolean print, ProducingStreamGate gate, String label) throws Exception {
         int heavyEvery = Integer.getInteger("perf.heavyEvery", 0);
         if (heavyEvery < 0) {
             throw new IllegalArgumentException("perf.heavyEvery must not be negative");
@@ -303,8 +403,8 @@ class SmallQueryThroughputPerfTest {
                 String sample = "permits=" + gate.permits() + "\nwaits=" + (gate.waits() - waits0)
                         + "\nwait_ns=" + (gate.waitNanos() - waitNanos0) + "\n";
                 if (PerfRunArtifacts.enabled()) {
-                    String label = print ? "c" + clients : "warmup-c" + clients;
-                    Files.writeString(Path.of(System.getProperty("perf.output"), label + "-gate.txt"), sample);
+                    Files.writeString(Path.of(System.getProperty("perf.output"), label + "-gate.txt"), sample,
+                            StandardOpenOption.CREATE_NEW);
                 }
                 if (print) {
                     System.out.printf(Locale.ROOT, "gate c%d %s%n", clients,
@@ -312,9 +412,9 @@ class SmallQueryThroughputPerfTest {
                 }
             }
             if (PerfRunArtifacts.enabled()) {
-                String label = print ? "c" + clients : "warmup-c" + clients;
                 Files.writeString(Path.of(System.getProperty("perf.output"), label + "-wall.txt"),
-                        "wall_start_ns=" + wall0 + "\nwall_seconds=" + wall + "\nprocess_cpu_ns=" + cpu + "\n");
+                        "wall_start_ns=" + wall0 + "\nwall_seconds=" + wall + "\nprocess_cpu_ns=" + cpu + "\n",
+                        StandardOpenOption.CREATE_NEW);
             }
             if (!print) {
                 return;
@@ -346,7 +446,7 @@ class SmallQueryThroughputPerfTest {
             }
             throw e;
         } finally {
-            finishClients(pool, samples, print ? "c" + clients : "warmup-c" + clients, failure);
+            finishClients(pool, samples, label, failure);
         }
     }
 

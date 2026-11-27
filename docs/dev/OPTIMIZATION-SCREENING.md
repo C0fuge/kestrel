@@ -7,6 +7,12 @@ from Dev CI and does not publish a server release. Manual runs accept `source_re
 rising client counts and `cpu_mode=pinned|quota`. Defaults are three paired rounds,
 15 seconds per step, clients 1/8/32, pinned CPUs and `heavy_every=0`; the common heavy
 interval accepts 0 through 64. Set `heavy_every=8` explicitly for mixed load.
+Common `warmup_mode=legacy|per-step` and `warmup_seconds=0..120` inputs apply to both
+revisions and preflight. Their defaults retain the historical single eight-client
+warmup for `max(3, seconds/3)` seconds; zero selects that automatic duration. A positive
+duration overrides it. `per-step` warms the same concurrency immediately before each
+measured step. These controls do not establish steady state; see
+[warmup controls](WARMUP-CONTROLS.md) for labels, validation and interpretation.
 The workflow runs the Python runner's unit tests before building or measuring.
 Every dispatch starts one `custom` paired job with explicit options, empty by default.
 There is no automatic literal/admission matrix or recurring benchmark on branch push.
@@ -56,14 +62,22 @@ The helper overrides `duckDbThreads*`, `duckDbShared*`, `duckDbMemoryLimit`,
 options. Use the corresponding `perf.*` properties; their actual values are recorded
 by the harness. For example, `-Dperf.threads=4 -Dperf.shared=4:1GB` changes the shared
 DuckDB thread count and limit.
+`perf.warmupSeconds` and `perf.warmupMode` are rejected as candidate-only options.
+Use the common workflow inputs so A and B receive identical warmup settings.
 Never supply credentials, production host names or personal paths in public inputs.
 For example, `-Dperf.producingStreams=2` screens admission control; associated `*-gate.txt`
 files are retained automatically if the selected harness writes them.
 
-Dispatches permit at most eight concurrency steps and fifteen planned measurement
-minutes, including warm-up/setup allowances. The build/measurement step has a separate
+Dispatches permit at most eight concurrency steps and twenty-five planned work
+minutes, including every warmup, a thirty-second drain allowance for each warmup/measured
+step and preflight, and setup allowances. The build/measurement step has a separate
 35-minute timeout inside the 45-minute job, reserving ten minutes for publishing partial
 artifacts if the work fails or exceeds its budget.
+The limit leaves ten minutes for builds within that step. `screen.json` separately
+records nominal configured workload seconds and the conservative planned-work bound.
+The default dispatch still fits; longer per-step warmups can require fewer rounds or
+client counts. Excessive combinations fail before starting containers; the existing
+timeouts and upload reservation remain unchanged.
 
 The answer gate compares rows, ordered value checksums, Arrow buffer bytes and batches
 for every overlapping `(concurrency, client, sequence, query kind, key)` pair. The test

@@ -3,6 +3,7 @@
 
 import csv
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import subprocess
@@ -21,7 +22,7 @@ class OptimizationScreenTest(unittest.TestCase):
     def test_rejects_shell_and_non_server_properties(self):
         """Workflow input cannot introduce commands or Maven/output settings."""
         for value in ("-DduckDbThreads=2;uname", "-Dmaven.repo.local=/tmp/other", "-Dperf.output=/elsewhere",
-                      "-Dperf.heavyEvery=8",
+                      "-Dperf.heavyEvery=8", "-Dperf.warmupSeconds=30", "-Dperf.warmupMode=per-step",
                       "-DduckDbPassword=secret", "--settings /tmp/settings.xml", "-DduckDbThreads=4",
                       "-DduckDbSharedDatabase=true", "-DduckDbMemoryLimit=1GB"):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -42,11 +43,78 @@ class OptimizationScreenTest(unittest.TestCase):
 
     def test_measurement_budget_leaves_time_to_upload(self):
         """Bound excessive dispatch inputs before a long cloud run can start."""
-        self.assertLess(SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32]), 900)
+        self.assertEqual(1230, SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32]))
+        self.assertLess(SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32]), 1500)
         with self.assertRaises(ValueError):
             SCREEN.planned_measurement_seconds(5, 60, list(range(1, 65)))
         with self.assertRaises(ValueError):
             SCREEN.planned_measurement_seconds(5, 60, [1, 2, 4, 8, 16, 32, 64])
+
+    def test_warmup_configuration_is_bounded_and_default_plan_is_unchanged(self):
+        """Common controls reject malformed input and retain one automatic eight-client warmup by default."""
+        for value in ("0", "1", "120"):
+            self.assertEqual(int(value), SCREEN.checked_warmup_seconds(value))
+        for value in ("-1", "121", "", "1.5", "later", "8 -Dperf.seconds=60"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                SCREEN.checked_warmup_seconds(value)
+        for mode in ("legacy", "per-step"):
+            self.assertEqual(mode, SCREEN.checked_warmup_mode(mode))
+        for mode in ("", "each", "PER_STEP"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                SCREEN.checked_warmup_mode(mode)
+        self.assertEqual({"mode": "legacy", "configured_seconds": 0,
+                          "steps": [{"label": "warmup-c8", "clients": 8, "seconds": 5}]},
+                         SCREEN.warmup_plan(15, [1, 8, 32]))
+        self.assertEqual(306, SCREEN.nominal_measurement_seconds(3, 15, [1, 8, 32]))
+
+    def test_budget_counts_each_warmup_and_the_longer_unranked_preflight(self):
+        """Every warmup, measured and preflight step can consume its own thirty-second drain."""
+        self.assertEqual(1223, SCREEN.planned_measurement_seconds(2, 15, [1, 8, 32], 12, "per-step"))
+        self.assertEqual(613, SCREEN.planned_measurement_seconds(1, 3, [8], 120, "per-step"))
+        self.assertLess(SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32], 30, "legacy"), 1500)
+        self.assertEqual(1067, SCREEN.planned_measurement_seconds(2, 30, [8, 32], 20, "per-step"))
+        with self.assertRaises(ValueError):
+            SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32], 30, "per-step")
+
+    def test_requested_warmup_plan_must_be_emitted_exactly(self):
+        """An older or ineffective harness cannot silently ignore common warmup flags."""
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            with self.assertRaisesRegex(ValueError, "updated candidate harness"):
+                SCREEN.verify_warmup_plan(folder, 15, [8, 32], 7, "per-step")
+            actual = ("warmup_mode,configured_warmup_seconds,step,label,clients,seconds,measured\n"
+                      "per-step,7,1,warmup-step-1-c8,8,7,false\n"
+                      "per-step,7,2,c8,8,15,true\n"
+                      "per-step,7,3,warmup-step-2-c32,32,7,false\n"
+                      "per-step,7,4,c32,32,15,true\n")
+            path = folder / "warmup-plan.csv"
+            path.write_text(actual)
+            SCREEN.verify_warmup_plan(folder, 15, [8, 32], 7, "per-step")
+            for replacement in (actual.replace("warmup-step-2-c32", "warmup-c8"),
+                                actual.replace(",32,7,false", ",8,7,false"),
+                                actual.replace(",8,7,false", ",8,5,false"),
+                                actual.replace("per-step", "legacy")):
+                path.write_text(replacement)
+                with self.assertRaisesRegex(ValueError, "differs from the common request"):
+                    SCREEN.verify_warmup_plan(folder, 15, [8, 32], 7, "per-step")
+            path.write_text(actual.splitlines()[0] + "\nlegacy,7,1,warmup-c8,8,7,false\nlegacy,7,2,c1,1,15,true\n")
+            SCREEN.verify_warmup_plan(folder, 15, [1], 7, "legacy")
+
+    def test_custom_warmup_rejects_an_older_candidate_before_starting_containers(self):
+        """Historical candidates remain default-compatible and must opt into the new harness for new controls."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "candidate" / SCREEN.HARNESS
+            harness.mkdir(parents=True)
+            (harness / "SmallQueryThroughputPerfTest.java").write_text("historical harness")
+            arguments = ["screen", "--baseline", str(root / "baseline"), "--candidate", str(root / "candidate"),
+                         "--output", str(root / "output")]
+            with mock.patch.dict(SCREEN.os.environ, {"SCREEN_WARMUP_MODE": "per-step", "SCREEN_ROUNDS": "1"}, clear=True), \
+                    mock.patch("sys.argv", arguments), mock.patch.object(SCREEN, "run_container") as runner:
+                with self.assertRaisesRegex(ValueError, "updated candidate harness"):
+                    SCREEN.main()
+            runner.assert_not_called()
+            self.assertFalse((root / "output").exists())
 
     def test_numeric_container_user_has_native_unix_identity(self):
         """Hadoop's native Unix login must resolve the runner UID even when the image cannot."""
@@ -174,18 +242,41 @@ class OptimizationScreenTest(unittest.TestCase):
 
     def test_main_passes_same_workload_to_both_sides(self):
         """The actual measurement plan shares the workload while limiting variant properties to B."""
+        trials, checks, metadata = self.shared_plan({})
+        self.assertEqual([], checks)
+        self.assertEqual({"mode": "legacy", "configured_seconds": 0,
+                          "steps": [{"label": "warmup-c8", "clients": 8, "seconds": 5}]}, metadata["warmup_plan"])
+        for args in trials:
+            self.assertFalse(any(value.startswith("-Dperf.warmup") for value in args[5]))
+
+    def test_main_passes_and_verifies_custom_warmup_on_both_sides_and_preflight(self):
+        """Warmup is common, verified for each actual attempt and cannot become a B-only workload change."""
+        trials, checks, metadata = self.shared_plan({"SCREEN_WARMUP_MODE": "per-step", "SCREEN_WARMUP_SECONDS": "7"})
+        self.assertEqual(5, len(checks))
+        self.assertEqual([("preflight", 3, [1], 7, "per-step"), ("r1-A", 15, [1], 7, "per-step"),
+                          ("r1-B", 15, [1], 7, "per-step"), ("r2-B", 15, [1], 7, "per-step"),
+                          ("r2-A", 15, [1], 7, "per-step")], checks)
+        self.assertEqual({"mode": "per-step", "configured_seconds": 7,
+                          "steps": [{"label": "warmup-step-1-c1", "clients": 1, "seconds": 7}]},
+                         metadata["warmup_plan"])
+        for args in trials:
+            self.assertEqual(1, args[5].count("-Dperf.warmupSeconds=7"))
+            self.assertEqual(1, args[5].count("-Dperf.warmupMode=per-step"))
+
+    def shared_plan(self, warmup_environment):
+        """Exercise the actual runner plan with mocked containers and optional warmup controls."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for side in ("baseline", "candidate"):
                 harness = root / side / SCREEN.HARNESS
                 harness.mkdir(parents=True)
                 for filename in ("SmallQueryThroughputPerfTest.java", "PerfRunArtifacts.java"):
-                    (harness / filename).write_text("test harness")
+                    (harness / filename).write_text("test harness perf.warmupMode")
             summary = {"1": {**dict.fromkeys(SCREEN.KIND_METRICS, 1), "cpu_ms_per_query": 1,
                              "query_kinds": {"0": {**dict.fromkeys(SCREEN.KIND_METRICS, 1),
                                                    "sample_fraction": 1}}}}
             environment = {"SCREEN_ROUNDS": "2", "SCREEN_CLIENTS": "1", "SCREEN_HEAVY_EVERY": "8",
-                           "SCREEN_VARIANT_OPTIONS": "-Dperf.producingStreams=2"}
+                           "SCREEN_VARIANT_OPTIONS": "-Dperf.producingStreams=2", **warmup_environment}
             arguments = ["screen", "--baseline", str(root / "baseline"), "--candidate", str(root / "candidate"),
                          "--output", str(root / "output")]
             with mock.patch.dict(SCREEN.os.environ, environment, clear=True), \
@@ -195,6 +286,7 @@ class OptimizationScreenTest(unittest.TestCase):
                     mock.patch.object(SCREEN.subprocess, "check_output", return_value="test-commit"), \
                     mock.patch.object(SCREEN, "command_log", side_effect=lambda command, path: path.write_text("")), \
                     mock.patch.object(SCREEN, "run_container") as runner, \
+                    mock.patch.object(SCREEN, "verify_warmup_plan") as verify_plan, \
                     mock.patch.object(SCREEN, "summary_of", return_value=(summary, {(1,): ("answer",)})):
                 SCREEN.main()
             trials = [call.args for call in runner.call_args_list if "-Dperf.heavyEvery=8" in call.args[5]]
@@ -203,6 +295,8 @@ class OptimizationScreenTest(unittest.TestCase):
                 self.assertEqual(1, args[5].count("-Dperf.heavyEvery=8"))
                 self.assertEqual(["-Dperf.producingStreams=2"] if args[2].name.endswith("-B") else [], args[8])
             self.assertTrue((root / "output/paired-ratios.json").is_file())
+            checks = [(call.args[0].name, *call.args[1:]) for call in verify_plan.call_args_list]
+            return trials, checks, json.loads((root / "output/screen.json").read_text())
 
 
 if __name__ == "__main__":

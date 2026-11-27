@@ -31,6 +31,15 @@ on:
         description: "Every Nth query is a bounded self-join (0 disables; 0..64; both revisions)"
         type: string
         default: "0"
+      warmup_mode:
+        description: "Common warmup: legacy eight clients once, or measured concurrency before each step"
+        type: choice
+        options: [legacy, per-step]
+        default: legacy
+      warmup_seconds:
+        description: "Common warmup seconds (0 = max(3, measured seconds / 3); explicit 1..120)"
+        type: string
+        default: "0"
       cpu_mode:
         description: "Pinned logical CPU set or Docker CPU quota"
         type: choice
@@ -85,6 +94,8 @@ jobs:
           SCREEN_SECONDS: ${{ inputs.seconds || '15' }}
           SCREEN_CLIENTS: ${{ inputs.clients || '1,8,32' }}
           SCREEN_HEAVY_EVERY: ${{ inputs.heavy_every || '0' }}
+          SCREEN_WARMUP_MODE: ${{ inputs.warmup_mode || 'legacy' }}
+          SCREEN_WARMUP_SECONDS: ${{ inputs.warmup_seconds || '0' }}
           SCREEN_CPU_MODE: ${{ inputs.cpu_mode || 'pinned' }}
         run: >
           python3 control/tools/ci/optimization-screen.py
