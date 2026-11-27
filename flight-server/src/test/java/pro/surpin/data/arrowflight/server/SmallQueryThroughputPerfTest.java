@@ -114,7 +114,7 @@ class SmallQueryThroughputPerfTest {
         }
         try (PerfRunArtifacts artifacts = PerfRunArtifacts.open();
                 FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
-                TestFlightServerHelper helper = builder.start()) {
+                TestFlightServerHelper helper = startServer(builder, artifacts)) {
             if (artifacts != null) {
                 artifacts.stage("server-ready");
             }
@@ -123,6 +123,22 @@ class SmallQueryThroughputPerfTest {
                     + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""),
                     helper.duckDbAdapter.producingGate());
         }
+    }
+
+    /**
+     * Starts the server after recording its initialization boundary.
+     *
+     * @param builder server configuration
+     * @param artifacts optional raw measurement collector
+     * @return running server helper
+     * @throws Exception when recording or startup fails
+     */
+    private static TestFlightServerHelper startServer(TestFlightServerHelper.Builder builder,
+            PerfRunArtifacts artifacts) throws Exception {
+        if (artifacts != null) {
+            artifacts.stage("server-start");
+        }
+        return builder.start();
     }
 
     /**
