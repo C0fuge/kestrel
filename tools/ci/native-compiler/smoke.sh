@@ -2,6 +2,8 @@
 set -euo pipefail
 evidence=$1
 corpus=$2
+extensions=$3
+test_jar=$4
 control=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$control/../../.." && pwd)
 test "$(java -XshowSettings:properties -version 2>&1 | sed -n 's/.*java.specification.version = //p')" = 21
@@ -26,7 +28,7 @@ with (root/'dependency-identities.json').open('x') as output:
 PY
 cp="$evidence/duckdb_jdbc.jar:$(cat "$smoke/dependency-classpath.txt")"
 package=pro/surpin/data/arrowflight/server
-javac --release 21 -cp "$cp" -d "$smoke/classes" "$control/NativeCompilerSmoke.java" \
+javac --release 21 -cp "$cp" -d "$smoke/classes" "$control/NativeCompilerSmoke.java" "$control/BoundedUpstreamSmoke.java" \
   "$repo/flight-server/src/test/java/$package/TpchChecksum.java" \
   "$repo/flight-server/src/test/java/$package/TpchArrowValues.java" > "$smoke/compile.log" 2>&1
 jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output "$smoke/smoke.jfc" \
@@ -37,7 +39,7 @@ command=(java -Xmx512m -XX:MaxDirectMemorySize=512m
   "-XX:StartFlightRecording=filename=$smoke/smoke.jfr,dumponexit=true,settings=$smoke/smoke.jfc"
   "-Xlog:gc*,safepoint:file=$smoke/gc.log:time,uptime,level,tags:filecount=0"
   --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
-  -cp "$smoke/classes:$cp" pro.surpin.data.arrowflight.server.NativeCompilerSmoke "$smoke" "$native_sha" "$corpus" "$(basename "$evidence")")
+  -cp "$smoke/classes:$cp" pro.surpin.data.arrowflight.server.NativeCompilerSmoke "$smoke" "$native_sha" "$corpus" "$(basename "$evidence")" "$extensions")
 printf '%q ' "${command[@]}" > "$smoke/java-command.txt"
 rc=0
 /usr/bin/time -v -o "$smoke/java-resources.txt" "${command[@]}" > "$smoke/java.log" 2>&1 || rc=$?
@@ -52,7 +54,8 @@ assert not json.loads((root/'jfr-private-events.json').read_text())['recording']
 PY
 # Select cheap upstream JDBC checks; the complete suite includes packaging and large-data tests.
 for test in test_connection test_execute_exception test_multiple_statements_execution; do
-  command=(java -Xmx512m -cp "$evidence/duckdb_jdbc_tests.jar:$cp" org.duckdb.TestDuckDBJDBC "$test")
+  command=(java -Xmx512m -XX:MaxDirectMemorySize=512m -cp "$smoke/classes:$test_jar:$cp"
+    pro.surpin.data.arrowflight.server.BoundedUpstreamSmoke "$test" "$smoke/upstream-$test")
   printf '%q ' "${command[@]}" > "$smoke/upstream-$test-command.txt"
   status=0
   /usr/bin/time -v -o "$smoke/upstream-$test-resources.txt" "${command[@]}" > "$smoke/upstream-$test.log" 2>&1 || status=$?

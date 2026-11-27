@@ -2,6 +2,12 @@ name: Native compiler build and smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "First run: configure and verify only; native compilation requires explicit build-smoke"
+        type: choice
+        options: [preflight, build-smoke]
+        default: preflight
   push:
     branches: [perf/native-compiler-20261127]
     paths: [.github/workflows/native-compiler-screen.yml]
@@ -17,7 +23,7 @@ jobs:
   native:
     if: github.event_name == 'workflow_dispatch' # A narrow branch push only registers the workflow.
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: ${{ inputs.mode == 'build-smoke' && 200 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,12 +38,14 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tools/ci -p test_native_compiler_build.py -v
           bash -n tools/ci/native-compiler/build.sh tools/ci/native-compiler/smoke.sh
-      - name: Build both compilers and require native correctness
-        timeout-minutes: 180 # Preserve twenty job minutes for partial artifacts after failure.
+      - name: Verify both configurations before any explicitly requested native build
+        timeout-minutes: ${{ inputs.mode == 'build-smoke' && 180 || 40 }} # Reserve twenty upload minutes.
+        env:
+          NATIVE_MODE: ${{ inputs.mode || 'preflight' }}
         run: |
           set -euo pipefail
           python3 tools/ci/native-compiler-build.py \
-            --output "$RUNNER_TEMP/native-compiler-evidence" --work "$RUNNER_TEMP/native-compiler-work"
+            --output "$RUNNER_TEMP/native-compiler-evidence" --work "$RUNNER_TEMP/native-compiler-work" --mode "$NATIVE_MODE"
       - name: Preserve source identity, binaries, commands and every failed attempt
         if: always()
         run: |
@@ -51,9 +59,9 @@ jobs:
           from pathlib import Path
           root=Path(sys.argv[1])
           cleanup=[]
-          for identity in root.glob('*/owned-container.json'):
+          for identity in root.glob('*/owned-container-*.json'):
               name=json.loads(identity.read_text())['name']
-              if not re.fullmatch(r'native-compiler-[0-9a-f]{32}-(gcc|clang)',name):
+              if not re.fullmatch(r'native-compiler-[0-9a-f]{32}-(gcc|clang)-(configure|build)',name):
                   raise ValueError('Invalid task-owned container identity')
               result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True)
               cleanup.append({'name':name,'status':result.returncode,'stdout':result.stdout,'stderr':result.stderr})
@@ -74,7 +82,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: native-compiler-build-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-compiler-${{ inputs.mode || 'preflight' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-compiler-evidence
           if-no-files-found: error
           include-hidden-files: true

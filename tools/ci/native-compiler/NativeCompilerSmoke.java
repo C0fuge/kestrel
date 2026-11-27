@@ -15,7 +15,10 @@ import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CountDownLatch;
+import java.util.Properties;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
+import java.lang.management.ManagementFactory;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -23,6 +26,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.duckdb.DuckDBResultSet;
+import org.duckdb.DuckDBPreparedStatement;
 
 /** Checks one isolated native candidate with exact rows and the actual mapped JNI library hash. */
 public final class NativeCompilerSmoke {
@@ -43,7 +47,7 @@ public final class NativeCompilerSmoke {
     /**
      * Runs a correctness-only smoke in one fresh JVM and fresh fixture directory.
      *
-     * @param args output directory, expected native SHA-256, common corpus path and compiler
+     * @param args output directory, native SHA-256, common corpus, variant and shared extensions
      * @throws Exception when any smoke or artifact operation fails
      */
     public static void main(String[] args) throws Exception {
@@ -53,7 +57,8 @@ public final class NativeCompilerSmoke {
             raw.write("query,start_epoch_ms,latency_ns,rows,checksum,arrow_bytes,batches,ok,error_type,checksum_version\n");
             raw.flush();
             NativeCompilerSmoke smoke = new NativeCompilerSmoke(raw);
-            try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
+            try (Connection connection = DriverManager.getConnection("jdbc:duckdb:", nativeProperties(output))) {
+                verifyNativeLimits(connection, output);
                 smoke.check("loaded_native", () -> loadedNative(output, args[1]));
                 smoke.check("source_version", () -> {
                     TpchChecksum checksum = new TpchChecksum();
@@ -86,7 +91,8 @@ public final class NativeCompilerSmoke {
                 smoke.check("snappy_jdbc", () -> jdbc(connection, sql, 128, expected.value()));
                 smoke.check("snappy_arrow", () -> arrow(connection, sql, 128, expected.value()));
                 smoke.check("cancel_and_reuse", () -> cancelAndReuse(connection, output));
-                smoke.check("native_extensions", () -> extensions(connection, parquet, expected.value(), output));
+                smoke.check("native_extensions", () -> extensions(connection, parquet, expected.value(), output,
+                        Path.of(args[4])));
             } catch (Throwable error) {
                 smoke.failed = true;
                 smoke.record("startup_or_fixture", System.currentTimeMillis(), 0, null, error);
@@ -95,6 +101,46 @@ public final class NativeCompilerSmoke {
             if (smoke.failed) {
                 throw new AssertionError("Native candidate smoke failed; raw attempts retained");
             }
+        }
+    }
+
+    /**
+     * Sets explicit native limits independently of JVM heap/direct limits.
+     *
+     * @param output fresh smoke output
+     * @return mandatory native configuration
+     * @throws Exception when the bounded temporary directory cannot be created
+     */
+    static Properties nativeProperties(Path output) throws Exception {
+        Path temporary = output.resolve("native-temp").toAbsolutePath();
+        Files.createDirectories(temporary);
+        Properties properties = new Properties();
+        properties.setProperty("threads", "1");
+        properties.setProperty("memory_limit", "256MiB");
+        properties.setProperty("max_temp_directory_size", "256MiB");
+        properties.setProperty("temp_directory", temporary.toString());
+        properties.setProperty("autoinstall_known_extensions", "false");
+        properties.setProperty("autoload_known_extensions", "false");
+        return properties;
+    }
+
+    /**
+     * Confirms and records effective native limits for every opened smoke connection.
+     *
+     * @param connection native connection
+     * @param output evidence directory
+     * @throws Exception when the limits differ or cannot be recorded
+     */
+    static void verifyNativeLimits(Connection connection, Path output) throws Exception {
+        try (Statement st = connection.createStatement(); ResultSet rs = st.executeQuery(
+                "SELECT current_setting('threads'), current_setting('memory_limit'),"
+                + " current_setting('max_temp_directory_size'), current_setting('temp_directory')")) {
+            require(rs.next() && rs.getInt(1) == 1 && rs.getString(2).matches("256(?:\\.0)? MiB")
+                    && rs.getString(3).matches("256(?:\\.0)? MiB"), "Native limits were not applied");
+            Files.writeString(output.resolve("native-limits.tsv"), "threads=" + rs.getInt(1) + "\tmemory_limit="
+                    + rs.getString(2) + "\tmax_temp_directory_size=" + rs.getString(3)
+                    + "\ttemp_directory=" + rs.getString(4) + "\n", java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
         }
     }
 
@@ -238,19 +284,22 @@ public final class NativeCompilerSmoke {
      * @throws Exception when cancellation or reuse fails
      */
     private static Metrics cancelAndReuse(Connection connection, Path output) throws Exception {
+        AtomicReference<Thread> queryThread = new AtomicReference<>();
+        try (Statement settings = connection.createStatement()) {
+            settings.execute("SET enable_progress_bar=true; SET enable_progress_bar_print=false; SET progress_bar_time=0");
+        }
         var pool = Executors.newSingleThreadExecutor(task -> {
             Thread thread = new Thread(task, "native-smoke-cancel");
             thread.setDaemon(true);
+            queryThread.set(thread);
             return thread;
         });
-        try (Statement st = connection.createStatement()) {
-            CountDownLatch started = new CountDownLatch(1);
+        try (DuckDBPreparedStatement st = (DuckDBPreparedStatement) connection.prepareStatement(
+                "SELECT sum(hash(i)) FROM range(10000000000) t(i)")) {
             var future = pool.submit(() -> {
                 long epoch = System.currentTimeMillis();
                 long begin = System.nanoTime();
-                started.countDown();
-                try (ResultSet ignored = st.executeQuery("SELECT sum(a.i*b.i) FROM range(1000000000) a(i),"
-                        + " range(1000000000) b(i)")) {
+                try (ResultSet ignored = st.executeQuery()) {
                     return false;
                 } catch (java.sql.SQLException expected) {
                     boolean interrupted = expected.getMessage().toLowerCase(Locale.ROOT).contains("interrupt");
@@ -262,19 +311,70 @@ public final class NativeCompilerSmoke {
                     return interrupted;
                 }
             });
-            require(started.await(5, TimeUnit.SECONDS), "Cancellation worker did not start");
-            for (int i = 0; i < 200 && !future.isDone(); i++) {
-                try {
-                    st.cancel();
-                } catch (java.sql.SQLException stopped) {
-                    if (!st.isClosed()) {
-                        throw stopped;
+            try {
+                boolean executing = false;
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                var cpu = ManagementFactory.getThreadMXBean();
+                long cpuStart = -1;
+                long cpuStartEpoch = -1;
+                while (!future.isDone() && System.nanoTime() < deadline) {
+                    var progress = st.getQueryProgress();
+                    if (progress.getRowsProcessed() > 0 && progress.getTotalRowsToProcess() > 0
+                            && progress.getPercentage() >= 0 && progress.getPercentage() < 100) {
+                        Files.writeString(output.resolve("cancel-readiness.json"), "{\"method\":\"query_progress\",\"rows_processed\":"
+                                + progress.getRowsProcessed() + ",\"total_rows\":" + progress.getTotalRowsToProcess()
+                                + ",\"percentage\":" + progress.getPercentage() + ",\"epoch_ms\":"
+                                + System.currentTimeMillis() + "}\n", java.nio.file.StandardOpenOption.CREATE_NEW);
+                        executing = true;
+                        break;
                     }
-                    break;
+                    Thread worker = queryThread.get();
+                    StackTraceElement[] stack = worker.getStackTrace();
+                    boolean nativeExecute = Arrays.stream(stack).anyMatch(frame -> frame.isNativeMethod()
+                            && frame.getClassName().equals("org.duckdb.DuckDBNative")
+                            && frame.getMethodName().equals("duckdb_jdbc_execute"));
+                    long measured = cpu.isThreadCpuTimeSupported() && cpu.isThreadCpuTimeEnabled()
+                            ? cpu.getThreadCpuTime(worker.threadId()) : -1;
+                    if (nativeExecute && measured >= 0 && !future.isDone()) {
+                        if (cpuStart < 0) {
+                            cpuStart = measured;
+                            cpuStartEpoch = System.currentTimeMillis();
+                            Files.writeString(output.resolve("cancel-stack-before.txt"), Arrays.toString(stack),
+                                    java.nio.file.StandardOpenOption.CREATE_NEW);
+                        } else if (measured - cpuStart >= 1_000_000) {
+                            Files.writeString(output.resolve("cancel-stack-after.txt"), Arrays.toString(stack),
+                                    java.nio.file.StandardOpenOption.CREATE_NEW);
+                            Files.writeString(output.resolve("cancel-readiness.json"),
+                                    "{\"method\":\"native_execute_thread_cpu\",\"thread_cpu_start_ns\":" + cpuStart
+                                    + ",\"thread_cpu_end_ns\":" + measured + ",\"cpu_start_epoch_ms\":" + cpuStartEpoch
+                                    + ",\"epoch_ms\":" + System.currentTimeMillis()
+                                    + ",\"task_incomplete\":true,\"native_method\":\"duckdb_jdbc_execute\",\"rows_processed\":"
+                                    + progress.getRowsProcessed() + ",\"total_rows\":" + progress.getTotalRowsToProcess()
+                                    + ",\"percentage\":" + progress.getPercentage() + "}\n",
+                                    java.nio.file.StandardOpenOption.CREATE_NEW);
+                            executing = true;
+                            break;
+                        }
+                    }
+                    Thread.sleep(5);
                 }
-                Thread.sleep(5);
+                require(executing, "Native execution readiness could not be proved");
+                Files.writeString(output.resolve("cancel-request.json"), "{\"epoch_ms\":"
+                        + System.currentTimeMillis() + "}\n", java.nio.file.StandardOpenOption.CREATE_NEW);
+                st.cancel();
+                require(future.get(5, TimeUnit.SECONDS), "Query was not interrupted");
+            } finally {
+                if (!future.isDone()) {
+                    try {
+                        st.cancel();
+                    } catch (java.sql.SQLException stopped) {
+                        if (!st.isClosed()) {
+                            throw stopped;
+                        }
+                    }
+                    future.get(5, TimeUnit.SECONDS);
+                }
             }
-            require(future.get(5, TimeUnit.SECONDS), "Query was not interrupted");
             try (Statement reuse = connection.createStatement(); ResultSet result = reuse.executeQuery("SELECT 42")) {
                 require(result.next() && result.getInt(1) == 42, "Connection cannot be reused after cancellation");
             }
@@ -282,6 +382,8 @@ public final class NativeCompilerSmoke {
             pool.shutdownNow();
             require(pool.awaitTermination(5, TimeUnit.SECONDS), "Cancellation worker did not stop");
         }
+        Files.writeString(output.resolve("cancel-termination.json"), "{\"terminated\":true,\"epoch_ms\":"
+                + System.currentTimeMillis() + "}\n", java.nio.file.StandardOpenOption.CREATE_NEW);
         TpchChecksum checksum = new TpchChecksum();
         checksum.addRow(42);
         return new Metrics(1, checksum.value(), -1, -1);
@@ -294,13 +396,24 @@ public final class NativeCompilerSmoke {
      * @param parquet generated fixture
      * @param expected exact checksum
      * @param output evidence directory
+     * @param shared signed shared extension directory
      * @return extension query measurements
      * @throws Exception when the stock extensions cannot load or execute correctly
      */
-    private static Metrics extensions(Connection connection, Path parquet, long expected, Path output) throws Exception {
+    private static Metrics extensions(Connection connection, Path parquet, long expected, Path output, Path shared)
+            throws Exception {
         try (Statement st = connection.createStatement()) {
-            st.execute("SET extension_directory='" + output.resolve("extensions").toAbsolutePath() + "'");
-            st.execute("INSTALL httpfs; LOAD httpfs; INSTALL iceberg; LOAD iceberg;");
+            for (String extension : List.of("httpfs", "iceberg")) {
+                Path file = shared.resolve(extension + ".duckdb_extension").toRealPath();
+                st.execute("LOAD '" + file.toString().replace("'", "''") + "'");
+                List<String> mapped = Files.readAllLines(Path.of("/proc/self/maps")).stream()
+                        .filter(line -> line.contains('/' + extension + ".duckdb_extension"))
+                        .map(line -> line.substring(line.indexOf('/')).strip()).distinct().toList();
+                require(mapped.size() == 1 && Path.of(mapped.getFirst()).toRealPath().equals(file),
+                        "Shared extension mapped identity differs");
+                Files.writeString(output.resolve(extension + "-loaded.json"), "{\"sha256\":\"" + sha256(file)
+                        + "\"}\n", java.nio.file.StandardOpenOption.CREATE_NEW);
+            }
             try (ResultSet result = st.executeQuery("SELECT count(*) FROM duckdb_extensions()"
                     + " WHERE extension_name IN ('httpfs','iceberg') AND loaded")) {
                 require(result.next() && result.getInt(1) == 2, "Stock extensions did not load");
