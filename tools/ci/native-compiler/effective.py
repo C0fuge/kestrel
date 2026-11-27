@@ -79,19 +79,25 @@ def common_arguments(argv, compiler, toolchain, installation):
     return [value for value in argv[1:] if value not in expected]
 
 
-def retain_default_config(argv, compiler, directory, output):
-    """Retain any automatic Clang configuration reported without the disabling selector."""
-    version, diagnostic = capture([argv[0], "--version"], directory, output / "default-compiler-version.txt")
+def retain_default_config(compiler, directory, output):
+    """Retain unconfigured C and C++ defaults before CMake without claiming observed compile flags."""
     configs = []
-    for index, name in enumerate(re.findall(r"^Configuration file: (.+)$", version + diagnostic, re.M)):
-        path = Path(name).resolve(strict=True)
-        content = path.read_bytes()
-        retained = "default-config-" + str(index) + ".cfg"
-        with (output / retained).open("xb") as stream:
-            stream.write(content)
-        configs.append({"path": str(path), "retained": retained, "sha256": hashlib.sha256(content).hexdigest()})
+    for language, driver in (("c", "gcc" if compiler == "gcc" else "clang"),
+                             ("cxx", "g++" if compiler == "gcc" else "clang++")):
+        version, diagnostic = capture([driver, "--version"], directory, output / (language + "-default-compiler-version.txt"))
+        current = []
+        for index, name in enumerate(re.findall(r"^Configuration file: (.+)$", version + diagnostic, re.M)):
+            path = Path(name).resolve(strict=True)
+            content = path.read_bytes()
+            retained = "default-config-" + language + "-" + str(index) + ".cfg"
+            with (output / retained).open("xb") as stream:
+                stream.write(content)
+            current.append({"path": str(path), "retained": retained, "language": language,
+                            "sha256": hashlib.sha256(content).hexdigest()})
+        write(output / (language + "-default-config.json"), {"driver": driver, "automatic_configs": current})
+        configs.extend(current)
     write(output / "default-config.json", {"compiler": compiler, "automatic_configs": configs,
-          "disabled_in_actual_argv": "--no-default-config" in argv})
+          "scope": "unconfigured_driver_defaults"})
 
 
 def capture(argv, cwd, path):
@@ -122,7 +128,6 @@ def probe(database, compiler, output):
     argv = command(entry, compiler)
     common_arguments(argv, compiler, (output / "gcc-toolchain-root.txt").read_text().strip(),
                      (output / "gcc-install-dir.txt").read_text().strip())
-    retain_default_config(argv, compiler, entry["directory"], output)
     macros, _ = capture(argv + ["-E", "-dM"], entry["directory"], output / "macros.txt")
     values = dict(re.findall(r"^#define (\w+) (.*)$", macros, re.M))
     expected = "false" if compiler == "gcc" else "true"
@@ -161,8 +166,16 @@ def probe(database, compiler, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("provenance", "probe"))
     parser.add_argument("compiler", choices=("gcc", "clang"))
-    parser.add_argument("database", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--database", type=Path)
     args = parser.parse_args()
-    probe(args.database, args.compiler, args.output)
+    if args.mode == "provenance":
+        if args.database is not None:
+            parser.error("Provenance does not use a compile database")
+        retain_default_config(args.compiler, str(Path.cwd()), args.output)
+    else:
+        if args.database is None:
+            parser.error("Probe requires the actual compile database")
+        probe(args.database, args.compiler, args.output)

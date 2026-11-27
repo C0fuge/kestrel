@@ -84,7 +84,7 @@ class NativeCompilerBuildTest(unittest.TestCase):
             (folder / "gcc-install-dir.txt").write_text("/portable/toolchain/lib/gcc/14\n")
             (folder / "gcc-libgcc-file.txt").write_text("/portable/toolchain/lib/gcc/14/libgcc.a\n")
             BUILD.save(folder / "default-config.json", {"compiler": compiler, "automatic_configs": [],
-                       "disabled_in_actual_argv": compiler == "clang"})
+                       "scope": "unconfigured_driver_defaults"})
             entry = {
                 "file": "/source/src/duckdb/third_party/snappy/snappy.cc",
                 "directory": "/source/build/release",
@@ -196,29 +196,89 @@ class NativeCompilerBuildTest(unittest.TestCase):
             retain = BUILD.EFFECTIVE["retain_default_config"]
             with mock.patch.dict(retain.__globals__, {"capture": lambda *args:
                     ("Configuration file: " + str(config) + "\n", "")}):
-                retain(["clang++", "--no-default-config"], "clang", str(root), root)
+                retain("clang", str(root), root)
             metadata = json.loads((root / "default-config.json").read_text())
-            self.assertTrue(metadata["disabled_in_actual_argv"])
+            self.assertEqual("unconfigured_driver_defaults", metadata["scope"])
+            self.assertEqual({"c", "cxx"}, {item["language"] for item in metadata["automatic_configs"]})
             item = metadata["automatic_configs"][0]
             self.assertEqual(config.read_bytes(), (root / item["retained"]).read_bytes())
             self.assertEqual(BUILD.digest(config), item["sha256"])
-        for field in ("disabled_in_actual_argv", "config_hash", "installation"):
+        for field in ("scope", "config_hash", "installation"):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 self.probes(root)
                 folder = root / "clang"
                 path = folder / "default-config.json"
                 value = json.loads(path.read_text())
-                if field == "disabled_in_actual_argv":
-                    value[field] = False
+                if field == "scope":
+                    value[field] = "requested_flags"
                 elif field == "config_hash":
-                    (folder / "default-config-0.cfg").write_text("original")
-                    value["automatic_configs"] = [{"retained": "default-config-0.cfg", "path": "/etc/clang/driver.cfg", "sha256": "f" * 64}]
+                    (folder / "default-config-cxx-0.cfg").write_text("original")
+                    value["automatic_configs"] = [{"retained": "default-config-cxx-0.cfg", "path": "/etc/clang/driver.cfg", "sha256": "f" * 64}]
                 else:
                     (folder / "gcc-libgcc-file.txt").write_text("/other/15/libgcc.a")
                 path.write_text(json.dumps(value))
                 with self.assertRaises(ValueError):
                     BUILD.check_probes(root)
+
+    def test_early_configure_failures_retain_snapshots_and_separate_driver_inputs(self):
+        """Execute the real recipe with fake tools, proving config retention precedes failing CMake."""
+        recipe = (BUILD.HERE / "native-compiler/build.sh").read_text()
+        for fail_mkdir in (False, True):
+            with self.subTest(fail_mkdir=fail_mkdir), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source, evidence, binary = root / "source", root / "evidence", root / "bin"
+                for path in (source, evidence, binary):
+                    path.mkdir()
+                if fail_mkdir:
+                    (source / "build").write_text("blocked directory")
+                libgcc = root / "lib/gcc/14/libgcc.a"
+                libgcc.parent.mkdir(parents=True)
+                libgcc.touch()
+                for name in ("gcc", "g++", "clang", "clang++", "ld", "cmake", "ninja", "rpm", "java"):
+                    config = root / (name + ".cfg")
+                    config.write_text("--gcc-install-dir=/automatic/15\n# " + name + "\n")
+                    if name == "gcc":
+                        body = 'if [ "$1" = -print-libgcc-file-name ]; then echo ' + str(libgcc) + '; else echo GCC; fi'
+                    elif name in ("clang", "clang++"):
+                        body = "echo 'Configuration file: " + str(config) + "'"
+                    elif name == "cmake":
+                        body = 'if [ "$1" = --version ]; then echo cmake; else echo deliberate-configure-failure >&2; exit 42; fi'
+                    else:
+                        body = "echo synthetic-tool-version"
+                    path = binary / name
+                    path.write_text("#!/bin/sh\n" + body + "\n")
+                    path.chmod(0o700)
+                stub = root / "snapshot.py"
+                stub.write_text("import json,sys\nfrom pathlib import Path\n"
+                    "out,phase,edge=sys.argv[1:4]\n"
+                    "with (Path(out)/(phase+'-cgroup-'+edge+'.json')).open('x') as f: "
+                    "json.dump({'edge':edge,'recipe_status':int(sys.argv[5]) if len(sys.argv)>5 else None},f)\n")
+                script = recipe.replace("/evidence", str(evidence)).replace("/source", str(source))
+                script = script.replace("/opt/python/cp312-cp312/bin/python3", sys.executable)
+                script = script.replace("/control/resources.py", str(stub))
+                script = script.replace("/control/effective.py", str(BUILD.HERE / "native-compiler/effective.py"))
+                script = script.replace("JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk", "JAVA_HOME=" + str(root))
+                script = script.replace("HOME=/tmp/native-home", "HOME=" + str(root / "home"))
+                env = dict(BUILD.os.environ, PATH=str(binary) + ":" + BUILD.os.environ["PATH"])
+                result = subprocess.run(["bash", "-c", script, "fixture", "clang", BUILD.FLAGS, "configure"],
+                                        env=env, cwd=source, capture_output=True, text=True)
+                expected = 1 if fail_mkdir else 42
+                self.assertEqual(expected, result.returncode, result.stderr)
+                self.assertTrue((evidence / "configure-cgroup-before.json").exists())
+                exit_frame = json.loads((evidence / "configure-cgroup-exit.json").read_text())
+                self.assertEqual(expected, exit_frame["recipe_status"])
+                self.assertEqual(str(expected), (evidence / "configure-recipe-exit-status.txt").read_text().strip())
+                self.assertFalse((evidence / "compile_commands.json").exists())
+                self.assertFalse((evidence / "effective.json").exists())
+                if not fail_mkdir:
+                    metadata = json.loads((evidence / "default-config.json").read_text())
+                    self.assertEqual("unconfigured_driver_defaults", metadata["scope"])
+                    configs = metadata["automatic_configs"]
+                    self.assertEqual({"c", "cxx"}, {item["language"] for item in configs})
+                    self.assertEqual(2, len({item["sha256"] for item in configs}))
+                    for item in configs:
+                        self.assertEqual(Path(item["path"]).read_bytes(), (evidence / item["retained"]).read_bytes())
 
     def test_actual_compile_argv_rejects_all_late_conflicting_overrides(self):
         """Fixed standalone macros cannot hide overrides in the actual decoder compilation."""

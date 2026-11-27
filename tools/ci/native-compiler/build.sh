@@ -10,9 +10,7 @@ case "$compiler" in gcc) cc=gcc; cxx=g++;; clang) cc=clang; cxx=clang++;; *) exi
 export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
 export SOURCE_DATE_EPOCH=1790590000
 export HOME=/tmp/native-home
-mkdir -p "$HOME"
 build=/source/build/release
-mkdir -p "$build"
 retain() {
   rc=$?
   trap - EXIT
@@ -31,6 +29,10 @@ retain() {
 }
 trap retain EXIT
 /opt/python/cp312-cp312/bin/python3 /control/resources.py /evidence "$phase" before
+mkdir -p "$HOME" "$build"
+if [ "$phase" = configure ]; then
+  /opt/python/cp312-cp312/bin/python3 /control/effective.py provenance "$compiler" /evidence
+fi
 gcc_root=$(dirname "$(dirname "$(readlink -f "$(command -v gcc)")")")
 gcc_libgcc=$(readlink -f "$(gcc -print-libgcc-file-name)")
 gcc_install=$(dirname "$gcc_libgcc")
@@ -59,7 +61,7 @@ if [ "$phase" = configure ]; then
   printf '%q ' cmake "${cmake_args[@]}" > /evidence/configure-command.txt
   cmake "${cmake_args[@]}"
   cp "$build/compile_commands.json" /evidence/compile_commands.json
-  /opt/python/cp312-cp312/bin/python3 /control/effective.py "$compiler" "$build/compile_commands.json" /evidence
+  /opt/python/cp312-cp312/bin/python3 /control/effective.py probe "$compiler" /evidence --database "$build/compile_commands.json"
   sha256sum "$build/compile_commands.json" > /evidence/preflight-compile-SHA256
   exit 0
 fi

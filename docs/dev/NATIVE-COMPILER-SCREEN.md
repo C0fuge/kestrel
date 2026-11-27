@@ -30,8 +30,11 @@ C++11, libstdc++ with `_GLIBCXX_USE_CXX11_ABI=1`, generic x86-64 ISA, two compil
 jobs and a 10 GiB container limit are common. Clang disables automatic driver
 configuration with `--no-default-config` and selects the exact GCC installation derived from the GCC driver's resolved
 `-print-libgcc-file-name`, in addition to the common toolchain root. The automatic
-configuration paths, contents and hashes reported by the unmodified Clang driver
-are retained for provenance; their options are not used for actual compilation.
+configuration paths, contents and hashes reported separately by the unmodified
+C and C++ drivers are retained before CMake starts, including on configure failure.
+This metadata describes unconfigured driver defaults, not observed compile flags;
+the actual compile-database proof remains a separate post-configuration gate.
+Those automatic options are not used for actual Clang compilation.
 Containers run as the runner's explicit UID:GID with image-derived passwd/group files, a private temporary HOME and every capability
 dropped. They can write the runner-owned source/evidence mounts without DAC caps.
 
@@ -76,8 +79,9 @@ compiler/linker/package/JVM versions, build resource counters, ELF metadata,
 query attempts, GC and privacy-filtered JFR files survive failures. No environment
 or credential dump is collected.
 
-Each compiler container records mandatory framed cgroup-v2 snapshots before the
-recipe and in its EXIT trap, independently of the optional five-second sampler.
+Each compiler container installs its EXIT trap and records a mandatory framed
+cgroup-v2 snapshot before creating recipe directories or running compiler setup.
+It records a second frame at EXIT, independently of the optional five-second sampler.
 Every CPU, memory/current/peak/events, IO and CPU/memory/swap/process-limit file
 has its own read status. Both frames, successful reads, actual counters and the
 2-CPU/10-GiB/no-swap/1024-process limits are required for phase success. A kernel

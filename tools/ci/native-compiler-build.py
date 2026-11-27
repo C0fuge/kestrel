@@ -314,11 +314,11 @@ def check_probes(output):
         if not libgcc.is_absolute() or str(libgcc.parent) != installations[compiler]:
             raise ValueError("Recorded GCC installation differs from driver libgcc")
         configuration = json.loads((folder / "default-config.json").read_text())
-        if configuration.get("compiler") != compiler or configuration.get("disabled_in_actual_argv") != (compiler == "clang"):
+        if configuration.get("compiler") != compiler or configuration.get("scope") != "unconfigured_driver_defaults":
             raise ValueError("Missing actual automatic-configuration provenance")
         for item in configuration["automatic_configs"]:
             retained = item["retained"]
-            if not re.fullmatch(r"default-config-[0-9]+\.cfg", retained) or not Path(item["path"]).is_absolute() or digest(folder / retained) != item["sha256"]:
+            if not re.fullmatch(r"default-config-(c|cxx)-[0-9]+\.cfg", retained) or not Path(item["path"]).is_absolute() or digest(folder / retained) != item["sha256"]:
                 raise ValueError("Automatic compiler configuration identity differs")
         common[compiler] = common_decoder_arguments(effective, toolchains[compiler], installations[compiler])
     if any(probes["gcc"][key] != probes["clang"][key] for key in ("libstdcxx", "libstdcxx_sha256", "glibcxx_header_version", "glibcxx_config_header", "glibcxx_config_sha256", "abi_features")):
