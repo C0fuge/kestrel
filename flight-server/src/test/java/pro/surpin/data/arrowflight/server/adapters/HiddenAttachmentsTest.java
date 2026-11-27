@@ -1,5 +1,6 @@
 package pro.surpin.data.arrowflight.server.adapters;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -31,9 +32,27 @@ class HiddenAttachmentsTest {
     /** Attachment name of these tests; no other test uses it (the hiding is process-wide). */
     private static final String HIDDEN = "item47_hidden_db";
 
+    /** Registers the synthetic attachment for this test class. */
     @BeforeAll
     static void hide() {
         HiddenAttachments.addAll(List.of(HIDDEN.toUpperCase(java.util.Locale.ROOT)));
+    }
+
+    /**
+     * Removes this class's synthetic attachment from the process-wide registry.
+     *
+     * @throws ReflectiveOperationException when the registry cannot be accessed
+     */
+    @AfterAll
+    static void restoreAttachments() throws ReflectiveOperationException {
+        // Keep the production registry add-only; only this test's entry is removed.
+        java.lang.reflect.Field field = HiddenAttachments.class.getDeclaredField("NAMES");
+        field.setAccessible(true);
+        synchronized (HiddenAttachments.class) {
+            if (field.get(null) instanceof Set<?> names) {
+                names.remove(HIDDEN);
+            }
+        }
     }
 
     /** Metadata queries that listed the attached database's names before the fix. */

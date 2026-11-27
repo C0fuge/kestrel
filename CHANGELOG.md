@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Prepared statement GetSchema now resolves signed or cluster-held parameter values just like
+  GetFlightInfo, so bound numeric parameters announce the schema actually streamed.
+- Prepared statement query uploads reject unsupported multiple parameter rows before copying
+  the rejected batch into an Arrow IPC buffer; accepted inputs and error status are unchanged.
+
 - Item 57 (core): `resourceProfile=balanced` keeps the file order again on every data dir (Q54-1's
   `duckDbPreserveInsertionOrder=false` on remote data dirs is no longer a default). With the order dropped DuckDB 1.5.6
   ran selective filters over remote Parquet up to 1.7x slower: TPC-H q14 through StarRocks 1.79 -> 3.62 s (SF10), q15

@@ -166,6 +166,28 @@ class CompleteAnswerIntegrationTest {
         }
     }
 
+    /** Verifies GetSchema, GetFlightInfo and DoGet agree after binding an untyped numeric parameter. */
+    @Test
+    void boundParameterSchemaMatchesItsStream() throws Exception {
+        org.apache.arrow.vector.types.pojo.Schema parameters = new org.apache.arrow.vector.types.pojo.Schema(
+                java.util.List.of(org.apache.arrow.vector.types.pojo.Field.nullable("p", new ArrowType.Int(64, true))));
+        try (VectorSchemaRoot values = VectorSchemaRoot.create(parameters, helper.allocator)) {
+            ((org.apache.arrow.vector.BigIntVector) values.getVector(0)).setSafe(0, 42L);
+            values.setRowCount(1);
+            com.google.protobuf.ByteString handle =
+                    pro.surpin.data.arrowflight.server.adapters.QueryParameters.boundHandle("SELECT ? AS v",
+                            pro.surpin.data.arrowflight.server.adapters.QueryParameters.serialize(values));
+            org.apache.arrow.flight.FlightDescriptor descriptor = org.apache.arrow.flight.FlightDescriptor.command(
+                    com.google.protobuf.Any.pack(org.apache.arrow.flight.sql.impl.FlightSql.CommandPreparedStatementQuery
+                            .newBuilder().setPreparedStatementHandle(handle).build()).toByteArray());
+            org.apache.arrow.vector.types.pojo.Schema schema = helper.flightClient().getSchema(descriptor).getSchema();
+            FlightInfo info = helper.flightClient().getInfo(descriptor);
+            assertEquals(new ArrowType.Int(64, true), schema.getFields().get(0).getType());
+            assertEquals(info.getSchema(), schema);
+            assertEquals(42L, firstValue(info));
+        }
+    }
+
     /** Verifies a parameter that does not fit an empty text is still prepared (? + 1, CAST). */
     @Test
     void untypedParameterInArithmeticIsPrepared() throws Exception {
