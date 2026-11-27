@@ -45,7 +45,8 @@ final class TpchQuerySamples implements AutoCloseable {
                 .append("\norigin_ns=").append(originNanos)
                 .append("\nstart_ns=absolute System.nanoTime; epoch timestamp anchored to origins")
                 .append("\nfirst_query=first attempt per client, round 0 sequence 0")
-                .append("\nchecksum=order-independent normalized row hash, hexadecimal unsigned 64-bit")
+                .append("\nchecksum_version=").append(TpchChecksum.VERSION)
+                .append("\nchecksum=SHA-256 first 64 bits per length-prefixed UTF-8 row, summed modulo 2^64")
                 .append("\narrow_bytes=Arrow vector buffers, excluding transport framing")
                 .append("\nunknown=rows,arrow_bytes,batches -1 and checksum 0 after incomplete reads\n");
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -59,7 +60,7 @@ final class TpchQuerySamples implements AutoCloseable {
         Files.writeString(directory.resolve("metadata.txt"), metadata, StandardOpenOption.CREATE_NEW);
         writer = Files.newBufferedWriter(directory.resolve("queries.csv"), StandardOpenOption.CREATE_NEW);
         writer.write("query,client,round,warmup,sequence,first_query,start_epoch_ms,start_ns,latency_ns,"
-                + "rows,checksum,arrow_bytes,batches,ok,error_type\n");
+                + "rows,checksum,arrow_bytes,batches,ok,error_type,checksum_version\n");
         writer.flush();
     }
 
@@ -98,12 +99,12 @@ final class TpchQuerySamples implements AutoCloseable {
     synchronized void write(String query, int client, int round, int sequence, long start, long elapsed,
             Answer answer, String error) throws IOException {
         long epochMillis = originEpochMillis + (start - originNanos) / 1_000_000;
-        writer.write(String.format(Locale.ROOT, "\"%s\",%d,%d,%d,%d,%d,%d,%d,%d,%d,%016x,%d,%d,%d,%s%n",
+        writer.write(String.format(Locale.ROOT, "\"%s\",%d,%d,%d,%d,%d,%d,%d,%d,%d,%016x,%d,%d,%d,%s,%s%n",
                 query.replace("\"", "\"\""), client, round, round == 0 ? 1 : 0, sequence,
                 round == 0 && sequence == 0 ? 1 : 0, epochMillis, start, elapsed,
                 answer == null ? -1 : answer.rows(), answer == null ? 0 : answer.checksum(),
                 answer == null ? -1 : answer.bytes(), answer == null ? -1 : answer.batches(),
-                error.isEmpty() ? 1 : 0, error));
+                error.isEmpty() ? 1 : 0, error, TpchChecksum.VERSION));
         writer.flush();
     }
 

@@ -1,6 +1,7 @@
 package pro.surpin.data.arrowflight.server;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +20,7 @@ import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.util.Text;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -70,11 +72,46 @@ class TpchQuerySamplesTest {
             assertEquals("2", row[12]);
             assertEquals("1", row[13]);
             assertEquals("", row[14]);
+            assertEquals(TpchChecksum.VERSION, row[15]);
         }
         String metadata = Files.readString(directory.resolve("raw/metadata.txt"));
         assertTrue(metadata.contains("perf.rounds=1\nperf.clients=2\nperf.mode=complete\n"));
         assertTrue(metadata.contains("query.0.sha256="));
+        assertTrue(metadata.contains("checksum_version=" + TpchChecksum.VERSION + "\n"));
         assertFalse(metadata.contains(directory.toString()));
+    }
+
+    /**
+     * Converts Arrow text and exact decimal counts to the cross-language q12 checksum.
+     *
+     * @param directory temporary parent directory
+     * @throws Exception when fixture setup or sample reading fails
+     */
+    @Test
+    void arrowTextAndHugeintDecimalsUseTheCanonicalChecksum(@TempDir Path directory) throws Exception {
+        FlightSqlClient client = mock(FlightSqlClient.class);
+        FlightStream stream = answerStream(client);
+        VectorSchemaRoot root = stream.getRoot();
+        FieldVector text = mock(FieldVector.class);
+        FieldVector high = mock(FieldVector.class);
+        FieldVector low = mock(FieldVector.class);
+        when(root.getFieldVectors()).thenReturn(List.of(text, high, low));
+        when(root.getRowCount()).thenReturn(2);
+        when(text.getObject(0)).thenReturn(new Text("MAIL"));
+        when(text.getObject(1)).thenReturn(new Text("SHIP"));
+        when(high.getObject(0)).thenReturn(new BigDecimal("6202"));
+        when(high.getObject(1)).thenReturn(new BigDecimal("6200"));
+        when(low.getObject(0)).thenReturn(new BigDecimal("9324"));
+        when(low.getObject(1)).thenReturn(new BigDecimal("9262"));
+        when(stream.next()).thenReturn(true, false);
+        AtomicInteger failures = new AtomicInteger();
+        try (TpchQuerySamples raw = samples(directory, List.of("q12"), List.of(2L))) {
+            TpchPerfTest.runPass(client, header(), List.of("SELECT 1"), List.of("q12"), List.of(2L),
+                    0, 0, 1, failures, raw);
+        }
+        assertEquals(0, failures.get());
+        assertEquals("66191bf0fe853f3d", rows(directory).getFirst()[10]);
+        assertEquals(TpchChecksum.VERSION, rows(directory).getFirst()[15]);
     }
 
     /**
@@ -153,7 +190,7 @@ class TpchQuerySamplesTest {
             assertEquals(40, rows(directory).size());
         }
         assertEquals(40, rows(directory).size());
-        assertTrue(rows(directory).stream().allMatch(row -> row.length == 15));
+        assertTrue(rows(directory).stream().allMatch(row -> row.length == 16));
         assertEquals(20, rows(directory).stream().filter(row -> row[1].equals("0")).count());
         assertEquals(20, rows(directory).stream().filter(row -> row[1].equals("1")).count());
     }
