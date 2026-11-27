@@ -5,7 +5,7 @@ ALL DONE 2026-11-18T17:58Z (restored; withdrawn 2026-11-17T15:58Z for items 52-5
 06d6468b17c5 as default; egret FRESH 06d6468b17c5 DONE. Still waiting only for the maintainer's real-cluster rerun:
 52(b) (merged bdeda437) and 55(a) (merged, defaults per answers a3a7f029).
 
-Status as of **2026-11-20T11:56Z UTC** (hourly orchestrator; it only watches, it does not change code).
+Status as of **2026-11-20T12:58Z UTC** (hourly orchestrator; it only watches, it does not change code).
 
 Points for the maintainer:
 - **egret FRESH 06d6468b17c5 DONE** (44335959845 + rereport 44362838876; upstream native `47c6c7d95db0`, new head):
@@ -14,7 +14,7 @@ Points for the maintainer:
   balanced S3 mixed (SF1 ADBC -18 %, SF10 JDBC +15 % on the same CPU type). **Flag: speed S3 SF10 ADBC 38.1 s vs
   32.3 s in f4feb0d5e404 (+18 %, same 9V74 type, one run; item 57 does not touch speed) - egret suggests a re-check.**
 - heron: session 335 closed the q09/q10/q12 SF10 watch (44338448083) and q21 SF1 (44352121022) at parity; e2e kill
-  delays fixed (push e2e 44352452531 green); sessions 336-364 finish mode, nothing open (364 at 11:50Z); plugins 11:13Z and catalogs 11:21Z no open item; marten unlock 11:40Z nothing new; egret idle 11:26Z.
+  delays fixed (push e2e 44352452531 green); sessions 336-365 finish mode, nothing open (365 at 12:52Z); catalogs 12:21Z no open item; marten unlock 12:41Z nothing new; egret idle 11:26Z.
 - marten: finish mode, 06d6468b17c5 default (unchanged; last unlock 08:41Z).
 - Q-57a (core): `speed` still drops the insertion order (options: leave / keep order / per-query second connection;
   lane recommends leave).
@@ -55,8 +55,8 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 ## marten / heron: IMPROVEMENTS from the connector comparison
 
 - marten: IMPROVEMENTS DONE (2026-11-03). 06d6468b17c5 m4 / compare default after full regression PASS; finish mode
-  (598ca3a 09:40Z), lock free.
-- heron: IMPROVEMENTS DONE (session 98). 06d6468b17c5 default; sessions 335-363 nothing open (10:51Z), lock
+  (c27efc8 12:41Z), lock free.
+- heron: IMPROVEMENTS DONE (session 98). 06d6468b17c5 default; sessions 335-365 nothing open (12:52Z), lock
   free; last runs green (e2e 44352452531, connector-compare 44352121022).
 
 ## egret
@@ -65,6 +65,7 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 06d6468b17c5: ACCEPT SHIP (44321703096).
 
 ## History
+- 2026-11-20T12:58Z: ALL DONE holds; only catalogs (12:21Z) no-open-item note; main green (44311547842), no new CI, services or pre-releases; marten 12:41Z nothing new, heron session 365 (12:52Z) nothing open; egret idle 11:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T11:56Z: ALL DONE holds; only plugins (11:13Z) and catalogs (11:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 11:40Z nothing new, heron session 364 (11:50Z) nothing open; egret idle 11:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T10:57Z: ALL DONE holds; only lane 3 (10:03Z), plugins (10:11Z) and catalogs (10:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 09:40Z nothing new, heron session 363 (10:51Z) nothing open; egret idle 09:26Z (FRESH 06d6468b17c5 newest); no stale locks.
 - 2026-11-20T09:56Z: ALL DONE holds; only plugins (09:11Z) and catalogs (09:21Z) no-open-item notes; main green (44311547842), no new CI, services or pre-releases; marten 09:40Z nothing new, heron session 362 (09:51Z) nothing open; egret idle 09:26Z (FRESH 06d6468b17c5 newest); no stale locks.
@@ -104,4 +105,3 @@ and heron locks empty). No new bug-first notes in the paused lanes.
 - 2026-11-18T10:56Z: heron pinned 36f3302321ba as default after full regression (e2e 44274803788/44274809554 PASS, A/B 44274814805 within noise, watch SF10 q05/q07); marten functional regression all PASS, compare 44285073710 pending; kestrel only lane 3 note 10:03Z, no new CI runs or pre-releases, main green; no stale locks.
 - 2026-11-18T09:58Z: maintainer note (12:20 MSK) in marten + heron: full regression on 36f3302321ba then default switch; marten m4 S3 1-9 PASS 44274880025, lakefs dispatched; heron session active; kestrel no new CI runs or pre-releases (only catalogs note 09:21Z), main green; no stale locks.
 - 2026-11-18T08:58Z: egret ACCEPT 36f3302321ba SHIP (44258093085), no FRESH (DC-only change); no new CI runs, commits only lane no-open-item notes; main green (44246657183); 52(b)/55(a) wait for stand rerun; marten/heron idle; no stale locks.
-- 2026-11-18T07:57Z: package pkg/36f33023 green (44253203263 + 4 service runs) -> pre-release server-1.0.0-36f3302321ba (07:17Z, first with item 56) for the stand rerun; egret FRESH 5f02e5b35611 DONE (balanced S3 ADBC export 0.66 of upstream, SF1 +20 % flagged), ACCEPT 36f3302321ba 44258093085 running; main CI green; lanes nothing open; marten/heron idle; no stale locks.
