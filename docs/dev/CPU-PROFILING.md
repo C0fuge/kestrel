@@ -9,7 +9,12 @@ existing `SmallQueryThroughputPerfTest`, mixed interval 8, separately at 8 and 3
 clients. Integer literal parameters and prepared schema-message experiments are
 explicitly off. It creates no A/B ratio or promotion recommendation. Maven builds
 once; each concurrency gets a fresh JVM and output folder. Four logical CPUs are
-pinned, with the existing harness JVM/DuckDB limits recorded in the exact commands.
+pinned. The target wrapper directly injects `-Xms512m -Xmx2g`, a 1 GiB direct-memory
+limit, four active JVM processors and synthetic `user.home=/tmp`. These limits
+do not depend on Maven's `-DargLine`: the inherited POM's late `@{argLine}` expansion
+can ignore that user property. The gate checks exact unique flags in wrapper argv,
+the standard harness JFR's actual JVM arguments and the harness RuntimeMXBean
+arguments, plus the actual available-processor count. Conflicting overrides fail.
 The job uses host Java 21 without sudo, kernel changes, capabilities or privileged
 containers. Host limits/cgroup access are recorded rather than assuming isolation.
 
@@ -28,7 +33,7 @@ perf privileges. Its timer resolution is limited by kernel jiffies and it cannot
 collect kernel stacks. Optional `cpu-clock,alluser` forces perf user-space CPU
 sampling and fails if unavailable. The helper never requests automatic `cpu`,
 `itimer` or wall fallback. It reads actual `engine`, `event`, version, interval and
-native stack mode and monotonic clock from every recording before declaring success. CPU samples
+native stack mode and monotonic clock from the target recording before declaring success. CPU samples
 represent running time, subject to sampling/timer granularity; sample percentages
 are statistical estimates, not exact per-query costs.
 
@@ -48,15 +53,39 @@ of one Java thread and one pthread that never attaches to Java, while another
 native thread waits for two wall seconds. It requires resolved native busy
 samples, Java samples, low waiting samples, and independent native thread CPU
 counters. Both workers are created after profiler startup. The same launch
-method is used for the benchmark: only the target Surefire fork receives
+method is used for the benchmark: the wrapper injects only the target Surefire fork's
 `LD_PRELOAD`, `ASPROF_COMMAND` and JVM-agent initialization through a dedicated
 `-Djvm` wrapper. Maven/version discovery and the caller environment are untouched.
-Per-PID filenames prevent profile collisions. Plain startup `-agentpath` alone
+Native children spawned by Java naturally inherit that environment and may also
+write CPU JFRs. The helper selects only `cpu-<sole wrapper launch PID>.jfr`; it never
+chooses the first file or treats the auxiliary recordings as the target. It binds
+that selection to the standard harness JFR's JVMInformation PID/start/arguments,
+RuntimeMXBean arguments and CPU sample timestamps within the launch lifetime.
+Preloaded CPU recordings can lack JVMInformation, so the separate standard JDK
+recording supplies that independent process identity. Duplicate launches, missing
+target files, mismatched identities and stale timestamps fail.
+
+Every auxiliary recording is retained, hashed and inventoried; its extraction
+status and sample count remain separate. Auxiliary files may contain no samples
+or incomplete chunks. Their errors do not replace target identity or CPU evidence.
+The profiler does not expand `%p` in log filenames, and its file logger uses
+[`creat()`](https://github.com/async-profiler/async-profiler/blob/557276c2950c14a5ad7073e2bef5a16616309247/src/log.cpp),
+which truncates a shared filename on child startup. Instead, the wrapper owns one
+`O_APPEND` stderr descriptor to `async-profiler.log` and requests `log=stderr`.
+The target and inherited children share this append stream, preserving JVM/native
+stderr and profiler diagnostics without truncation. Unprefixed log lines cannot
+be assigned to a particular child. The full Maven log and Surefire reports are
+retained separately. Plain startup `-agentpath` alone
 missed the busy unattached pthread in the controlled Java 21 preflight, so it
 does not satisfy this workflow's coverage gate.
 
 Each actual benchmark must also contain at least ten resolved DuckDB CPU samples
-with unwound stacks of two or more frames on threads with no Java thread ID.
+with at least two actual symbol frames, the pinned native
+`duckdb::TaskScheduler::ExecuteForever` root and profiler `thread_start_wrapper`,
+and no Java/interpreted/JIT or unknown-type frames. A zero/missing Java thread ID
+does not prove an unattached native thread: real Java/gRPC stacks can have ID zero.
+Module-only `.so` names do not count as resolved function frames. Java, unknown
+and other native samples are retained and classified separately.
 Otherwise collection fails and its partial evidence is
 uploaded. The helper reports unresolved frame occurrences and truncated stacks;
 inspect these before attributing a hotspot. It uses native DWARF unwinding and
@@ -85,3 +114,9 @@ For a cheap cloud gate use `preflight_only=true`; for an initial actual-query
 unwind check use `seconds=5`. Review those artifacts before a longer diagnostic
 profile. Neither mode is a performance comparison. Local heavy builds or
 benchmarks are unnecessary.
+
+The first diagnostic run `46043760942` retained its original raw evidence. It was
+misconfigured: intended JVM limits were absent, native child recordings caused a
+selection failure, and zero Java thread IDs were insufficient worker evidence.
+It is not a performance pass or an optimization recommendation. The corrected
+gate rejects that launch's missing flags; its original raw files remain unchanged.

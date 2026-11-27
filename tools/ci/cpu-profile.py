@@ -2,8 +2,10 @@
 """Collect explicitly verified on-CPU profiles of the existing embedded screening harness."""
 
 import argparse
+import calendar
 from collections import Counter
 import csv
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -12,6 +14,7 @@ import platform
 import re
 import resource
 import runpy
+import shlex
 import shutil
 import signal
 import subprocess
@@ -31,6 +34,7 @@ SCREEN = runpy.run_path(str(HERE / "optimization-screen.py"))
 SYSTEM = runpy.run_path(str(HERE / "benchmark-system.py"))
 SCOPE = ("embedded server, Flight clients, JVM/compiler/GC and collectors share one JVM; "
          "whole-process on-CPU attribution, not pure-server CPU or an A/B ranking")
+FIXED_JVM = ("-Xms512m", "-Xmx2g", "-XX:MaxDirectMemorySize=1g", "-XX:ActiveProcessorCount=4", "-Duser.home=/tmp")
 
 
 def save(path, value):
@@ -116,7 +120,7 @@ def profiler_command(event, folder):
     if event not in ("ctimer", "cpu-clock"):
         raise ValueError("CPU event must be ctimer or cpu-clock")
     return (f"start,event={event},interval=10ms,cstack=dwarf,clock=monotonic,jfr,"
-            f"file={folder}/cpu-%p.jfr,log={folder}/async-profiler-%p.log"
+            f"file={folder}/cpu-%p.jfr,log=stderr"
             + (",alluser" if event == "cpu-clock" else ""))
 
 
@@ -181,6 +185,113 @@ def extract_profile(folder, recording, event):
          "jdk.ActiveSetting,jdk.ExecutionSample,profiler.WallClockSample", str(recording)],
         folder, stem + "-events")
     return inspect_cpu_events(event_values(folder / (stem + "-events.log")), event)
+
+
+def target_recording(folder):
+    """Bind one Surefire launch to its exact PID filename, retaining auxiliary inherited recordings."""
+    launches = list(folder.glob("java-launch-*.json"))
+    if len(launches) != 1:
+        raise ValueError("Expected exactly one target Surefire launch")
+    launch = json.loads(launches[0].read_text())
+    pid = launch.get("pid")
+    if type(pid) is not int or pid <= 0 or launches[0].name != f"java-launch-{pid}.json":
+        raise ValueError("Target launch PID and filename disagree")
+    target = folder / f"cpu-{pid}.jfr"
+    if not target.is_file() or target.stat().st_size == 0:
+        raise ValueError("Missing nonempty CPU recording for exact target launch PID")
+    return target, launch, sorted(path for path in folder.glob("cpu-*.jfr") if path != target)
+
+
+def check_jvm_arguments(arguments):
+    """Require every intended limit in actual JVM arguments, rejecting conflicting overrides."""
+    for flag, prefix in zip(FIXED_JVM, ("-Xms", "-Xmx", "-XX:MaxDirectMemorySize=",
+                                      "-XX:ActiveProcessorCount=", "-Duser.home=")):
+        if [arg for arg in arguments if arg.startswith(prefix)] != [flag]:
+            raise ValueError(f"Missing or conflicting actual JVM flag {flag}")
+    aliases = ("-XX:InitialHeapSize=", "-XX:MinHeapSize=", "-XX:MaxHeapSize=")
+    if any(arg.startswith(aliases) for arg in arguments):
+        raise ValueError("Conflicting JVM heap-size aliases")
+
+
+def recording_inventory(folder, target, auxiliary):
+    """Preserve child CPU recordings and extraction errors without treating them as the target JVM."""
+    result = []
+    for path in [target, *auxiliary]:
+        row = {"file": path.name, "sha256": digest(path), "bytes": path.stat().st_size,
+               "role": "target" if path == target else "auxiliary; expected inherited child; identity unverified; never ranked"}
+        if path != target:
+            label = path.stem + "-auxiliary-events"
+            try:
+                run(["jfr", "print", "--json", "--events", "jdk.ActiveSetting,jdk.ExecutionSample", str(path)],
+                    folder, label)
+                events = event_values(folder / (label + ".log"))
+                row.update(readable=True, cpu_samples=sum(event["type"] == "jdk.ExecutionSample" for event in events))
+            except Exception as error:
+                row.update(readable=False, extraction_error=str(error))
+        result.append(row)
+    save(folder / "cpu-recording-inventory.json", result)
+    return result
+
+
+def epoch_ns(value):
+    """Parse retained JFR UTC timestamps without floating-point epoch rounding."""
+    match = re.fullmatch(r"(.{19})(?:\.(\d{1,9}))?Z", value)
+    if not match:
+        raise ValueError("Expected a JFR UTC timestamp")
+    seconds = calendar.timegm(datetime.strptime(match[1], "%Y-%m-%dT%H:%M:%S").timetuple())
+    return seconds * 1_000_000_000 + int((match[2] or "").ljust(9, "0"))
+
+
+def check_target_identity(launch, cpu_samples, jvm_events, runtime, status):
+    """Cross-check target PID, actual runtime flags and CPU event times against independent JDK evidence."""
+    check_jvm_arguments(launch["argv"])
+    infos = [event["values"] for event in jvm_events if event["type"] == "jdk.JVMInformation"]
+    if not infos or {info.get("pid") for info in infos} != {launch["pid"]}:
+        raise ValueError("Harness JFR process identity does not match target launch PID")
+    for info in infos:
+        check_jvm_arguments(shlex.split(info.get("jvmArguments") or ""))
+        started = epoch_ns(info["jvmStartTime"])
+        if not launch["epoch_ns"] - 100_000_000 <= started <= status["end_epoch_ns"]:
+            raise ValueError("Stale or inconsistent JVM start time")
+    actual = dict(line.split("=", 1) for line in runtime.splitlines() if "=" in line)
+    text = actual.get("arguments", "")
+    if not text.startswith("[") or not text.endswith("]"):
+        raise ValueError("Missing actual harness RuntimeMXBean input arguments")
+    check_jvm_arguments(text[1:-1].split(", "))
+    if actual.get("processors") != "4":
+        raise ValueError("Actual JVM processor count differs from intended limit")
+    times = [epoch_ns(sample["startTime"]) for sample in cpu_samples]
+    if not times or min(times) < launch["epoch_ns"] - 100_000_000 or max(times) > status["end_epoch_ns"] + 100_000_000:
+        raise ValueError("Stale CPU recording outside target launch lifetime")
+    return {"pid": launch["pid"], "identity_sources": ["exact CPU PID filename", "wrapper argv",
+            "harness JFR JVMInformation PID/start/arguments", "RuntimeMXBean arguments/processors", "CPU event times"],
+            "fixed_jvm_flags": list(FIXED_JVM), "cpu_first_epoch_ns": min(times), "cpu_last_epoch_ns": max(times)}
+
+
+def classify_duckdb_sample(sample):
+    """Recognize pinned DuckDB scheduler workers by native roots, never by a zero Java thread ID."""
+    frames = (sample.get("stackTrace") or {}).get("frames", [])
+    java = any(frame.get("type") in ("JIT compiled", "Interpreted", "Inlined")
+               or ((frame.get("method") or {}).get("type") or {}).get("package")
+               for frame in frames)
+    if java:
+        return "java_frames"
+    if not frames or any(frame.get("type") not in ("Native", "C++", "C", "Kernel") for frame in frames):
+        return "unknown_frame_types"
+    names = list(frame_names(sample))
+    scheduler = any("duckdb" in cls.lower() and name == "duckdb::TaskScheduler::ExecuteForever"
+                    for cls, name in names)
+    hook = any(cls == "libasyncProfiler.so" and name == "thread_start_wrapper" for cls, name in names)
+    symbols = sum("duckdb" in cls.lower() and "duckdb::" in name for cls, name in names)
+    if scheduler and hook and symbols >= 2:
+        return "native_duckdb_scheduler_worker"
+    return "native_unclassified"
+
+
+def resolved_symbol(name):
+    """Distinguish actual symbols from address/error placeholders and module-only names."""
+    return (not name.startswith(("[", "0x", "/")) and "unknown" not in name.lower()
+            and re.search(r"\.so(?:\.\d+)*$", name) is None)
 
 
 def check_probe(samples, counters):
@@ -303,7 +414,7 @@ def write_wrapper(folder, java, profiler, event):
     shutil.copyfile(Path(java).parent.parent / "release", jdk / "release")
     path = jdk / "bin/java"
     payload = {"java": java, "library": str(profiler / "lib/libasyncProfiler.so"),
-               "command": profiler_command(event, folder), "folder": str(folder)}
+               "command": profiler_command(event, folder), "folder": str(folder), "fixed_jvm": list(FIXED_JVM)}
     script = '''#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 config = CONFIG
@@ -317,15 +428,23 @@ if any("surefirebooter" in arg or "ForkedBooter" in arg for arg in args):
     before = time.monotonic_ns()
     epoch = time.time_ns()
     after = time.monotonic_ns()
-    argv = [config["java"], "-agentpath:" + config["library"], *args]
+    argv = [config["java"], *config["fixed_jvm"], "-agentpath:" + config["library"], *args]
     record = pathlib.Path(config["folder"]) / ("java-launch-%d.json" % pid)
     temporary = record.with_suffix(".tmp")
     with temporary.open("x") as out:
         json.dump({"pid": pid, "argv": argv, "epoch_ns": epoch,
                    "monotonic_before_ns": before, "monotonic_after_ns": after,
                    "runtime_environment": env,
+                   "stderr_file": str(pathlib.Path(config["folder"]) / "async-profiler.log"),
                    "LD_PRELOAD": config["library"], "ASPROF_COMMAND": config["command"]}, out)
     temporary.rename(record)
+    # Log::open uses creat(), and does not expand %p for log filenames. Native
+    # children inherit the profiler environment; one inherited O_APPEND stderr
+    # descriptor preserves every process's diagnostic messages without truncation.
+    log = os.open(str(pathlib.Path(config["folder"]) / "async-profiler.log"),
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
+    os.dup2(log, 2)
+    os.close(log)
     env["LD_PRELOAD"] = config["library"]
     env["ASPROF_COMMAND"] = config["command"]
 else:
@@ -374,31 +493,31 @@ def validate_trial(folder, clients, event):
             raise ValueError("Missing or unsuccessful raw answer rows")
         if {row["query_kind"] for row in rows} != {"0", "1", "2"}:
             raise ValueError("Mixed workload lacks one of its query kinds")
-    recordings = list(folder.glob("cpu-*.jfr"))
-    launches = list(folder.glob("java-launch-*.json"))
-    if len(recordings) != 1 or len(launches) != 1:
-        raise ValueError("Expected one explicitly profiled Surefire JVM")
-    metadata, samples = extract_profile(folder, recordings[0], event)
+    recording, launch, auxiliary = target_recording(folder)
+    recording_inventory(folder, recording, auxiliary)
+    metadata, samples = extract_profile(folder, recording, event)
+    run(["jfr", "print", "--json", "--events", "jdk.JVMInformation", str(folder / "profile.jfr")],
+        folder, "harness-jvm-events")
+    identity = check_target_identity(launch, samples, event_values(folder / "harness-jvm-events.log"),
+                                    (folder / "runtime.txt").read_text(),
+                                    json.loads((folder / "maven.status.json").read_text()))
+    save(folder / "target-identity.json", {**identity, "cpu_recording_sha256": digest(recording)})
     coverage = thread_cpu_coverage(folder / "process.jsonl", samples)
     save(folder / "thread-cpu-coverage.json", coverage)
     if coverage["unsampled_active_tids"]:
         raise ValueError("CPU profile missed OS threads with at least 0.5 observed user CPU seconds")
-    worker = [s for s in samples if not s["sampledThread"].get("javaThreadId")
-              and any("duckdb" in cls.lower() for cls, name in frame_names(s))]
-    resolved_worker = [s for s in worker if any("duckdb" in cls.lower()
-                       and ("duckdb::" in name or name.startswith("duckdb_")
-                            or (name.startswith("_Z") and "6duckdb" in name))
-                       for cls, name in frame_names(s))]
-    depth = Counter(sum(not name.startswith(("[", "0x")) and "unknown" not in name.lower()
-                        for cls, name in frame_names(s)) for s in resolved_worker)
+    classes = Counter(classify_duckdb_sample(sample) for sample in samples)
+    worker = [s for s in samples if classify_duckdb_sample(s) == "native_duckdb_scheduler_worker"]
+    resolved_worker = worker
+    depth = Counter(sum(resolved_symbol(name) for cls, name in frame_names(s)) for s in resolved_worker)
     if len(resolved_worker) < 10 or sum(count for length, count in depth.items() if length >= 2) < 10:
         raise ValueError("Insufficient resolved, unwound unattached DuckDB native worker CPU stacks")
-    unresolved = Counter(name for s in samples for cls, name in frame_names(s)
-                         if name.startswith(("[", "0x")) or "unknown" in name.lower())
+    unresolved = Counter(name for s in samples for cls, name in frame_names(s) if not resolved_symbol(name))
     native = [json.loads(path.read_text()) for path in folder.glob("native-*.json")]
     if not any("duckdb" in item["mapped_path"].lower() for item in native):
         raise ValueError("Actual mapped DuckDB native binary was not retained")
-    save(folder / "cpu-verified.json", {**metadata, "scope": SCOPE,
+    save(folder / "cpu-verified.json", {**metadata, "scope": SCOPE, "target_identity": identity,
+         "sample_classification_counts": dict(classes),
          "unattached_duckdb_worker_samples": len(worker), "profile_window": "entire Surefire JVM lifetime",
          "resolved_unattached_duckdb_worker_samples": len(resolved_worker),
          "unattached_duckdb_worker_tids": sorted({s["sampledThread"]["osThreadId"] for s in resolved_worker}),
@@ -407,6 +526,7 @@ def validate_trial(folder, clients, event):
          "truncated_stack_samples": sum(bool((s.get("stackTrace") or {}).get("truncated")) for s in samples),
          "phase_clock": "c*-wall.txt uses System.nanoTime; java-launch clock bracket uses Linux monotonic",
          "raw_metric_summary": summary})
+    return recording
 
 
 def manifest(folder):
@@ -459,6 +579,7 @@ def main():
             raise ValueError("Four available logical CPUs are required")
         save(output / "plan.json", {"scope": SCOPE, "clients": [8, 32], "seconds": args.seconds,
              "heavy_every": 8, "requested_event": args.event, "interval_ns": 10_000_000,
+             "fixed_jvm_flags": list(FIXED_JVM),
              "cpus": affinity[:4], "kernel_release": platform.release(), "kernel_version": platform.version(),
              "workflow_sha": os.environ.get("GITHUB_SHA"), "run_id": os.environ.get("GITHUB_RUN_ID"),
              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
@@ -502,7 +623,7 @@ def main():
                      "flight-server", "-am", "test", "-Pperf", "-Dgroups=perf", "-DexcludedGroups=",
                      "-Djacoco.skip=true", "-Dtest=SmallQueryThroughputPerfTest",
                      "-Dsurefire.failIfNoSpecifiedTests=false", "-Dcheckstyle.skip", "-Dspotbugs.skip",
-                     "-Djvm=" + str(wrapper), "-DargLine=" + SCREEN["JVM"],
+                     "-Djvm=" + str(wrapper),
                      "-Dperf.clients=" + str(clients), "-Dperf.seconds=" + str(args.seconds),
                      "-Dperf.heavyEvery=8", "-Dperf.threads=2", "-Dperf.shared=2:512MB",
                      "-Dperf.dataDir=" + str(data), "-Dperf.output=" + str(folder),
@@ -514,8 +635,7 @@ def main():
                 reports = source / "flight-server/target/surefire-reports"
                 for report in reports.glob("*SmallQueryThroughputPerfTest*"):
                     shutil.copyfile(report, folder / report.name)
-            validate_trial(folder, clients, args.event)
-            recording = next(folder.glob("cpu-*.jfr"))
+            recording = validate_trial(folder, clients, args.event)
             for name, options in (("flame.html", []), ("collapsed.txt", ["--output", "collapsed"])):
                 run([str(profiler / "bin/jfrconv"), *options, "--threads", str(recording), str(folder / name)],
                     folder, "convert-" + name)
