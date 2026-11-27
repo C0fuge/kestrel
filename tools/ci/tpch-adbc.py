@@ -14,10 +14,14 @@ empty when that file is missing).
 import decimal
 import hashlib
 import os
+from pathlib import Path
+import runpy
 import sys
 import time
 
 import adbc_driver_flightsql.dbapi as flightsql
+
+RawRun = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["RawRun"]
 
 
 def normalized(value):
@@ -28,7 +32,7 @@ def normalized(value):
 
 
 def read(cursor, sql):
-    """Runs one query and returns its row count and order-independent checksum."""
+    """Return rows, the existing checksum, referenced Arrow bytes and table chunk count."""
     cursor.execute(sql)
     table = cursor.fetch_arrow_table()
     total = 0
@@ -36,7 +40,7 @@ def read(cursor, sql):
         text = "|".join(normalized(v) for v in row.values()) + "|"
         digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
         total = (total + int.from_bytes(digest, "little")) % (1 << 64)
-    return table.num_rows, total
+    return table.num_rows, total, table.nbytes, len(table.to_batches())
 
 
 def main():
@@ -50,23 +54,39 @@ def main():
         with open(os.path.join(queries, name + ".sql"), encoding="utf-8") as f:
             sqls.append(f.read().strip().rstrip(";"))
         rows = os.path.join(queries, name + ".rows")
-        expected.append(int(open(rows).read().strip()) if os.path.exists(rows) else -1)
+        expected.append(int(Path(rows).read_text().strip()) if os.path.exists(rows) else -1)
     kwargs = {"adbc.flight.sql.rpc.call_header.x-flight-result-mode": mode}
     failed = False
-    with flightsql.connect(f"grpc://{server}", db_kwargs=kwargs) as conn:
-        for r in range(rounds + 1):
-            total = 0
-            for name, sql, want in zip(names, sqls, expected):
-                with conn.cursor() as cursor:
+    raw = RawRun()
+    completed = False
+    try:
+        with flightsql.connect(f"grpc://{server}", db_kwargs=kwargs) as conn:
+            for r in range(rounds + 1):
+                total = 0
+                for name, sql, want in zip(names, sqls, expected):
+                    timestamp = time.time_ns()
                     t0 = time.perf_counter_ns()
-                    rows, checksum = read(cursor, sql)
-                    nanos = time.perf_counter_ns() - t0
-                total += nanos
-                if (want >= 0 and rows != want) or (want < 0 and rows == 0):
-                    print(f"{name} rows {rows}, expected {want if want >= 0 else 'at least 1'}", file=sys.stderr)
-                    failed = True
-                print(f"{name} r{r} {nanos / 1e6:9.1f} ms rows {rows} sum {checksum:016x}", flush=True)
-            print(f"total r{r} {total / 1e9:.2f} s{' (warm-up)' if r == 0 else ''}", flush=True)
+                    try:
+                        with conn.cursor() as cursor:
+                            timestamp = time.time_ns()
+                            t0 = time.perf_counter_ns()
+                            answer = read(cursor, sql)
+                            nanos = time.perf_counter_ns() - t0
+                    except Exception as error:
+                        raw.record(name, r, timestamp, time.perf_counter_ns() - t0, None, want,
+                                   type(error).__name__)
+                        raise
+                    raw.record(name, r, timestamp, nanos, answer, want)
+                    rows, checksum = answer[:2]
+                    total += nanos
+                    if (want >= 0 and rows != want) or (want < 0 and rows == 0):
+                        print(f"{name} rows {rows}, expected {want if want >= 0 else 'at least 1'}", file=sys.stderr)
+                        failed = True
+                    print(f"{name} r{r} {nanos / 1e6:9.1f} ms rows {rows} sum {checksum:016x}", flush=True)
+                print(f"total r{r} {total / 1e9:.2f} s{' (warm-up)' if r == 0 else ''}", flush=True)
+        completed = not failed
+    finally:
+        raw.close(completed)
     sys.exit(1 if failed else 0)
 
 
