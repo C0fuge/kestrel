@@ -177,4 +177,9 @@ between passes, so it does not measure the cross-literal reuse benefit establish
 by the small-query workload. The instrumented workflow preserves raw samples, full logs, process
 and cgroup counters, JFR/GC, versions, query and input manifests. Exact requested
 query/client/round coverage and readable recording evidence must pass before results
-can be ranked. No TPC-H performance result or default promotion is claimed yet.
+can be ranked. The later [complete TPC-H check](TPCH-LITERAL-CHECK-2026-11-27.md)
+verified 1,716 ADBC and 264 concurrent-Java oracle slots. TPC-H total time is close
+to neutral; per-query direction depends on the process pair and aggregation method.
+The detailed report retains all 22 query ratios, server-phase correlation and the
+retention-failure/recovery caveat. It establishes no aggregate TPC-H gain or universal
+default promotion.
