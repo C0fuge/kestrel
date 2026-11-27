@@ -97,7 +97,7 @@ class SmallQueryThroughputPerfTest {
                     artifacts.stage("external-client-ready");
                 }
                 measureAll(new FlightSqlClient(flight), System.getProperty("perf.mode", "complete"),
-                        "external " + external, null);
+                        "external " + external, null, null);
             }
             return;
         }
@@ -125,7 +125,7 @@ class SmallQueryThroughputPerfTest {
             measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)
                     + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default")
                     + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""),
-                    helper.duckDbAdapter.producingGate());
+                    helper.duckDbAdapter.producingGate(), joinGate(helper.duckDbAdapter));
         }
     }
 
@@ -172,10 +172,11 @@ class SmallQueryThroughputPerfTest {
      * @param mode result mode
      * @param server description of the server for the header line
      * @param gate producer gate, or null for an external server
+     * @param joinGate optional experimental join producer gate
      * @throws Exception on failure
      */
     private static void measureAll(FlightSqlClient client, String mode, String server,
-            ProducingStreamGate gate) throws Exception {
+            ProducingStreamGate gate, ProducingStreamGate joinGate) throws Exception {
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
         FlightCallHeaders headers = new FlightCallHeaders();
         headers.insert("x-flight-result-mode", mode);
@@ -184,9 +185,9 @@ class SmallQueryThroughputPerfTest {
         System.out.printf(Locale.ROOT, "== server %s, mode %s, client %s, %d cores, %d s per step%n",
                 server, mode, statements ? "statement" : "prepared", Runtime.getRuntime().availableProcessors(),
                 seconds);
-        run(client, header, statements, 8, Math.max(3, seconds / 3), false, gate);
+        run(client, header, statements, 8, Math.max(3, seconds / 3), false, gate, joinGate);
         for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true, gate);
+            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true, gate, joinGate);
         }
     }
 
@@ -239,6 +240,41 @@ class SmallQueryThroughputPerfTest {
      */
     static void run(FlightSqlClient client, CallOption header, boolean statements,
             int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
+        run(client, header, statements, clients, seconds, print, gate, null);
+    }
+
+    /**
+     * Finds optional join-gate telemetry while keeping this harness compatible with the baseline.
+     *
+     * @param adapter server's DuckDB adapter
+     * @return experimental gate, or null when the baseline does not expose one
+     * @throws ReflectiveOperationException when an existing getter fails
+     */
+    private static ProducingStreamGate joinGate(Object adapter) throws ReflectiveOperationException {
+        try {
+            return (ProducingStreamGate) adapter.getClass().getMethod("joinProducingGate").invoke(adapter);
+        } catch (NoSuchMethodException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Measures one concurrency step with optional experimental admission telemetry.
+     *
+     * @param client Flight SQL client
+     * @param header result-mode header
+     * @param statements whether to use statements rather than prepares
+     * @param clients concurrent clients
+     * @param seconds duration
+     * @param print whether to print the measured step
+     * @param gate global producer gate, or null
+     * @param joinGate experimental join gate, or null
+     * @throws Exception on failure
+     */
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    private static void run(FlightSqlClient client, CallOption header, boolean statements,
+            int clients, int seconds, boolean print, ProducingStreamGate gate,
+            ProducingStreamGate joinGate) throws Exception {
         int heavyEvery = Integer.getInteger("perf.heavyEvery", 0);
         if (heavyEvery < 0) {
             throw new IllegalArgumentException("perf.heavyEvery must not be negative");
@@ -251,6 +287,8 @@ class SmallQueryThroughputPerfTest {
         long cpu0 = processCpu();
         long waits0 = gate == null ? 0 : gate.waits();
         long waitNanos0 = gate == null ? 0 : gate.waitNanos();
+        long joinWaits0 = joinGate == null ? 0 : joinGate.waits();
+        long joinWaitNanos0 = joinGate == null ? 0 : joinGate.waitNanos();
         long end = System.nanoTime() + seconds * 1_000_000_000L;
         long wall0 = System.nanoTime();
         List<StringBuffer> samples = new ArrayList<>();
@@ -308,6 +346,18 @@ class SmallQueryThroughputPerfTest {
                 }
                 if (print) {
                     System.out.printf(Locale.ROOT, "gate c%d %s%n", clients,
+                            sample.strip().replace('\n', ' '));
+                }
+            }
+            if (joinGate != null) {
+                String sample = "permits=" + joinGate.permits() + "\nwaits=" + (joinGate.waits() - joinWaits0)
+                        + "\nwait_ns=" + (joinGate.waitNanos() - joinWaitNanos0) + "\n";
+                if (PerfRunArtifacts.enabled()) {
+                    String label = print ? "c" + clients : "warmup-c" + clients;
+                    Files.writeString(Path.of(System.getProperty("perf.output"), label + "-join-gate.txt"), sample);
+                }
+                if (print) {
+                    System.out.printf(Locale.ROOT, "join_gate c%d %s%n", clients,
                             sample.strip().replace('\n', ' '));
                 }
             }

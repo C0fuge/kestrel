@@ -193,9 +193,13 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param names  function and table names the text uses, lower case
      * @param tables UTF-8 byte offsets in the text where DuckDB's parse puts a base table
      *               reference ({@code query_location}), ascending; empty when unknown
+     * @param admission structural class for experimental producer admission
      */
-    record Accepted(List<String> names, int[] tables) {
+    record Accepted(List<String> names, int[] tables, Admission admission) {
     }
+
+    /** Structural classes of a statement's serialized DuckDB parse. */
+    enum Admission { JOIN, NON_JOIN, UNKNOWN }
     private final ThreadLocal<Session> threadSession;
     /**
      * Node-wide threads and memory limit of duckDbSharedDatabase; null when every session is a
@@ -272,6 +276,8 @@ public final class DuckDbAdapter implements AutoCloseable {
     private final int cores;
     /** Caps the streams inside DuckDB at once (duckDbProducingStreams); off by default. */
     private final ProducingStreamGate producingGate;
+    /** Experimental cap of join producers, used only without a global producer cap. */
+    private final ProducingStreamGate joinProducingGate;
     /** Whether every DuckDB keeps the Parquet footers it read (duckDbParquetMetadataCache). */
     private final boolean parquetMetadataCache = ConfigAdapter.duckDbParquetMetadataCache();
     /** Whether every finished result stream logs one {@code streamTiming} INFO line (streamTimingLog). */
@@ -624,6 +630,11 @@ public final class DuckDbAdapter implements AutoCloseable {
         this.shared = shared;
         this.sharedStatementLimit = shared == null ? 0 : sharedStatementBudget(shared.memoryLimit());
         this.producingGate = producingGate;
+        this.joinProducingGate = new ProducingStreamGate(joinProducingStreams());
+        if (this.joinProducingGate.permits() > 0 && producingGate.permits() > 0) {
+            LOGGER.info("duckdb=joinProducingStreams inactive=globalProducingStreams permits={}",
+                    producingGate.permits());
+        }
         this.zeroCopyWrites = zeroCopyWrites;
         this.readableRoots = setup.roots();
         this.storageSetupStatements = setup.statements();
@@ -684,12 +695,12 @@ public final class DuckDbAdapter implements AutoCloseable {
                 SESSION_REAP_PERIOD_SECONDS, SESSION_REAP_PERIOD_SECONDS, TimeUnit.SECONDS);
 
         LOGGER.info("node={} duckdb=threads perConnection={} underLoad={} whenIdle={}"
-                + " producingStreams={} zeroCopyWrites={} availableProcessors={} sharedDatabase={}"
+                + " producingStreams={} joinProducingStreams={} zeroCopyWrites={} availableProcessors={} sharedDatabase={}"
                 + " parquetMetadataCache={}",
                 LogUtil.node(),
                 shared == null ? appConfig.duckDbThreads() : "shared", this.threadsUnderLoad,
                 this.threadsWhenIdle,
-                producingGate.permits(),
+                producingGate.permits(), joinProducingGate.permits(),
                 zeroCopyWrites, this.cores, shared == null ? "off" : shared.describe(),
                 parquetMetadataCache);
         int warmCount = appConfig.duckDbWarmConnections();
@@ -1946,6 +1957,46 @@ public final class DuckDbAdapter implements AutoCloseable {
         return producingGate;
     }
 
+    /**
+     * Returns the experimental join gate for read-only measurement.
+     *
+     * @return join producer gate, inactive when the global producer cap is configured
+     */
+    public ProducingStreamGate joinProducingGate() {
+        return joinProducingGate;
+    }
+
+    /**
+     * Reads the experimental join cap, which is disabled by default.
+     *
+     * @return nonnegative producer cap
+     * @throws IllegalArgumentException when the property is not a nonnegative integer
+     */
+    static int joinProducingStreams() {
+        String property = "arrowflight.experimental.joinProducingStreams";
+        String value = System.getProperty(property, "0");
+        try {
+            int cap = Integer.parseInt(value);
+            if (cap >= 0) {
+                return cap;
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(property + " must be a nonnegative integer", e);
+        }
+        throw new IllegalArgumentException(property + " must be a nonnegative integer");
+    }
+
+    /**
+     * Selects the existing global cap first, otherwise the experimental cap for joins or unknowns.
+     *
+     * @param admission structural admission class
+     * @return gate used throughout the stream's existing producer-pass lifecycle
+     */
+    ProducingStreamGate producingGate(Admission admission) {
+        return producingGate.permits() > 0 || admission == Admission.NON_JOIN
+                ? producingGate : joinProducingGate;
+    }
+
     /** A query's place in the node's running-query count; see {@link #enterQuery()}. */
     @FunctionalInterface
     public interface QuerySlot extends AutoCloseable {
@@ -2034,9 +2085,9 @@ public final class DuckDbAdapter implements AutoCloseable {
             boolean startListener) throws Exception {
         Session session = session();
         try {
-            requireSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
+            Accepted accepted = checkSingleQuery(session.statement(PARSE_CHECK_SQL), duckSql);
             try (PreparedStatement ps = session.conn.prepareStatement(duckSql)) {
-                streamPrepared(allocator, duckSql, ps, listener, startListener);
+                streamPrepared(allocator, duckSql, ps, accepted.admission(), listener, startListener);
             }
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
@@ -2066,20 +2117,20 @@ public final class DuckDbAdapter implements AutoCloseable {
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
         // Filters of the other mode reach DuckDB as the client wrote them.
-        checkSingleQuery(session, duckSql);
+        Accepted accepted = checkSingleQuery(session, duckSql);
         if (readsLocalCopies(duckSql)) {
             try (PreparedStatement ps = beforeSend(session, () -> session.conn.prepareStatement(duckSql))) {
-                streamPrepared(allocator, duckSql, ps, listener, startListener);
+                streamPrepared(allocator, duckSql, ps, accepted.admission(), listener, startListener);
             }
             return;
         }
         PreparedStatement shaped = literalStatement(session, duckSql);
         if (shaped != null) {
-            streamPrepared(allocator, duckSql, shaped, listener, startListener);
+            streamPrepared(allocator, duckSql, shaped, accepted.admission(), listener, startListener);
             return;
         }
         PreparedStatement ps = beforeSend(session, () -> session.statement(duckSql));
-        streamPrepared(allocator, duckSql, ps, listener, startListener);
+        streamPrepared(allocator, duckSql, ps, accepted.admission(), listener, startListener);
     }
 
     /**
@@ -2102,11 +2153,13 @@ public final class DuckDbAdapter implements AutoCloseable {
      * @param allocator    Arrow buffer allocator
      * @param duckSql      DuckDB SQL of the statement, for logs
      * @param ps           prepared statement with its parameter values set
+     * @param admission    structural class from this statement's existing parse check
      * @param listener     Flight stream listener
      * @param startListener whether to call listener.start()
      * @throws Exception on query or stream failure
      */
     private void streamPrepared(BufferAllocator allocator, String duckSql, PreparedStatement ps,
+            Admission admission,
             org.apache.arrow.flight.FlightProducer.ServerStreamListener listener,
             boolean startListener) throws Exception {
         String qid = LogUtil.qid();
@@ -2128,7 +2181,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         boolean started = false;
         // Whether anything reached the listener: until then a query may run again elsewhere.
         boolean sent = false;
-        try (ProducingStreamGate.Pass pass = enterGate(listener);
+        try (ProducingStreamGate.Pass pass = enterGate(listener, admission);
                 org.duckdb.DuckDBResultSet drs = (org.duckdb.DuckDBResultSet) executeQuery(ps, listener);
                 ArrowReader reader = (ArrowReader) drs.arrowExportStream(allocator, batchSize)) {
             // Gate wait, executeQuery and arrowExportStream.
@@ -2233,13 +2286,14 @@ public final class DuckDbAdapter implements AutoCloseable {
      * query (and, for a materialised result, all of it) when it is executed.
      *
      * @param listener Flight stream listener, for cancellation while waiting
+     * @param admission structural class from the statement's parse check
      * @return pass holding a permit (none when the gate is off)
      * @throws InterruptedException if the thread is interrupted while waiting
      */
     private ProducingStreamGate.Pass enterGate(
-            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener)
+            org.apache.arrow.flight.FlightProducer.ServerStreamListener listener, Admission admission)
             throws InterruptedException {
-        ProducingStreamGate.Pass pass = producingGate.pass(listener::isCancelled);
+        ProducingStreamGate.Pass pass = producingGate(admission).pass(listener::isCancelled);
         pass.enter();
         return pass;
     }
@@ -3124,13 +3178,13 @@ public final class DuckDbAdapter implements AutoCloseable {
             return null;
         });
         // Parse first: preparing a text with several statements runs all but the last one.
-        checkSingleQuery(session, sql);
+        Accepted accepted = checkSingleQuery(session, sql);
         if (readsLocalCopies(sql)) {
             // Not cached: the statement would keep the copies open (readsLocalCopies).
             try (PreparedStatement ps = beforeSend(session, () -> session.conn.prepareStatement(sql))) {
                 requireQuery(sql, ps);
                 bindParameters(ps, parameters);
-                streamPrepared(allocator, sql, ps, listener, startListener);
+                streamPrepared(allocator, sql, ps, accepted.admission(), listener, startListener);
             }
             return;
         }
@@ -3142,7 +3196,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         }
         // Not streamSql: its parse check would take a statement from the cache, and a cache of
         // one statement would close this bound one ("Parameter count mismatch").
-        streamPrepared(allocator, sql, ps, listener, startListener);
+        streamPrepared(allocator, sql, ps, accepted.admission(), listener, startListener);
     }
 
     /**
@@ -3223,11 +3277,12 @@ public final class DuckDbAdapter implements AutoCloseable {
         Session session = session();
         try {
             syncViews(session, views, sql);
-            requireNoSessionCatalog(requireSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
+            Accepted accepted = checkSingleQuery(session.statement(PARSE_CHECK_SQL), sql);
+            requireNoSessionCatalog(accepted.names());
             try (PreparedStatement ps = session.conn.prepareStatement(sql)) {
                 requireQuery(sql, ps);
                 bindParameters(ps, parameters);
-                streamPrepared(allocator, sql, ps, listener, startListener);
+                streamPrepared(allocator, sql, ps, accepted.admission(), listener, startListener);
             }
         } catch (ChangedFileBeforeStart e) {
             throw e.error;
@@ -3439,7 +3494,7 @@ public final class DuckDbAdapter implements AutoCloseable {
     private void checkSharedDescription(String sql,
             pro.surpin.data.arrowflight.server.services.CatalogViews.Snapshot views)
             throws Exception {
-        if (acceptedBefore(sql)) {
+        if (acceptedBefore(sql) != null) {
             return;
         }
         Session session = session();
@@ -3592,7 +3647,7 @@ public final class DuckDbAdapter implements AutoCloseable {
                     views.emptyStatements(), views.dropStatements());
             session.describeVersion = views.version();
         }
-        if (!acceptedBefore(sql)) {
+        if (acceptedBefore(sql) == null) {
             if (session.describeCheck == null || session.describeCheck.isClosed()) {
                 session.describeCheck = conn.prepareStatement(PARSE_CHECK_SQL);
             }
@@ -3607,13 +3662,17 @@ public final class DuckDbAdapter implements AutoCloseable {
      *
      * @param session this thread's session
      * @param sql     client SQL
+     * @return the cached or newly checked statement classification
      * @throws IllegalArgumentException when the text is not one query
      * @throws java.sql.SQLException when the check itself fails
      */
-    private void checkSingleQuery(Session session, String sql) throws java.sql.SQLException {
-        if (!acceptedBefore(sql)) {
-            rememberAccepted(sql, checkSingleQuery(session.statement(PARSE_CHECK_SQL), sql));
+    private Accepted checkSingleQuery(Session session, String sql) throws java.sql.SQLException {
+        Accepted accepted = acceptedBefore(sql);
+        if (accepted == null) {
+            accepted = checkSingleQuery(session.statement(PARSE_CHECK_SQL), sql);
+            rememberAccepted(sql, accepted);
         }
+        return accepted;
     }
 
     /**
@@ -3621,17 +3680,17 @@ public final class DuckDbAdapter implements AutoCloseable {
      * against the refused ones again.
      *
      * @param sql client SQL
-     * @return true when the check need not run again
+     * @return cached parse result, or null when the check must run
      * @throws IllegalArgumentException when the text uses a name refused since
      */
-    private boolean acceptedBefore(String sql) {
+    private Accepted acceptedBefore(String sql) {
         Accepted accepted = parseCheckCache.get(sql);
         if (accepted == null) {
-            return false;
+            return null;
         }
         requireAllowedNames(accepted.names());
         requireNoSessionCatalog(accepted.names());
-        return true;
+        return accepted;
     }
 
     /**
@@ -3679,7 +3738,7 @@ public final class DuckDbAdapter implements AutoCloseable {
         } catch (IllegalArgumentException e) {
             return false;   // the full check refuses it with its own message
         }
-        rememberAccepted(rewritten, new Accepted(List.copyOf(names), new int[0]));
+        rememberAccepted(rewritten, new Accepted(List.copyOf(names), new int[0], accepted.admission()));
         return true;
     }
 
@@ -3784,7 +3843,26 @@ public final class DuckDbAdapter implements AutoCloseable {
             throw new IllegalArgumentException("Only one query that reads data is allowed"
                     + " (SELECT, WITH, VALUES, FROM, TABLE, DESCRIBE, SHOW, SUMMARIZE), one statement per request");
         }
-        return new Accepted(requireAllowedFunctions(serialized), baseTableLocations(serialized));
+        return new Accepted(requireAllowedFunctions(serialized), baseTableLocations(serialized),
+                admission(serialized));
+    }
+
+    /**
+     * Classifies the JSON already produced by DuckDB's single-query check without parsing SQL again.
+     *
+     * @param serialized successful serialized DuckDB statement
+     * @return join, known non-join SELECT, or unknown structural form
+     */
+    static Admission admission(String serialized) {
+        if (serialized == null) {
+            return Admission.UNKNOWN;
+        }
+        // Quotes inside a JSON string are escaped, so a literal cannot supply either key sequence.
+        if (serialized.contains("\"type\":\"JOIN\"")) {
+            return Admission.JOIN;
+        }
+        return serialized.contains("\"node\":{\"type\":\"SELECT_NODE\"")
+                ? Admission.NON_JOIN : Admission.UNKNOWN;
     }
 
     /**
