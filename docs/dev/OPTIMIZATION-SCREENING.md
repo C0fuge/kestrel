@@ -6,13 +6,16 @@ from Dev CI and does not publish a server release. Manual runs accept `source_re
 `baseline_ref`, candidate-only `variant_options`, paired `rounds`, seconds per step,
 rising client counts and `cpu_mode=pinned|quota`. Push runs use three paired rounds,
 15 seconds per step, clients 1/8/32 and pinned CPUs, comparing the pushed revision with
-`90542012`. Pushes to `perf/optimization-screen-mixed-*` use two rounds and
+`90542012`. Pushes to `perf/optimization-screen-mixed-*` or
+`perf/optimization-screen-joins-*` use two rounds and
 `heavy_every=8`; other pushes use `heavy_every=0`. Manual dispatches default to three
 rounds and `heavy_every=0` and accept a common interval from 0 through 64.
 The workflow runs the Python runner's unit tests before building or measuring.
-Pushes start three independent paired jobs: `literal` enables
+Ordinary and mixed-screen pushes start three independent paired jobs: `literal` enables
 `arrowflight.experimental.integerLiteralParameters` only on B; `admission2` and
-`admission4` set only B's `perf.producingStreams=2` or `4`. Manual dispatches start one
+`admission4` set only B's `perf.producingStreams=2` or `4`. Join-screen pushes instead
+start `join1` and `join2`, setting only B's
+`arrowflight.experimental.joinProducingStreams=1` or `2`. Manual dispatches start one
 `custom` paired job with explicit options. Each variant has its own raw artifact.
 Compare A/B ratios within a job; absolute values from different runners are not comparable.
 Use a full 40-character commit SHA for explicit commit inputs; branch and tag names
@@ -54,6 +57,13 @@ DuckDB thread count and limit.
 Never supply credentials, production host names or personal paths in public inputs.
 For example, `-Dperf.producingStreams=2` screens admission control; associated `*-gate.txt`
 files are retained automatically if the selected harness writes them.
+The join experiment defaults to zero and uses the existing DuckDB parse result to cap
+joins and unknown structural forms while other statements bypass it. An explicitly
+configured global producer cap takes precedence and logs the join experiment inactive.
+The harness uses an optional getter for `*-join-gate.txt` wait/permit deltas, so the same
+harness builds on baseline `90542012` without adding production code to A. This is a
+join-admission screen: expensive non-join queries can still run concurrently, and the
+producer cap does not bound memory retained between batches.
 
 Dispatches permit at most eight concurrency steps and fifteen planned measurement
 minutes, including warm-up/setup allowances. The build/measurement step has a separate
