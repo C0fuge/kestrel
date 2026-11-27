@@ -87,6 +87,16 @@ its real Flight SQL regression. The final source tree is integrated in `25b225fa
 The workflow now installs reactor artifacts before standalone follow-up checks;
 those checks previously tried to resolve internal project JARs from Maven Central.
 
+The subsequent main run exposed a test timeout. A focused probe reproduced a JDBC
+race in its concurrent catalog-inspection pattern: queries shared the raw root
+connection and could invalidate a pending result. The original peer exception was
+not retained; the visible failure was a barrier timeout. Catalog inspection now runs
+once on the coordinator after both workers finish; all concurrent describe/type/access
+checks and timeouts remain. Both worker failures are retained. The fixed main
+`fc89a55a` passed [full Dev CI 46035230051](https://github.com/C0fuge/kestrel/actions/runs/46035230051):
+2,082 tests, one skip, zero failures/errors, Checkstyle/SpotBugs and all three standalone
+concurrency/memory-pressure steps. No production code changed in this test correction.
+
 - Compare bounded statement scheduling and query cancellation under mixed small/heavy
   load before adopting further admission-control changes.
 - Compare native Arrow batch transfer and copy/backpressure behavior under the same
