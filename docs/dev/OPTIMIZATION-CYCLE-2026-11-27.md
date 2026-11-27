@@ -28,7 +28,8 @@ Statements reading evictable local copies retain their uncached lifetime.
 Existing parameter markers, oversized SQL, comments, backslashes and unsupported
 literal shapes use the original path. Review found two lexer mismatches that
 required these conservative exclusions: nested block comments and backslash-escaped
-quotes in E-strings. No change to the shared lexer or its other callers was made.
+quotes in E-strings. A separate correctness branch fixes nested block comments in
+the shared lexer; this experiment retains its conservative exclusions.
 
 ## Preliminary local evidence
 
@@ -109,3 +110,71 @@ status prevents execution or answer errors from being ranked as fast queries;
 global deadline and synchronized snapshots preserve partial evidence.
 TPC-H and slow-reader checks follow before promoting any default. No TPC-H or
 full-scan run is claimed here.
+
+## Verified mixed-load screening
+
+[Run 46023313188](https://github.com/C0fuge/kestrel/actions/runs/46023313188)
+passed two alternating paired rounds per variant, using the same bounded self join
+every eighth query on both revisions. The other slots alternate point and count
+queries. A is `90542012`; B is `59764eaf`. Resources and metric scope match the
+short-query cloud screening above. Values below are medians of paired B/A ratios.
+Two pairs establish a screening result, not a confidence interval or a production SLA.
+
+| Variant | Clients | QPS | CPU/query | Point p99 | Count p99 | Heavy p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Integer literal reuse | 1 | 1.143 | 0.923 | 0.959 | 0.876 | 0.834 |
+| Integer literal reuse | 8 | 1.090 | 0.914 | 0.903 | 0.921 | 0.950 |
+| Integer literal reuse | 32 | 1.075 | 0.928 | 0.934 | 0.991 | 1.008 |
+| Producer cap 2 | 32 | 0.876 | — | 1.341 | 1.211 | 0.473 |
+| Producer cap 4 | 32 | 0.932 | — | 1.566 | 1.393 | 0.606 |
+
+All answer gates passed; 438 raw files across three immutable archives were downloaded
+and checked against their SHA256SUMS manifests. The reuse candidate improves throughput
+and CPU/query without the small-query tail regression seen with global caps. Its heavy
+p99 ratio of 1.008 at 32 clients is effectively unchanged in this short experiment.
+Global caps improve aggregate p99 while worsening point/count p99; aggregate latency
+alone would produce the wrong default decision. They remain unsuitable as universal
+defaults. The corresponding [fast CI](https://github.com/C0fuge/kestrel/actions/runs/46023493840)
+passed focused regressions and Checkstyle.
+
+## Join-only admission screening
+
+[Run 46027018997](https://github.com/C0fuge/kestrel/actions/runs/46027018997)
+compares A `90542012` with B `6593dada`, using the same mixed workload and two paired
+rounds. B enables only `arrowflight.experimental.joinProducingStreams=1` or `2`;
+integer reuse is off. Admission classification comes from the cached DuckDB JSON
+query tree. Separate gate counters and raw samples retain queue waits and full
+end-to-end query latency. The two caps run on separate runners: compare each cap
+with its own baseline, not their absolute QPS against each other.
+
+| Join cap | Clients | QPS | CPU/query | Point p99 | Count p99 | Heavy p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 8 | 0.926 | 0.976 | 0.839 | 0.846 | 1.911 |
+| 1 | 32 | 0.926 | 0.983 | 0.424 | 0.426 | 5.875 |
+| 2 | 8 | 0.972 | 1.021 | 0.942 | 0.908 | 1.207 |
+| 2 | 32 | 0.954 | 1.041 | 0.750 | 0.704 | 4.619 |
+
+Both answer gates and the [focused CI](https://github.com/C0fuge/kestrel/actions/runs/46027075589)
+passed. All 308 raw files were downloaded and hash-verified. Join-only caps isolate
+small-query tails, but queue heavy work, reduce throughput, and increase aggregate
+p99 at 32 clients by 3.961x and 3.166x respectively. This is a workload-priority tradeoff,
+not a general performance improvement. Both switches remain experimental and disabled.
+CPU/query is a whole-process metric; no per-kind CPU attribution is claimed.
+
+## TPC-H validation instrumentation
+
+[Run 46028477490](https://github.com/C0fuge/kestrel/actions/runs/46028477490)
+requested SF1, one ADBC client, a warm-up and two measured passes over all 22 queries,
+comparing integer reuse off/on within both balanced and speed profiles on ref
+`6110786a`, with a four-CPU/eight-GiB server container. It stopped before starting
+queries because GitHub omitted an empty optional `baseline` input. Failed artifacts
+were retained and hash-verified. The omitted-input handling is fixed with a regression
+test; all fourteen telemetry tests pass, including replay of that exact input payload.
+
+Within each requested profile pair the flag is the only setting change. TPC-H here
+checks answer compatibility and regression risk: its query literals do not vary
+between passes, so it does not measure the cross-literal reuse benefit established
+by the small-query workload. The instrumented workflow preserves raw samples, full logs, process
+and cgroup counters, JFR/GC, versions, query and input manifests. Exact requested
+query/client/round coverage and readable recording evidence must pass before results
+can be ranked. No TPC-H performance result or default promotion is claimed yet.
