@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Direct DuckDB Arrow result streams send their dictionaries with the schema, fixing ENUM
+  columns, nested enum lists and empty enum results failing before the first batch.
 - Nested SQL block comments are skipped through their outer closing delimiter, so text inside
   a valid comment cannot be mistaken for a malformed time-travel clause during authorization.
 - Prepared statement GetSchema now resolves signed or cluster-held parameter values just like
