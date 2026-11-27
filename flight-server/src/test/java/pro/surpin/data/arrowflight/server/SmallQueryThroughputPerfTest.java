@@ -39,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import pro.surpin.data.arrowflight.plugin.s3.FakeS3;
 import pro.surpin.data.arrowflight.server.adapters.DuckDbSizing;
+import pro.surpin.data.arrowflight.server.adapters.ProducingStreamGate;
 import pro.surpin.data.arrowflight.server.plugin.ConfigSource;
 import pro.surpin.data.arrowflight.server.plugin.PluginSettings;
 import pro.surpin.data.arrowflight.server.storage.StoreRegistry;
@@ -60,6 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * {@code -Dperf.threads} and {@code -Dperf.threadsUnderLoad} set duckDbThreads and
  * duckDbThreadsUnderLoad of the in-process server (default: the server's defaults);
  * {@code -Dperf.shared=threads:memoryLimit} runs it on one shared DuckDB (duckDbSharedDatabase).
+ * {@code -Dperf.producingStreams} caps active producers and records gate wait deltas.
  */
 @Tag("perf")
 class SmallQueryThroughputPerfTest {
@@ -83,11 +85,15 @@ class SmallQueryThroughputPerfTest {
         }
         if (external != null) {
             String[] hostPort = external.split(":");
-            try (BufferAllocator allocator = new RootAllocator();
+            try (PerfRunArtifacts artifacts = PerfRunArtifacts.open();
+                    BufferAllocator allocator = new RootAllocator();
                     FlightClient flight = FlightClient.builder(allocator,
                             Location.forGrpcInsecure(hostPort[0], Integer.parseInt(hostPort[1]))).build()) {
+                if (artifacts != null) {
+                    artifacts.stage("external-client-ready");
+                }
                 measureAll(new FlightSqlClient(flight), System.getProperty("perf.mode", "complete"),
-                        "external " + external);
+                        "external " + external, null);
             }
             return;
         }
@@ -98,18 +104,24 @@ class SmallQueryThroughputPerfTest {
         // 0 = the server's own default for the store (not the helper's 1 thread).
         TestFlightServerHelper.Builder builder = TestFlightServerHelper.builder()
                 .dataDir(dir.toString()).resultMode(mode).threads(threads)
-                .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors());
+                .threadsUnderLoad(underLoad, Runtime.getRuntime().availableProcessors())
+                .producingStreams(Integer.getInteger("perf.producingStreams", 0));
         String shared = System.getProperty("perf.shared");
         if (shared != null) {
             // threads:memoryLimit of one node-wide DuckDB, as duckDbSharedDatabase=true.
             String[] parts = shared.split(":", 2);
             builder.sharedDatabase(new DuckDbSizing.Shared(Integer.parseInt(parts[0]), parts[1]));
         }
-        try (FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
+        try (PerfRunArtifacts artifacts = PerfRunArtifacts.open();
+                FakeS3 fake = s3 ? onFakeS3(builder, dir) : null;
                 TestFlightServerHelper helper = builder.start()) {
+            if (artifacts != null) {
+                artifacts.stage("server-ready");
+            }
             measureAll(helper.sqlClient(), mode, (s3 ? "s3 (latency " + Long.getLong("s3.perf.latencyMs", 2)
                     + " ms)" : "local") + ", duckDbThreads " + (threads > 0 ? threads : "default")
-                    + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""));
+                    + (underLoad > 0 ? ", duckDbThreadsUnderLoad " + underLoad : ""),
+                    helper.duckDbAdapter.producingGate());
         }
     }
 
@@ -139,9 +151,11 @@ class SmallQueryThroughputPerfTest {
      * @param client Flight SQL client of the measured server
      * @param mode result mode
      * @param server description of the server for the header line
+     * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
-    private static void measureAll(FlightSqlClient client, String mode, String server) throws Exception {
+    private static void measureAll(FlightSqlClient client, String mode, String server,
+            ProducingStreamGate gate) throws Exception {
         int seconds = Integer.parseInt(System.getProperty("perf.seconds", "15"));
         FlightCallHeaders headers = new FlightCallHeaders();
         headers.insert("x-flight-result-mode", mode);
@@ -150,9 +164,9 @@ class SmallQueryThroughputPerfTest {
         System.out.printf(Locale.ROOT, "== server %s, mode %s, client %s, %d cores, %d s per step%n",
                 server, mode, statements ? "statement" : "prepared", Runtime.getRuntime().availableProcessors(),
                 seconds);
-        run(client, header, statements, 8, Math.max(3, seconds / 3), false);
+        run(client, header, statements, 8, Math.max(3, seconds / 3), false, gate);
         for (String clients : System.getProperty("perf.clients", "1,8,32").split(",")) {
-            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true);
+            run(client, header, statements, Integer.parseInt(clients.strip()), seconds, true, gate);
         }
     }
 
@@ -200,22 +214,29 @@ class SmallQueryThroughputPerfTest {
      * @param clients concurrent clients
      * @param seconds duration
      * @param print whether to print the step (false for warm-up)
+     * @param gate producer gate, or null for an external server
      * @throws Exception on failure
      */
     private static void run(FlightSqlClient client, CallOption header, boolean statements,
-            int clients, int seconds, boolean print) throws Exception {
+            int clients, int seconds, boolean print, ProducingStreamGate gate) throws Exception {
         AtomicInteger names = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(clients,
                 r -> new Thread(r, "perf-client-" + names.incrementAndGet()));
         ThreadMXBean mx = ManagementFactory.getThreadMXBean();
         Map<String, Long> cpuBefore = cpuByGroup(mx);
         long cpu0 = processCpu();
+        long waits0 = gate == null ? 0 : gate.waits();
+        long waitNanos0 = gate == null ? 0 : gate.waitNanos();
         long end = System.nanoTime() + seconds * 1_000_000_000L;
         long wall0 = System.nanoTime();
+        List<StringBuilder> samples = new ArrayList<>();
         try {
             List<Future<long[]>> futures = new ArrayList<>();
             for (int c = 0; c < clients; c++) {
                 int base = c * 100_003;
+                int thread = c;
+                StringBuilder raw = new StringBuilder();
+                samples.add(raw);
                 futures.add(pool.submit(() -> {
                     long[] times = new long[1 << 16];
                     int n = 0;
@@ -225,16 +246,25 @@ class SmallQueryThroughputPerfTest {
                         String sql = (i & 1) == 0
                                 ? "SELECT * FROM s.orders WHERE o_orderkey = " + k
                                 : "SELECT count(*) FROM s.orders WHERE o_orderkey < " + k;
-                        long rows;
+                        QueryRead result;
                         if (statements) {
-                            rows = read(client, client.execute(sql, header), header);
+                            result = read(client, client.execute(sql, header), header);
                         } else {
                             try (FlightSqlClient.PreparedStatement prepared = client.prepare(sql, header)) {
-                                rows = read(client, prepared.execute(header), header);
+                                result = read(client, prepared.execute(header), header);
                             }
                         }
-                        assertEquals(1, rows, sql);
-                        times[n++] = System.nanoTime() - t0;
+                        long elapsed = System.nanoTime() - t0;
+                        times[n++] = elapsed;
+                        if (PerfRunArtifacts.enabled()) {
+                            raw.append(thread).append(',').append(i).append(',').append(i & 1)
+                                    .append(',').append(k).append(',').append(t0 - wall0)
+                                    .append(',').append(elapsed).append(',').append(result.rows())
+                                    .append(',').append(result.checksum()).append(',').append(result.bytes())
+                                    .append(',').append(result.batches()).append('\n');
+                        }
+                        assertEquals(1, result.rows(), sql);
+                        assertEquals(k, result.first(), sql);
                     }
                     return Arrays.copyOf(times, n);
                 }));
@@ -245,6 +275,23 @@ class SmallQueryThroughputPerfTest {
             }
             double wall = (System.nanoTime() - wall0) / 1e9;
             long cpu = processCpu() - cpu0;
+            if (gate != null) {
+                String sample = "permits=" + gate.permits() + "\nwaits=" + (gate.waits() - waits0)
+                        + "\nwait_ns=" + (gate.waitNanos() - waitNanos0) + "\n";
+                if (PerfRunArtifacts.enabled()) {
+                    String label = print ? "c" + clients : "warmup-c" + clients;
+                    Files.writeString(Path.of(System.getProperty("perf.output"), label + "-gate.txt"), sample);
+                }
+                if (print) {
+                    System.out.printf(Locale.ROOT, "gate c%d %s%n", clients,
+                            sample.strip().replace('\n', ' '));
+                }
+            }
+            if (PerfRunArtifacts.enabled()) {
+                String label = print ? "c" + clients : "warmup-c" + clients;
+                Files.writeString(Path.of(System.getProperty("perf.output"), label + "-wall.txt"),
+                        "wall_start_ns=" + wall0 + "\nwall_seconds=" + wall + "\nprocess_cpu_ns=" + cpu + "\n");
+            }
             if (!print) {
                 return;
             }
@@ -270,6 +317,12 @@ class SmallQueryThroughputPerfTest {
             System.out.println(line);
         } finally {
             pool.shutdownNow();
+            if (!pool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Performance clients did not stop");
+            }
+            if (PerfRunArtifacts.enabled()) {
+                PerfRunArtifacts.writeSamples(print ? "c" + clients : "warmup-c" + clients, samples);
+            }
         }
     }
 
@@ -279,19 +332,49 @@ class SmallQueryThroughputPerfTest {
      * @param client Flight SQL client
      * @param info the query's flight info
      * @param header result-mode header
-     * @return rows read
+     * @return rows, first value, checksum and transferred Arrow buffers
      * @throws Exception on failure
      */
-    private static long read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
+    private static QueryRead read(FlightSqlClient client, FlightInfo info, CallOption header) throws Exception {
         long rows = 0;
+        long first = 0;
+        long checksum = 1;
+        long bytes = 0;
+        long batches = 0;
         for (FlightEndpoint endpoint : info.getEndpoints()) {
             try (FlightStream stream = client.getStream(endpoint.getTicket(), header)) {
                 while (stream.next()) {
-                    rows += stream.getRoot().getRowCount();
+                    org.apache.arrow.vector.VectorSchemaRoot root = stream.getRoot();
+                    if (rows == 0 && root.getRowCount() > 0) {
+                        first = ((Number) root.getVector(0).getObject(0)).longValue();
+                    }
+                    for (org.apache.arrow.vector.FieldVector vector : root.getFieldVectors()) {
+                        bytes += vector.getBufferSize();
+                    }
+                    for (int row = 0; row < root.getRowCount(); row++) {
+                        for (org.apache.arrow.vector.FieldVector vector : root.getFieldVectors()) {
+                            Object value = vector.getObject(row);
+                            checksum = 31 * checksum + (value == null ? 0 : value.toString().hashCode());
+                        }
+                    }
+                    rows += root.getRowCount();
+                    batches++;
                 }
             }
         }
-        return rows;
+        return new QueryRead(rows, first, checksum, bytes, batches);
+    }
+
+    /**
+     * One completely consumed answer.
+     *
+     * @param rows returned rows
+     * @param first first numeric value
+     * @param checksum ordered hash of all values
+     * @param bytes bytes of Arrow buffers
+     * @param batches batches received
+     */
+    private record QueryRead(long rows, long first, long checksum, long bytes, long batches) {
     }
 
     /**
