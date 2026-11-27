@@ -49,6 +49,12 @@ the string `1.00`. Every token is strict UTF-8 preceded by its ASCII byte length
 big-endian, form each row's unsigned hash; answer hashes add modulo 2^64, retaining
 duplicates while ignoring row order. Unsupported scalar types fail explicitly.
 
+The Java reader converts Arrow's physical Date32 epoch-day integers and Date64 UTC
+millisecond integers to logical ISO dates before tokenization. Numeric integer
+columns remain numeric. Real Arrow vector and Flight-reader regressions cover this
+boundary; the failed Java run `46032353815` is retained with its 24 q03/q18 oracle
+mismatches, rather than counted as a server-answer or performance pass.
+
 The historical SF1 run `46029114466` passed A/B and row-count checks but predates this
 oracle gate. Its q12 reference checksum differs only because native `SUM(CASE)` is a
 Python HUGEINT integer while Arrow exports Decimal128(38,0), and the old helper
@@ -97,6 +103,11 @@ five-second heap diagnostics introduce overhead; cgroup totals also include the 
 in-container diagnostic processes. Server `/proc/1` counters isolate the server
 process. Compare configurations from the same instrumented workflow rather than
 treating times as identical to historical uninstrumented runs.
+
+Client query latencies include answer consumption and checksum work. Compare client
+times within the same checksum version; use the separate server stream timings to
+inspect execution and handoff costs. More accurate canonical checksums can change
+client-side overhead relative to historical checksum implementations.
 
 `TPCH_RAW_DIR` optionally enables Python ADBC/plain-client evidence. Java uses
 `-Dperf.rawDir=<fresh directory>` and retains its per-client samples. Every attempted
