@@ -27,9 +27,12 @@ Both builds use one toolbox image derived from the same digest-pinned
 `manylinux_2_28_x86_64` image. Both compilers are installed once; the resulting
 toolbox image ID and package versions are retained. Release `-O3 -DNDEBUG`,
 C++11, libstdc++ with `_GLIBCXX_USE_CXX11_ABI=1`, generic x86-64 ISA, two compile
-jobs and a 10 GiB container limit are common. Clang selects the same GCC toolchain
-for headers and libstdc++. Containers run as the runner's explicit UID:GID with
-image-derived passwd/group files, a private temporary HOME and every capability
+jobs and a 10 GiB container limit are common. Clang disables automatic driver
+configuration with `--no-default-config` and selects the exact GCC installation derived from the GCC driver's resolved
+`-print-libgcc-file-name`, in addition to the common toolchain root. The automatic
+configuration paths, contents and hashes reported by the unmodified Clang driver
+are retained for provenance; their options are not used for actual compilation.
+Containers run as the runner's explicit UID:GID with image-derived passwd/group files, a private temporary HOME and every capability
 dropped. They can write the runner-owned source/evidence mounts without DAC caps.
 
 `effective.py` derives preprocessing, include tracing and library lookup from the
@@ -40,7 +43,10 @@ overrides, including later ones. Actual macros must prove baseline x86-64, C++11
 ABI 1 and GCC's old / Clang's new decoder. Both candidates must identify the same
 libstdc++ linker input/hash and header version before either native build begins.
 Normalized actual decoder argv must also match exactly across the pair, removing
-only the compiler executable and the recorded Clang GCC-toolchain driver selector.
+only the compiler executable and exactly one of each recorded Clang selector:
+`--no-default-config`, `--gcc-install-dir=<exact-installation>` and
+`--gcc-toolchain=<exact-root>`. Missing, duplicated or redirected configuration
+selectors fail before preprocessing.
 One-sided options such as `-fno-inline`, `-fno-tree-vectorize` or `--param` therefore
 cannot hide behind unchanged preprocessor macros. Unexpected differences fail preflight.
 The compile database is hashed and checked again by the build phase.
@@ -70,6 +76,16 @@ compiler/linker/package/JVM versions, build resource counters, ELF metadata,
 query attempts, GC and privacy-filtered JFR files survive failures. No environment
 or credential dump is collected.
 
+Each compiler container records mandatory framed cgroup-v2 snapshots before the
+recipe and in its EXIT trap, independently of the optional five-second sampler.
+Every CPU, memory/current/peak/events, IO and CPU/memory/swap/process-limit file
+has its own read status. Both frames, successful reads, actual counters and the
+2-CPU/10-GiB/no-swap/1024-process limits are required for phase success. A kernel
+missing a required cgroup-v2 file fails this research preflight with retained
+partial evidence. EXIT records the original recipe status; a snapshot/retention
+failure cannot replace an earlier failure, and it fails an otherwise successful
+phase. These are compiler-container counters, not query or host CPU attribution.
+
 Every smoke connection explicitly uses one native DuckDB thread, a 256 MiB native
 memory limit and 256 MiB maximum temporary-file usage in a task-owned directory.
 The upstream test entry point wraps the JDBC driver to apply and verify the same
@@ -97,7 +113,9 @@ data and measured hardware for paired, warmed, oracle-checked trials. Record raw
 latencies, CPU, memory, JFR and native stacks. Runner CPU features do not establish
 production ISA support, and compiler selection alone proves no speedup.
 
-Primary sources: [upstream decoder selector](https://github.com/duckdb/duckdb/blob/v1.5.6/third_party/snappy/snappy_version.hpp),
+Primary sources: [Clang automatic configuration](https://clang.llvm.org/docs/UsersManual.html#configuration-files),
+[Clang exact GCC installation selector](https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-gcc-install-dir),
+[upstream decoder selector](https://github.com/duckdb/duckdb/blob/v1.5.6/third_party/snappy/snappy_version.hpp),
 [official JDBC Linux build](https://github.com/duckdb/duckdb-java/blob/v1.5.6.0/.github/composite-actions/linux-build-docker/action.yml),
 [official JNI build configuration](https://github.com/duckdb/duckdb-java/blob/v1.5.6.0/CMakeLists.txt),
 [concurrent native progress API](https://github.com/duckdb/duckdb-java/blob/a561d2ddadde231402411ce76112779bc34b57f0/src/main/java/org/duckdb/DuckDBPreparedStatement.java).

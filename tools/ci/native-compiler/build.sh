@@ -11,20 +11,38 @@ export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
 export SOURCE_DATE_EPOCH=1790590000
 export HOME=/tmp/native-home
 mkdir -p "$HOME"
-gcc_root=$(dirname "$(dirname "$(readlink -f "$(command -v gcc)")")")
 build=/source/build/release
 mkdir -p "$build"
 retain() {
   rc=$?
+  trap - EXIT
+  set +e
+  /opt/python/cp312-cp312/bin/python3 /control/resources.py /evidence "$phase" exit --recipe-status "$rc"
+  snapshot_rc=$?
   for file in CMakeCache.txt compile_commands.json; do
-    [ ! -f "$build/$file" ] || cp "$build/$file" "/evidence/$phase-$file"
+    if [ -f "$build/$file" ]; then
+      cp "$build/$file" "/evidence/$phase-$file" || snapshot_rc=1
+    fi
   done
   printf '%s\n' "$rc" > "/evidence/$phase-recipe-exit-status.txt"
+  printf '%s\n' "$snapshot_rc" > "/evidence/$phase-retention-exit-status.txt"
+  if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+  exit "$snapshot_rc"
 }
 trap retain EXIT
+/opt/python/cp312-cp312/bin/python3 /control/resources.py /evidence "$phase" before
+gcc_root=$(dirname "$(dirname "$(readlink -f "$(command -v gcc)")")")
+gcc_libgcc=$(readlink -f "$(gcc -print-libgcc-file-name)")
+gcc_install=$(dirname "$gcc_libgcc")
+compiler_flags=$common_flags
+if [ "$compiler" = clang ]; then
+  compiler_flags+=" --no-default-config --gcc-install-dir=$gcc_install"
+fi
 if [ "$phase" = configure ]; then
   id > /evidence/container-identity.txt
   printf '%s\n' "$gcc_root" > /evidence/gcc-toolchain-root.txt
+  printf '%s\n' "$gcc_install" > /evidence/gcc-install-dir.txt
+  printf '%s\n' "$gcc_libgcc" > /evidence/gcc-libgcc-file.txt
   "$cc" --version > /evidence/c-compiler.txt 2>&1
   rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > /evidence/packages.txt
   ld --version > /evidence/linker.txt
@@ -35,7 +53,7 @@ if [ "$phase" = configure ]; then
   -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx"
   -DCMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN="$gcc_root"
   -DCMAKE_CXX_STANDARD=11 -DCMAKE_CXX_EXTENSIONS=ON
-  -DCMAKE_CXX_FLAGS="$common_flags" -DCMAKE_C_FLAGS="$common_flags"
+  -DCMAKE_CXX_FLAGS="$compiler_flags" -DCMAKE_C_FLAGS="$compiler_flags"
   -DCMAKE_CXX_FLAGS_RELEASE='-O3 -DNDEBUG' -DCMAKE_C_FLAGS_RELEASE='-O3 -DNDEBUG'
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF)
   printf '%q ' cmake "${cmake_args[@]}" > /evidence/configure-command.txt

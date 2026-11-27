@@ -4,6 +4,7 @@ import importlib.util
 import io
 import csv
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tarfile
@@ -80,10 +81,16 @@ class NativeCompilerBuildTest(unittest.TestCase):
                 "#define _GLIBCXX_USE_CXX11_ABI 1\n#define __GLIBCXX__ 20260101\n")
             (folder / "libstdcxx.txt").write_text("/portable/libstdc++.so\n")
             (folder / "gcc-toolchain-root.txt").write_text("/portable/toolchain\n")
+            (folder / "gcc-install-dir.txt").write_text("/portable/toolchain/lib/gcc/14\n")
+            (folder / "gcc-libgcc-file.txt").write_text("/portable/toolchain/lib/gcc/14/libgcc.a\n")
+            BUILD.save(folder / "default-config.json", {"compiler": compiler, "automatic_configs": [],
+                       "disabled_in_actual_argv": compiler == "clang"})
             entry = {
                 "file": "/source/src/duckdb/third_party/snappy/snappy.cc",
                 "directory": "/source/build/release",
                 "command": ("g++" if compiler == "gcc" else "clang++") + " " + BUILD.FLAGS
+                           + (" --no-default-config --gcc-install-dir=/portable/toolchain/lib/gcc/14 --gcc-toolchain=/portable/toolchain"
+                              if compiler == "clang" else "")
                            + " -O3 -DNDEBUG -std=gnu++11 -c /source/src/duckdb/third_party/snappy/snappy.cc -o snappy.o"}
             (folder / "compile_commands.json").write_text(json.dumps([entry]))
             BUILD.save(folder / "effective.json", {"compiler": compiler, "entry": entry,
@@ -152,22 +159,66 @@ class NativeCompilerBuildTest(unittest.TestCase):
                         BUILD.check_probes(root)
                     self.assertFalse((root / "verified-compiler-probes.json").exists())
 
-    def test_only_recorded_clang_toolchain_selector_is_normalized(self):
-        """The intended driver selector is allowed, while another root or extra selector is rejected."""
-        for selector, valid in (("--gcc-toolchain=/portable/toolchain", True),
-                                ("--gcc-toolchain=/other", False),
-                                ("--gcc-toolchain=/portable/toolchain --gcc-toolchain=/other", False)):
-            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as temp:
+    def test_exact_clang_configuration_selectors_are_required(self):
+        """Missing, duplicate or redirected configuration selectors cannot normalize away."""
+        changes = (("--no-default-config", ""),
+                   ("--no-default-config", "--no-default-config --no-default-config"),
+                   ("--gcc-install-dir=/portable/toolchain/lib/gcc/14", "--gcc-install-dir=/other/15"),
+                   ("--gcc-install-dir=/portable/toolchain/lib/gcc/14", ""),
+                   ("--gcc-toolchain=/portable/toolchain", "--gcc-toolchain=/other"),
+                   ("--gcc-toolchain=/portable/toolchain", ""),
+                   ("-O3", "-O3 --config=/other.cfg"),
+                   ("-O3", "-O3 --config-system-dir=/other"),
+                   ("-O3", "-O3 --gcc-install-dir=/other/15"))
+        for old, new in changes:
+            with self.subTest(new=new), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 self.probes(root)
-                self.update_actual_flags(root, "clang", selector)
-                if valid:
+                folder = root / "clang"
+                path = folder / "compile_commands.json"
+                path.write_text(path.read_text().replace(old, new))
+                entry = json.loads(path.read_text())[0]
+                proof_path = folder / "effective.json"
+                proof = json.loads(proof_path.read_text())
+                proof.update(entry=entry, probe_argv=BUILD.EFFECTIVE["command"](entry, "clang"),
+                             compile_database_sha256=BUILD.digest(path))
+                proof_path.write_text(json.dumps(proof))
+                with self.assertRaisesRegex(ValueError, "configuration/toolchain selector"):
                     BUILD.check_probes(root)
-                    proof = json.loads((root / "verified-compiler-probes.json").read_text())
-                    self.assertFalse(any(flag.startswith("--gcc-toolchain") for flag in proof["verified_common_decoder_argv"]))
+                self.assertFalse((root / "verified-compiler-probes.json").exists())
+
+    def test_default_configuration_contents_are_hashed_and_required(self):
+        """Automatic configuration provenance is retained even though actual compilation disables it."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "automatic.cfg"
+            config.write_text("--gcc-install-dir=/other/15\n")
+            retain = BUILD.EFFECTIVE["retain_default_config"]
+            with mock.patch.dict(retain.__globals__, {"capture": lambda *args:
+                    ("Configuration file: " + str(config) + "\n", "")}):
+                retain(["clang++", "--no-default-config"], "clang", str(root), root)
+            metadata = json.loads((root / "default-config.json").read_text())
+            self.assertTrue(metadata["disabled_in_actual_argv"])
+            item = metadata["automatic_configs"][0]
+            self.assertEqual(config.read_bytes(), (root / item["retained"]).read_bytes())
+            self.assertEqual(BUILD.digest(config), item["sha256"])
+        for field in ("disabled_in_actual_argv", "config_hash", "installation"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.probes(root)
+                folder = root / "clang"
+                path = folder / "default-config.json"
+                value = json.loads(path.read_text())
+                if field == "disabled_in_actual_argv":
+                    value[field] = False
+                elif field == "config_hash":
+                    (folder / "default-config-0.cfg").write_text("original")
+                    value["automatic_configs"] = [{"retained": "default-config-0.cfg", "path": "/etc/clang/driver.cfg", "sha256": "f" * 64}]
                 else:
-                    with self.assertRaisesRegex(ValueError, "toolchain selector"):
-                        BUILD.check_probes(root)
+                    (folder / "gcc-libgcc-file.txt").write_text("/other/15/libgcc.a")
+                path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError):
+                    BUILD.check_probes(root)
 
     def test_actual_compile_argv_rejects_all_late_conflicting_overrides(self):
         """Fixed standalone macros cannot hide overrides in the actual decoder compilation."""
@@ -197,6 +248,8 @@ class NativeCompilerBuildTest(unittest.TestCase):
             entry = {"file": source, "directory": "/source/build/release", "arguments":
                 ["g++", *BUILD.shlex.split(BUILD.FLAGS), "-O3", "-DNDEBUG", "-std=gnu++11",
                  "-DACTUAL_CMAKE_SENTINEL=1", "-c", source, "-o", "snappy.o"]}
+            (root / "gcc-toolchain-root.txt").write_text("/portable/toolchain\n")
+            (root / "gcc-install-dir.txt").write_text("/portable/toolchain/lib/gcc/14\n")
             database = root / "compile_commands.json"
             database.write_text(json.dumps([entry]))
             calls = []
@@ -212,11 +265,102 @@ class NativeCompilerBuildTest(unittest.TestCase):
             probe = BUILD.EFFECTIVE["probe"]
             with mock.patch.dict(probe.__globals__, {"capture": capture}):
                 probe(database, "gcc", root)
-            self.assertIn(source, calls[0])
-            self.assertIn("-DACTUAL_CMAKE_SENTINEL=1", calls[0])
-            self.assertNotIn("-c", calls[0])
-            self.assertNotIn("snappy.o", calls[0])
+            actual = next(argv for argv in calls if "-dM" in argv)
+            self.assertIn(source, actual)
+            self.assertIn("-DACTUAL_CMAKE_SENTINEL=1", actual)
+            self.assertNotIn("-c", actual)
+            self.assertNotIn("snappy.o", actual)
             self.assertEqual(BUILD.digest(database), json.loads((root / "effective.json").read_text())["compile_database_sha256"])
+
+    def cgroup_fixture(self, root):
+        """Create complete cgroup-v2 counters with the declared container limits."""
+        cgroup = root / "cgroup"
+        cgroup.mkdir()
+        values = {"cpu.stat": "usage_usec 3\nuser_usec 2\nsystem_usec 1\n",
+                  "cpu.max": "200000 100000\n", "memory.current": "1024\n", "memory.peak": "2048\n",
+                  "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+                  "memory.max": str(10 * 1024 ** 3), "memory.swap.max": "0\n",
+                  "io.stat": "8:0 rbytes=1 wbytes=2 rios=1 wios=1\n", "pids.max": "1024\n"}
+        for name, value in values.items():
+            (cgroup / name).write_text(value)
+        return cgroup
+
+    def phase_snapshots(self, root, cgroup):
+        """Capture real file reads for both edges without a sampler or container startup race."""
+        for edge in ("before", "exit"):
+            self.assertEqual(0, BUILD.RESOURCES["snapshot"](root, "configure", edge,
+                             None if edge == "before" else 0, cgroup))
+        for suffix in ("recipe", "retention"):
+            (root / ("configure-" + suffix + "-exit-status.txt")).write_text("0\n")
+
+    def test_short_phase_requires_both_actual_cgroup_edges_and_limits(self):
+        """An immediate phase has verifiable before/EXIT snapshots independent of periodic sampling."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.phase_snapshots(root, self.cgroup_fixture(root))
+            result = BUILD.RESOURCES["verify"](root, "configure")
+            self.assertEqual(0, result["status"])
+            self.assertEqual(["before", "exit"], result["edges"])
+            with self.assertRaises(FileExistsError):
+                BUILD.RESOURCES["snapshot"](root, "configure", "before")
+
+    def test_cgroup_snapshot_read_failures_retain_every_status_and_original_failure(self):
+        """Unavailable and unreadable counters leave complete framed evidence and a failing status."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cgroup = self.cgroup_fixture(root)
+            (cgroup / "memory.peak").unlink()
+            (cgroup / "cpu.stat").unlink()
+            (cgroup / "cpu.stat").mkdir()
+            self.assertEqual(1, BUILD.RESOURCES["snapshot"](root, "build", "exit", 7, cgroup))
+            result = json.loads((root / "build-cgroup-exit.json").read_text())
+            self.assertEqual(7, result["recipe_status"])
+            self.assertEqual(set(BUILD.RESOURCES["FILES"]), set(result["files"]))
+            self.assertEqual("FileNotFoundError", result["files"]["memory.peak"]["error_type"])
+            self.assertEqual("IsADirectoryError", result["files"]["cpu.stat"]["error_type"])
+            self.assertEqual(0, result["files"]["memory.current"]["status"])
+
+    def test_cgroup_gate_rejects_status_missing_counters_wrong_limits_and_frame(self):
+        """A successful shell exit cannot replace required individual reads, values or frame order."""
+        for mutation in ("read", "cpu", "memory", "swap", "pids", "quota", "frame", "exit", "retention", "missing"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.phase_snapshots(root, self.cgroup_fixture(root))
+                path = root / "configure-cgroup-exit.json"
+                value = json.loads(path.read_text())
+                if mutation == "read":
+                    value["files"]["io.stat"]["status"] = 1
+                elif mutation == "cpu":
+                    value["files"]["cpu.stat"]["text"] = "usage_usec 0"
+                elif mutation in ("memory", "swap", "pids", "quota"):
+                    name = {"memory": "memory.max", "swap": "memory.swap.max", "pids": "pids.max", "quota": "cpu.max"}[mutation]
+                    value["files"][name]["text"] = {"memory": "max", "swap": "1", "pids": "max", "quota": "400000 100000"}[mutation]
+                elif mutation == "frame":
+                    value["begin_epoch_ns"] = 0
+                elif mutation == "exit":
+                    value["recipe_status"] = 7
+                elif mutation == "retention":
+                    (root / "configure-retention-exit-status.txt").write_text("1")
+                else:
+                    del value["files"]["memory.peak"]
+                path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError):
+                    BUILD.RESOURCES["verify"](root, "configure")
+
+    def test_exit_trap_preserves_original_failure_and_rejects_snapshot_failure(self):
+        """Run the actual trap body and prove cleanup cannot replace an earlier nonzero status."""
+        recipe = (BUILD.HERE / "native-compiler/build.sh").read_text()
+        trap = recipe[recipe.index("retain() {"):recipe.index("trap retain EXIT")]
+        command = '/opt/python/cp312-cp312/bin/python3 /control/resources.py /evidence "$phase" exit --recipe-status "$rc"'
+        for original, snapshot, expected in ((7, 1, 7), (0, 1, 1), (0, 0, 0)):
+            with self.subTest(original=original, snapshot=snapshot), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                body = trap.replace(command, "false" if snapshot else "true").replace("/evidence/", str(root) + "/")
+                script = "set -euo pipefail\nphase=configure\nbuild=/nonexistent-native-test\n" + body + "trap retain EXIT\nexit " + str(original)
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                self.assertEqual(expected, result.returncode, result.stderr)
+                self.assertEqual(str(original), (root / "configure-recipe-exit-status.txt").read_text().strip())
+                self.assertEqual(str(snapshot), (root / "configure-retention-exit-status.txt").read_text().strip())
 
     def test_failed_and_timed_out_commands_keep_output_and_original_status(self):
         """Partial command output remains auditable even after a real process timeout."""

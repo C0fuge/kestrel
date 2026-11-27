@@ -32,6 +32,7 @@ SNAPPY = {"snappy.cc": "fdf65fc9a34465224869751981ea517df5b63e378f4d874191da7e29
 HERE = Path(__file__).resolve().parent
 SYSTEM = runpy.run_path(str(HERE / "benchmark-system.py"))
 EFFECTIVE = runpy.run_path(str(HERE / "native-compiler/effective.py"))
+RESOURCES = runpy.run_path(str(HERE / "native-compiler/resources.py"))
 STOCK_NATIVE = "b36f739cca01c475867e332e496da8c95bcac37478d55f40ac9b3149e30f285c"
 STOCK_JAR = "04ae3375d7c40dc88dc9bf0014b82ba5e66715564584af4e3abea39c7ba144d3"
 SMOKES = {"loaded_native", "source_version", "jdbc_types", "arrow_types", "snappy_jdbc",
@@ -278,12 +279,13 @@ def candidate_phase(compiler, image, pristine, work, output, phase):
         state = SYSTEM["optional_command"](["docker", "inspect", "--format", "{{json .State}}", name], "build_container")
         save(evidence / (phase + "-container-state.json"), state)
         subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, check=False)
+    RESOURCES["verify"](evidence, phase)
     return evidence
 
 
 def check_probes(output):
     """Reject a wrong decoder, raised ISA, different libstdc++ or incompatible declared ABI."""
-    probes, common, toolchains = {}, {}, {}
+    probes, common, toolchains, installations = {}, {}, {}, {}
     for compiler in ("gcc", "clang"):
         folder = output / compiler
         effective = json.loads((folder / "effective.json").read_text())
@@ -307,27 +309,29 @@ def check_probes(output):
             raise ValueError("Effective standard-library identity differs")
         probes[compiler] = effective
         toolchains[compiler] = (folder / "gcc-toolchain-root.txt").read_text().strip()
-        if not toolchains[compiler].startswith("/"):
-            raise ValueError("Missing recorded GCC toolchain root")
-        common[compiler] = common_decoder_arguments(effective, toolchains[compiler])
+        installations[compiler] = (folder / "gcc-install-dir.txt").read_text().strip()
+        libgcc = Path((folder / "gcc-libgcc-file.txt").read_text().strip())
+        if not libgcc.is_absolute() or str(libgcc.parent) != installations[compiler]:
+            raise ValueError("Recorded GCC installation differs from driver libgcc")
+        configuration = json.loads((folder / "default-config.json").read_text())
+        if configuration.get("compiler") != compiler or configuration.get("disabled_in_actual_argv") != (compiler == "clang"):
+            raise ValueError("Missing actual automatic-configuration provenance")
+        for item in configuration["automatic_configs"]:
+            retained = item["retained"]
+            if not re.fullmatch(r"default-config-[0-9]+\.cfg", retained) or not Path(item["path"]).is_absolute() or digest(folder / retained) != item["sha256"]:
+                raise ValueError("Automatic compiler configuration identity differs")
+        common[compiler] = common_decoder_arguments(effective, toolchains[compiler], installations[compiler])
     if any(probes["gcc"][key] != probes["clang"][key] for key in ("libstdcxx", "libstdcxx_sha256", "glibcxx_header_version", "glibcxx_config_header", "glibcxx_config_sha256", "abi_features")):
         raise ValueError("Compiler builds use different standard libraries")
-    if toolchains["gcc"] != toolchains["clang"] or common["gcc"] != common["clang"] or probes["gcc"]["entry"]["directory"] != probes["clang"]["entry"]["directory"]:
+    if toolchains["gcc"] != toolchains["clang"] or installations["gcc"] != installations["clang"] or common["gcc"] != common["clang"] or probes["gcc"]["entry"]["directory"] != probes["clang"]["entry"]["directory"]:
         raise ValueError("Actual common decoder arguments differ beyond compiler/toolchain selection")
     probes["verified_common_decoder_argv"] = common["gcc"]
     save(output / "verified-compiler-probes.json", probes)
 
 
-def common_decoder_arguments(effective, toolchain):
-    """Remove only the executable and the declared Clang GCC-toolchain driver selector."""
-    flags = effective["probe_argv"][1:]
-    if effective["compiler"] == "clang":
-        selectors = [value for value in flags if value.startswith("--gcc-toolchain")]
-        expected = "--gcc-toolchain=" + toolchain
-        if selectors and selectors != [expected]:
-            raise ValueError("Unexpected Clang toolchain selector")
-        flags = [value for value in flags if value != expected]
-    return flags
+def common_decoder_arguments(effective, toolchain, installation):
+    """Normalize only exact recorded Clang configuration and GCC installation selectors."""
+    return EFFECTIVE["common_arguments"](effective["probe_argv"], effective["compiler"], toolchain, installation)
 
 
 def verify_smoke(evidence):

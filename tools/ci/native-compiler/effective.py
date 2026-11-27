@@ -66,6 +66,34 @@ def command(entry, compiler):
     return result
 
 
+def common_arguments(argv, compiler, toolchain, installation):
+    """Require exact recorded driver selectors and remove only those compiler differences."""
+    root, install = Path(toolchain), Path(installation)
+    if not root.is_absolute() or not install.is_absolute() or ".." in root.parts + install.parts or not install.is_relative_to(root):
+        raise ValueError("Invalid recorded GCC installation")
+    expected = ["--no-default-config", "--gcc-install-dir=" + installation, "--gcc-toolchain=" + toolchain]
+    selectors = [value for value in argv[1:] if value.startswith(
+        ("--gcc-", "-gcc-", "--no-default-config", "--config"))]
+    if (compiler == "clang" and (sorted(selectors) != sorted(expected))) or (compiler == "gcc" and selectors):
+        raise ValueError("Unexpected or missing compiler configuration/toolchain selector")
+    return [value for value in argv[1:] if value not in expected]
+
+
+def retain_default_config(argv, compiler, directory, output):
+    """Retain any automatic Clang configuration reported without the disabling selector."""
+    version, diagnostic = capture([argv[0], "--version"], directory, output / "default-compiler-version.txt")
+    configs = []
+    for index, name in enumerate(re.findall(r"^Configuration file: (.+)$", version + diagnostic, re.M)):
+        path = Path(name).resolve(strict=True)
+        content = path.read_bytes()
+        retained = "default-config-" + str(index) + ".cfg"
+        with (output / retained).open("xb") as stream:
+            stream.write(content)
+        configs.append({"path": str(path), "retained": retained, "sha256": hashlib.sha256(content).hexdigest()})
+    write(output / "default-config.json", {"compiler": compiler, "automatic_configs": configs,
+          "disabled_in_actual_argv": "--no-default-config" in argv})
+
+
 def capture(argv, cwd, path):
     """Retain exact argv, status and full preprocessing output before requiring success."""
     try:
@@ -92,6 +120,9 @@ def probe(database, compiler, output):
         raise ValueError("Expected one actual decoder compilation")
     entry = entries[0]
     argv = command(entry, compiler)
+    common_arguments(argv, compiler, (output / "gcc-toolchain-root.txt").read_text().strip(),
+                     (output / "gcc-install-dir.txt").read_text().strip())
+    retain_default_config(argv, compiler, entry["directory"], output)
     macros, _ = capture(argv + ["-E", "-dM"], entry["directory"], output / "macros.txt")
     values = dict(re.findall(r"^#define (\w+) (.*)$", macros, re.M))
     expected = "false" if compiler == "gcc" else "true"
@@ -118,7 +149,7 @@ def probe(database, compiler, output):
     library = Path(library.strip()).resolve(strict=True)
     with library.open("rb") as stream:
         library_hash = hashlib.file_digest(stream, "sha256").hexdigest()
-    capture([argv[0], "--version"], entry["directory"], output / "actual-compiler-version.txt")
+    capture(driver + ["--version"], entry["directory"], output / "actual-compiler-version.txt")
     write(output / "effective.json", {"compiler": compiler, "entry": entry, "probe_argv": argv,
           "compile_database_sha256": hashlib.sha256(database.read_bytes()).hexdigest(),
           "decoder": expected, "abi": values["_GLIBCXX_USE_CXX11_ABI"], "cplusplus": values["__cplusplus"],
