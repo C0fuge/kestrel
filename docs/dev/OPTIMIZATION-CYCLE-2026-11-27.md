@@ -1,11 +1,18 @@
 # Small-query optimization cycle — 2026-11-27
 
+> **Blocked for integration:** the literal-reuse candidate changes valid DuckDB
+> query behavior. The [coercion counterexample](LITERAL-COERCION-REJECTION-2026-11-27.md)
+> succeeds with the original SQL and fails after the actual typed-parameter rewrite.
+> Keep the pinned experiments below as historical evidence; their successful answer
+> checks do not establish general literal equivalence. Do not integrate or enable
+> the candidate until type-aware equivalence is proven.
+
 ## Scope and decision
 
 This is an opt-in experiment, not a new server default. The switch is
 `-Darrowflight.experimental.integerLiteralParameters=true`. The normal execution
-path stays active unless the switch is set. Do not enable it as a default until
-the pinned-core, mixed-load and tail-latency checks pass.
+path stays active unless the switch is set in the retained research revision.
+The native coercion failure blocks this candidate independently of performance.
 
 The baseline is `90542012`. Local screening uses synthetic Parquet with 400,000
 rows in four files, alternating point and filtered-count queries through the

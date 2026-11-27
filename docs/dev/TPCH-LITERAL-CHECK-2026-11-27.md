@@ -1,5 +1,12 @@
 # TPC-H check of integer literal plan reuse
 
+> **Blocked for integration:** the literal-reuse candidate changes valid DuckDB
+> query behavior. The [coercion counterexample](LITERAL-COERCION-REJECTION-2026-11-27.md)
+> succeeds with the original SQL and fails after the actual typed-parameter rewrite.
+> Keep the pinned experiments below as historical evidence; their successful answer
+> checks do not establish general literal equivalence. Do not integrate or enable
+> the candidate until type-aware equivalence is proven.
+
 ## Scope and answer checks
 
 [Run 46032353197](https://github.com/C0fuge/kestrel/actions/runs/46032353197), revision
