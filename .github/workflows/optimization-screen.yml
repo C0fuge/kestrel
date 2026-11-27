@@ -14,7 +14,7 @@ on:
         type: string
         default: "90542012c037465c8b7213908c85e957b8af771b"
       variant_options:
-        description: "Candidate-only experimental/duckDb/resourceProfile properties or perf.producingStreams; no credentials"
+        description: "Candidate-only server/perf properties (see OPTIMIZATION-SCREENING.md); no credentials"
         type: string
         default: ""
       rounds:
@@ -70,6 +70,7 @@ jobs:
             candidate/**/pom.xml
             baseline/**/pom.xml
       - name: Build and measure both revisions
+        timeout-minutes: 35 # Reserve ten job minutes for summary/artifact upload on failure.
         env:
           SCREEN_VARIANT_OPTIONS: ${{ inputs.variant_options || (github.event_name == 'push' && '-Darrowflight.experimental.integerLiteralParameters=true' || '') }}
           SCREEN_ROUNDS: ${{ inputs.rounds || '3' }}

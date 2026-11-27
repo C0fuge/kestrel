@@ -26,10 +26,21 @@ share one JVM and CPU allocation, so process CPU/RSS measurements include both. 
 are screening ratios; hosted-runner absolute QPS is not a production estimate.
 
 Candidate options are structured arguments, never shell-expanded. Only experimental
-server properties, `duckDb*`, `resourceProfile` and `perf.producingStreams` are accepted.
+server properties, effective `duckDb*` settings, `resourceProfile`, `perf.producingStreams`,
+`perf.threads`, `perf.threadsUnderLoad` and `perf.shared` are accepted.
+The helper overrides `duckDbThreads*`, `duckDbShared*`, `duckDbMemoryLimit`,
+`duckDbWarmConnections` and `duckDbGroups`, so the workflow rejects those ineffective
+options. Use the corresponding `perf.*` properties; their actual values are recorded
+by the harness. For example, `-Dperf.threads=4 -Dperf.shared=4:1GB` changes the shared
+DuckDB thread count and limit.
 Never supply credentials, production host names or personal paths in public inputs.
 For example, `-Dperf.producingStreams=2` screens admission control; associated `*-gate.txt`
 files are retained automatically if the selected harness writes them.
+
+Dispatches permit at most eight concurrency steps and fifteen planned measurement
+minutes, including warm-up/setup allowances. The build/measurement step has a separate
+35-minute timeout inside the 45-minute job, reserving ten minutes for publishing partial
+artifacts if the work fails or exceeds its budget.
 
 The answer gate compares rows, ordered value checksums, Arrow buffer bytes and batches
 for every overlapping `(concurrency, client, sequence, query kind, key)` pair. The test

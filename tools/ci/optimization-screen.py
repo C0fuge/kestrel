@@ -24,12 +24,25 @@ def checked_options(text):
     """Accept only non-secret server property arguments, never shell commands."""
     options = shlex.split(text)
     pattern = (r"-D(?:arrowflight\.experimental\.[A-Za-z0-9_.-]+|duckDb[A-Za-z0-9]+|resourceProfile"
-               r"|perf\.producingStreams)=[A-Za-z0-9_.,:+/-]+")
+               r"|perf\.(?:producingStreams|threads|threadsUnderLoad|shared))=[A-Za-z0-9_.,:+/-]+")
     if any(not re.fullmatch(pattern, option) for option in options):
         raise ValueError("Candidate options must be allowed -Dserver.property=value arguments")
     if any(re.search(r"password|secret|token|credential|keytab", option, re.I) for option in options):
         raise ValueError("Do not put credentials in a public screening run")
+    overridden = ("-DduckDbThreads", "-DduckDbShared", "-DduckDbMemoryLimit=",
+                  "-DduckDbWarmConnections=", "-DduckDbGroups=")
+    if any(option.startswith(overridden) for option in options):
+        raise ValueError("The embedded harness overrides these settings; use perf.threads, "
+                         "perf.threadsUnderLoad or perf.shared")
     return options
+
+
+def planned_measurement_seconds(rounds, seconds, clients):
+    """Bound trial work so the job retains time for builds and artifact upload."""
+    planned = 2 * rounds * (seconds * len(clients) + max(3, seconds // 3) + 20) + 30
+    if len(clients) > 8 or planned > 900:
+        raise ValueError("At most eight concurrency steps and fifteen planned measurement minutes are allowed")
+    return planned
 
 
 def save_json(path, value):
@@ -150,6 +163,7 @@ def main():
         raise ValueError("Expected 1..5 rounds, 3..60 seconds and 1..64 clients")
     if clients != sorted(set(clients)):
         raise ValueError("Client counts must be unique and increasing")
+    planned = planned_measurement_seconds(rounds, seconds, clients)
     mode = os.environ.get("SCREEN_CPU_MODE", "pinned")
     if mode not in ("pinned", "quota"):
         raise ValueError("CPU mode must be pinned or quota")
@@ -169,6 +183,7 @@ def main():
                for side, source in sources.items()}
     save_json(output / "screen.json", {"commits": commits, "rounds": rounds, "seconds": seconds,
               "clients": clients, "variant_options": options, "cpu_mode": mode, "cpu_set": cpu_set,
+              "planned_measurement_seconds": planned,
               "scope": "embedded server and clients share one JVM; screening ratios, not production QPS"})
     command_log(["lscpu"], output / "hardware.txt")
     command_log(["docker", "version"], output / "docker-version.txt")

@@ -19,12 +19,23 @@ class OptimizationScreenTest(unittest.TestCase):
     def test_rejects_shell_and_non_server_properties(self):
         """Workflow input cannot introduce commands or Maven/output settings."""
         for value in ("-DduckDbThreads=2;uname", "-Dmaven.repo.local=/tmp/other", "-Dperf.output=/elsewhere",
-                      "-DduckDbPassword=secret", "--settings /tmp/settings.xml"):
+                      "-DduckDbPassword=secret", "--settings /tmp/settings.xml", "-DduckDbThreads=4",
+                      "-DduckDbSharedDatabase=true", "-DduckDbMemoryLimit=1GB"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 SCREEN.checked_options(value)
         self.assertEqual(["-Darrowflight.experimental.integerLiteralParameters=true", "-Dperf.producingStreams=2"],
                          SCREEN.checked_options("-Darrowflight.experimental.integerLiteralParameters=true "
                                                 "-Dperf.producingStreams=2"))
+        self.assertEqual(["-Dperf.threads=4", "-Dperf.shared=4:1GB"],
+                         SCREEN.checked_options("-Dperf.threads=4 -Dperf.shared=4:1GB"))
+
+    def test_measurement_budget_leaves_time_to_upload(self):
+        """Bound excessive dispatch inputs before a long cloud run can start."""
+        self.assertLess(SCREEN.planned_measurement_seconds(3, 15, [1, 8, 32]), 900)
+        with self.assertRaises(ValueError):
+            SCREEN.planned_measurement_seconds(5, 60, list(range(1, 65)))
+        with self.assertRaises(ValueError):
+            SCREEN.planned_measurement_seconds(5, 60, [1, 2, 4, 8, 16, 32, 64])
 
     def test_answer_gate_checks_values_and_requires_overlap(self):
         """Different timing samples may overlap partially, but overlapping answers must match."""
