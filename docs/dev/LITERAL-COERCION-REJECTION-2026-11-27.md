@@ -7,6 +7,11 @@ the production `bindParameters` method. The experiment defaults to off; this fin
 concerns its opt-in execution path. A successful default-off CI run cannot validate
 that path's semantic equivalence.
 
+DuckDB 1.5 documents separate binding/conversion rules for
+[integer literals](https://duckdb.org/docs/1.5/sql/data_types/literal_types#integer-literals):
+a literal can convert to an integer type that fits its value. The counterexample
+below directly tests the resulting difference from a typed INTEGER parameter.
+
 ## Two-row native reproduction
 
 Use an in-memory DuckDB 1.5.6 JDBC connection on Java 21. No files, extensions,
