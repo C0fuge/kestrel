@@ -61,6 +61,29 @@ Python HUGEINT integer while Arrow exports Decimal128(38,0), and the old helper
 rendered these as `2` and `2.00`. Its raw evidence is unchanged; that run alone does
 not establish a complete generation-oracle checksum pass.
 
+Prepare-time `system-host-prepare.json` retains the runner's `/proc/meminfo`
+(including `MemTotal` and `MemAvailable`), `/proc/stat`, host CPU/memory/I/O PSI,
+and `df -Pk` capacity for the root and output filesystems. Docker info is restricted
+to daemon CPU count, memory total, storage driver and cgroup driver/version; it does
+not dump environment, proxy, registry, label or credential configuration.
+
+Every one-second resource row additionally keeps `optional_host` samples of
+`/proc/stat` and `/proc/pressure/{cpu,memory,io}`, scoped `runner_host`, and
+`optional_cgroup_pressure` from the container's `cpu.pressure`, `memory.pressure`
+and `io.pressure`. Each file has an individual read status and scope. Host read
+failures retain the OS errno; shell reads retain their exit status, and an absent
+capture is marked -1. These fields are optional: unsupported kernels or permission
+errors remain visible without weakening or extending the existing required gates.
+
+`/proc/stat` records cumulative CPU counters in the retained `SC_CLK_TCK` units,
+including iowait and steal. PSI averages are percentages; PSI totals are
+microseconds. Host counters include clients and other runner work, while cgroup
+pressure describes the target container. Docker-daemon capacity can describe a
+separate daemon host or VM. Host iowait/steal/PSI are context for correlation, not
+per-query or server-only attribution; they are unrelated to wire bytes. Collector
+overhead applies equally to all configurations. Completed historical runs are not
+repeated or rewritten to add these new fields.
+
 Each server configuration also retains:
 
 - Exact server/client/container argv, selected container limits and exit/OOM state;

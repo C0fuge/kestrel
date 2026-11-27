@@ -5,6 +5,7 @@ import csv
 import importlib.util
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest import mock
 
@@ -135,6 +136,41 @@ class OptimizationScreenTest(unittest.TestCase):
         del measurements[1]["B"]["8"]["query_kinds"]["2"]
         with self.assertRaisesRegex(ValueError, "Query kinds differ"):
             SCREEN.paired_ratios(measurements, [8])
+
+    def test_trial_failure_keeps_optional_snapshots_and_existing_cleanup(self):
+        """Per-trial metadata uses the created directory, retains flags and survives a failed Maven child."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            output = root / "trial"
+            snapshots = []
+
+            def snapshot(path, filesystem):
+                self.assertTrue(output.is_dir())
+                self.assertFalse((output / "resources.csv").exists())
+                self.assertEqual(output, filesystem)
+                path.write_text("optional snapshot")
+                snapshots.append(path.name)
+                return True
+
+            process = mock.Mock()
+            process.poll.return_value = 7
+            process.wait.return_value = 7
+            with mock.patch.dict(SCREEN.SYSTEM, {"save_host_snapshot": snapshot}), \
+                    mock.patch.object(SCREEN.subprocess, "Popen", return_value=process) as popen, \
+                    mock.patch.object(SCREEN.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "state", "")) as run:
+                with self.assertRaisesRegex(RuntimeError, "failed"):
+                    SCREEN.run_container("owned-container", source, output, root / "data", root / "cache",
+                                         ["test", "-Dperf.output=/output"], "pinned", "0-3", ["-Dperf.producingStreams=2"])
+            command = popen.call_args.args[0]
+            child = command[command.index("benchmark-trial") + 1:]
+            self.assertEqual(["mvn", "-B", "-ntp", "-Dmaven.repo.local=/maven-cache", "-pl", "flight-server", "-am",
+                              "test", "-Dperf.output=/output", "-Dperf.producingStreams=2"], child)
+            self.assertEqual(["system-host-before.json", "system-host-after.json"], snapshots)
+            self.assertTrue((output / "maven.log").exists())
+            self.assertTrue((output / "container-state.txt").exists())
+            self.assertEqual(["docker", "rm", "-f", "owned-container"], run.call_args.args[0])
 
     def test_main_passes_same_workload_to_both_sides(self):
         """The actual measurement plan shares the workload while limiting variant properties to B."""

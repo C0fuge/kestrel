@@ -123,6 +123,8 @@ jobs:
           uname -srvmp > "$metrics/kernel.txt"
           java -version > "$metrics/host-java-version.txt" 2>&1
           docker version > "$metrics/docker-version.txt" 2>&1
+          python3 tools/ci/benchmark-system.py "$metrics/system-host-prepare.json" --filesystem "$RUNNER_TEMP"
+          python3 -m unittest discover -s tools/ci -p 'test_benchmark_system.py' -v
           python3 -m unittest discover -s tools/ci -p 'test_tpch_*.py' -v
           jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output "$metrics/server.jfc" \
             jdk.DirectBufferStatistics#enabled=true jdk.DirectBufferStatistics#period=1s \

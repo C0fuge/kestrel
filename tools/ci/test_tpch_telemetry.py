@@ -214,6 +214,33 @@ class TpchTelemetryTest(unittest.TestCase):
             self.assertIn("/sys/fs/cgroup/cpu.stat", command[-1])
             self.assertIn("/proc/1/io", command[-1])
 
+    def test_optional_host_and_pressure_errors_do_not_weaken_required_counter_gate(self):
+        """Unavailable PSI remains scoped evidence while missing required counters still fail."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            files = resource_fixture()
+            for path in TELEMETRY["SYSTEM"]["CGROUP_PRESSURE_FILES"]:
+                files[path] = {"status": 1, "text": "unsupported kernel"}
+            raw = "\n".join(f"@@FILE {path}\n{entry['text']}\n@@STATUS {path} {entry['status']}"
+                            for path, entry in files.items())
+
+            def sample(command, **kwargs):
+                (directory / "monitor.stop").touch()
+                return subprocess.CompletedProcess(command, 0, raw, "")
+
+            host = {"scope": "runner_host", "optional": True,
+                    "files": {"/proc/stat": {"status": 13, "text": "", "scope": "runner_host", "optional": True}}}
+            with mock.patch.object(subprocess, "run", side_effect=sample), mock.patch("time.sleep"), \
+                    mock.patch.dict(TELEMETRY["SYSTEM"], {"host_sample": lambda: host}):
+                TELEMETRY["monitor"]("task-container", directory)
+            row = json.loads((directory / "resources.jsonl").read_text())
+            self.assertEqual(host, row["optional_host"])
+            self.assertTrue(all(entry["status"] == 1 and entry["scope"] == "container_cgroup"
+                                and entry["optional"] for entry in row["optional_cgroup_pressure"].values()))
+            self.assertEqual([], TELEMETRY["resource_errors"](row["files"]))
+            del row["files"]["/sys/fs/cgroup/memory.current"]
+            self.assertIn("/sys/fs/cgroup/memory.current", TELEMETRY["resource_errors"](row["files"]))
+
     def test_protocol_keeps_early_read_failure_before_later_success(self):
         """Per-file framing retains an early missing counter even when the shell's last cat succeeds."""
         files = resource_fixture()

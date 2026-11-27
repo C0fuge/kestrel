@@ -13,6 +13,7 @@ import runpy
 import subprocess
 import time
 
+SYSTEM = runpy.run_path(str(Path(__file__).with_name("benchmark-system.py")))
 percentiles = runpy.run_path(str(Path(__file__).with_name("tpch-raw.py")))["percentiles"]
 CHECKSUM_VERSION = runpy.run_path(str(Path(__file__).with_name("tpch-checksum.py")))["VERSION"]
 COUNTERS = ("cpu.stat", "cpu.max", "cpuset.cpus.effective", "memory.current", "memory.peak", "memory.stat",
@@ -147,18 +148,24 @@ def capture(command, path):
 def monitor(container, directory):
     """Flush timestamped raw cgroup and process CPU/RSS/I/O counters once per second."""
     command = ["docker", "exec", container, "sh", "-c",
-               "for f in " + " ".join(RESOURCE_FILES) + "; "
-               "do printf '\\n@@FILE %s\\n' \"$f\"; cat \"$f\"; code=$?; "
-               "printf '\\n@@STATUS %s %s\\n' \"$f\" \"$code\"; done"]
+               SYSTEM["framed_read_command"]((*RESOURCE_FILES, *SYSTEM["CGROUP_PRESSURE_FILES"]))]
     save_json(directory / "monitor-command.json", {"argv": command, "period_seconds": 1,
-              "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "page_bytes": os.sysconf("SC_PAGE_SIZE")})
+              "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "page_bytes": os.sysconf("SC_PAGE_SIZE"),
+              "required_scope": "container_process_and_cgroup",
+              "optional_host_scope": "runner_host", "optional_pressure_scope": "container_cgroup"})
     with (directory / "resources.jsonl").open("x") as output:
         index = 0
         while not (directory / "monitor.stop").exists():
             started = time.monotonic()
             result = run(command, timeout=15)
             sample = {"timestamp_ns": time.time_ns(), "status": result.returncode,
+                      "scope": "container_process_and_cgroup",
                       "stdout": result.stdout, "stderr": result.stderr, "files": parsed_files(result.stdout)}
+            sample["optional_host"] = SYSTEM["host_sample"]()
+            sample["optional_cgroup_pressure"] = {
+                path: {**sample["files"].get(path, {"status": -1, "text": "not captured"}),
+                       "scope": "container_cgroup", "optional": True}
+                for path in SYSTEM["CGROUP_PRESSURE_FILES"]}
             if directory.name != "plain" and index % 5 == 0:
                 heap = run(["docker", "exec", container, "jcmd", "1", "GC.heap_info"], timeout=15)
                 sample["heap"] = {"status": heap.returncode, "stdout": heap.stdout, "stderr": heap.stderr}

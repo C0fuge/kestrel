@@ -79,7 +79,9 @@ jobs:
             candidate/**/pom.xml
             baseline/**/pom.xml
       - name: Test screening runner
-        run: python3 -m unittest discover -s control/tools/ci -p 'test_optimization_screen.py' -v
+        run: |
+          python3 -m unittest discover -s control/tools/ci -p 'test_benchmark_system.py' -v
+          python3 -m unittest discover -s control/tools/ci -p 'test_optimization_screen.py' -v
       - name: Build and measure both revisions
         timeout-minutes: 35 # Reserve ten job minutes for summary/artifact upload on failure.
         env:

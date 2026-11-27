@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import shutil
 import statistics
@@ -15,6 +16,7 @@ import subprocess
 import time
 
 
+SYSTEM = runpy.run_path(str(Path(__file__).with_name("benchmark-system.py")))
 HARNESS = Path("flight-server/src/test/java/pro/surpin/data/arrowflight/server")
 IMAGE = "maven:3.9-eclipse-temurin-21"
 JVM = "-Xms512m -Xmx2g -XX:MaxDirectMemorySize=1g -XX:ActiveProcessorCount=4 -Duser.home=/tmp"
@@ -168,6 +170,7 @@ def matching_answers(first, second):
 def run_container(name, source, output, data, cache, arguments, cpu_mode, cpu_set, options):
     """Run one dedicated container while retaining cgroup counters and full logs."""
     output.mkdir(parents=True)
+    SYSTEM["save_host_snapshot"](output / "system-host-before.json", output)
     print(f"Starting {output.name}; complete Maven log: {output.name}/maven.log", flush=True)
     cpu = ["--cpuset-cpus=" + cpu_set] if cpu_mode == "pinned" else ["--cpus=4"]
     command = ["docker", "run", "--name", name, "--hostname", "screen-node",
@@ -179,8 +182,9 @@ def run_container(name, source, output, data, cache, arguments, cpu_mode, cpu_se
                "-v", str(output.parent / "container-passwd") + ":/etc/passwd:ro",
                "-v", str(output.parent / "container-group") + ":/etc/group:ro",
                "-v", str(cache) + ":/maven-cache", "-w", "/work", IMAGE,
-               "mvn", "-B", "-ntp", "-Dmaven.repo.local=/maven-cache", "-pl", "flight-server", "-am",
-               *arguments, *options]
+               *SYSTEM["wrapped_trial"]([
+                   "mvn", "-B", "-ntp", "-Dmaven.repo.local=/maven-cache", "-pl", "flight-server", "-am",
+                   *arguments, *options])]
     save_json(output / "command.json", command)
     process = None
     try:
@@ -199,6 +203,7 @@ def run_container(name, source, output, data, cache, arguments, cpu_mode, cpu_se
             if process.wait() != 0:
                 raise RuntimeError(f"{name} failed; complete output is in {output.name}/maven.log")
     finally:
+        SYSTEM["save_host_snapshot"](output / "system-host-after.json", output)
         inspected = subprocess.run(["docker", "inspect", "--format",
                                     "state={{json .State}} memory={{.HostConfig.Memory}} "
                                     "nano_cpus={{.HostConfig.NanoCpus}} cpuset={{.HostConfig.CpusetCpus}}", name],

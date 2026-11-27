@@ -89,6 +89,31 @@ Every successful or failed attempt is uploaded for 30 days with SHA-256 checksum
 - cgroup CPU, throttling, memory, process and I/O counters, container exit/OOM state;
 - full build/test logs, Surefire reports, WARN/ERROR extracts and the original Parquet data.
 
+Each already-created trial directory also retains `system-host-before.json` and
+`system-host-after.json`: runner `/proc/meminfo` (MemTotal/Available), `/proc/stat`,
+CPU/memory/I/O PSI, root/output filesystem capacity, and selected safe Docker-daemon
+capacity/driver fields. The container wrapper writes `system-container-before.txt`
+and `system-container-after.txt` around Maven, including the same kernel files and
+`/sys/fs/cgroup/{cpu,memory,io}.pressure`. This includes build and preflight attempts.
+No JVM raw-output file or directory is pre-created by these snapshots; the Java
+100 ms collector remains unchanged.
+
+Each optional file read retains its own status and scope. `runner_host` and
+`container_kernel_hostwide` data include work beyond the benchmark; only
+`container_cgroup` pressure is scoped to that container. CPU iowait/steal counters
+are cumulative `SC_CLK_TCK` values; PSI averages are percentages and totals are
+microseconds. Capacity describes the runner filesystems or Docker daemon, not a
+per-container disk reservation. No environment or broad daemon configuration is
+dumped. Unsupported files and diagnostic errors do not affect ranking gates.
+
+The wrapper preserves the child exit status and forwards TERM/INT while retaining
+the existing outer cleanup and artifact checksumming. GNU coreutils `env` restores
+default INT/QUIT dispositions before starting the child, avoiding the ignored INT
+inherited by ordinary asynchronous shell commands. A forced container kill can
+prevent the after snapshot; the before snapshot and prior samples remain intact.
+These counters support future scheduling/memory correlation, not server-only CPU,
+per-query stall or wire-byte attribution. Historical runs are not rerun for them.
+
 Full-scan, TPC-H, real-service, distributed/failover and external-client experiments
 remain separate workloads. They are not implied by passing this small-query screen.
 Download artifacts before their retention expires when a run is used for a decision.
